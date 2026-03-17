@@ -1,0 +1,12 @@
+{
+  "name": "agenc-protocol",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Public protocol source of truth for AgenC",
+  "packageManager": "npm@11.7.0",
+  "scripts": {
+    "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs",
+    "artifacts:check": "node scripts/sync-anchor-artifacts.mjs --check"
+  }
+}
+

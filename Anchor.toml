@@ -1,0 +1,31 @@
+[toolchain]
+anchor_version = "0.32.1"
+solana_version = "3.0.13"
+
+[features]
+seeds = true
+skip-lint = false
+
+[programs.localnet]
+agenc_coordination = "6UcJzbTEemBz3aY5wK5qKHGMD7bdRsmR4smND29gB2ab"
+
+[programs.devnet]
+agenc_coordination = "6UcJzbTEemBz3aY5wK5qKHGMD7bdRsmR4smND29gB2ab"
+
+# Mainnet intentionally not configured yet.
+# Add [programs.mainnet] only after pre-mainnet security sign-off.
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[test]
+startup_wait = 120000
+shutdown_wait = 5000
+upgradeable = true
+
+[workspace]
+members = ["programs/agenc-coordination"]

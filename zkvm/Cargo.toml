@@ -1,0 +1,4 @@
+[workspace]
+members = ["guest"]
+default-members = ["guest"]
+resolver = "2"
