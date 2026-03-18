@@ -5,8 +5,9 @@ import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-const root = process.cwd();
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceIdl = path.join(root, 'target', 'idl', 'agenc_coordination.json');
 const sourceTypes = path.join(root, 'target', 'types', 'agenc_coordination.ts');
 const destIdl = path.join(root, 'artifacts', 'anchor', 'idl', 'agenc_coordination.json');
@@ -119,4 +120,3 @@ main().catch((error) => {
   process.stderr.write(`${message}\n`);
   process.exit(1);
 });
-

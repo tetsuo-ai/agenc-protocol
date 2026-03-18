@@ -42,6 +42,11 @@ The committed public artifact contract lives in:
 
 Downstream repos should consume released protocol artifacts from this repository rather than assuming monorepo-local `target/` or runtime-vendored copies are canonical.
 
+The npm distribution surface lives in [packages/protocol](./packages/protocol) as
+`@tetsuo-ai/protocol`. That package is derived from the committed canonical
+artifacts above and is the supported way for downstream repos to consume the
+public protocol contract.
+
 ## Build
 
 ```bash
@@ -63,9 +68,30 @@ To verify that committed artifacts still match the latest local Anchor build:
 npm run artifacts:check
 ```
 
+## Publishable Artifact Package
+
+Build the publishable protocol package:
+
+```bash
+npm install
+npm run build
+```
+
+Validate pack/install smoke:
+
+```bash
+npm run pack:smoke
+```
+
+Run the full package validation set:
+
+```bash
+npm run validate
+```
+
 ## Scope Rules
 
 - Do not add runtime, MCP, app, or control-plane code here.
 - Do not treat `target/` as the public artifact interface.
 - Do not hand-edit `artifacts/anchor/*`; regenerate them from `anchor build`.
-
+- Do not hand-edit `packages/protocol/src/generated/*`; regenerate them from the canonical artifacts.

@@ -39,3 +39,11 @@ jobs:
       - name: Verify committed protocol artifacts
         run: npm run artifacts:check
 
+      - name: Build publishable protocol package
+        run: npm run build
+
+      - name: Typecheck publishable protocol package
+        run: npm run typecheck
+
+      - name: Smoke test packed protocol package
+        run: npm run pack:smoke
