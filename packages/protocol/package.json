@@ -1,0 +1,61 @@
+{
+  "name": "@tetsuo-ai/protocol",
+  "version": "0.1.1",
+  "description": "Public protocol artifacts and trust-surface constants for AgenC",
+  "packageManager": "npm@11.7.0",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "default": "./dist/index.mjs"
+    },
+    "./idl/agenc_coordination.json": "./src/generated/agenc_coordination.json",
+    "./manifest.json": "./src/generated/manifest.json",
+    "./verifier-router.json": "./src/generated/verifier_router.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src/generated",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "sync:artifacts": "node ../../scripts/sync-package-protocol-assets.mjs",
+    "sync:artifacts:check": "node ../../scripts/sync-package-protocol-assets.mjs --check",
+    "build": "npm run sync:artifacts && tsup",
+    "typecheck": "npm run sync:artifacts:check && tsc --noEmit",
+    "pack:smoke": "npm run build && node scripts/pack-smoke.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck"
+  },
+  "keywords": [
+    "solana",
+    "anchor",
+    "idl",
+    "protocol",
+    "zk",
+    "agents",
+    "coordination"
+  ],
+  "author": "Tetsuo AI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetsuo-ai/agenc-protocol.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/tetsuo-ai/agenc-protocol#readme",
+  "bugs": {
+    "url": "https://github.com/tetsuo-ai/agenc-protocol/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

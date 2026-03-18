@@ -1,12 +1,25 @@
 {
   "name": "agenc-protocol",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Public protocol source of truth for AgenC",
   "packageManager": "npm@11.7.0",
+  "workspaces": [
+    "packages/protocol"
+  ],
   "scripts": {
-    "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs",
-    "artifacts:check": "node scripts/sync-anchor-artifacts.mjs --check"
+    "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs && npm run sync:artifacts",
+    "artifacts:check": "node scripts/sync-anchor-artifacts.mjs --check && npm run sync:artifacts:check",
+    "sync:artifacts": "node scripts/sync-package-protocol-assets.mjs",
+    "sync:artifacts:check": "node scripts/sync-package-protocol-assets.mjs --check",
+    "build": "npm run build --workspace=@tetsuo-ai/protocol",
+    "typecheck": "npm run typecheck --workspace=@tetsuo-ai/protocol",
+    "pack:smoke": "npm run pack:smoke --workspace=@tetsuo-ai/protocol",
+    "validate": "npm run build && npm run typecheck && npm run pack:smoke"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
   }
 }
-
