@@ -521,39 +521,25 @@ pub fn execute_completion_rewards<'info>(
                 &ta.token_program,
             )?;
         }
-        // Always close the escrow PDA (returns rent-exempt SOL to creator)
+        // Always close the escrow PDA (returns rent-exempt SOL to creator).
+        // Use Anchor's close path so the runtime sees a fully closed account
+        // instead of a lamport-drained account that still fails rent checks.
         close_escrow_to_creator(escrow, creator_info)?;
     }
 
     Ok(())
 }
 
-/// Manually close the escrow account by transferring all remaining lamports to the
-/// creator and zeroing the account data.
+/// Close the escrow account and return remaining rent lamports to the creator.
 ///
-/// This replaces Anchor's `close` attribute to enable conditional closure — the escrow
-/// must stay open for collaborative tasks until all required completions are done.
+/// We intentionally do this conditionally in the handler, instead of using
+/// Anchor's `close = ...` account attribute, because collaborative tasks keep the
+/// escrow open until the final required completion.
 fn close_escrow_to_creator<'info>(
     escrow: &mut Account<'info, TaskEscrow>,
     creator_info: &AccountInfo<'info>,
 ) -> Result<()> {
-    let escrow_info = escrow.to_account_info();
-    let remaining_lamports = escrow_info.lamports();
-
-    // Transfer remaining lamports (rent + any leftover) from escrow to creator
-    **escrow_info.try_borrow_mut_lamports()? = 0;
-    **creator_info.try_borrow_mut_lamports()? = creator_info
-        .lamports()
-        .checked_add(remaining_lamports)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-
-    // Zero the escrow account data to mark it as closed
-    let mut data = escrow_info.try_borrow_mut_data()?;
-    for byte in data.iter_mut() {
-        *byte = 0;
-    }
-
-    Ok(())
+    escrow.close(creator_info.clone())
 }
 
 #[cfg(test)]
