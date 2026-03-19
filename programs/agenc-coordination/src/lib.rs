@@ -195,8 +195,8 @@ pub mod agenc_coordination {
     /// * `ctx` - Context with task, worker claim, and reward accounts
     /// * `proof_hash` - 32-byte hash of the proof of work
     /// * `result_data` - Optional result data or pointer
-    pub fn complete_task(
-        ctx: Context<CompleteTask>,
+    pub fn complete_task<'info>(
+        ctx: Context<'_, '_, '_, 'info, CompleteTask<'info>>,
         proof_hash: [u8; 32],
         result_data: Option<[u8; 64]>,
     ) -> Result<()> {
@@ -204,8 +204,8 @@ pub mod agenc_coordination {
     }
 
     /// Complete a task with private proof verification.
-    pub fn complete_task_private(
-        ctx: Context<CompleteTaskPrivate>,
+    pub fn complete_task_private<'info>(
+        ctx: Context<'_, '_, '_, 'info, CompleteTaskPrivate<'info>>,
         task_id: u64,
         proof: PrivateCompletionPayload,
     ) -> Result<()> {
@@ -226,7 +226,7 @@ pub mod agenc_coordination {
     }
 
     /// Cancel an unclaimed or expired task and reclaim funds.
-    pub fn cancel_task(ctx: Context<CancelTask>) -> Result<()> {
+    pub fn cancel_task<'info>(ctx: Context<'_, '_, '_, 'info, CancelTask<'info>>) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
             CoordinationError::UnauthorizedTaskAction
