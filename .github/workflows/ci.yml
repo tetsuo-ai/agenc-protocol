@@ -36,6 +36,9 @@ jobs:
       - name: Check zkVM guest formatting
         run: cargo fmt --manifest-path zkvm/guest/Cargo.toml --all --check
 
+      - name: Run Marketplace V2 bid scenario tests
+        run: cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml bid_marketplace
+
       - name: Verify committed protocol artifacts
         run: npm run artifacts:check
 

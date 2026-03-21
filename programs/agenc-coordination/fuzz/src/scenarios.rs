@@ -814,6 +814,562 @@ pub fn simulate_double_completion(
     (result1, result2)
 }
 
+// ============================================================================
+// Marketplace V2 Bid Lifecycle Simulation
+// ============================================================================
+
+/// Marketplace V2 bid-book state enum values.
+pub mod bid_book_state {
+    pub const OPEN: u8 = 0;
+    pub const ACCEPTED: u8 = 1;
+    pub const CLOSED: u8 = 2;
+}
+
+/// Marketplace V2 matching policy enum values.
+pub mod matching_policy {
+    pub const BEST_PRICE: u8 = 0;
+    pub const BEST_ETA: u8 = 1;
+    pub const WEIGHTED_SCORE: u8 = 2;
+}
+
+/// Marketplace V2 bid state enum values.
+pub mod bid_state {
+    pub const ACTIVE: u8 = 0;
+    pub const ACCEPTED: u8 = 1;
+}
+
+const TASK_TYPE_BID_EXCLUSIVE: u8 = 3;
+const BID_WINDOW_SECONDS: i64 = 86_400;
+const MAX_CONFIDENCE_BPS: u16 = 10_000;
+const MAX_ACTIVE_BID_TASKS: u8 = 10;
+
+/// Simulated Marketplace V2 config.
+#[derive(Debug, Clone)]
+pub struct SimulatedBidMarketplaceConfig {
+    pub min_bid_bond_lamports: u64,
+    pub bid_creation_cooldown_secs: i64,
+    pub max_bids_per_24h: u16,
+    pub max_active_bids_per_task: u16,
+    pub max_bid_lifetime_secs: i64,
+    pub accepted_no_show_slash_bps: u16,
+}
+
+impl Default for SimulatedBidMarketplaceConfig {
+    fn default() -> Self {
+        Self {
+            min_bid_bond_lamports: 100_000,
+            bid_creation_cooldown_secs: 60,
+            max_bids_per_24h: 24,
+            max_active_bids_per_task: 8,
+            max_bid_lifetime_secs: 86_400,
+            accepted_no_show_slash_bps: 2_500,
+        }
+    }
+}
+
+/// Simulated bidder market state.
+#[derive(Debug, Clone, Default)]
+pub struct SimulatedBidderMarketState {
+    pub bidder: [u8; 32],
+    pub last_bid_created_at: i64,
+    pub bid_window_started_at: i64,
+    pub bids_created_in_window: u16,
+    pub active_bid_count: u16,
+    pub total_bids_created: u64,
+    pub total_bids_accepted: u64,
+}
+
+/// Simulated bid book state.
+#[derive(Debug, Clone)]
+pub struct SimulatedBidBook {
+    pub task: [u8; 32],
+    pub state: u8,
+    pub policy: u8,
+    pub accepted_bid: Option<[u8; 32]>,
+    pub version: u64,
+    pub total_bids: u32,
+    pub active_bids: u16,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Default for SimulatedBidBook {
+    fn default() -> Self {
+        Self {
+            task: [0u8; 32],
+            state: bid_book_state::OPEN,
+            policy: matching_policy::BEST_PRICE,
+            accepted_bid: None,
+            version: 0,
+            total_bids: 0,
+            active_bids: 0,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+/// Simulated task bid state.
+#[derive(Debug, Clone, Default)]
+pub struct SimulatedBid {
+    pub bid_id: [u8; 32],
+    pub task: [u8; 32],
+    pub bidder: [u8; 32],
+    pub requested_reward_lamports: u64,
+    pub eta_seconds: u32,
+    pub confidence_bps: u16,
+    pub reputation_snapshot_bps: u16,
+    pub expires_at: i64,
+    pub state: u8,
+    pub bond_lamports: u64,
+    pub is_closed: bool,
+}
+
+fn require_bid_marketplace_task(task: &SimulatedTask) -> Option<SimulationResult> {
+    if task.task_type != TASK_TYPE_BID_EXCLUSIVE {
+        return Some(SimulationResult::Error("TaskNotBidExclusive".to_string()));
+    }
+
+    if task.max_workers != 1 {
+        return Some(SimulationResult::Error(
+            "BidExclusiveRequiresSingleWorker".to_string(),
+        ));
+    }
+
+    None
+}
+
+fn refresh_bid_window(state: &mut SimulatedBidderMarketState, now: i64) {
+    if state.bid_window_started_at == 0
+        || now.saturating_sub(state.bid_window_started_at) >= BID_WINDOW_SECONDS
+    {
+        state.bid_window_started_at = now;
+        state.bids_created_in_window = 0;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_initialize_bid_book(
+    task: &SimulatedTask,
+    bid_book: &mut SimulatedBidBook,
+    now: i64,
+    policy: u8,
+    price_weight_bps: u16,
+    eta_weight_bps: u16,
+    confidence_weight_bps: u16,
+    reliability_weight_bps: u16,
+) -> SimulationResult {
+    if let Some(result) = require_bid_marketplace_task(task) {
+        return result;
+    }
+
+    if task.status != task_status::OPEN {
+        return SimulationResult::Error("TaskNotOpen".to_string());
+    }
+
+    if task.current_workers != 0 {
+        return SimulationResult::Error("TaskFullyClaimed".to_string());
+    }
+
+    match policy {
+        matching_policy::BEST_PRICE | matching_policy::BEST_ETA => {}
+        matching_policy::WEIGHTED_SCORE => {
+            let total = price_weight_bps
+                .checked_add(eta_weight_bps)
+                .and_then(|v| v.checked_add(confidence_weight_bps))
+                .and_then(|v| v.checked_add(reliability_weight_bps));
+
+            if total != Some(MAX_CONFIDENCE_BPS) {
+                return SimulationResult::Error("InvalidWeightedScoreWeights".to_string());
+            }
+        }
+        _ => return SimulationResult::Error("InvalidMatchingPolicy".to_string()),
+    }
+
+    bid_book.task = task.task_id;
+    bid_book.state = bid_book_state::OPEN;
+    bid_book.policy = policy;
+    bid_book.accepted_bid = None;
+    bid_book.version = 0;
+    bid_book.total_bids = 0;
+    bid_book.active_bids = 0;
+    bid_book.created_at = now;
+    bid_book.updated_at = now;
+
+    SimulationResult::Success
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_create_bid(
+    task: &SimulatedTask,
+    bid_book: &mut SimulatedBidBook,
+    bid: &mut SimulatedBid,
+    bidder: &SimulatedAgent,
+    bidder_state: &mut SimulatedBidderMarketState,
+    config: &SimulatedBidMarketplaceConfig,
+    now: i64,
+    min_reputation: u16,
+    bid_id: [u8; 32],
+    requested_reward_lamports: u64,
+    eta_seconds: u32,
+    confidence_bps: u16,
+    expires_at: i64,
+) -> SimulationResult {
+    if let Some(result) = require_bid_marketplace_task(task) {
+        return result;
+    }
+
+    if task.status != task_status::OPEN {
+        return SimulationResult::Error("TaskNotOpen".to_string());
+    }
+
+    if bid_book.state != bid_book_state::OPEN {
+        return SimulationResult::Error("BidBookNotOpen".to_string());
+    }
+
+    if bidder.status != agent_status::ACTIVE {
+        return SimulationResult::Error("AgentNotActive".to_string());
+    }
+
+    if (bidder.capabilities & task.required_capabilities) != task.required_capabilities {
+        return SimulationResult::Error("InsufficientCapabilities".to_string());
+    }
+
+    if min_reputation > 0 && bidder.reputation < min_reputation {
+        return SimulationResult::Error("InsufficientReputation".to_string());
+    }
+
+    if requested_reward_lamports == 0 {
+        return SimulationResult::Error("InvalidReward".to_string());
+    }
+
+    if requested_reward_lamports > task.reward_amount {
+        return SimulationResult::Error("BidPriceExceedsTaskBudget".to_string());
+    }
+
+    if eta_seconds == 0 {
+        return SimulationResult::Error("InvalidBidEta".to_string());
+    }
+
+    if confidence_bps > MAX_CONFIDENCE_BPS {
+        return SimulationResult::Error("InvalidBidConfidence".to_string());
+    }
+
+    if expires_at <= now {
+        return SimulationResult::Error("InvalidBidExpiry".to_string());
+    }
+
+    if task.deadline > 0 && expires_at > task.deadline {
+        return SimulationResult::Error("InvalidBidExpiry".to_string());
+    }
+
+    if expires_at.saturating_sub(now) > config.max_bid_lifetime_secs {
+        return SimulationResult::Error("InvalidBidExpiry".to_string());
+    }
+
+    if bid_book.active_bids >= config.max_active_bids_per_task {
+        return SimulationResult::Error("BidBookCapacityReached".to_string());
+    }
+
+    if bidder_state.bidder == [0u8; 32] {
+        bidder_state.bidder = bidder.agent_id;
+    }
+
+    refresh_bid_window(bidder_state, now);
+
+    if bidder_state.last_bid_created_at > 0
+        && now.saturating_sub(bidder_state.last_bid_created_at) < config.bid_creation_cooldown_secs
+    {
+        return SimulationResult::Error("CooldownNotElapsed".to_string());
+    }
+
+    if bidder_state.bids_created_in_window >= config.max_bids_per_24h {
+        return SimulationResult::Error("RateLimitExceeded".to_string());
+    }
+
+    bid.bid_id = bid_id;
+    bid.task = task.task_id;
+    bid.bidder = bidder.agent_id;
+    bid.requested_reward_lamports = requested_reward_lamports;
+    bid.eta_seconds = eta_seconds;
+    bid.confidence_bps = confidence_bps;
+    bid.reputation_snapshot_bps = bidder.reputation;
+    bid.expires_at = expires_at;
+    bid.state = bid_state::ACTIVE;
+    bid.bond_lamports = config.min_bid_bond_lamports;
+    bid.is_closed = false;
+
+    bidder_state.last_bid_created_at = now;
+    bidder_state.bids_created_in_window = match bidder_state.bids_created_in_window.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bidder_state.active_bid_count = match bidder_state.active_bid_count.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bidder_state.total_bids_created = match bidder_state.total_bids_created.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+
+    bid_book.version = match bid_book.version.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.total_bids = match bid_book.total_bids.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.active_bids = match bid_book.active_bids.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.updated_at = now;
+
+    SimulationResult::Success
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_update_bid(
+    task: &SimulatedTask,
+    bid_book: &mut SimulatedBidBook,
+    bid: &mut SimulatedBid,
+    bidder: &SimulatedAgent,
+    config: &SimulatedBidMarketplaceConfig,
+    now: i64,
+    requested_reward_lamports: u64,
+    eta_seconds: u32,
+    confidence_bps: u16,
+    expires_at: i64,
+) -> SimulationResult {
+    if let Some(result) = require_bid_marketplace_task(task) {
+        return result;
+    }
+
+    if bid.is_closed || bid.state != bid_state::ACTIVE {
+        return SimulationResult::Error("BidNotActive".to_string());
+    }
+
+    if bid_book.state != bid_book_state::OPEN {
+        return SimulationResult::Error("BidBookNotOpen".to_string());
+    }
+
+    if task.status != task_status::OPEN {
+        return SimulationResult::Error("TaskNotOpen".to_string());
+    }
+
+    if requested_reward_lamports == 0 {
+        return SimulationResult::Error("InvalidReward".to_string());
+    }
+
+    if requested_reward_lamports > task.reward_amount {
+        return SimulationResult::Error("BidPriceExceedsTaskBudget".to_string());
+    }
+
+    if eta_seconds == 0 {
+        return SimulationResult::Error("InvalidBidEta".to_string());
+    }
+
+    if confidence_bps > MAX_CONFIDENCE_BPS {
+        return SimulationResult::Error("InvalidBidConfidence".to_string());
+    }
+
+    if expires_at <= now {
+        return SimulationResult::Error("InvalidBidExpiry".to_string());
+    }
+
+    if task.deadline > 0 && expires_at > task.deadline {
+        return SimulationResult::Error("InvalidBidExpiry".to_string());
+    }
+
+    if expires_at.saturating_sub(now) > config.max_bid_lifetime_secs {
+        return SimulationResult::Error("InvalidBidExpiry".to_string());
+    }
+
+    bid.requested_reward_lamports = requested_reward_lamports;
+    bid.eta_seconds = eta_seconds;
+    bid.confidence_bps = confidence_bps;
+    bid.reputation_snapshot_bps = bidder.reputation;
+    bid.expires_at = expires_at;
+
+    bid_book.version = match bid_book.version.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.updated_at = now;
+
+    SimulationResult::Success
+}
+
+pub fn simulate_cancel_bid(
+    task: &SimulatedTask,
+    bid_book: &mut SimulatedBidBook,
+    bid: &mut SimulatedBid,
+    bidder_state: &mut SimulatedBidderMarketState,
+    now: i64,
+) -> SimulationResult {
+    if let Some(result) = require_bid_marketplace_task(task) {
+        return result;
+    }
+
+    if bid.is_closed || bid.state != bid_state::ACTIVE {
+        return SimulationResult::Error("BidNotActive".to_string());
+    }
+
+    if bid_book.state != bid_book_state::OPEN && bid_book.state != bid_book_state::ACCEPTED {
+        return SimulationResult::Error("BidBookNotOpen".to_string());
+    }
+
+    if bid_book.accepted_bid == Some(bid.bid_id) {
+        return SimulationResult::Error("BidAlreadyAccepted".to_string());
+    }
+
+    bid_book.active_bids = match bid_book.active_bids.checked_sub(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.version = match bid_book.version.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.updated_at = now;
+
+    bidder_state.active_bid_count = match bidder_state.active_bid_count.checked_sub(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+
+    bid.is_closed = true;
+    bid.bond_lamports = 0;
+
+    SimulationResult::Success
+}
+
+pub fn simulate_accept_bid(
+    task: &mut SimulatedTask,
+    bid_book: &mut SimulatedBidBook,
+    bid: &mut SimulatedBid,
+    bidder: &mut SimulatedAgent,
+    bidder_state: &mut SimulatedBidderMarketState,
+    now: i64,
+    min_reputation: u16,
+) -> SimulationResult {
+    if let Some(result) = require_bid_marketplace_task(task) {
+        return result;
+    }
+
+    if task.status != task_status::OPEN {
+        return SimulationResult::Error("TaskNotOpen".to_string());
+    }
+
+    if task.current_workers != 0 {
+        return SimulationResult::Error("TaskFullyClaimed".to_string());
+    }
+
+    if bid_book.state != bid_book_state::OPEN {
+        return SimulationResult::Error("BidBookNotOpen".to_string());
+    }
+
+    if bid.is_closed || bid.state != bid_state::ACTIVE {
+        return SimulationResult::Error("BidNotActive".to_string());
+    }
+
+    if now >= bid.expires_at {
+        return SimulationResult::Error("TaskExpired".to_string());
+    }
+
+    if bidder.status != agent_status::ACTIVE {
+        return SimulationResult::Error("AgentNotActive".to_string());
+    }
+
+    if (bidder.capabilities & task.required_capabilities) != task.required_capabilities {
+        return SimulationResult::Error("InsufficientCapabilities".to_string());
+    }
+
+    if min_reputation > 0 && bidder.reputation < min_reputation {
+        return SimulationResult::Error("InsufficientReputation".to_string());
+    }
+
+    if bidder.active_tasks >= MAX_ACTIVE_BID_TASKS {
+        return SimulationResult::Error("MaxActiveTasksReached".to_string());
+    }
+
+    let old_status = task.status;
+    task.current_workers = 1;
+    task.status = task_status::IN_PROGRESS;
+
+    if let TaskInvariantResult::InvalidStateTransition { from, to } =
+        check_task_state_transition(old_status, task.status)
+    {
+        return SimulationResult::InvariantViolation(format!(
+            "T1: Invalid state transition from {} to {}",
+            from, to
+        ));
+    }
+
+    bid.state = bid_state::ACCEPTED;
+    bid_book.state = bid_book_state::ACCEPTED;
+    bid_book.accepted_bid = Some(bid.bid_id);
+    bid_book.version = match bid_book.version.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.updated_at = now;
+
+    bidder.active_tasks = match bidder.active_tasks.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+
+    bidder_state.total_bids_accepted = match bidder_state.total_bids_accepted.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+
+    SimulationResult::Success
+}
+
+pub fn simulate_expire_bid(
+    task: &SimulatedTask,
+    bid_book: &mut SimulatedBidBook,
+    bid: &mut SimulatedBid,
+    bidder_state: &mut SimulatedBidderMarketState,
+    now: i64,
+) -> SimulationResult {
+    if let Some(result) = require_bid_marketplace_task(task) {
+        return result;
+    }
+
+    if bid.is_closed || bid.state != bid_state::ACTIVE {
+        return SimulationResult::Error("BidNotActive".to_string());
+    }
+
+    if now <= bid.expires_at && bid_book.state != bid_book_state::CLOSED {
+        return SimulationResult::Error("BidNotExpired".to_string());
+    }
+
+    bid_book.active_bids = match bid_book.active_bids.checked_sub(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.version = match bid_book.version.checked_add(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    bid_book.updated_at = now;
+
+    bidder_state.active_bid_count = match bidder_state.active_bid_count.checked_sub(1) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+
+    bid.is_closed = true;
+    bid.bond_lamports = 0;
+
+    SimulationResult::Success
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

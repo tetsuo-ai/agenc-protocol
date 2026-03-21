@@ -29,6 +29,12 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 - complete task private
 - cancel task
 
+### Marketplace V2
+
+- initialize / update bid marketplace config
+- initialize bid book
+- create / update / cancel / accept / expire bid
+
 ### Disputes and slashing
 
 - initiate / vote / resolve dispute
@@ -67,10 +73,20 @@ The complete model lives in `src/state.rs`. Important state families include:
 - zk config
 - agent accounts
 - task and claim accounts
+- Marketplace V2 bid marketplace config, bidder market state, bid books, and bids
 - escrow accounts
 - dispute and vote accounts
 - governance config and proposals
 - reputation and skill-related accounts
+
+## Marketplace V2 Rent / Compute Notes
+
+- `initialize_bid_book` allocates a `TaskBidBook`; `create_bid` allocates a `TaskBid` and, on a bidder's first bid, a `BidderMarketState`.
+- `create_bid` also transfers the minimum bid bond into the `TaskBid` PDA, so rent + bond funding are both part of bidder-side cost.
+- Matching policy and weighted-score config are stored on-chain for indexers and auditability, but `accept_bid` stays creator-driven and O(1): the instruction does not scan or rank competing bids on-chain.
+- `max_active_bids_per_task`, bidder cooldown, and the 24-hour rate limit intentionally cap hot-task fanout and keep create/expire paths bounded in compute and account churn.
+- Accepted-bid settlement happens later through `bid_settlement_helpers` in task completion/cancellation/dispute flows, using appended `remaining_accounts`; private proof-dependent completion shifts that settlement suffix by one parent-task account.
+- Closing an unaccepted bid returns its remaining lamports to the bidder authority by closing the bid account; accepted bids stay resident until settlement closes the accepted bid and either reopens or closes the bid book.
 
 ## Where To Edit
 
@@ -80,4 +96,3 @@ The complete model lives in `src/state.rs`. Important state families include:
 - update error semantics: `src/errors.rs`
 
 Use the file layout in `src/instructions/` as the real ownership guide instead of older condensed summaries.
-

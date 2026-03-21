@@ -17,13 +17,14 @@ See `Anchor.toml`, `programs/agenc-coordination/Cargo.toml`, and `.github/workfl
 npm ci
 cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
 cargo fmt --manifest-path zkvm/guest/Cargo.toml --all --check
+cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml bid_marketplace
 npm run artifacts:check
 npm run build
 npm run typecheck
 npm run pack:smoke
 ```
 
-Those are the same gates enforced by CI.
+Those are the same gates enforced by CI for Marketplace V2 work.
 
 ## Artifact Commands
 
@@ -42,3 +43,8 @@ Use `anchor build` before refreshing artifacts when the on-chain program or IDL 
 
 The program also ships a property/invariant harness under `programs/agenc-coordination/fuzz/`. Treat it as the place for invariant-oriented testing and threat-model assertions when touching state transitions or safety properties.
 
+For Marketplace V2 bid flow changes, run:
+
+```bash
+cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml bid_marketplace
+```

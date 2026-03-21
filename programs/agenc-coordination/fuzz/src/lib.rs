@@ -56,3 +56,7 @@ mod dependency_graph_tests;
 #[cfg(test)]
 #[path = "../fuzz_targets/dispute_timing.rs"]
 mod dispute_timing_tests;
+
+#[cfg(test)]
+#[path = "../fuzz_targets/bid_marketplace.rs"]
+mod bid_marketplace_tests;
