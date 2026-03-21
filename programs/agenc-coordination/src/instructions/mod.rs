@@ -19,9 +19,9 @@
 //! handlers are accessed via their module path (e.g., `claim_task::handler`)
 //! rather than directly, so the ambiguity doesn't affect usage.
 
+pub mod bid_settlement_helpers;
 pub mod completion_helpers;
 pub mod constants;
-pub mod bid_settlement_helpers;
 pub mod dispute_helpers;
 pub mod lamport_transfer;
 pub mod rate_limit_helpers;
