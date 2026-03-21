@@ -81,6 +81,22 @@ pub(crate) fn load_task_escrow<'info>(
     Account::<TaskEscrow>::try_from(escrow_info_ref)
 }
 
+fn validate_cancel_prereqs(task: &Task, now: i64) -> Result<()> {
+    require!(
+        task.status.can_transition_to(TaskStatus::Cancelled),
+        CoordinationError::InvalidStatusTransition
+    );
+
+    let can_cancel = match task.status {
+        TaskStatus::Open => true,
+        TaskStatus::InProgress => task.deadline > 0 && now > task.deadline && task.completions == 0,
+        _ => false,
+    };
+
+    require!(can_cancel, CoordinationError::TaskCannotBeCancelled);
+    Ok(())
+}
+
 fn process_cancel_task_impl<'info>(
     accounts: &mut CancelTask<'info>,
     remaining_accounts: &[AccountInfo<'info>],
@@ -104,25 +120,8 @@ fn process_cancel_task_impl<'info>(
     let clock = Clock::get()?;
     require!(task.bump > 0, CoordinationError::CorruptedData);
 
-    // Validate status transition is allowed (fix #538)
-    require!(
-        task.status.can_transition_to(TaskStatus::Cancelled),
-        CoordinationError::InvalidStatusTransition
-    );
-
-    // Can only cancel if:
-    // 1. Task is open (no workers yet)
-    // 2. Task has expired and no completions
-    let can_cancel = match task.status {
-        TaskStatus::Open => true,
-        TaskStatus::InProgress => {
-            // Can cancel if deadline passed and no completions
-            task.deadline > 0 && clock.unix_timestamp > task.deadline && task.completions == 0
-        }
-        _ => false,
-    };
-
-    require!(can_cancel, CoordinationError::TaskCannotBeCancelled);
+    // Validate protocol-level cancellation rules before escrow deserialization.
+    validate_cancel_prereqs(task, clock.unix_timestamp)?;
 
     let mut escrow = load_task_escrow(&accounts.escrow)?;
     require!(escrow.bump > 0, CoordinationError::CorruptedData);
@@ -406,4 +405,79 @@ fn process_cancel_task_impl<'info>(
     escrow.close(accounts.authority.to_account_info())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_test_task(status: TaskStatus, deadline: i64, completions: u8) -> Task {
+        Task {
+            status,
+            deadline,
+            completions,
+            ..Task::default()
+        }
+    }
+
+    fn assert_anchor_error_code<T>(result: Result<T>, expected: CoordinationError) {
+        let expected_code: u32 = expected.into();
+        match result {
+            Ok(_) => panic!("expected AnchorError code {expected_code}, got success"),
+            Err(anchor_lang::error::Error::AnchorError(anchor_err)) => {
+                assert_eq!(anchor_err.error_code_number, expected_code);
+            }
+            Err(other) => {
+                panic!("expected AnchorError code {expected_code}, got {other:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn open_task_can_be_cancelled() {
+        let task = build_test_task(TaskStatus::Open, 0, 0);
+        validate_cancel_prereqs(&task, 100).unwrap();
+    }
+
+    #[test]
+    fn expired_in_progress_task_without_completions_can_be_cancelled() {
+        let task = build_test_task(TaskStatus::InProgress, 100, 0);
+        validate_cancel_prereqs(&task, 101).unwrap();
+    }
+
+    #[test]
+    fn in_progress_task_before_deadline_returns_task_cannot_be_cancelled() {
+        let task = build_test_task(TaskStatus::InProgress, 100, 0);
+        assert_anchor_error_code(
+            validate_cancel_prereqs(&task, 100),
+            CoordinationError::TaskCannotBeCancelled,
+        );
+    }
+
+    #[test]
+    fn in_progress_task_with_completions_returns_task_cannot_be_cancelled() {
+        let task = build_test_task(TaskStatus::InProgress, 100, 1);
+        assert_anchor_error_code(
+            validate_cancel_prereqs(&task, 101),
+            CoordinationError::TaskCannotBeCancelled,
+        );
+    }
+
+    #[test]
+    fn completed_task_returns_invalid_status_transition() {
+        let task = build_test_task(TaskStatus::Completed, 0, 0);
+        assert_anchor_error_code(
+            validate_cancel_prereqs(&task, 100),
+            CoordinationError::InvalidStatusTransition,
+        );
+    }
+
+    #[test]
+    fn cancelled_task_returns_invalid_status_transition() {
+        let task = build_test_task(TaskStatus::Cancelled, 0, 0);
+        assert_anchor_error_code(
+            validate_cancel_prereqs(&task, 100),
+            CoordinationError::InvalidStatusTransition,
+        );
+    }
 }
