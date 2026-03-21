@@ -21,6 +21,7 @@
 
 pub mod completion_helpers;
 pub mod constants;
+pub mod bid_settlement_helpers;
 pub mod dispute_helpers;
 pub mod lamport_transfer;
 pub mod rate_limit_helpers;
@@ -32,6 +33,7 @@ pub mod zk_config_helpers;
 
 pub mod apply_dispute_slash;
 pub mod apply_initiator_slash;
+pub mod bid_marketplace;
 pub mod cancel_dispute;
 pub mod cancel_proposal;
 pub mod cancel_task;
@@ -80,6 +82,8 @@ pub mod withdraw_reputation_stake;
 pub use apply_dispute_slash::*;
 #[allow(ambiguous_glob_reexports)]
 pub use apply_initiator_slash::*;
+#[allow(ambiguous_glob_reexports)]
+pub use bid_marketplace::*;
 #[allow(ambiguous_glob_reexports)]
 pub use cancel_dispute::*;
 #[allow(ambiguous_glob_reexports)]

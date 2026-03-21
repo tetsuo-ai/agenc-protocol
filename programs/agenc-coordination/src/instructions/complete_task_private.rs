@@ -1,10 +1,13 @@
 //! Private task completion with RISC Zero verifier-router verification.
 
 use crate::errors::CoordinationError;
+use crate::instructions::bid_settlement_helpers::{
+    finalize_bid_task_completion, load_bid_task_completion_meta,
+};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    calculate_fee_with_reputation, execute_completion_rewards, validate_completion_prereqs,
-    validate_task_dependency,
+    calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
+    validate_completion_prereqs, validate_task_dependency,
 };
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
@@ -70,12 +73,12 @@ pub struct CompleteTaskPrivate<'info> {
 
     #[account(
         mut,
-        close = authority,
         seeds = [b"claim", task.key().as_ref(), worker.key().as_ref()],
-        bump = claim.bump,
-        constraint = claim.task == task.key() @ CoordinationError::NotClaimed
+        bump
     )]
-    pub claim: Box<Account<'info, TaskClaim>>,
+    /// CHECK: Claim PDA is validated by seeds and loaded in the handler so a missing
+    /// claim can surface `NotClaimed` instead of Anchor's `AccountNotInitialized`.
+    pub claim: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -190,37 +193,89 @@ pub struct CompleteTaskPrivate<'info> {
     pub token_program: Option<Program<'info, Token>>,
 }
 
-pub fn complete_task_private(
-    mut ctx: Context<CompleteTaskPrivate>,
+pub fn complete_task_private<'info>(
+    ctx: Context<'_, '_, '_, 'info, CompleteTaskPrivate<'info>>,
+    task_id: u64,
+    proof: PrivateCompletionPayload,
+) -> Result<()> {
+    complete_task_private_impl(
+        ctx.accounts,
+        ctx.remaining_accounts,
+        ctx.program_id,
+        ctx.bumps.binding_spend,
+        ctx.bumps.nullifier_spend,
+        task_id,
+        proof,
+    )
+}
+
+fn complete_task_private_impl<'info>(
+    accounts: &mut CompleteTaskPrivate<'info>,
+    remaining_accounts: &[AccountInfo<'info>],
+    program_id: &Pubkey,
+    binding_spend_bump: u8,
+    nullifier_spend_bump: u8,
     task_id: u64,
     proof: PrivateCompletionPayload,
 ) -> Result<()> {
     let clock = Clock::get()?;
-    let task_key = ctx.accounts.task.key();
-    let decoded_proof = verify_private_completion_stage(&ctx, &task_key, task_id, &proof, &clock)?;
-    settle_private_completion(&mut ctx, &decoded_proof, &clock)
-}
-
-#[inline(never)]
-fn settle_private_completion(
-    ctx: &mut Context<CompleteTaskPrivate>,
-    decoded_proof: &DecodedPrivateProof,
-    clock: &Clock,
-) -> Result<()> {
+    let task_key = accounts.task.key();
+    let mut claim = load_task_claim_or_not_claimed(&accounts.claim, &task_key)?;
+    let decoded_proof = verify_private_completion_stage(
+        accounts,
+        remaining_accounts,
+        program_id,
+        &task_key,
+        &claim,
+        task_id,
+        &proof,
+        &clock,
+    )?;
     record_private_spends(
-        ctx.accounts,
+        accounts,
         &decoded_proof.parsed_journal,
-        clock,
-        ctx.bumps.binding_spend,
-        ctx.bumps.nullifier_spend,
+        &clock,
+        binding_spend_bump,
+        nullifier_spend_bump,
     );
-    let token_accounts = build_token_payment_accounts(ctx.accounts)?;
+    let token_accounts = build_token_payment_accounts(accounts)?;
+    let bid_settlement = load_bid_task_completion_meta(
+        accounts.task.as_ref(),
+        &task_key,
+        &claim,
+        remaining_accounts,
+    )?;
+    let reward_amount_override = bid_settlement
+        .as_ref()
+        .map(|settlement| settlement.accepted_bid_price);
+    let authority_info = accounts.authority.to_account_info();
+    let treasury_info = accounts.treasury.to_account_info();
+    let creator_info = accounts.creator.to_account_info();
     finalize_private_completion(
-        ctx.accounts,
+        &mut accounts.task,
+        &mut claim,
+        &mut accounts.escrow,
+        &mut accounts.worker,
+        &mut accounts.protocol_config,
+        authority_info,
+        treasury_info,
+        creator_info,
         decoded_proof.parsed_journal.output_commitment,
-        clock,
+        &clock,
+        reward_amount_override,
         token_accounts,
-    )
+    )?;
+    if let Some(settlement) = &bid_settlement {
+        finalize_bid_task_completion(
+            remaining_accounts,
+            &task_key,
+            &claim,
+            settlement,
+            clock.unix_timestamp,
+        )?;
+    }
+    claim.close(accounts.authority.to_account_info())?;
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -255,28 +310,31 @@ struct DecodedPrivateProof {
 
 #[inline(never)]
 fn verify_private_completion_stage(
-    ctx: &Context<CompleteTaskPrivate>,
+    accounts: &CompleteTaskPrivate<'_>,
+    remaining_accounts: &[AccountInfo<'_>],
+    program_id: &Pubkey,
     task_key: &Pubkey,
+    claim: &TaskClaim,
     task_id: u64,
     proof: &PrivateCompletionPayload,
     clock: &Clock,
 ) -> Result<DecodedPrivateProof> {
     let decoded_proof = decode_private_completion_payload(proof)?;
     validate_completion_inputs(
-        &ctx.accounts.task,
+        &accounts.task,
         task_key,
-        &ctx.accounts.claim,
-        &ctx.accounts.protocol_config,
-        &ctx.accounts.zk_config,
-        ctx.remaining_accounts,
-        ctx.program_id,
-        &ctx.accounts.authority.key(),
+        claim,
+        &accounts.protocol_config,
+        &accounts.zk_config,
+        remaining_accounts,
+        program_id,
+        &accounts.authority.key(),
         task_id,
         proof,
         &decoded_proof.parsed_journal,
         clock,
     )?;
-    invoke_router_verification(ctx.accounts, proof, &decoded_proof)?;
+    invoke_router_verification(accounts, proof, &decoded_proof)?;
     Ok(decoded_proof)
 }
 
@@ -549,16 +607,19 @@ fn record_private_spends<'info>(
 
 #[inline(never)]
 fn finalize_private_completion<'info>(
-    accounts: &mut CompleteTaskPrivate<'info>,
+    task: &mut Account<'info, Task>,
+    claim: &mut Account<'info, TaskClaim>,
+    escrow: &mut Account<'info, TaskEscrow>,
+    worker: &mut Account<'info, AgentRegistration>,
+    protocol_config: &mut Account<'info, ProtocolConfig>,
+    authority: AccountInfo<'info>,
+    treasury: AccountInfo<'info>,
+    creator: AccountInfo<'info>,
     output_commitment: [u8; HASH_SIZE],
     clock: &Clock,
+    reward_amount_override: Option<u64>,
     token_accounts: Option<TokenPaymentAccounts<'info>>,
 ) -> Result<()> {
-    let task = &mut accounts.task;
-    let claim = &mut accounts.claim;
-    let escrow = &mut accounts.escrow;
-    let worker = &mut accounts.worker;
-
     claim.proof_hash = output_commitment;
     claim.result_data = [0u8; RESULT_DATA_SIZE];
     claim.is_completed = true;
@@ -570,11 +631,12 @@ fn finalize_private_completion<'info>(
         claim,
         escrow,
         worker,
-        &mut accounts.protocol_config,
-        &accounts.authority.to_account_info(),
-        &accounts.treasury.to_account_info(),
-        &accounts.creator.to_account_info(),
+        protocol_config,
+        &authority,
+        &treasury,
+        &creator,
         protocol_fee_bps,
+        reward_amount_override,
         None,
         clock,
         token_accounts,

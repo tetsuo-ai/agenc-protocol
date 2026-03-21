@@ -137,6 +137,47 @@ pub enum TaskType {
     /// Race condition handling: Claims are first-come-first-served.
     /// Only the first valid completion receives the reward.
     Competitive = 2,
+    /// Bid-market exclusive task. Direct `claim_task` is disallowed; the creator
+    /// must explicitly accept a bid before a normal `TaskClaim` is created.
+    BidExclusive = 3,
+}
+
+/// Bid book state for Marketplace V2.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+#[repr(u8)]
+pub enum BidBookState {
+    #[default]
+    Open = 0,
+    Accepted = 1,
+    Closed = 2,
+}
+
+/// Matching policy declared on a bid book.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+#[repr(u8)]
+pub enum MatchingPolicy {
+    #[default]
+    BestPrice = 0,
+    BestEta = 1,
+    WeightedScore = 2,
+}
+
+/// Bid lifecycle state.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+#[repr(u8)]
+pub enum TaskBidState {
+    #[default]
+    Active = 0,
+    Accepted = 1,
+}
+
+/// Weight configuration used when a bid book declares `WeightedScore`.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+pub struct WeightedScoreWeights {
+    pub price_weight_bps: u16,
+    pub eta_weight_bps: u16,
+    pub confidence_weight_bps: u16,
+    pub reliability_weight_bps: u16,
 }
 
 /// Task dependency type for speculative execution decisions
@@ -748,6 +789,93 @@ impl TaskEscrow {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
 }
 
+/// Marketplace V2 configuration account
+/// PDA seeds: ["bid_marketplace"]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct BidMarketplaceConfig {
+    pub authority: Pubkey,
+    pub min_bid_bond_lamports: u64,
+    pub bid_creation_cooldown_secs: i64,
+    pub max_bids_per_24h: u16,
+    pub max_active_bids_per_task: u16,
+    pub max_bid_lifetime_secs: i64,
+    pub accepted_no_show_slash_bps: u16,
+    pub bump: u8,
+}
+
+impl BidMarketplaceConfig {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Per-bidder bid-market activity state
+/// PDA seeds: ["bidder_market", bidder_agent]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct BidderMarketState {
+    pub bidder: Pubkey,
+    pub last_bid_created_at: i64,
+    pub bid_window_started_at: i64,
+    pub bids_created_in_window: u16,
+    pub active_bid_count: u16,
+    pub total_bids_created: u64,
+    pub total_bids_accepted: u64,
+    pub bump: u8,
+}
+
+impl BidderMarketState {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Bid book for a Marketplace V2 task
+/// PDA seeds: ["bid_book", task]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskBidBook {
+    pub task: Pubkey,
+    pub state: BidBookState,
+    pub policy: MatchingPolicy,
+    pub weights: WeightedScoreWeights,
+    pub accepted_bid: Option<Pubkey>,
+    pub version: u64,
+    pub total_bids: u32,
+    pub active_bids: u16,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub bump: u8,
+}
+
+impl TaskBidBook {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Single active bid per bidder per task in Marketplace V2
+/// PDA seeds: ["bid", task, bidder_agent]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskBid {
+    pub task: Pubkey,
+    pub bid_book: Pubkey,
+    pub bidder: Pubkey,
+    pub bidder_authority: Pubkey,
+    pub requested_reward_lamports: u64,
+    pub eta_seconds: u32,
+    pub confidence_bps: u16,
+    pub reputation_snapshot_bps: u16,
+    pub quality_guarantee_hash: [u8; 32],
+    pub metadata_hash: [u8; 32],
+    pub expires_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub state: TaskBidState,
+    pub bond_lamports: u64,
+    pub bump: u8,
+}
+
+impl TaskBid {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
 /// Agent's speculation bond account
 /// PDA seeds: ["speculation_bond", agent]
 #[account]
@@ -1245,6 +1373,26 @@ mod tests {
     #[test]
     fn test_task_escrow_size() {
         test_size_constant!(TaskEscrow);
+    }
+
+    #[test]
+    fn test_bid_marketplace_config_size() {
+        test_size_constant!(BidMarketplaceConfig);
+    }
+
+    #[test]
+    fn test_bidder_market_state_size() {
+        test_size_constant!(BidderMarketState);
+    }
+
+    #[test]
+    fn test_task_bid_book_size() {
+        test_size_constant!(TaskBidBook);
+    }
+
+    #[test]
+    fn test_task_bid_size() {
+        test_size_constant!(TaskBid);
     }
 
     #[test]

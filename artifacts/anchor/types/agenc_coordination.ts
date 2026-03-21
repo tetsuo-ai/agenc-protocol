@@ -15,6 +15,209 @@ export type AgencCoordination = {
   },
   "instructions": [
     {
+      "name": "acceptBid",
+      "docs": [
+        "Accept a Marketplace V2 bid and convert it into a normal task claim."
+      ],
+      "discriminator": [
+        196,
+        191,
+        1,
+        229,
+        144,
+        172,
+        122,
+        227
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bid",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidderMarketState",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  100,
+                  101,
+                  114,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidder",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "applyDisputeSlash",
       "docs": [
         "Apply slashing to a worker after losing a dispute."
@@ -327,6 +530,157 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "cancelBid",
+      "docs": [
+        "Cancel an open or parked Marketplace V2 bid."
+      ],
+      "discriminator": [
+        40,
+        243,
+        190,
+        217,
+        208,
+        253,
+        86,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bid",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidderMarketState",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  100,
+                  101,
+                  114,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidder",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "cancelDispute",
       "docs": [
         "Cancel a dispute before any votes are cast.",
@@ -505,6 +859,9 @@ export type AgencCoordination = {
         },
         {
           "name": "escrow",
+          "docs": [
+            "cancellation can surface protocol-specific errors before Anchor account loading."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -769,9 +1126,7 @@ export type AgencCoordination = {
         {
           "name": "claim",
           "docs": [
-            "Note: Claim account is closed after completion.",
-            "If proof-of-completion is needed later, store result_hash",
-            "in an event or separate completion record."
+            "claim can surface `NotClaimed` instead of Anchor's `AccountNotInitialized`."
           ],
           "writable": true,
           "pda": {
@@ -996,6 +1351,9 @@ export type AgencCoordination = {
         },
         {
           "name": "claim",
+          "docs": [
+            "claim can surface `NotClaimed` instead of Anchor's `AccountNotInitialized`."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -1354,6 +1712,247 @@ export type AgencCoordination = {
               "name": "privateCompletionPayload"
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "createBid",
+      "docs": [
+        "Create a Marketplace V2 bid for a task."
+      ],
+      "discriminator": [
+        234,
+        10,
+        213,
+        160,
+        52,
+        26,
+        91,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidMarketplace",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  112,
+                  108,
+                  97,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bid",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidderMarketState",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  100,
+                  101,
+                  114,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidder",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "bidder"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "requestedRewardLamports",
+          "type": "u64"
+        },
+        {
+          "name": "etaSeconds",
+          "type": "u32"
+        },
+        {
+          "name": "confidenceBps",
+          "type": "u16"
+        },
+        {
+          "name": "qualityGuaranteeHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expiresAt",
+          "type": "i64"
         }
       ]
     },
@@ -2321,6 +2920,183 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "expireBid",
+      "docs": [
+        "Expire an unaccepted Marketplace V2 bid."
+      ],
+      "discriminator": [
+        61,
+        99,
+        189,
+        49,
+        121,
+        31,
+        41,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bid",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidderMarketState",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  100,
+                  101,
+                  114,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidder",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidderAuthority",
+          "docs": [
+            "and only receives lamports when the expired bid account is closed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "expireClaim",
       "docs": [
         "Expire a stale claim to free up task slot.",
@@ -2684,6 +3460,228 @@ export type AgencCoordination = {
         }
       ],
       "args": []
+    },
+    {
+      "name": "initializeBidBook",
+      "docs": [
+        "Initialize a bid book for a Marketplace V2 task."
+      ],
+      "discriminator": [
+        13,
+        138,
+        190,
+        172,
+        182,
+        53,
+        234,
+        251
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "policy",
+          "type": "u8"
+        },
+        {
+          "name": "priceWeightBps",
+          "type": "u16"
+        },
+        {
+          "name": "etaWeightBps",
+          "type": "u16"
+        },
+        {
+          "name": "confidenceWeightBps",
+          "type": "u16"
+        },
+        {
+          "name": "reliabilityWeightBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "initializeBidMarketplace",
+      "docs": [
+        "Initialize Marketplace V2 global configuration."
+      ],
+      "discriminator": [
+        29,
+        114,
+        158,
+        184,
+        251,
+        125,
+        249,
+        176
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidMarketplace",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  112,
+                  108,
+                  97,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "minBidBondLamports",
+          "type": "u64"
+        },
+        {
+          "name": "bidCreationCooldownSecs",
+          "type": "i64"
+        },
+        {
+          "name": "maxBidsPer24h",
+          "type": "u16"
+        },
+        {
+          "name": "maxActiveBidsPerTask",
+          "type": "u16"
+        },
+        {
+          "name": "maxBidLifetimeSecs",
+          "type": "i64"
+        },
+        {
+          "name": "acceptedNoShowSlashBps",
+          "type": "u16"
+        }
+      ]
     },
     {
       "name": "initializeGovernance",
@@ -4588,6 +5586,308 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "updateBid",
+      "docs": [
+        "Update an existing Marketplace V2 bid."
+      ],
+      "discriminator": [
+        30,
+        24,
+        210,
+        187,
+        71,
+        101,
+        78,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bid",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidder",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "bidder"
+          ]
+        },
+        {
+          "name": "bidMarketplace",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  112,
+                  108,
+                  97,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "requestedRewardLamports",
+          "type": "u64"
+        },
+        {
+          "name": "etaSeconds",
+          "type": "u32"
+        },
+        {
+          "name": "confidenceBps",
+          "type": "u16"
+        },
+        {
+          "name": "qualityGuaranteeHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expiresAt",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "updateBidMarketplaceConfig",
+      "docs": [
+        "Update Marketplace V2 global configuration."
+      ],
+      "discriminator": [
+        188,
+        47,
+        195,
+        95,
+        22,
+        60,
+        246,
+        211
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidMarketplace",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  112,
+                  108,
+                  97,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "minBidBondLamports",
+          "type": "u64"
+        },
+        {
+          "name": "bidCreationCooldownSecs",
+          "type": "i64"
+        },
+        {
+          "name": "maxBidsPer24h",
+          "type": "u16"
+        },
+        {
+          "name": "maxActiveBidsPerTask",
+          "type": "u16"
+        },
+        {
+          "name": "maxBidLifetimeSecs",
+          "type": "i64"
+        },
+        {
+          "name": "acceptedNoShowSlashBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "updateMinVersion",
       "docs": [
         "Update minimum supported protocol version (multisig gated).",
@@ -5844,6 +7144,32 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "bidMarketplaceConfig",
+      "discriminator": [
+        47,
+        42,
+        142,
+        40,
+        13,
+        39,
+        48,
+        107
+      ]
+    },
+    {
+      "name": "bidderMarketState",
+      "discriminator": [
+        169,
+        198,
+        7,
+        111,
+        52,
+        32,
+        197,
+        88
+      ]
+    },
+    {
       "name": "bindingSpend",
       "discriminator": [
         196,
@@ -6065,6 +7391,32 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "taskBid",
+      "discriminator": [
+        173,
+        104,
+        90,
+        231,
+        189,
+        239,
+        133,
+        142
+      ]
+    },
+    {
+      "name": "taskBidBook",
+      "discriminator": [
+        65,
+        139,
+        202,
+        158,
+        184,
+        110,
+        242,
+        52
+      ]
+    },
+    {
       "name": "taskClaim",
       "discriminator": [
         115,
@@ -6181,6 +7533,97 @@ export type AgencCoordination = {
         79,
         179,
         220
+      ]
+    },
+    {
+      "name": "bidAccepted",
+      "discriminator": [
+        19,
+        140,
+        36,
+        175,
+        195,
+        5,
+        55,
+        193
+      ]
+    },
+    {
+      "name": "bidBookInitialized",
+      "discriminator": [
+        38,
+        162,
+        188,
+        135,
+        56,
+        9,
+        20,
+        181
+      ]
+    },
+    {
+      "name": "bidCancelled",
+      "discriminator": [
+        175,
+        52,
+        76,
+        11,
+        201,
+        1,
+        205,
+        65
+      ]
+    },
+    {
+      "name": "bidCreated",
+      "discriminator": [
+        197,
+        135,
+        149,
+        136,
+        71,
+        130,
+        31,
+        39
+      ]
+    },
+    {
+      "name": "bidExpired",
+      "discriminator": [
+        116,
+        54,
+        204,
+        245,
+        160,
+        244,
+        77,
+        97
+      ]
+    },
+    {
+      "name": "bidMarketplaceInitialized",
+      "discriminator": [
+        88,
+        3,
+        13,
+        52,
+        255,
+        35,
+        211,
+        60
+      ]
+    },
+    {
+      "name": "bidUpdated",
+      "discriminator": [
+        70,
+        153,
+        25,
+        253,
+        224,
+        94,
+        198,
+        148
       ]
     },
     {
@@ -6886,861 +8329,946 @@ export type AgencCoordination = {
     },
     {
       "code": 6028,
+      "name": "taskNotBidExclusive",
+      "msg": "Task is not a Marketplace V2 bid-exclusive task"
+    },
+    {
+      "code": 6029,
+      "name": "bidExclusiveRequiresSingleWorker",
+      "msg": "Bid-exclusive tasks must use max_workers = 1"
+    },
+    {
+      "code": 6030,
+      "name": "bidTaskSolOnly",
+      "msg": "Marketplace V2 bid tasks are SOL-only in v2"
+    },
+    {
+      "code": 6031,
+      "name": "bidTaskRequiresAcceptance",
+      "msg": "Bid-exclusive tasks require bid acceptance and cannot be claimed directly"
+    },
+    {
+      "code": 6032,
+      "name": "bidBookNotOpen",
+      "msg": "Bid book is not open"
+    },
+    {
+      "code": 6033,
+      "name": "bidBookNotAccepted",
+      "msg": "Bid book is not in accepted state"
+    },
+    {
+      "code": 6034,
+      "name": "bidSettlementAccountsRequired",
+      "msg": "Bid settlement accounts are required"
+    },
+    {
+      "code": 6035,
+      "name": "bidPriceExceedsTaskBudget",
+      "msg": "Bid price exceeds task budget"
+    },
+    {
+      "code": 6036,
+      "name": "invalidBidExpiry",
+      "msg": "Bid expiry is invalid"
+    },
+    {
+      "code": 6037,
+      "name": "invalidBidEta",
+      "msg": "Bid ETA must be greater than zero"
+    },
+    {
+      "code": 6038,
+      "name": "invalidBidConfidence",
+      "msg": "Bid confidence must be between 0 and 10000 basis points"
+    },
+    {
+      "code": 6039,
+      "name": "invalidMatchingPolicy",
+      "msg": "Invalid matching policy"
+    },
+    {
+      "code": 6040,
+      "name": "invalidWeightedScoreWeights",
+      "msg": "Weighted score weights must sum to 10000 basis points"
+    },
+    {
+      "code": 6041,
+      "name": "bidNotActive",
+      "msg": "Bid is not active"
+    },
+    {
+      "code": 6042,
+      "name": "bidAlreadyAccepted",
+      "msg": "Bid has already been accepted"
+    },
+    {
+      "code": 6043,
+      "name": "bidNotExpired",
+      "msg": "Bid has not expired and bid book is not closed"
+    },
+    {
+      "code": 6044,
+      "name": "bidBookCapacityReached",
+      "msg": "Bid book has reached its active bid capacity"
+    },
+    {
+      "code": 6045,
       "name": "invalidDeadline",
       "msg": "Invalid deadline: deadline must be greater than zero"
     },
     {
-      "code": 6029,
+      "code": 6046,
       "name": "invalidReward",
       "msg": "Invalid reward: reward must be greater than zero"
     },
     {
-      "code": 6030,
+      "code": 6047,
       "name": "invalidRequiredCapabilities",
       "msg": "Invalid required capabilities: required_capabilities cannot be zero"
     },
     {
-      "code": 6031,
+      "code": 6048,
       "name": "competitiveTaskAlreadyWon",
       "msg": "Competitive task already completed by another worker"
     },
     {
-      "code": 6032,
+      "code": 6049,
       "name": "noWorkers",
       "msg": "Task has no workers"
     },
     {
-      "code": 6033,
+      "code": 6050,
       "name": "constraintHashMismatch",
       "msg": "Proof constraint hash does not match task's stored constraint hash"
     },
     {
-      "code": 6034,
+      "code": 6051,
       "name": "notPrivateTask",
       "msg": "Task is not a private task (no constraint hash set)"
     },
     {
-      "code": 6035,
+      "code": 6052,
       "name": "alreadyClaimed",
       "msg": "Worker has already claimed this task"
     },
     {
-      "code": 6036,
+      "code": 6053,
       "name": "notClaimed",
       "msg": "Worker has not claimed this task"
     },
     {
-      "code": 6037,
+      "code": 6054,
       "name": "claimAlreadyCompleted",
       "msg": "Claim has already been completed"
     },
     {
-      "code": 6038,
+      "code": 6055,
       "name": "claimNotExpired",
       "msg": "Claim has not expired yet"
     },
     {
-      "code": 6039,
+      "code": 6056,
       "name": "claimExpired",
       "msg": "Claim has expired"
     },
     {
-      "code": 6040,
+      "code": 6057,
       "name": "invalidExpiration",
       "msg": "Invalid expiration: expires_at cannot be zero"
     },
     {
-      "code": 6041,
+      "code": 6058,
       "name": "invalidProof",
       "msg": "Invalid proof of work"
     },
     {
-      "code": 6042,
+      "code": 6059,
       "name": "zkVerificationFailed",
       "msg": "ZK proof verification failed"
     },
     {
-      "code": 6043,
+      "code": 6060,
       "name": "invalidSealEncoding",
       "msg": "Invalid RISC0 seal encoding"
     },
     {
-      "code": 6044,
+      "code": 6061,
       "name": "invalidJournalLength",
       "msg": "Invalid RISC0 journal length"
     },
     {
-      "code": 6045,
+      "code": 6062,
       "name": "invalidJournalBinding",
       "msg": "Invalid RISC0 journal binding"
     },
     {
-      "code": 6046,
+      "code": 6063,
       "name": "invalidJournalTask",
       "msg": "RISC0 journal task binding mismatch"
     },
     {
-      "code": 6047,
+      "code": 6064,
       "name": "invalidJournalAuthority",
       "msg": "RISC0 journal authority binding mismatch"
     },
     {
-      "code": 6048,
+      "code": 6065,
       "name": "invalidImageId",
       "msg": "Invalid RISC0 image ID"
     },
     {
-      "code": 6049,
+      "code": 6066,
       "name": "trustedSelectorMismatch",
       "msg": "RISC0 seal selector does not match trusted selector"
     },
     {
-      "code": 6050,
+      "code": 6067,
       "name": "trustedVerifierProgramMismatch",
       "msg": "RISC0 verifier program does not match trusted verifier"
     },
     {
-      "code": 6051,
+      "code": 6068,
       "name": "routerAccountMismatch",
       "msg": "RISC0 router account constraints failed"
     },
     {
-      "code": 6052,
+      "code": 6069,
       "name": "invalidProofSize",
       "msg": "Invalid proof size - expected 256 bytes for RISC Zero seal body"
     },
     {
-      "code": 6053,
+      "code": 6070,
       "name": "invalidProofBinding",
       "msg": "Invalid proof binding: expected_binding cannot be all zeros"
     },
     {
-      "code": 6054,
+      "code": 6071,
       "name": "invalidOutputCommitment",
       "msg": "Invalid output commitment: output_commitment cannot be all zeros"
     },
     {
-      "code": 6055,
+      "code": 6072,
       "name": "invalidRentRecipient",
       "msg": "Invalid rent recipient: must be worker authority"
     },
     {
-      "code": 6056,
+      "code": 6073,
       "name": "gracePeriodNotPassed",
       "msg": "Grace period not passed: only worker authority can expire claim within 60 seconds of expiry"
     },
     {
-      "code": 6057,
+      "code": 6074,
       "name": "invalidProofHash",
       "msg": "Invalid proof hash: proof_hash cannot be all zeros"
     },
     {
-      "code": 6058,
+      "code": 6075,
       "name": "invalidResultData",
       "msg": "Invalid result data: result_data cannot be all zeros when provided"
     },
     {
-      "code": 6059,
+      "code": 6076,
       "name": "disputeNotActive",
       "msg": "Dispute is not active"
     },
     {
-      "code": 6060,
+      "code": 6077,
       "name": "votingEnded",
       "msg": "Voting period has ended"
     },
     {
-      "code": 6061,
+      "code": 6078,
       "name": "votingNotEnded",
       "msg": "Voting period has not ended"
     },
     {
-      "code": 6062,
+      "code": 6079,
       "name": "alreadyVoted",
       "msg": "Already voted on this dispute"
     },
     {
-      "code": 6063,
+      "code": 6080,
       "name": "notArbiter",
       "msg": "Not authorized to vote (not an arbiter)"
     },
     {
-      "code": 6064,
+      "code": 6081,
       "name": "insufficientVotes",
       "msg": "Insufficient votes to resolve"
     },
     {
-      "code": 6065,
+      "code": 6082,
       "name": "disputeAlreadyResolved",
       "msg": "Dispute has already been resolved"
     },
     {
-      "code": 6066,
+      "code": 6083,
       "name": "unauthorizedResolver",
       "msg": "Only protocol authority or dispute initiator can resolve disputes"
     },
     {
-      "code": 6067,
+      "code": 6084,
       "name": "activeDisputeVotes",
       "msg": "Agent has active dispute votes pending resolution"
     },
     {
-      "code": 6068,
+      "code": 6085,
       "name": "recentVoteActivity",
       "msg": "Agent must wait 24 hours after voting before deregistering"
     },
     {
-      "code": 6069,
+      "code": 6086,
       "name": "authorityAlreadyVoted",
       "msg": "Authority has already voted on this dispute"
     },
     {
-      "code": 6070,
+      "code": 6087,
       "name": "insufficientEvidence",
       "msg": "Insufficient dispute evidence provided"
     },
     {
-      "code": 6071,
+      "code": 6088,
       "name": "evidenceTooLong",
       "msg": "Dispute evidence exceeds maximum allowed length"
     },
     {
-      "code": 6072,
+      "code": 6089,
       "name": "disputeNotExpired",
       "msg": "Dispute has not expired"
     },
     {
-      "code": 6073,
+      "code": 6090,
       "name": "slashAlreadyApplied",
       "msg": "Dispute slashing already applied"
     },
     {
-      "code": 6074,
+      "code": 6091,
       "name": "slashWindowExpired",
       "msg": "Slash window expired: must apply slashing within 7 days of resolution"
     },
     {
-      "code": 6075,
+      "code": 6092,
       "name": "disputeNotResolved",
       "msg": "Dispute has not been resolved"
     },
     {
-      "code": 6076,
+      "code": 6093,
       "name": "notTaskParticipant",
       "msg": "Only task creator or workers can initiate disputes"
     },
     {
-      "code": 6077,
+      "code": 6094,
       "name": "invalidEvidenceHash",
       "msg": "Invalid evidence hash: cannot be all zeros"
     },
     {
-      "code": 6078,
+      "code": 6095,
       "name": "arbiterIsDisputeParticipant",
       "msg": "Arbiter cannot vote on disputes they are a participant in"
     },
     {
-      "code": 6079,
+      "code": 6096,
       "name": "insufficientQuorum",
       "msg": "Insufficient quorum: minimum number of voters not reached"
     },
     {
-      "code": 6080,
+      "code": 6097,
       "name": "activeDisputesExist",
       "msg": "Agent has active disputes as defendant and cannot deregister"
     },
     {
-      "code": 6081,
+      "code": 6098,
       "name": "tooManyDisputeVoters",
       "msg": "Dispute has reached maximum voter capacity"
     },
     {
-      "code": 6082,
+      "code": 6099,
       "name": "workerAgentRequired",
       "msg": "Worker agent account required when creator initiates dispute"
     },
     {
-      "code": 6083,
+      "code": 6100,
       "name": "workerClaimRequired",
       "msg": "Worker claim account required when creator initiates dispute"
     },
     {
-      "code": 6084,
+      "code": 6101,
       "name": "workerNotInDispute",
       "msg": "Worker was not involved in this dispute"
     },
     {
-      "code": 6085,
+      "code": 6102,
       "name": "initiatorCannotResolve",
       "msg": "Dispute initiator cannot resolve their own dispute"
     },
     {
-      "code": 6086,
+      "code": 6103,
       "name": "versionMismatch",
       "msg": "State version mismatch (concurrent modification)"
     },
     {
-      "code": 6087,
+      "code": 6104,
       "name": "stateKeyExists",
       "msg": "State key already exists"
     },
     {
-      "code": 6088,
+      "code": 6105,
       "name": "stateNotFound",
       "msg": "State not found"
     },
     {
-      "code": 6089,
+      "code": 6106,
       "name": "invalidStateValue",
       "msg": "Invalid state value: state_value cannot be all zeros"
     },
     {
-      "code": 6090,
+      "code": 6107,
       "name": "stateOwnershipViolation",
       "msg": "State ownership violation: only the creator agent can update this state"
     },
     {
-      "code": 6091,
+      "code": 6108,
       "name": "invalidStateKey",
       "msg": "Invalid state key: state_key cannot be all zeros"
     },
     {
-      "code": 6092,
+      "code": 6109,
       "name": "protocolAlreadyInitialized",
       "msg": "Protocol is already initialized"
     },
     {
-      "code": 6093,
+      "code": 6110,
       "name": "protocolNotInitialized",
       "msg": "Protocol is not initialized"
     },
     {
-      "code": 6094,
+      "code": 6111,
       "name": "invalidProtocolFee",
       "msg": "Invalid protocol fee (must be <= 1000 bps)"
     },
     {
-      "code": 6095,
+      "code": 6112,
       "name": "invalidTreasury",
       "msg": "Invalid treasury: treasury account cannot be default pubkey"
     },
     {
-      "code": 6096,
+      "code": 6113,
       "name": "invalidDisputeThreshold",
       "msg": "Invalid dispute threshold: must be 1-100 (percentage of votes required)"
     },
     {
-      "code": 6097,
+      "code": 6114,
       "name": "insufficientStake",
       "msg": "Insufficient stake for arbiter registration"
     },
     {
-      "code": 6098,
+      "code": 6115,
       "name": "multisigInvalidThreshold",
       "msg": "Invalid multisig threshold"
     },
     {
-      "code": 6099,
+      "code": 6116,
       "name": "multisigInvalidSigners",
       "msg": "Invalid multisig signer configuration"
     },
     {
-      "code": 6100,
+      "code": 6117,
       "name": "multisigNotEnoughSigners",
       "msg": "Not enough multisig signers"
     },
     {
-      "code": 6101,
+      "code": 6118,
       "name": "multisigDuplicateSigner",
       "msg": "Duplicate multisig signer provided"
     },
     {
-      "code": 6102,
+      "code": 6119,
       "name": "multisigDefaultSigner",
       "msg": "Multisig signer cannot be default pubkey"
     },
     {
-      "code": 6103,
+      "code": 6120,
       "name": "multisigSignerNotSystemOwned",
       "msg": "Multisig signer account not owned by System Program"
     },
     {
-      "code": 6104,
+      "code": 6121,
       "name": "invalidInput",
       "msg": "Invalid input parameter"
     },
     {
-      "code": 6105,
+      "code": 6122,
       "name": "arithmeticOverflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6106,
+      "code": 6123,
       "name": "voteOverflow",
       "msg": "Vote count overflow"
     },
     {
-      "code": 6107,
+      "code": 6124,
       "name": "insufficientFunds",
       "msg": "Insufficient funds"
     },
     {
-      "code": 6108,
+      "code": 6125,
       "name": "rewardTooSmall",
       "msg": "Reward too small: worker must receive at least 1 lamport"
     },
     {
-      "code": 6109,
+      "code": 6126,
       "name": "corruptedData",
       "msg": "Account data is corrupted"
     },
     {
-      "code": 6110,
+      "code": 6127,
       "name": "stringTooLong",
       "msg": "String too long"
     },
     {
-      "code": 6111,
+      "code": 6128,
       "name": "invalidAccountOwner",
       "msg": "Account owner validation failed: account not owned by this program"
     },
     {
-      "code": 6112,
+      "code": 6129,
       "name": "rateLimitExceeded",
       "msg": "Rate limit exceeded: maximum actions per 24h window reached"
     },
     {
-      "code": 6113,
+      "code": 6130,
       "name": "cooldownNotElapsed",
       "msg": "Cooldown period has not elapsed since last action"
     },
     {
-      "code": 6114,
+      "code": 6131,
       "name": "updateTooFrequent",
       "msg": "Agent update too frequent: must wait cooldown period"
     },
     {
-      "code": 6115,
+      "code": 6132,
       "name": "invalidCooldown",
       "msg": "Cooldown value cannot be negative"
     },
     {
-      "code": 6116,
+      "code": 6133,
       "name": "cooldownTooLarge",
       "msg": "Cooldown value exceeds maximum (24 hours)"
     },
     {
-      "code": 6117,
+      "code": 6134,
       "name": "rateLimitTooHigh",
       "msg": "Rate limit value exceeds maximum allowed (1000)"
     },
     {
-      "code": 6118,
+      "code": 6135,
       "name": "cooldownTooLong",
       "msg": "Cooldown value exceeds maximum allowed (1 week)"
     },
     {
-      "code": 6119,
+      "code": 6136,
       "name": "insufficientStakeForDispute",
       "msg": "Insufficient stake to initiate dispute"
     },
     {
-      "code": 6120,
+      "code": 6137,
       "name": "insufficientStakeForCreatorDispute",
       "msg": "Creator-initiated disputes require 2x the minimum stake"
     },
     {
-      "code": 6121,
+      "code": 6138,
       "name": "versionMismatchProtocol",
       "msg": "Protocol version mismatch: account version incompatible with current program"
     },
     {
-      "code": 6122,
+      "code": 6139,
       "name": "accountVersionTooOld",
       "msg": "Account version too old: migration required"
     },
     {
-      "code": 6123,
+      "code": 6140,
       "name": "accountVersionTooNew",
       "msg": "Account version too new: program upgrade required"
     },
     {
-      "code": 6124,
+      "code": 6141,
       "name": "invalidMigrationSource",
       "msg": "Migration not allowed: invalid source version"
     },
     {
-      "code": 6125,
+      "code": 6142,
       "name": "invalidMigrationTarget",
       "msg": "Migration not allowed: invalid target version"
     },
     {
-      "code": 6126,
+      "code": 6143,
       "name": "unauthorizedUpgrade",
       "msg": "Only upgrade authority can perform this action"
     },
     {
-      "code": 6127,
+      "code": 6144,
       "name": "unauthorizedProtocolAuthority",
       "msg": "Only protocol authority can perform this action"
     },
     {
-      "code": 6128,
+      "code": 6145,
       "name": "invalidMinVersion",
       "msg": "Minimum version cannot exceed current protocol version"
     },
     {
-      "code": 6129,
+      "code": 6146,
       "name": "protocolConfigRequired",
       "msg": "Protocol config account required: suspending an agent requires the protocol config PDA in remaining_accounts"
     },
     {
-      "code": 6130,
+      "code": 6147,
       "name": "parentTaskCancelled",
       "msg": "Parent task has been cancelled"
     },
     {
-      "code": 6131,
+      "code": 6148,
       "name": "parentTaskDisputed",
       "msg": "Parent task is in disputed state"
     },
     {
-      "code": 6132,
+      "code": 6149,
       "name": "invalidDependencyType",
       "msg": "Invalid dependency type"
     },
     {
-      "code": 6133,
+      "code": 6150,
       "name": "parentTaskNotCompleted",
       "msg": "Parent task must be completed before completing a proof-dependent task"
     },
     {
-      "code": 6134,
+      "code": 6151,
       "name": "parentTaskAccountRequired",
       "msg": "Parent task account required for proof-dependent task completion"
     },
     {
-      "code": 6135,
+      "code": 6152,
       "name": "unauthorizedCreator",
       "msg": "Parent task does not belong to the same creator"
     },
     {
-      "code": 6136,
+      "code": 6153,
       "name": "nullifierAlreadySpent",
       "msg": "Nullifier has already been spent - proof/knowledge reuse detected"
     },
     {
-      "code": 6137,
+      "code": 6154,
       "name": "invalidNullifier",
       "msg": "Invalid nullifier: nullifier value cannot be all zeros"
     },
     {
-      "code": 6138,
+      "code": 6155,
       "name": "incompleteWorkerAccounts",
       "msg": "All worker accounts must be provided when cancelling a task with active claims"
     },
     {
-      "code": 6139,
+      "code": 6156,
       "name": "workerAccountsRequired",
       "msg": "Worker accounts required when task has active workers"
     },
     {
-      "code": 6140,
+      "code": 6157,
       "name": "duplicateArbiter",
       "msg": "Duplicate arbiter provided in remaining_accounts"
     },
     {
-      "code": 6141,
+      "code": 6158,
       "name": "insufficientEscrowBalance",
       "msg": "Escrow has insufficient balance for reward transfer"
     },
     {
-      "code": 6142,
+      "code": 6159,
       "name": "invalidStatusTransition",
       "msg": "Invalid task status transition"
     },
     {
-      "code": 6143,
+      "code": 6160,
       "name": "stakeTooLow",
       "msg": "Stake value is below minimum required (0.001 SOL)"
     },
     {
-      "code": 6144,
+      "code": 6161,
       "name": "invalidMinStake",
       "msg": "min_stake_for_dispute must be greater than zero"
     },
     {
-      "code": 6145,
+      "code": 6162,
       "name": "invalidSlashAmount",
       "msg": "Slash amount must be greater than zero"
     },
     {
-      "code": 6146,
+      "code": 6163,
       "name": "bondAmountTooLow",
       "msg": "Bond amount too low"
     },
     {
-      "code": 6147,
+      "code": 6164,
       "name": "bondAlreadyExists",
       "msg": "Bond already exists"
     },
     {
-      "code": 6148,
+      "code": 6165,
       "name": "bondNotFound",
       "msg": "Bond not found"
     },
     {
-      "code": 6149,
+      "code": 6166,
       "name": "bondNotMatured",
       "msg": "Bond not yet matured"
     },
     {
-      "code": 6150,
+      "code": 6167,
       "name": "insufficientReputation",
       "msg": "Agent reputation below task minimum requirement"
     },
     {
-      "code": 6151,
+      "code": 6168,
       "name": "invalidMinReputation",
       "msg": "Invalid minimum reputation: must be <= 10000"
     },
     {
-      "code": 6152,
+      "code": 6169,
       "name": "developmentKeyNotAllowed",
       "msg": "Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use."
     },
     {
-      "code": 6153,
+      "code": 6170,
       "name": "selfTaskNotAllowed",
       "msg": "Cannot claim own task: worker authority matches task creator"
     },
     {
-      "code": 6154,
+      "code": 6171,
       "name": "missingTokenAccounts",
       "msg": "Token accounts not provided for token-denominated task"
     },
     {
-      "code": 6155,
+      "code": 6172,
       "name": "invalidTokenEscrow",
       "msg": "Token escrow ATA does not match expected derivation"
     },
     {
-      "code": 6156,
+      "code": 6173,
       "name": "invalidTokenMint",
       "msg": "Provided mint does not match task's reward_mint"
     },
     {
-      "code": 6157,
+      "code": 6174,
       "name": "tokenTransferFailed",
       "msg": "SPL token transfer CPI failed"
     },
     {
-      "code": 6158,
+      "code": 6175,
       "name": "proposalNotActive",
       "msg": "Proposal is not active"
     },
     {
-      "code": 6159,
+      "code": 6176,
       "name": "proposalVotingNotEnded",
       "msg": "Voting period has not ended"
     },
     {
-      "code": 6160,
+      "code": 6177,
       "name": "proposalVotingEnded",
       "msg": "Voting period has ended"
     },
     {
-      "code": 6161,
+      "code": 6178,
       "name": "proposalAlreadyExecuted",
       "msg": "Proposal has already been executed"
     },
     {
-      "code": 6162,
+      "code": 6179,
       "name": "proposalInsufficientQuorum",
       "msg": "Insufficient quorum for proposal execution"
     },
     {
-      "code": 6163,
+      "code": 6180,
       "name": "proposalNotApproved",
       "msg": "Proposal did not achieve majority"
     },
     {
-      "code": 6164,
+      "code": 6181,
       "name": "proposalUnauthorizedCancel",
       "msg": "Only the proposer can cancel this proposal"
     },
     {
-      "code": 6165,
+      "code": 6182,
       "name": "proposalInsufficientStake",
       "msg": "Insufficient stake to create a proposal"
     },
     {
-      "code": 6166,
+      "code": 6183,
       "name": "invalidProposalPayload",
       "msg": "Invalid proposal payload"
     },
     {
-      "code": 6167,
+      "code": 6184,
       "name": "invalidProposalType",
       "msg": "Invalid proposal type"
     },
     {
-      "code": 6168,
+      "code": 6185,
       "name": "treasuryInsufficientBalance",
       "msg": "Treasury spend amount exceeds available balance"
     },
     {
-      "code": 6169,
+      "code": 6186,
       "name": "timelockNotElapsed",
       "msg": "Execution timelock has not elapsed"
     },
     {
-      "code": 6170,
+      "code": 6187,
       "name": "invalidGovernanceParam",
       "msg": "Invalid governance configuration parameter"
     },
     {
-      "code": 6171,
+      "code": 6188,
       "name": "treasuryNotProgramOwned",
       "msg": "Treasury must be a program-owned PDA"
     },
     {
-      "code": 6172,
+      "code": 6189,
       "name": "treasuryNotSpendable",
       "msg": "Treasury must be program-owned, or a signer system account for governance spends"
     },
     {
-      "code": 6173,
+      "code": 6190,
       "name": "skillInvalidId",
       "msg": "Skill ID cannot be all zeros"
     },
     {
-      "code": 6174,
+      "code": 6191,
       "name": "skillInvalidName",
       "msg": "Skill name cannot be all zeros"
     },
     {
-      "code": 6175,
+      "code": 6192,
       "name": "skillInvalidContentHash",
       "msg": "Skill content hash cannot be all zeros"
     },
     {
-      "code": 6176,
+      "code": 6193,
       "name": "skillNotActive",
       "msg": "Skill is not active"
     },
     {
-      "code": 6177,
+      "code": 6194,
       "name": "skillInvalidRating",
       "msg": "Rating must be between 1 and 5"
     },
     {
-      "code": 6178,
+      "code": 6195,
       "name": "skillSelfRating",
       "msg": "Cannot rate own skill"
     },
     {
-      "code": 6179,
+      "code": 6196,
       "name": "skillUnauthorizedUpdate",
       "msg": "Only the skill author can update this skill"
     },
     {
-      "code": 6180,
+      "code": 6197,
       "name": "skillSelfPurchase",
       "msg": "Cannot purchase own skill"
     },
     {
-      "code": 6181,
+      "code": 6198,
       "name": "feedInvalidContentHash",
       "msg": "Feed content hash cannot be all zeros"
     },
     {
-      "code": 6182,
+      "code": 6199,
       "name": "feedInvalidTopic",
       "msg": "Feed topic cannot be all zeros"
     },
     {
-      "code": 6183,
+      "code": 6200,
       "name": "feedPostNotFound",
       "msg": "Feed post not found"
     },
     {
-      "code": 6184,
+      "code": 6201,
       "name": "feedSelfUpvote",
       "msg": "Cannot upvote own post"
     },
     {
-      "code": 6185,
+      "code": 6202,
       "name": "reputationStakeAmountTooLow",
       "msg": "Reputation stake amount must be greater than zero"
     },
     {
-      "code": 6186,
+      "code": 6203,
       "name": "reputationStakeLocked",
       "msg": "Reputation stake is locked: withdrawal before cooldown"
     },
     {
-      "code": 6187,
+      "code": 6204,
       "name": "reputationStakeInsufficientBalance",
       "msg": "Reputation stake has insufficient balance for withdrawal"
     },
     {
-      "code": 6188,
+      "code": 6205,
       "name": "reputationDelegationAmountInvalid",
       "msg": "Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT"
     },
     {
-      "code": 6189,
+      "code": 6206,
       "name": "reputationCannotDelegateSelf",
       "msg": "Cannot delegate reputation to self"
     },
     {
-      "code": 6190,
+      "code": 6207,
       "name": "reputationDelegationExpired",
       "msg": "Reputation delegation has expired"
     },
     {
-      "code": 6191,
+      "code": 6208,
       "name": "reputationAgentNotActive",
       "msg": "Agent must be Active to participate in reputation economy"
     },
     {
-      "code": 6192,
+      "code": 6209,
       "name": "reputationDisputesPending",
       "msg": "Agent has pending disputes as defendant: cannot withdraw stake"
     },
     {
-      "code": 6193,
+      "code": 6210,
       "name": "privateTaskRequiresZkProof",
       "msg": "Private tasks (non-zero constraint_hash) must use complete_task_private"
     },
     {
-      "code": 6194,
+      "code": 6211,
       "name": "invalidTokenAccountOwner",
       "msg": "Token account owner does not match expected authority"
     },
     {
-      "code": 6195,
+      "code": 6212,
       "name": "insufficientSeedEntropy",
       "msg": "Binding or nullifier seed has insufficient byte diversity (min 8 distinct bytes required)"
     },
     {
-      "code": 6196,
+      "code": 6213,
       "name": "skillPriceBelowMinimum",
       "msg": "Skill price below minimum required"
     },
     {
-      "code": 6197,
+      "code": 6214,
       "name": "skillPriceChanged",
       "msg": "Skill price changed since transaction was prepared"
     },
     {
-      "code": 6198,
+      "code": 6215,
       "name": "delegationCooldownNotElapsed",
       "msg": "Delegation must be active for minimum duration before revocation"
     },
     {
-      "code": 6199,
+      "code": 6216,
       "name": "rateLimitBelowMinimum",
       "msg": "Rate limit value below protocol minimum"
     }
@@ -8201,6 +9729,398 @@ export type AgencCoordination = {
             "docs": [
               "Bump seed"
             ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidAccepted",
+      "docs": [
+        "Emitted when a bid is accepted."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bid",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "policy",
+            "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidBookInitialized",
+      "docs": [
+        "Emitted when a bid book is initialized for a task."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "state",
+            "type": "u8"
+          },
+          {
+            "name": "policy",
+            "type": "u8"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidBookState",
+      "docs": [
+        "Bid book state for Marketplace V2."
+      ],
+      "repr": {
+        "kind": "rust"
+      },
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "open"
+          },
+          {
+            "name": "accepted"
+          },
+          {
+            "name": "closed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidCancelled",
+      "docs": [
+        "Emitted when a parked or open bid is cancelled."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bid",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidCreated",
+      "docs": [
+        "Emitted when a bid is created."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bid",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "requestedRewardLamports",
+            "type": "u64"
+          },
+          {
+            "name": "etaSeconds",
+            "type": "u32"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidExpired",
+      "docs": [
+        "Emitted when a bid is expired and cleaned up."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bid",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidMarketplaceConfig",
+      "docs": [
+        "Marketplace V2 configuration account",
+        "PDA seeds: [\"bid_marketplace\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "minBidBondLamports",
+            "type": "u64"
+          },
+          {
+            "name": "bidCreationCooldownSecs",
+            "type": "i64"
+          },
+          {
+            "name": "maxBidsPer24h",
+            "type": "u16"
+          },
+          {
+            "name": "maxActiveBidsPerTask",
+            "type": "u16"
+          },
+          {
+            "name": "maxBidLifetimeSecs",
+            "type": "i64"
+          },
+          {
+            "name": "acceptedNoShowSlashBps",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidMarketplaceInitialized",
+      "docs": [
+        "Emitted when Marketplace V2 configuration is initialized."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "minBidBondLamports",
+            "type": "u64"
+          },
+          {
+            "name": "bidCreationCooldownSecs",
+            "type": "i64"
+          },
+          {
+            "name": "maxBidsPer24h",
+            "type": "u16"
+          },
+          {
+            "name": "maxActiveBidsPerTask",
+            "type": "u16"
+          },
+          {
+            "name": "maxBidLifetimeSecs",
+            "type": "i64"
+          },
+          {
+            "name": "acceptedNoShowSlashBps",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidUpdated",
+      "docs": [
+        "Emitted when a bid is updated."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bid",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "requestedRewardLamports",
+            "type": "u64"
+          },
+          {
+            "name": "etaSeconds",
+            "type": "u32"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidderMarketState",
+      "docs": [
+        "Per-bidder bid-market activity state",
+        "PDA seeds: [\"bidder_market\", bidder_agent]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "lastBidCreatedAt",
+            "type": "i64"
+          },
+          {
+            "name": "bidWindowStartedAt",
+            "type": "i64"
+          },
+          {
+            "name": "bidsCreatedInWindow",
+            "type": "u16"
+          },
+          {
+            "name": "activeBidCount",
+            "type": "u16"
+          },
+          {
+            "name": "totalBidsCreated",
+            "type": "u64"
+          },
+          {
+            "name": "totalBidsAccepted",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
             "type": "u8"
           }
         ]
@@ -9363,6 +11283,29 @@ export type AgencCoordination = {
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "matchingPolicy",
+      "docs": [
+        "Matching policy declared on a bid book."
+      ],
+      "repr": {
+        "kind": "rust"
+      },
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "bestPrice"
+          },
+          {
+            "name": "bestEta"
+          },
+          {
+            "name": "weightedScore"
           }
         ]
       }
@@ -11416,6 +13359,186 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "taskBid",
+      "docs": [
+        "Single active bid per bidder per task in Marketplace V2",
+        "PDA seeds: [\"bid\", task, bidder_agent]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidderAuthority",
+            "type": "pubkey"
+          },
+          {
+            "name": "requestedRewardLamports",
+            "type": "u64"
+          },
+          {
+            "name": "etaSeconds",
+            "type": "u32"
+          },
+          {
+            "name": "confidenceBps",
+            "type": "u16"
+          },
+          {
+            "name": "reputationSnapshotBps",
+            "type": "u16"
+          },
+          {
+            "name": "qualityGuaranteeHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "metadataHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "createdAt",
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "type": "i64"
+          },
+          {
+            "name": "state",
+            "type": {
+              "defined": {
+                "name": "taskBidState"
+              }
+            }
+          },
+          {
+            "name": "bondLamports",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskBidBook",
+      "docs": [
+        "Bid book for a Marketplace V2 task",
+        "PDA seeds: [\"bid_book\", task]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "state",
+            "type": {
+              "defined": {
+                "name": "bidBookState"
+              }
+            }
+          },
+          {
+            "name": "policy",
+            "type": {
+              "defined": {
+                "name": "matchingPolicy"
+              }
+            }
+          },
+          {
+            "name": "weights",
+            "type": {
+              "defined": {
+                "name": "weightedScoreWeights"
+              }
+            }
+          },
+          {
+            "name": "acceptedBid",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "version",
+            "type": "u64"
+          },
+          {
+            "name": "totalBids",
+            "type": "u32"
+          },
+          {
+            "name": "activeBids",
+            "type": "u16"
+          },
+          {
+            "name": "createdAt",
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskBidState",
+      "docs": [
+        "Bid lifecycle state."
+      ],
+      "repr": {
+        "kind": "rust"
+      },
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "active"
+          },
+          {
+            "name": "accepted"
+          }
+        ]
+      }
+    },
+    {
       "name": "taskCancelled",
       "docs": [
         "Emitted when a task is cancelled"
@@ -11787,6 +13910,9 @@ export type AgencCoordination = {
           },
           {
             "name": "competitive"
+          },
+          {
+            "name": "bidExclusive"
           }
         ]
       }
@@ -11814,6 +13940,33 @@ export type AgencCoordination = {
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "weightedScoreWeights",
+      "docs": [
+        "Weight configuration used when a bid book declares `WeightedScore`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "priceWeightBps",
+            "type": "u16"
+          },
+          {
+            "name": "etaWeightBps",
+            "type": "u16"
+          },
+          {
+            "name": "confidenceWeightBps",
+            "type": "u16"
+          },
+          {
+            "name": "reliabilityWeightBps",
+            "type": "u16"
           }
         ]
       }
