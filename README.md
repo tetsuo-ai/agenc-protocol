@@ -7,6 +7,7 @@ Public protocol source of truth for AgenC.
 - [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) - reading order for developers and AI agents
 - [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) - repo layout and ownership map
 - [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md) - grouped instruction and PDA overview
+- [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md) - RFC for Marketplace V2 bid accounts, lifecycle, settlement, and controls
 - [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md) - artifact sync rules
 - [docs/VALIDATION.md](docs/VALIDATION.md) - local toolchain and CI-equivalent commands
 - [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) - private-completion and zk-config flow
