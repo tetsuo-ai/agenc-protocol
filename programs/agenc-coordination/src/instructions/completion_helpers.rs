@@ -610,6 +610,119 @@ mod tests {
         }
     }
 
+    fn leak_pubkey(key: Pubkey) -> &'static Pubkey {
+        Box::leak(Box::new(key))
+    }
+
+    fn leak_lamports(lamports: u64) -> &'static mut u64 {
+        Box::leak(Box::new(lamports))
+    }
+
+    fn leak_data(data: Vec<u8>) -> &'static mut [u8] {
+        Box::leak(data.into_boxed_slice())
+    }
+
+    fn build_unchecked_account(
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+    ) -> UncheckedAccount<'static> {
+        let account_info = AccountInfo::new(
+            leak_pubkey(key),
+            false,
+            true,
+            leak_lamports(lamports),
+            leak_data(data),
+            leak_pubkey(owner),
+            false,
+            0,
+        );
+        UncheckedAccount::try_from(Box::leak(Box::new(account_info)))
+    }
+
+    fn serialize_account<T: AccountSerialize>(account: &T) -> Vec<u8> {
+        let mut data = Vec::new();
+        account.try_serialize(&mut data).unwrap();
+        data
+    }
+
+    fn assert_anchor_error_code<T>(result: Result<T>, expected: CoordinationError) {
+        let expected_code: u32 = expected.into();
+        match result {
+            Ok(_) => panic!("expected AnchorError code {expected_code}, got success"),
+            Err(anchor_lang::error::Error::AnchorError(anchor_err)) => {
+                assert_eq!(anchor_err.error_code_number, expected_code);
+            }
+            Err(other) => {
+                panic!("expected AnchorError code {expected_code}, got {other:?}");
+            }
+        }
+    }
+
+    mod load_task_claim_or_not_claimed_tests {
+        use super::*;
+        use anchor_lang::solana_program::system_program;
+
+        #[test]
+        fn test_closed_claim_pda_returns_not_claimed() {
+            let task_key = Pubkey::new_unique();
+            let claim_account =
+                build_unchecked_account(Pubkey::new_unique(), system_program::ID, 0, Vec::new());
+
+            assert_anchor_error_code(
+                load_task_claim_or_not_claimed(&claim_account, &task_key),
+                CoordinationError::NotClaimed,
+            );
+        }
+
+        #[test]
+        fn test_initialized_claim_deserializes_successfully() {
+            let task_key = Pubkey::new_unique();
+            let worker = Pubkey::new_unique();
+            let claim = TaskClaim {
+                task: task_key,
+                worker,
+                bump: 1,
+                ..TaskClaim::default()
+            };
+            let claim_account = build_unchecked_account(
+                Pubkey::new_unique(),
+                crate::ID,
+                1,
+                serialize_account(&claim),
+            );
+
+            let loaded = load_task_claim_or_not_claimed(&claim_account, &task_key).unwrap();
+
+            assert_eq!(loaded.task, task_key);
+            assert_eq!(loaded.worker, worker);
+            assert_eq!(loaded.bump, 1);
+        }
+
+        #[test]
+        fn test_claim_for_different_task_returns_not_claimed() {
+            let expected_task = Pubkey::new_unique();
+            let claim = TaskClaim {
+                task: Pubkey::new_unique(),
+                worker: Pubkey::new_unique(),
+                bump: 1,
+                ..TaskClaim::default()
+            };
+            let claim_account = build_unchecked_account(
+                Pubkey::new_unique(),
+                crate::ID,
+                1,
+                serialize_account(&claim),
+            );
+
+            assert_anchor_error_code(
+                load_task_claim_or_not_claimed(&claim_account, &expected_task),
+                CoordinationError::NotClaimed,
+            );
+        }
+    }
+
     mod calculate_reward_per_worker_tests {
         use super::*;
 
