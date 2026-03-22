@@ -14,6 +14,7 @@ use super::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_bid_task_mode,
     validate_deadline, validate_task_params,
 };
+use super::token_helpers::ensure_token_escrow_ata;
 
 #[derive(Accounts)]
 #[instruction(task_id: [u8; 32])]
@@ -130,6 +131,33 @@ pub fn handler(
     // Check rate limits and update agent state
     check_task_creation_rate_limits(creator_agent, config, &clock)?;
 
+    // Initialize task-owned state before any external CPI so later logic does not
+    // depend on a stale view of freshly funded PDAs.
+    let escrow_key = ctx.accounts.escrow.key();
+    let protocol_fee_bps = config.protocol_fee_bps;
+    let task = &mut ctx.accounts.task;
+    init_task_fields(
+        task,
+        task_id,
+        ctx.accounts.creator.key(),
+        required_capabilities,
+        description,
+        constraint_hash,
+        reward_amount,
+        max_workers,
+        task_type,
+        deadline,
+        escrow_key,
+        ctx.bumps.task,
+        protocol_fee_bps,
+        clock.unix_timestamp,
+        min_reputation,
+        reward_mint,
+    )?;
+
+    let escrow = &mut ctx.accounts.escrow;
+    init_escrow_fields(escrow, task.key(), reward_amount, ctx.bumps.escrow);
+
     if let Some(expected_mint) = reward_mint {
         // Token path: validate required token accounts are provided
         require!(
@@ -175,17 +203,25 @@ pub fn handler(
 
         let token_escrow_info = token_escrow_ata.to_account_info();
         if token_escrow_info.owner == &system_program::ID {
-            anchor_spl::associated_token::create(CpiContext::new(
-                ata_program.to_account_info(),
-                anchor_spl::associated_token::Create {
-                    payer: ctx.accounts.creator.to_account_info(),
-                    associated_token: token_escrow_info.clone(),
-                    authority: ctx.accounts.escrow.to_account_info(),
-                    mint: mint.to_account_info(),
-                    system_program: ctx.accounts.system_program.to_account_info(),
-                    token_program: token_program.to_account_info(),
-                },
-            ))?;
+            ensure_token_escrow_ata(
+                &token_escrow_info,
+                &ctx.accounts.creator.to_account_info(),
+                &ctx.accounts.escrow.to_account_info(),
+                &mint.to_account_info(),
+                &ctx.accounts.system_program,
+                token_program,
+                ata_program,
+            )?;
+            let created_escrow_ata = ctx
+                .accounts
+                .token_escrow_ata
+                .as_ref()
+                .ok_or(CoordinationError::MissingTokenAccounts)?
+                .to_account_info();
+            require!(
+                created_escrow_ata.owner == token_program.key,
+                CoordinationError::InvalidTokenEscrow
+            );
         } else {
             require!(
                 token_escrow_info.owner == token_program.key,
@@ -211,7 +247,12 @@ pub fn handler(
                 token_program.to_account_info(),
                 Transfer {
                     from: creator_ta.to_account_info(),
-                    to: token_escrow_ata.to_account_info(),
+                    to: ctx
+                        .accounts
+                        .token_escrow_ata
+                        .as_ref()
+                        .ok_or(CoordinationError::MissingTokenAccounts)?
+                        .to_account_info(),
                     authority: ctx.accounts.creator.to_account_info(),
                 },
             ),
@@ -230,31 +271,6 @@ pub fn handler(
             reward_amount,
         )?;
     }
-
-    // Initialize task
-    let task = &mut ctx.accounts.task;
-    init_task_fields(
-        task,
-        task_id,
-        ctx.accounts.creator.key(),
-        required_capabilities,
-        description,
-        constraint_hash,
-        reward_amount,
-        max_workers,
-        task_type,
-        deadline,
-        ctx.accounts.escrow.key(),
-        ctx.bumps.task,
-        config.protocol_fee_bps,
-        clock.unix_timestamp,
-        min_reputation,
-        reward_mint,
-    )?;
-
-    // Initialize escrow
-    let escrow = &mut ctx.accounts.escrow;
-    init_escrow_fields(escrow, task.key(), reward_amount, ctx.bumps.escrow);
 
     // Update protocol stats
     let protocol_config = &mut ctx.accounts.protocol_config;

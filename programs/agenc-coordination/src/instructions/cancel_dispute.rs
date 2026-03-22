@@ -42,6 +42,10 @@ pub struct CancelDispute<'info> {
 }
 
 pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::UnauthorizedResolver
+    );
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
     let clock = Clock::get()?;

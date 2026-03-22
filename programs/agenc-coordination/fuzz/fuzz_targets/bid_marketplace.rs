@@ -329,6 +329,18 @@ proptest! {
 mod edge_cases {
     use super::*;
 
+    fn plus_time(current_time: i64, delta: i64) -> i64 {
+        current_time
+            .checked_add(delta)
+            .expect("test timestamp addition should stay in range")
+    }
+
+    fn minus_time(current_time: i64, delta: i64) -> i64 {
+        current_time
+            .checked_sub(delta)
+            .expect("test timestamp subtraction should stay in range")
+    }
+
     #[test]
     fn test_initialize_bid_book_weighted_score_rejects_invalid_sum() {
         let task = build_bid_task([1u8; 32], 1_000_000, 1, 0);
@@ -354,7 +366,7 @@ mod edge_cases {
     #[test]
     fn test_create_bid_over_budget_fails() {
         let current_time = 1_750_000_000;
-        let task = build_bid_task([1u8; 32], 500_000, 1, current_time + 10_000);
+        let task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
         let bidder = build_bidder([2u8; 32], 1, 0, 5_000);
         let mut bid_book = build_open_bid_book(task.task_id, current_time);
         let mut bid = SimulatedBid::default();
@@ -373,7 +385,7 @@ mod edge_cases {
             500_001,
             600,
             9_000,
-            current_time + 600,
+            plus_time(current_time, 600),
         );
 
         assert!(result.is_error());
@@ -385,14 +397,14 @@ mod edge_cases {
     #[test]
     fn test_create_bid_respects_cooldown() {
         let current_time = 1_750_000_000;
-        let task = build_bid_task([1u8; 32], 500_000, 1, current_time + 10_000);
+        let task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
         let bidder = build_bidder([2u8; 32], 1, 0, 5_000);
         let mut bid_book = build_open_bid_book(task.task_id, current_time);
         let mut bid = SimulatedBid::default();
         let mut bidder_state = SimulatedBidderMarketState {
             bidder: bidder.agent_id,
-            last_bid_created_at: current_time - 10,
-            bid_window_started_at: current_time - 10,
+            last_bid_created_at: minus_time(current_time, 10),
+            bid_window_started_at: minus_time(current_time, 10),
             bids_created_in_window: 1,
             active_bid_count: 1,
             total_bids_created: 1,
@@ -416,7 +428,7 @@ mod edge_cases {
             400_000,
             600,
             9_000,
-            current_time + 600,
+            plus_time(current_time, 600),
         );
 
         assert!(result.is_error());
@@ -428,14 +440,14 @@ mod edge_cases {
     #[test]
     fn test_create_bid_respects_rate_limit() {
         let current_time = 1_750_000_000;
-        let task = build_bid_task([1u8; 32], 500_000, 1, current_time + 10_000);
+        let task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
         let bidder = build_bidder([2u8; 32], 1, 0, 5_000);
         let mut bid_book = build_open_bid_book(task.task_id, current_time);
         let mut bid = SimulatedBid::default();
         let mut bidder_state = SimulatedBidderMarketState {
             bidder: bidder.agent_id,
-            last_bid_created_at: current_time - 600,
-            bid_window_started_at: current_time - 600,
+            last_bid_created_at: minus_time(current_time, 600),
+            bid_window_started_at: minus_time(current_time, 600),
             bids_created_in_window: 2,
             active_bid_count: 0,
             total_bids_created: 2,
@@ -459,7 +471,7 @@ mod edge_cases {
             400_000,
             600,
             9_000,
-            current_time + 600,
+            plus_time(current_time, 600),
         );
 
         assert!(result.is_error());
@@ -471,7 +483,7 @@ mod edge_cases {
     #[test]
     fn test_accept_expired_bid_fails() {
         let current_time = 1_750_000_000;
-        let mut task = build_bid_task([1u8; 32], 500_000, 1, current_time + 10_000);
+        let mut task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
         let bidder = build_bidder([2u8; 32], 1, 0, 5_000);
         let mut bid_book = build_open_bid_book(task.task_id, current_time);
         let mut bid = SimulatedBid::default();
@@ -490,7 +502,7 @@ mod edge_cases {
             400_000,
             600,
             9_000,
-            current_time + 60,
+            plus_time(current_time, 60),
         );
         assert!(create_result.is_success());
 
@@ -501,7 +513,7 @@ mod edge_cases {
             &mut bid,
             &mut bidder,
             &mut bidder_state,
-            current_time + 60,
+            plus_time(current_time, 60),
             0,
         );
 
@@ -514,7 +526,7 @@ mod edge_cases {
     #[test]
     fn test_accept_bid_rejects_bidder_at_capacity() {
         let current_time = 1_750_000_000;
-        let mut task = build_bid_task([1u8; 32], 500_000, 1, current_time + 10_000);
+        let mut task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
         let bidder = build_bidder([2u8; 32], 1, 10, 5_000);
         let mut bid_book = build_open_bid_book(task.task_id, current_time);
         let mut bid = SimulatedBid::default();
@@ -533,7 +545,7 @@ mod edge_cases {
             400_000,
             600,
             9_000,
-            current_time + 600,
+            plus_time(current_time, 600),
         );
         assert!(create_result.is_success());
 
@@ -557,7 +569,7 @@ mod edge_cases {
     #[test]
     fn test_update_accepted_bid_fails() {
         let current_time = 1_750_000_000;
-        let mut task = build_bid_task([1u8; 32], 500_000, 1, current_time + 10_000);
+        let mut task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
         let bidder = build_bidder([2u8; 32], 1, 0, 5_000);
         let mut bid_book = build_open_bid_book(task.task_id, current_time);
         let mut bid = SimulatedBid::default();
@@ -576,7 +588,7 @@ mod edge_cases {
             400_000,
             600,
             9_000,
-            current_time + 600,
+            plus_time(current_time, 600),
         );
         assert!(create_result.is_success());
 
@@ -602,7 +614,7 @@ mod edge_cases {
             350_000,
             300,
             9_500,
-            current_time + 500,
+            plus_time(current_time, 500),
         );
 
         assert!(result.is_error());
@@ -614,7 +626,7 @@ mod edge_cases {
     #[test]
     fn test_cancel_accepted_bid_fails() {
         let current_time = 1_750_000_000;
-        let mut task = build_bid_task([1u8; 32], 500_000, 1, current_time + 10_000);
+        let mut task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
         let bidder = build_bidder([2u8; 32], 1, 0, 5_000);
         let mut bid_book = build_open_bid_book(task.task_id, current_time);
         let mut bid = SimulatedBid::default();
@@ -633,7 +645,7 @@ mod edge_cases {
             400_000,
             600,
             9_000,
-            current_time + 600,
+            plus_time(current_time, 600),
         );
         assert!(create_result.is_success());
 

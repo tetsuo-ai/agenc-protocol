@@ -8,14 +8,16 @@ use crate::instructions::constants::{
     BASIS_POINTS_DIVISOR, MAX_REPUTATION, REPUTATION_PER_COMPLETION,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
-use crate::instructions::token_helpers::close_token_escrow_account_info;
+use crate::instructions::token_helpers::{
+    close_token_escrow_account_info, transfer_tokens_from_escrow,
+};
 use crate::state::{
     AgentRegistration, DependencyType, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus,
     TaskType, RESULT_DATA_SIZE,
 };
 use crate::utils::compute_budget::{calculate_reputation_fee_discount, calculate_tiered_fee};
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Transfer};
+use anchor_spl::token::{self, Token, TokenAccount};
 
 /// Calculate worker reward and protocol fee from task reward amount.
 ///
@@ -103,12 +105,12 @@ fn calculate_reward_per_worker(task: &Task) -> Result<u64> {
 ///
 /// Uses owned `AccountInfo` values (not references) to avoid lifetime conflicts
 /// with mutable borrows of task/claim/escrow in handler functions.
-pub struct TokenPaymentAccounts<'info> {
-    pub token_escrow_ata: AccountInfo<'info>,
+pub struct TokenPaymentAccounts<'a, 'info> {
+    pub token_escrow_ata: &'a mut Account<'info, TokenAccount>,
     pub token_escrow_starting_amount: u64,
     pub worker_token_account: AccountInfo<'info>,
     pub treasury_token_account: AccountInfo<'info>,
-    pub token_program: AccountInfo<'info>,
+    pub token_program: &'a Program<'info, Token>,
     pub escrow_authority: AccountInfo<'info>,
     pub escrow_bump: u8,
     pub task_key: Pubkey,
@@ -139,46 +141,41 @@ pub fn load_task_claim_or_not_claimed<'info>(
 }
 
 /// Transfer tokens from escrow ATA to worker and treasury ATAs via PDA-signed CPI.
-fn transfer_token_rewards<'info>(
-    ta: &TokenPaymentAccounts<'info>,
+fn transfer_token_rewards<'a, 'info>(
+    ta: &mut TokenPaymentAccounts<'a, 'info>,
     worker_reward: u64,
     protocol_fee: u64,
 ) -> Result<()> {
     let task_key_bytes = ta.task_key.to_bytes();
     let bump_slice = [ta.escrow_bump];
     let escrow_seeds: &[&[u8]] = &[b"escrow", task_key_bytes.as_ref(), &bump_slice];
-    let signer_seeds: &[&[&[u8]]] = &[escrow_seeds];
 
     if worker_reward > 0 {
-        token::transfer(
-            CpiContext::new_with_signer(
-                ta.token_program.clone(),
-                Transfer {
-                    from: ta.token_escrow_ata.clone(),
-                    to: ta.worker_token_account.clone(),
-                    authority: ta.escrow_authority.clone(),
-                },
-                signer_seeds,
-            ),
+        transfer_tokens_from_escrow(
+            ta.token_escrow_ata,
+            &ta.worker_token_account,
+            &ta.escrow_authority,
             worker_reward,
-        )
-        .map_err(|_| CoordinationError::TokenTransferFailed)?;
+            escrow_seeds,
+            ta.token_program,
+        )?;
     }
 
     if protocol_fee > 0 {
-        token::transfer(
-            CpiContext::new_with_signer(
-                ta.token_program.clone(),
-                Transfer {
-                    from: ta.token_escrow_ata.clone(),
-                    to: ta.treasury_token_account.clone(),
-                    authority: ta.escrow_authority.clone(),
-                },
-                signer_seeds,
-            ),
+        let remaining_balance = token::accessor::amount(&ta.token_escrow_ata.to_account_info())
+            .map_err(|_| CoordinationError::TokenTransferFailed)?;
+        require!(
+            remaining_balance >= protocol_fee,
+            CoordinationError::InsufficientEscrowBalance
+        );
+        transfer_tokens_from_escrow(
+            ta.token_escrow_ata,
+            &ta.treasury_token_account,
+            &ta.escrow_authority,
             protocol_fee,
-        )
-        .map_err(|_| CoordinationError::TokenTransferFailed)?;
+            escrow_seeds,
+            ta.token_program,
+        )?;
     }
 
     Ok(())
@@ -426,7 +423,7 @@ pub fn calculate_fee_with_reputation(task_protocol_fee_bps: u16, worker_reputati
 /// - `claim.completed_at`
 ///
 /// The `TaskCompleted` event reads `proof_hash` and `result_data` from the claim.
-pub fn execute_completion_rewards<'info>(
+pub fn execute_completion_rewards<'a, 'info>(
     task: &mut Account<'info, Task>,
     claim: &mut Account<'info, TaskClaim>,
     escrow: &mut Account<'info, TaskEscrow>,
@@ -439,7 +436,7 @@ pub fn execute_completion_rewards<'info>(
     reward_amount_override: Option<u64>,
     result_data_for_task: Option<[u8; RESULT_DATA_SIZE]>,
     clock: &Clock,
-    token_accounts: Option<TokenPaymentAccounts<'info>>,
+    token_accounts: Option<TokenPaymentAccounts<'a, 'info>>,
 ) -> Result<()> {
     let settlement_amount = reward_amount_override.unwrap_or(task.reward_amount);
     let (worker_reward, protocol_fee) = match reward_amount_override {
@@ -498,7 +495,8 @@ pub fn execute_completion_rewards<'info>(
     });
 
     // Interactions: external CPIs AFTER all state updates and events.
-    if let Some(ref ta) = token_accounts {
+    let mut token_accounts = token_accounts;
+    if let Some(ref mut ta) = token_accounts {
         transfer_token_rewards(ta, worker_reward, protocol_fee)?;
     } else {
         transfer_rewards(
@@ -514,7 +512,7 @@ pub fn execute_completion_rewards<'info>(
     // For collaborative tasks with max_workers > 1, this keeps the escrow open
     // for subsequent workers to complete and receive their share.
     if task_completed {
-        if let Some(ref ta) = token_accounts {
+        if let Some(ref mut ta) = token_accounts {
             // Close token escrow ATA first, return rent to creator
             let task_key_bytes = ta.task_key.to_bytes();
             let bump_slice = [ta.escrow_bump];
@@ -527,13 +525,13 @@ pub fn execute_completion_rewards<'info>(
                 .checked_sub(transferred_total)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
             close_token_escrow_account_info(
-                &ta.token_escrow_ata,
+                ta.token_escrow_ata,
                 residual_amount,
                 &ta.treasury_token_account,
                 creator_info,
                 &ta.escrow_authority,
                 escrow_seeds,
-                &ta.token_program,
+                ta.token_program,
             )?;
         }
         // Always close the escrow PDA (returns rent-exempt SOL to creator)

@@ -89,21 +89,6 @@ pub fn handler(
     agent.active_tasks = 0;
     agent.stake = stake_amount;
     agent.bump = ctx.bumps.agent;
-
-    // Transfer stake SOL from authority to agent PDA (fix #823)
-    // Previously stake was recorded but never actually deposited
-    if stake_amount > 0 {
-        anchor_lang::system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                anchor_lang::system_program::Transfer {
-                    from: ctx.accounts.authority.to_account_info(),
-                    to: agent.to_account_info(),
-                },
-            ),
-            stake_amount,
-        )?;
-    }
     // Initialize rate limiting fields
     agent.last_task_created = 0;
     agent.last_dispute_initiated = 0;
@@ -120,6 +105,21 @@ pub fn handler(
     agent.last_state_update = 0;
     agent.disputes_as_defendant = 0;
     agent._reserved = [0u8; 4];
+
+    // Transfer stake SOL after all account fields are set so the handler does not
+    // rely on a stale post-CPI view of the freshly initialized PDA.
+    if stake_amount > 0 {
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.authority.to_account_info(),
+                    to: agent.to_account_info(),
+                },
+            ),
+            stake_amount,
+        )?;
+    }
 
     // Update protocol stats
     let config = &mut ctx.accounts.protocol_config;

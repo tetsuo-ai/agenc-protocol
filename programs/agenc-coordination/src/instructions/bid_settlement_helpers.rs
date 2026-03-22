@@ -179,15 +179,27 @@ pub(crate) fn load_bid_task_completion_meta<'info>(
     }
 
     let offset = bid_settlement_offset(task);
+    let min_accounts = offset
+        .checked_add(4)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
     require!(
-        remaining_accounts.len() >= offset + 4,
+        remaining_accounts.len() >= min_accounts,
         CoordinationError::BidSettlementAccountsRequired
     );
 
+    let accepted_bid_index = offset
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let bidder_state_index = offset
+        .checked_add(2)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let bidder_authority_index = offset
+        .checked_add(3)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
     let bid_book_info = account_info_at(remaining_accounts, offset);
-    let accepted_bid_info = account_info_at(remaining_accounts, offset + 1);
-    let bidder_market_state_info = account_info_at(remaining_accounts, offset + 2);
-    let bidder_authority_info = account_info_at(remaining_accounts, offset + 3);
+    let accepted_bid_info = account_info_at(remaining_accounts, accepted_bid_index);
+    let bidder_market_state_info = account_info_at(remaining_accounts, bidder_state_index);
+    let bidder_authority_info = account_info_at(remaining_accounts, bidder_authority_index);
 
     let (_, accepted_bid, _) = load_accepted_bid_settlement_accounts(
         task_key,
@@ -211,10 +223,22 @@ pub(crate) fn finalize_bid_task_completion<'info>(
     meta: &BidTaskCompletionMeta,
     now: i64,
 ) -> Result<()> {
+    let accepted_bid_index = meta
+        .settlement_offset
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let bidder_state_index = meta
+        .settlement_offset
+        .checked_add(2)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let bidder_authority_index = meta
+        .settlement_offset
+        .checked_add(3)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
     let bid_book_info = account_info_at(remaining_accounts, meta.settlement_offset);
-    let accepted_bid_info = account_info_at(remaining_accounts, meta.settlement_offset + 1);
-    let bidder_market_state_info = account_info_at(remaining_accounts, meta.settlement_offset + 2);
-    let bidder_authority_info = account_info_at(remaining_accounts, meta.settlement_offset + 3);
+    let accepted_bid_info = account_info_at(remaining_accounts, accepted_bid_index);
+    let bidder_market_state_info = account_info_at(remaining_accounts, bidder_state_index);
+    let bidder_authority_info = account_info_at(remaining_accounts, bidder_authority_index);
 
     settle_accepted_bid(
         task_key,

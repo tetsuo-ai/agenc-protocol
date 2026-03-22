@@ -210,12 +210,18 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
                 .len()
                 .checked_sub(3)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
+            let accepted_bid_index = split_at
+                .checked_add(1)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
+            let bidder_state_index = split_at
+                .checked_add(2)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
             (
                 remaining_account_slice(ctx.remaining_accounts, 0, split_at),
                 Some((
                     remaining_account_info(ctx.remaining_accounts, split_at),
-                    remaining_account_info(ctx.remaining_accounts, split_at + 1),
-                    remaining_account_info(ctx.remaining_accounts, split_at + 2),
+                    remaining_account_info(ctx.remaining_accounts, accepted_bid_index),
+                    remaining_account_info(ctx.remaining_accounts, bidder_state_index),
                 )),
             )
         } else {
@@ -265,7 +271,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
             let token_escrow = ctx
                 .accounts
                 .token_escrow_ata
-                .as_ref()
+                .as_mut()
                 .ok_or(CoordinationError::MissingTokenAccounts)?;
             validate_token_account(token_escrow, &mint.key(), &escrow.key())?;
             let token_escrow_starting_amount =
@@ -627,7 +633,7 @@ fn distribute_expired_funds<'a>(
 ///
 /// Returns (creator_amount, worker_amount) for event emission.
 fn distribute_expired_tokens<'a>(
-    token_escrow: &Account<'a, TokenAccount>,
+    token_escrow: &mut Account<'a, TokenAccount>,
     escrow_authority: &AccountInfo<'a>,
     creator_token_account: Option<&AccountInfo<'a>>,
     worker_token_account: Option<&AccountInfo<'a>>,

@@ -216,7 +216,7 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         let token_escrow = ctx
             .accounts
             .token_escrow_ata
-            .as_ref()
+            .as_mut()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let treasury_ta = ctx
             .accounts

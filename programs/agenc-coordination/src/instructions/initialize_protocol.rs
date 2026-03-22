@@ -78,6 +78,10 @@ pub fn handler(
     multisig_threshold: u8,
     multisig_owners: Vec<Pubkey>,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.protocol_config.authority == Pubkey::default(),
+        CoordinationError::ProtocolAlreadyInitialized
+    );
     // Verify the caller is the program's upgrade authority (fix #839)
     // The ProgramData account must be passed as remaining_accounts[0]
     let program_data_info = ctx

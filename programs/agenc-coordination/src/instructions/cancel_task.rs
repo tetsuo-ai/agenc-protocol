@@ -31,7 +31,8 @@ pub struct CancelTask<'info> {
         mut,
         seeds = [b"escrow", task.key().as_ref()],
         bump,
-        constraint = escrow.key() != task.key() @ CoordinationError::InvalidInput
+        constraint = escrow.key() != task.key() @ CoordinationError::InvalidInput,
+        constraint = escrow.owner == &crate::ID @ CoordinationError::InvalidAccountOwner
     )]
     /// CHECK: Escrow PDA is validated by seeds and deserialized in the handler so
     /// cancellation can surface protocol-specific errors before Anchor account loading.
@@ -68,6 +69,10 @@ pub struct CancelTask<'info> {
 pub fn process_cancel_task<'info>(
     ctx: Context<'_, '_, '_, 'info, CancelTask<'info>>,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::UnauthorizedTaskAction
+    );
     process_cancel_task_impl(ctx.accounts, ctx.remaining_accounts)
 }
 
@@ -182,7 +187,7 @@ fn process_cancel_task_impl<'info>(
 
         let token_escrow = accounts
             .token_escrow_ata
-            .as_ref()
+            .as_mut()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let creator_ta = accounts
             .creator_token_account
@@ -371,7 +376,7 @@ fn process_cancel_task_impl<'info>(
     if is_token_task {
         let token_escrow = accounts
             .token_escrow_ata
-            .as_ref()
+            .as_mut()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let token_program = accounts
             .token_program

@@ -87,7 +87,8 @@ fn refresh_bid_window(state: &mut BidderMarketState, now: i64) {
 pub struct InitializeBidMarketplace<'info> {
     #[account(
         seeds = [b"protocol"],
-        bump = protocol_config.bump
+        bump = protocol_config.bump,
+        constraint = protocol_config.key() != bid_marketplace.key() @ CoordinationError::InvalidInput
     )]
     pub protocol_config: Account<'info, ProtocolConfig>,
 
@@ -100,7 +101,11 @@ pub struct InitializeBidMarketplace<'info> {
     )]
     pub bid_marketplace: Account<'info, BidMarketplaceConfig>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = authority.key() != protocol_config.key() @ CoordinationError::InvalidInput,
+        constraint = authority.key() != bid_marketplace.key() @ CoordinationError::InvalidInput
+    )]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -116,6 +121,20 @@ pub fn initialize_bid_marketplace_handler(
     max_bid_lifetime_secs: i64,
     accepted_no_show_slash_bps: u16,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::MultisigNotEnoughSigners
+    );
+    require!(
+        ctx.accounts.bid_marketplace.authority == Pubkey::default()
+            && ctx.accounts.bid_marketplace.bump == 0,
+        CoordinationError::InvalidInput
+    );
+    require_keys_neq!(
+        ctx.accounts.protocol_config.key(),
+        ctx.accounts.bid_marketplace.key(),
+        CoordinationError::InvalidInput
+    );
     check_version_compatible(&ctx.accounts.protocol_config)?;
     let unique_signers = unique_account_infos(ctx.remaining_accounts);
     require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
@@ -168,7 +187,8 @@ pub fn initialize_bid_marketplace_handler(
 pub struct UpdateBidMarketplaceConfig<'info> {
     #[account(
         seeds = [b"protocol"],
-        bump = protocol_config.bump
+        bump = protocol_config.bump,
+        constraint = protocol_config.key() != bid_marketplace.key() @ CoordinationError::InvalidInput
     )]
     pub protocol_config: Account<'info, ProtocolConfig>,
 
@@ -179,6 +199,10 @@ pub struct UpdateBidMarketplaceConfig<'info> {
     )]
     pub bid_marketplace: Account<'info, BidMarketplaceConfig>,
 
+    #[account(
+        constraint = authority.key() != protocol_config.key() @ CoordinationError::InvalidInput,
+        constraint = authority.key() != bid_marketplace.key() @ CoordinationError::InvalidInput
+    )]
     pub authority: Signer<'info>,
 }
 
@@ -192,6 +216,15 @@ pub fn update_bid_marketplace_config_handler(
     max_bid_lifetime_secs: i64,
     accepted_no_show_slash_bps: u16,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::MultisigNotEnoughSigners
+    );
+    require_keys_neq!(
+        ctx.accounts.protocol_config.key(),
+        ctx.accounts.bid_marketplace.key(),
+        CoordinationError::InvalidInput
+    );
     check_version_compatible(&ctx.accounts.protocol_config)?;
     let unique_signers = unique_account_infos(ctx.remaining_accounts);
     require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
@@ -268,6 +301,16 @@ pub fn initialize_bid_book_handler(
     confidence_weight_bps: u16,
     reliability_weight_bps: u16,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.creator.is_signer,
+        CoordinationError::UnauthorizedTaskAction
+    );
+    require!(
+        ctx.accounts.bid_book.task == Pubkey::default()
+            && ctx.accounts.bid_book.total_bids == 0
+            && ctx.accounts.bid_book.active_bids == 0,
+        CoordinationError::InvalidInput
+    );
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
     require!(
@@ -382,6 +425,16 @@ pub fn create_bid_handler(
     metadata_hash: [u8; 32],
     expires_at: i64,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::UnauthorizedAgent
+    );
+    require!(
+        ctx.accounts.bid.task == Pubkey::default()
+            && ctx.accounts.bid.bidder == Pubkey::default()
+            && ctx.accounts.bid.bond_lamports == 0,
+        CoordinationError::InvalidInput
+    );
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
     require!(
@@ -831,6 +884,10 @@ pub struct AcceptBid<'info> {
 }
 
 pub fn accept_bid_handler(ctx: Context<AcceptBid>) -> Result<()> {
+    require!(
+        ctx.accounts.creator.is_signer,
+        CoordinationError::UnauthorizedTaskAction
+    );
     let task = &mut ctx.accounts.task;
     let bid = &mut ctx.accounts.bid;
     let bid_book = &mut ctx.accounts.bid_book;
