@@ -158,6 +158,15 @@ fn decrement_bidder_active_bid_count(bidder_market_state: &mut BidderMarketState
     Ok(())
 }
 
+fn persist_account_state<T: AnchorSerialize>(
+    account_info: &AccountInfo<'_>,
+    state: &T,
+) -> Result<()> {
+    let mut data = account_info.try_borrow_mut_data()?;
+    AnchorSerialize::serialize(state, &mut &mut data[8..])
+        .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotSerialize.into())
+}
+
 fn account_info_at<'info>(
     remaining_accounts: &[AccountInfo<'info>],
     index: usize,
@@ -277,6 +286,8 @@ pub(crate) fn close_bid_book_without_accepted_bid<'info>(
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
 
+    persist_account_state(bid_book_info, &*bid_book)?;
+
     Ok(())
 }
 
@@ -318,6 +329,8 @@ pub(crate) fn settle_accepted_bid<'info>(
 
     apply_bid_book_disposition(&mut bid_book, now, book_disposition)?;
     decrement_bidder_active_bid_count(&mut bidder_market_state)?;
+    persist_account_state(bid_book_info, &*bid_book)?;
+    persist_account_state(bidder_market_state_info, &*bidder_market_state)?;
 
     accepted_bid.updated_at = now;
     accepted_bid.close(bidder_authority_info)?;
