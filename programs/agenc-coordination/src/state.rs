@@ -276,13 +276,13 @@ pub struct ProtocolConfig {
     /// Length of configured multisig owners
     pub multisig_owners_len: u8,
     // === Rate limiting configuration ===
-    /// Minimum cooldown between task creations (seconds, 0 = disabled)
+    /// Minimum cooldown between task creations per authority wallet (seconds, 0 = disabled)
     pub task_creation_cooldown: i64,
-    /// Maximum tasks an agent can create per 24h window (0 = unlimited)
+    /// Maximum tasks an authority wallet can create per 24h window (0 = unlimited)
     pub max_tasks_per_24h: u8,
-    /// Minimum cooldown between dispute initiations (seconds, 0 = disabled)
+    /// Minimum cooldown between dispute initiations per authority wallet (seconds, 0 = disabled)
     pub dispute_initiation_cooldown: i64,
-    /// Maximum disputes an agent can initiate per 24h window (0 = unlimited)
+    /// Maximum disputes an authority wallet can initiate per 24h window (0 = unlimited)
     pub max_disputes_per_24h: u8,
     /// Minimum stake required to initiate a dispute (griefing resistance)
     pub min_stake_for_dispute: u64,
@@ -443,7 +443,9 @@ pub struct AgentRegistration {
     pub stake: u64,
     /// Bump seed
     pub bump: u8,
-    // === Rate limiting fields ===
+    // === Agent-scoped rate limiting fields ===
+    // Used for actions that remain bound to a specific agent identity.
+    // Wallet-scoped task/dispute throttles live in `AuthorityRateLimit`.
     /// Timestamp of last task creation
     pub last_task_created: i64,
     /// Timestamp of last dispute initiated
@@ -476,6 +478,31 @@ impl AgentRegistration {
     pub fn validate_reserved_fields(&self) -> bool {
         self._reserved == [0u8; 4]
     }
+}
+
+/// Wallet-scoped rate limit state.
+/// PDA seeds: ["authority_rate_limit", authority]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct AuthorityRateLimit {
+    /// Authority wallet this rate limit state belongs to
+    pub authority: Pubkey,
+    /// Timestamp of last task creation initiated by this authority
+    pub last_task_created: i64,
+    /// Timestamp of last dispute initiated by this authority
+    pub last_dispute_initiated: i64,
+    /// Number of tasks created in current 24h window
+    pub task_count_24h: u8,
+    /// Number of disputes initiated in current 24h window
+    pub dispute_count_24h: u8,
+    /// Start of current rate limit window (unix timestamp)
+    pub rate_limit_window_start: i64,
+    /// PDA bump seed
+    pub bump: u8,
+}
+
+impl AuthorityRateLimit {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
 }
 
 /// Task account
@@ -1333,6 +1360,11 @@ mod tests {
     #[test]
     fn test_agent_registration_size() {
         test_size_constant!(AgentRegistration);
+    }
+
+    #[test]
+    fn test_authority_rate_limit_size() {
+        test_size_constant!(AuthorityRateLimit);
     }
 
     #[test]

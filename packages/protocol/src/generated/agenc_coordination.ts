@@ -2067,9 +2067,8 @@ export type AgencCoordination = {
         {
           "name": "creatorAgent",
           "docs": [
-            "Creator's agent registration for rate limiting (required)"
+            "Creator's agent registration for identity/authorization checks"
           ],
-          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -2086,6 +2085,46 @@ export type AgencCoordination = {
                 "kind": "account",
                 "path": "creator_agent.agent_id",
                 "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authorityRateLimit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
               }
             ]
           }
@@ -2485,9 +2524,8 @@ export type AgencCoordination = {
         {
           "name": "creatorAgent",
           "docs": [
-            "Creator's agent registration for rate limiting (required)"
+            "Creator's agent registration for identity/authorization checks"
           ],
-          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -2504,6 +2542,46 @@ export type AgencCoordination = {
                 "kind": "account",
                 "path": "creator_agent.agent_id",
                 "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authorityRateLimit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
               }
             ]
           }
@@ -4042,6 +4120,46 @@ export type AgencCoordination = {
                 "kind": "account",
                 "path": "agent.agent_id",
                 "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authorityRateLimit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
               }
             ]
           }
@@ -7144,6 +7262,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "authorityRateLimit",
+      "discriminator": [
+        155,
+        36,
+        149,
+        133,
+        58,
+        70,
+        81,
+        19
+      ]
+    },
+    {
       "name": "bidMarketplaceConfig",
       "discriminator": [
         47,
@@ -9735,6 +9866,67 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "authorityRateLimit",
+      "docs": [
+        "Wallet-scoped rate limit state.",
+        "PDA seeds: [\"authority_rate_limit\", authority]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "Authority wallet this rate limit state belongs to"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "lastTaskCreated",
+            "docs": [
+              "Timestamp of last task creation initiated by this authority"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "lastDisputeInitiated",
+            "docs": [
+              "Timestamp of last dispute initiated by this authority"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "taskCount24h",
+            "docs": [
+              "Number of tasks created in current 24h window"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "disputeCount24h",
+            "docs": [
+              "Number of disputes initiated in current 24h window"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "rateLimitWindowStart",
+            "docs": [
+              "Start of current rate limit window (unix timestamp)"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "bidAccepted",
       "docs": [
         "Emitted when a bid is accepted."
@@ -11979,28 +12171,28 @@ export type AgencCoordination = {
           {
             "name": "taskCreationCooldown",
             "docs": [
-              "Minimum cooldown between task creations (seconds, 0 = disabled)"
+              "Minimum cooldown between task creations per authority wallet (seconds, 0 = disabled)"
             ],
             "type": "i64"
           },
           {
             "name": "maxTasksPer24h",
             "docs": [
-              "Maximum tasks an agent can create per 24h window (0 = unlimited)"
+              "Maximum tasks an authority wallet can create per 24h window (0 = unlimited)"
             ],
             "type": "u8"
           },
           {
             "name": "disputeInitiationCooldown",
             "docs": [
-              "Minimum cooldown between dispute initiations (seconds, 0 = disabled)"
+              "Minimum cooldown between dispute initiations per authority wallet (seconds, 0 = disabled)"
             ],
             "type": "i64"
           },
           {
             "name": "maxDisputesPer24h",
             "docs": [
-              "Maximum disputes an agent can initiate per 24h window (0 = unlimited)"
+              "Maximum disputes an authority wallet can initiate per 24h window (0 = unlimited)"
             ],
             "type": "u8"
           },

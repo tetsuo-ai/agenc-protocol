@@ -2061,9 +2061,8 @@
         {
           "name": "creator_agent",
           "docs": [
-            "Creator's agent registration for rate limiting (required)"
+            "Creator's agent registration for identity/authorization checks"
           ],
-          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -2080,6 +2079,46 @@
                 "kind": "account",
                 "path": "creator_agent.agent_id",
                 "account": "AgentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority_rate_limit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
               }
             ]
           }
@@ -2479,9 +2518,8 @@
         {
           "name": "creator_agent",
           "docs": [
-            "Creator's agent registration for rate limiting (required)"
+            "Creator's agent registration for identity/authorization checks"
           ],
-          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -2498,6 +2536,46 @@
                 "kind": "account",
                 "path": "creator_agent.agent_id",
                 "account": "AgentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority_rate_limit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
               }
             ]
           }
@@ -4036,6 +4114,46 @@
                 "kind": "account",
                 "path": "agent.agent_id",
                 "account": "AgentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority_rate_limit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
               }
             ]
           }
@@ -7138,6 +7256,19 @@
       ]
     },
     {
+      "name": "AuthorityRateLimit",
+      "discriminator": [
+        155,
+        36,
+        149,
+        133,
+        58,
+        70,
+        81,
+        19
+      ]
+    },
+    {
       "name": "BidMarketplaceConfig",
       "discriminator": [
         47,
@@ -9729,6 +9860,67 @@
       }
     },
     {
+      "name": "AuthorityRateLimit",
+      "docs": [
+        "Wallet-scoped rate limit state.",
+        "PDA seeds: [\"authority_rate_limit\", authority]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "Authority wallet this rate limit state belongs to"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "last_task_created",
+            "docs": [
+              "Timestamp of last task creation initiated by this authority"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_dispute_initiated",
+            "docs": [
+              "Timestamp of last dispute initiated by this authority"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "task_count_24h",
+            "docs": [
+              "Number of tasks created in current 24h window"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "dispute_count_24h",
+            "docs": [
+              "Number of disputes initiated in current 24h window"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "rate_limit_window_start",
+            "docs": [
+              "Start of current rate limit window (unix timestamp)"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
       "name": "BidAccepted",
       "docs": [
         "Emitted when a bid is accepted."
@@ -11973,28 +12165,28 @@
           {
             "name": "task_creation_cooldown",
             "docs": [
-              "Minimum cooldown between task creations (seconds, 0 = disabled)"
+              "Minimum cooldown between task creations per authority wallet (seconds, 0 = disabled)"
             ],
             "type": "i64"
           },
           {
             "name": "max_tasks_per_24h",
             "docs": [
-              "Maximum tasks an agent can create per 24h window (0 = unlimited)"
+              "Maximum tasks an authority wallet can create per 24h window (0 = unlimited)"
             ],
             "type": "u8"
           },
           {
             "name": "dispute_initiation_cooldown",
             "docs": [
-              "Minimum cooldown between dispute initiations (seconds, 0 = disabled)"
+              "Minimum cooldown between dispute initiations per authority wallet (seconds, 0 = disabled)"
             ],
             "type": "i64"
           },
           {
             "name": "max_disputes_per_24h",
             "docs": [
-              "Maximum disputes an agent can initiate per 24h window (0 = unlimited)"
+              "Maximum disputes an authority wallet can initiate per 24h window (0 = unlimited)"
             ],
             "type": "u8"
           },
