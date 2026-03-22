@@ -59,7 +59,20 @@ pub fn handler(ctx: Context<StakeReputation>, amount: u64) -> Result<()> {
         stake.bump = ctx.bumps.reputation_stake;
     }
 
-    // Transfer SOL from authority to stake PDA
+    let updated_staked_amount = stake
+        .staked_amount
+        .checked_add(amount)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let updated_locked_until = clock
+        .unix_timestamp
+        .checked_add(REPUTATION_STAKING_COOLDOWN)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+
+    stake.staked_amount = updated_staked_amount;
+    stake.locked_until = updated_locked_until;
+
+    // Transfer SOL after state is prepared so later logic does not depend on a
+    // potentially stale post-CPI view of the stake account.
     anchor_lang::system_program::transfer(
         CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -71,21 +84,11 @@ pub fn handler(ctx: Context<StakeReputation>, amount: u64) -> Result<()> {
         amount,
     )?;
 
-    stake.staked_amount = stake
-        .staked_amount
-        .checked_add(amount)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-
-    stake.locked_until = clock
-        .unix_timestamp
-        .checked_add(REPUTATION_STAKING_COOLDOWN)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-
     emit!(ReputationStaked {
         agent: ctx.accounts.agent.key(),
         amount,
-        total_staked: stake.staked_amount,
-        locked_until: stake.locked_until,
+        total_staked: updated_staked_amount,
+        locked_until: updated_locked_until,
         timestamp: clock.unix_timestamp,
     });
 

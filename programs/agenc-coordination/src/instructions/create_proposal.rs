@@ -68,6 +68,17 @@ pub fn handler(
     let governance = &mut ctx.accounts.governance_config;
     let clock = Clock::get()?;
 
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::UnauthorizedAgent
+    );
+    require!(
+        ctx.accounts.proposal.proposer == Pubkey::default()
+            && ctx.accounts.proposal.created_at == 0
+            && ctx.accounts.proposal.bump == 0,
+        CoordinationError::InvalidInput
+    );
+
     check_version_compatible(config)?;
 
     // Verify proposer is active

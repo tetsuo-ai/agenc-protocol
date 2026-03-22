@@ -107,6 +107,10 @@ pub fn handler<'info>(
     proof_hash: [u8; HASH_SIZE],
     result_data: Option<[u8; RESULT_DATA_SIZE]>,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::UnauthorizedAgent
+    );
     handle_complete_task(
         ctx.accounts,
         ctx.remaining_accounts,
@@ -124,6 +128,10 @@ fn handle_complete_task<'info>(
     result_data: Option<[u8; RESULT_DATA_SIZE]>,
 ) -> Result<()> {
     log_compute_units("complete_task_start");
+    require!(
+        accounts.authority.is_signer,
+        CoordinationError::UnauthorizedAgent
+    );
 
     let task_key = accounts.task.key();
     let mut claim = load_task_claim_or_not_claimed(&accounts.claim, &task_key)?;
@@ -184,11 +192,11 @@ fn handle_complete_task<'info>(
 
         let mint = accounts
             .reward_mint
-            .as_ref()
+            .as_mut()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let token_escrow = accounts
             .token_escrow_ata
-            .as_ref()
+            .as_mut()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let treasury_ta = accounts
             .treasury_token_account
@@ -217,15 +225,14 @@ fn handle_complete_task<'info>(
         validate_unchecked_token_mint(&worker_ta_info, &mint.key(), &accounts.authority.key())?;
 
         Some(TokenPaymentAccounts {
-            token_escrow_ata: token_escrow.to_account_info(),
+            token_escrow_ata: token_escrow,
             token_escrow_starting_amount,
             worker_token_account: worker_ta_info,
             treasury_token_account: treasury_ta.to_account_info(),
             token_program: accounts
                 .token_program
                 .as_ref()
-                .ok_or(CoordinationError::MissingTokenAccounts)?
-                .to_account_info(),
+                .ok_or(CoordinationError::MissingTokenAccounts)?,
             escrow_authority: escrow.to_account_info(),
             escrow_bump: escrow.bump,
             task_key: task.key(),

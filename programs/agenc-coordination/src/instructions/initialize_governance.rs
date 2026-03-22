@@ -24,11 +24,16 @@ pub struct InitializeGovernance<'info> {
     #[account(
         seeds = [b"protocol"],
         bump = protocol_config.bump,
-        constraint = authority.key() == protocol_config.authority @ CoordinationError::UnauthorizedAgent
+        constraint = authority.key() == protocol_config.authority @ CoordinationError::UnauthorizedAgent,
+        constraint = protocol_config.key() != governance_config.key() @ CoordinationError::InvalidInput
     )]
     pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = authority.key() != protocol_config.key() @ CoordinationError::InvalidInput,
+        constraint = authority.key() != governance_config.key() @ CoordinationError::InvalidInput
+    )]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -42,6 +47,24 @@ pub fn handler(
     approval_threshold_bps: u16,
     min_proposal_stake: u64,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::UnauthorizedAgent
+    );
+    require!(
+        ctx.accounts.governance_config.authority == Pubkey::default()
+            && ctx.accounts.governance_config.total_proposals == 0,
+        CoordinationError::InvalidInput
+    );
+    require!(
+        ctx.accounts.authority.key() == ctx.accounts.protocol_config.authority,
+        CoordinationError::UnauthorizedAgent
+    );
+    require_keys_neq!(
+        ctx.accounts.protocol_config.key(),
+        ctx.accounts.governance_config.key(),
+        CoordinationError::InvalidInput
+    );
     // Validate voting period
     require!(
         voting_period > 0 && voting_period <= GovernanceConfig::MAX_VOTING_PERIOD,

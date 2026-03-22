@@ -198,6 +198,10 @@ pub fn complete_task_private<'info>(
     task_id: u64,
     proof: PrivateCompletionPayload,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::UnauthorizedAgent
+    );
     complete_task_private_impl(
         ctx.accounts,
         ctx.remaining_accounts,
@@ -218,6 +222,10 @@ fn complete_task_private_impl<'info>(
     task_id: u64,
     proof: PrivateCompletionPayload,
 ) -> Result<()> {
+    require!(
+        accounts.authority.is_signer,
+        CoordinationError::UnauthorizedAgent
+    );
     let clock = Clock::get()?;
     let task_key = accounts.task.key();
     let mut claim = load_task_claim_or_not_claimed(&accounts.claim, &task_key)?;
@@ -238,7 +246,6 @@ fn complete_task_private_impl<'info>(
         binding_spend_bump,
         nullifier_spend_bump,
     );
-    let token_accounts = build_token_payment_accounts(accounts)?;
     let bid_settlement = load_bid_task_completion_meta(
         accounts.task.as_ref(),
         &task_key,
@@ -248,6 +255,69 @@ fn complete_task_private_impl<'info>(
     let reward_amount_override = bid_settlement
         .as_ref()
         .map(|settlement| settlement.accepted_bid_price);
+    let token_accounts = if accounts.task.reward_mint.is_some() {
+        require!(
+            accounts.token_escrow_ata.is_some()
+                && accounts.worker_token_account.is_some()
+                && accounts.treasury_token_account.is_some()
+                && accounts.reward_mint.is_some()
+                && accounts.token_program.is_some(),
+            CoordinationError::MissingTokenAccounts
+        );
+
+        let mint = accounts
+            .reward_mint
+            .as_ref()
+            .ok_or(CoordinationError::MissingTokenAccounts)?;
+        let token_escrow = accounts
+            .token_escrow_ata
+            .as_mut()
+            .ok_or(CoordinationError::MissingTokenAccounts)?;
+        let worker_token_account = accounts
+            .worker_token_account
+            .as_ref()
+            .ok_or(CoordinationError::MissingTokenAccounts)?;
+        let treasury_ta = accounts
+            .treasury_token_account
+            .as_ref()
+            .ok_or(CoordinationError::MissingTokenAccounts)?;
+        let token_program = accounts
+            .token_program
+            .as_ref()
+            .ok_or(CoordinationError::MissingTokenAccounts)?;
+        let expected_mint = accounts
+            .task
+            .reward_mint
+            .ok_or(CoordinationError::InvalidTokenMint)?;
+
+        require!(
+            mint.key() == expected_mint,
+            CoordinationError::InvalidTokenMint
+        );
+        validate_token_account(token_escrow, &mint.key(), &accounts.escrow.key())?;
+        validate_token_account(treasury_ta, &mint.key(), &accounts.protocol_config.treasury)?;
+        let token_escrow_starting_amount =
+            anchor_spl::token::accessor::amount(&token_escrow.to_account_info())
+                .map_err(|_| CoordinationError::TokenTransferFailed)?;
+        validate_unchecked_token_mint(
+            &worker_token_account.to_account_info(),
+            &mint.key(),
+            &accounts.authority.key(),
+        )?;
+
+        Some(TokenPaymentAccounts {
+            token_escrow_ata: token_escrow,
+            token_escrow_starting_amount,
+            worker_token_account: worker_token_account.to_account_info(),
+            treasury_token_account: treasury_ta.to_account_info(),
+            token_program,
+            escrow_authority: accounts.escrow.to_account_info(),
+            escrow_bump: accounts.escrow.bump,
+            task_key: accounts.task.key(),
+        })
+    } else {
+        None
+    };
     let authority_info = accounts.authority.to_account_info();
     let treasury_info = accounts.treasury.to_account_info();
     let creator_info = accounts.creator.to_account_info();
@@ -319,6 +389,14 @@ fn verify_private_completion_stage(
     proof: &PrivateCompletionPayload,
     clock: &Clock,
 ) -> Result<DecodedPrivateProof> {
+    require!(
+        accounts.router_program.key() == TRUSTED_RISC0_ROUTER_PROGRAM_ID,
+        CoordinationError::RouterAccountMismatch
+    );
+    require!(
+        accounts.verifier_program.key() == TRUSTED_RISC0_VERIFIER_PROGRAM_ID,
+        CoordinationError::TrustedVerifierProgramMismatch
+    );
     let decoded_proof = decode_private_completion_payload(proof)?;
     validate_completion_inputs(
         &accounts.task,
@@ -446,6 +524,14 @@ fn invoke_router_verification<'info>(
     proof: &PrivateCompletionPayload,
     decoded_proof: &DecodedPrivateProof,
 ) -> Result<()> {
+    require!(
+        accounts.router_program.key() == TRUSTED_RISC0_ROUTER_PROGRAM_ID,
+        CoordinationError::RouterAccountMismatch
+    );
+    require!(
+        accounts.verifier_program.key() == TRUSTED_RISC0_VERIFIER_PROGRAM_ID,
+        CoordinationError::TrustedVerifierProgramMismatch
+    );
     validate_verifier_entry(&accounts.verifier_entry, &accounts.verifier_program)?;
     let router_program_key = validate_router_program_accounts(accounts)?;
     let verify_ix =
@@ -474,6 +560,16 @@ fn build_and_validate_router_verify_ix<'info>(
     decoded_proof: &DecodedPrivateProof,
     router_program_key: &Pubkey,
 ) -> Result<Instruction> {
+    require!(
+        *router_program_key == TRUSTED_RISC0_ROUTER_PROGRAM_ID,
+        CoordinationError::RouterAccountMismatch
+    );
+    require!(
+        accounts.router.key() != Pubkey::default()
+            && accounts.verifier_entry.key() != Pubkey::default()
+            && accounts.verifier_program.key() == TRUSTED_RISC0_VERIFIER_PROGRAM_ID,
+        CoordinationError::RouterAccountMismatch
+    );
     let verify_ix = build_router_verify_ix(
         router_program_key,
         &accounts.router.key(),
@@ -498,6 +594,18 @@ fn invoke_router_verify_ix<'info>(
     accounts: &CompleteTaskPrivate<'info>,
     verify_ix: &Instruction,
 ) -> Result<()> {
+    require!(
+        verify_ix.program_id == accounts.router_program.key(),
+        CoordinationError::RouterAccountMismatch
+    );
+    require!(
+        accounts.router_program.key() == TRUSTED_RISC0_ROUTER_PROGRAM_ID,
+        CoordinationError::RouterAccountMismatch
+    );
+    require!(
+        accounts.verifier_program.key() == TRUSTED_RISC0_VERIFIER_PROGRAM_ID,
+        CoordinationError::TrustedVerifierProgramMismatch
+    );
     invoke(
         verify_ix,
         &[
@@ -550,13 +658,19 @@ fn decode_seal_bytes(seal_bytes: &[u8]) -> Result<Risc0Seal> {
     let selector = seal_bytes[0..RISC0_SELECTOR_LEN]
         .try_into()
         .map_err(|_| error!(CoordinationError::InvalidSealEncoding))?;
-    let pi_a = seal_bytes[RISC0_SELECTOR_LEN..RISC0_SELECTOR_LEN + 64]
+    let pi_a_end = RISC0_SELECTOR_LEN
+        .checked_add(64)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let pi_b_end = pi_a_end
+        .checked_add(128)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let pi_a = seal_bytes[RISC0_SELECTOR_LEN..pi_a_end]
         .try_into()
         .map_err(|_| error!(CoordinationError::InvalidSealEncoding))?;
-    let pi_b = seal_bytes[RISC0_SELECTOR_LEN + 64..RISC0_SELECTOR_LEN + 64 + 128]
+    let pi_b = seal_bytes[pi_a_end..pi_b_end]
         .try_into()
         .map_err(|_| error!(CoordinationError::InvalidSealEncoding))?;
-    let pi_c = seal_bytes[RISC0_SELECTOR_LEN + 64 + 128..RISC0_SEAL_BYTES_LEN]
+    let pi_c = seal_bytes[pi_b_end..RISC0_SEAL_BYTES_LEN]
         .try_into()
         .map_err(|_| error!(CoordinationError::InvalidSealEncoding))?;
 
@@ -618,7 +732,7 @@ fn finalize_private_completion<'info>(
     output_commitment: [u8; HASH_SIZE],
     clock: &Clock,
     reward_amount_override: Option<u64>,
-    token_accounts: Option<TokenPaymentAccounts<'info>>,
+    token_accounts: Option<TokenPaymentAccounts<'_, 'info>>,
 ) -> Result<()> {
     claim.proof_hash = output_commitment;
     claim.result_data = [0u8; RESULT_DATA_SIZE];
@@ -641,108 +755,6 @@ fn finalize_private_completion<'info>(
         clock,
         token_accounts,
     )
-}
-
-#[inline(never)]
-fn build_token_payment_accounts<'info>(
-    accounts: &CompleteTaskPrivate<'info>,
-) -> Result<Option<TokenPaymentAccounts<'info>>> {
-    let task = &accounts.task;
-    if task.reward_mint.is_none() {
-        return Ok(None);
-    }
-
-    let required_accounts = extract_required_token_accounts(accounts)?;
-    let token_payment_accounts =
-        build_validated_token_payment_accounts(accounts, required_accounts)?;
-    Ok(Some(token_payment_accounts))
-}
-
-struct RequiredTokenAccounts<'a, 'info> {
-    mint: &'a Account<'info, Mint>,
-    token_escrow: &'a Account<'info, TokenAccount>,
-    worker_token_account: &'a UncheckedAccount<'info>,
-    treasury_ta: &'a Account<'info, TokenAccount>,
-    token_program: &'a Program<'info, Token>,
-    expected_mint: Pubkey,
-}
-
-fn extract_required_token_accounts<'a, 'info>(
-    accounts: &'a CompleteTaskPrivate<'info>,
-) -> Result<RequiredTokenAccounts<'a, 'info>> {
-    let mint = accounts
-        .reward_mint
-        .as_ref()
-        .ok_or(CoordinationError::MissingTokenAccounts)?;
-    let token_escrow = accounts
-        .token_escrow_ata
-        .as_ref()
-        .ok_or(CoordinationError::MissingTokenAccounts)?;
-    let worker_token_account = accounts
-        .worker_token_account
-        .as_ref()
-        .ok_or(CoordinationError::MissingTokenAccounts)?;
-    let treasury_ta = accounts
-        .treasury_token_account
-        .as_ref()
-        .ok_or(CoordinationError::MissingTokenAccounts)?;
-    let token_program = accounts
-        .token_program
-        .as_ref()
-        .ok_or(CoordinationError::MissingTokenAccounts)?;
-    let expected_mint = accounts
-        .task
-        .reward_mint
-        .ok_or(CoordinationError::InvalidTokenMint)?;
-
-    Ok(RequiredTokenAccounts {
-        mint,
-        token_escrow,
-        worker_token_account,
-        treasury_ta,
-        token_program,
-        expected_mint,
-    })
-}
-
-fn build_validated_token_payment_accounts<'a, 'info>(
-    accounts: &'a CompleteTaskPrivate<'info>,
-    required_accounts: RequiredTokenAccounts<'a, 'info>,
-) -> Result<TokenPaymentAccounts<'info>> {
-    let RequiredTokenAccounts {
-        mint,
-        token_escrow,
-        worker_token_account,
-        treasury_ta,
-        token_program,
-        expected_mint,
-    } = required_accounts;
-
-    require!(
-        mint.key() == expected_mint,
-        CoordinationError::InvalidTokenMint
-    );
-    validate_token_account(token_escrow, &mint.key(), &accounts.escrow.key())?;
-    validate_token_account(treasury_ta, &mint.key(), &accounts.protocol_config.treasury)?;
-    let token_escrow_starting_amount =
-        anchor_spl::token::accessor::amount(&token_escrow.to_account_info())
-            .map_err(|_| CoordinationError::TokenTransferFailed)?;
-    validate_unchecked_token_mint(
-        &worker_token_account.to_account_info(),
-        &mint.key(),
-        &accounts.authority.key(),
-    )?;
-
-    Ok(TokenPaymentAccounts {
-        token_escrow_ata: token_escrow.to_account_info(),
-        token_escrow_starting_amount,
-        worker_token_account: worker_token_account.to_account_info(),
-        treasury_token_account: treasury_ta.to_account_info(),
-        token_program: token_program.to_account_info(),
-        escrow_authority: accounts.escrow.to_account_info(),
-        escrow_bump: accounts.escrow.bump,
-        task_key: accounts.task.key(),
-    })
 }
 
 fn parse_and_validate_journal(journal: &[u8]) -> Result<ParsedJournal> {

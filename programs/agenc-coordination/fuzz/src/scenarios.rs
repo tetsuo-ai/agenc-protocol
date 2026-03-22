@@ -963,6 +963,10 @@ pub fn simulate_initialize_bid_book(
         return result;
     }
 
+    if bid_book.task != [0u8; 32] || bid_book.total_bids != 0 || bid_book.active_bids != 0 {
+        return SimulationResult::Error("AlreadyInitialized".to_string());
+    }
+
     if task.status != task_status::OPEN {
         return SimulationResult::Error("TaskNotOpen".to_string());
     }
@@ -1017,6 +1021,10 @@ pub fn simulate_create_bid(
 ) -> SimulationResult {
     if let Some(result) = require_bid_marketplace_task(task) {
         return result;
+    }
+
+    if bid.bid_id != [0u8; 32] || bid.task != [0u8; 32] || bid.bond_lamports != 0 {
+        return SimulationResult::Error("AlreadyInitialized".to_string());
     }
 
     if task.status != task_status::OPEN {

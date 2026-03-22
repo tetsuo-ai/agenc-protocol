@@ -183,6 +183,10 @@ pub mod agenc_coordination {
         max_bid_lifetime_secs: i64,
         accepted_no_show_slash_bps: u16,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
         instructions::bid_marketplace::initialize_bid_marketplace_handler(
             ctx,
             min_bid_bond_lamports,
@@ -226,6 +230,10 @@ pub mod agenc_coordination {
         confidence_weight_bps: u16,
         reliability_weight_bps: u16,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.creator.is_signer,
+            CoordinationError::UnauthorizedTaskAction
+        );
         instructions::bid_marketplace::initialize_bid_book_handler(
             ctx,
             policy,
@@ -247,6 +255,10 @@ pub mod agenc_coordination {
         metadata_hash: [u8; 32],
         expires_at: i64,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedAgent
+        );
         instructions::bid_marketplace::create_bid_handler(
             ctx,
             requested_reward_lamports,
@@ -287,6 +299,10 @@ pub mod agenc_coordination {
 
     /// Accept a Marketplace V2 bid and convert it into a normal task claim.
     pub fn accept_bid(ctx: Context<AcceptBid>) -> Result<()> {
+        require!(
+            ctx.accounts.creator.is_signer,
+            CoordinationError::UnauthorizedTaskAction
+        );
         instructions::bid_marketplace::accept_bid_handler(ctx)
     }
 
@@ -323,6 +339,10 @@ pub mod agenc_coordination {
         proof_hash: [u8; 32],
         result_data: Option<[u8; 64]>,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedAgent
+        );
         instructions::complete_task::handler(ctx, proof_hash, result_data)
     }
 
@@ -332,6 +352,10 @@ pub mod agenc_coordination {
         task_id: u64,
         proof: PrivateCompletionPayload,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedAgent
+        );
         instructions::complete_task_private::complete_task_private(ctx, task_id, proof)
     }
 
@@ -340,6 +364,10 @@ pub mod agenc_coordination {
         ctx: Context<InitializeZkConfig>,
         active_image_id: [u8; 32],
     ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedProtocolAuthority
+        );
         instructions::initialize_zk_config::handler(ctx, active_image_id)
     }
 
@@ -467,6 +495,10 @@ pub mod agenc_coordination {
         multisig_threshold: u8,
         multisig_owners: Vec<Pubkey>,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedUpgrade
+        );
         instructions::initialize_protocol::handler(
             ctx,
             dispute_threshold,
@@ -587,6 +619,10 @@ pub mod agenc_coordination {
         approval_threshold_bps: u16,
         min_proposal_stake: u64,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedAgent
+        );
         instructions::initialize_governance::handler(
             ctx,
             voting_period,
