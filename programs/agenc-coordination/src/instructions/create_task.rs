@@ -2,14 +2,14 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskCreated;
-use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskEscrow};
+use crate::state::{AgentRegistration, AuthorityRateLimit, ProtocolConfig, Task, TaskEscrow};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-use super::rate_limit_helpers::check_task_creation_rate_limits;
+use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use super::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_bid_task_mode,
     validate_deadline, validate_task_params,
@@ -44,14 +44,23 @@ pub struct CreateTask<'info> {
     )]
     pub protocol_config: Account<'info, ProtocolConfig>,
 
-    /// Creator's agent registration for rate limiting (required)
+    /// Creator's agent registration for identity/authorization checks
     #[account(
-        mut,
         seeds = [b"agent", creator_agent.agent_id.as_ref()],
         bump = creator_agent.bump,
         has_one = authority @ CoordinationError::UnauthorizedAgent
     )]
     pub creator_agent: Account<'info, AgentRegistration>,
+
+    /// Wallet-scoped task/dispute rate limit state shared across all agents
+    #[account(
+        init_if_needed,
+        payer = creator,
+        space = AuthorityRateLimit::SIZE,
+        seeds = [b"authority_rate_limit", authority.key().as_ref()],
+        bump
+    )]
+    pub authority_rate_limit: Account<'info, AuthorityRateLimit>,
 
     /// The authority that owns the creator_agent
     pub authority: Signer<'info>,
@@ -126,10 +135,18 @@ pub fn handler(
     // Validate deadline - must be set and in the future (#575)
     validate_deadline(deadline, &clock, true)?;
 
-    let creator_agent = &mut ctx.accounts.creator_agent;
+    let creator_agent = &ctx.accounts.creator_agent;
+    let authority_rate_limit = &mut ctx.accounts.authority_rate_limit;
 
-    // Check rate limits and update agent state
-    check_task_creation_rate_limits(creator_agent, config, &clock)?;
+    // Check wallet-scoped rate limits to prevent multi-agent bypasses under one authority.
+    check_authority_task_creation_rate_limits(
+        authority_rate_limit,
+        ctx.accounts.authority.key(),
+        ctx.bumps.authority_rate_limit,
+        creator_agent.agent_id,
+        config,
+        &clock,
+    )?;
 
     // Initialize task-owned state before any external CPI so later logic does not
     // depend on a stale view of freshly funded PDAs.

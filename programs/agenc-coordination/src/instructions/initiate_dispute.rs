@@ -3,13 +3,13 @@
 use crate::errors::CoordinationError;
 use crate::events::DisputeInitiated;
 use crate::state::{
-    AgentRegistration, AgentStatus, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task,
-    TaskClaim, TaskStatus,
+    AgentRegistration, AgentStatus, AuthorityRateLimit, Dispute, DisputeStatus, ProtocolConfig,
+    ResolutionType, Task, TaskClaim, TaskStatus,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
-use super::rate_limit_helpers::{check_rate_limits, RateLimitAction};
+use super::rate_limit_helpers::{check_authority_rate_limits, RateLimitAction};
 
 /// Maximum evidence string length
 const MAX_EVIDENCE_LEN: usize = 256;
@@ -42,6 +42,16 @@ pub struct InitiateDispute<'info> {
         has_one = authority @ CoordinationError::UnauthorizedAgent
     )]
     pub agent: Box<Account<'info, AgentRegistration>>,
+
+    /// Wallet-scoped task/dispute rate limit state shared across all agents
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = AuthorityRateLimit::SIZE,
+        seeds = [b"authority_rate_limit", authority.key().as_ref()],
+        bump
+    )]
+    pub authority_rate_limit: Account<'info, AuthorityRateLimit>,
 
     #[account(
         seeds = [b"protocol"],
@@ -79,7 +89,6 @@ pub fn handler(
 ) -> Result<()> {
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
-    let agent = &mut ctx.accounts.agent;
     let config = &ctx.accounts.protocol_config;
     let clock = Clock::get()?;
 
@@ -87,7 +96,7 @@ pub fn handler(
 
     // Verify agent is active
     require!(
-        agent.status == AgentStatus::Active,
+        ctx.accounts.agent.status == AgentStatus::Active,
         CoordinationError::AgentNotActive
     );
 
@@ -156,19 +165,30 @@ pub fn handler(
                 .checked_mul(2)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
             require!(
-                agent.stake >= creator_min_stake,
+                ctx.accounts.agent.stake >= creator_min_stake,
                 CoordinationError::InsufficientStakeForCreatorDispute
             );
         } else {
             require!(
-                agent.stake >= config.min_stake_for_dispute,
+                ctx.accounts.agent.stake >= config.min_stake_for_dispute,
                 CoordinationError::InsufficientStakeForDispute
             );
         }
     }
 
-    // Check rate limits and update counters
-    check_rate_limits(agent, config, &clock, RateLimitAction::DisputeInitiation)?;
+    // Check wallet-scoped rate limits to prevent multi-agent bypasses under one authority.
+    let agent_id = ctx.accounts.agent.agent_id;
+    check_authority_rate_limits(
+        &mut ctx.accounts.authority_rate_limit,
+        ctx.accounts.authority.key(),
+        ctx.bumps.authority_rate_limit,
+        agent_id,
+        config,
+        &clock,
+        RateLimitAction::DisputeInitiation,
+    )?;
+
+    let agent = &mut ctx.accounts.agent;
 
     // === Determine Worker Stake to Snapshot (fix #550) ===
     // Snapshot the worker's stake at dispute initiation time to prevent
