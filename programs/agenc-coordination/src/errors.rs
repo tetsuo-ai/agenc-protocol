@@ -239,6 +239,45 @@ pub enum CoordinationError {
     #[msg("Invalid result data: result_data cannot be all zeros when provided")]
     InvalidResultData,
 
+    #[msg("Task Validation V2 is only supported for exclusive task flows")]
+    ValidationModeUnsupportedTaskType,
+
+    #[msg("Invalid validation mode")]
+    InvalidValidationMode,
+
+    #[msg("Invalid review window")]
+    InvalidReviewWindow,
+
+    #[msg("Task validation configuration required")]
+    TaskValidationConfigRequired,
+
+    #[msg("Task already has validation configured")]
+    TaskValidationAlreadyConfigured,
+
+    #[msg("Task validation cannot be reconfigured once work has started")]
+    TaskValidationImmutableAfterClaim,
+
+    #[msg("Task submission is required")]
+    TaskSubmissionRequired,
+
+    #[msg("Task submission already pending review")]
+    SubmissionAlreadyPending,
+
+    #[msg("Task submission is not pending review")]
+    SubmissionNotPending,
+
+    #[msg("Task submission has already been resolved")]
+    SubmissionAlreadyResolved,
+
+    #[msg("Task is not pending validation")]
+    TaskNotPendingValidation,
+
+    #[msg("Task uses creator-review validation and must submit through Task Validation V2")]
+    ManualValidationRequiresReviewFlow,
+
+    #[msg("Creator-review validation is not supported for private tasks yet")]
+    ManualValidationPrivateTaskUnsupported,
+
     // Dispute errors (6300-6399)
     #[msg("Dispute is not active")]
     DisputeNotActive,

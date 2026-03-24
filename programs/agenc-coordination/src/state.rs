@@ -16,6 +16,10 @@ pub const HASH_SIZE: usize = 32;
 /// Size of result/description/value data fields
 pub const RESULT_DATA_SIZE: usize = 64;
 
+/// Reserved sentinel stored in `Task.constraint_hash` to indicate that the task
+/// uses the Task Validation V2 creator-review flow rather than immediate payout.
+pub const MANUAL_VALIDATION_SENTINEL: [u8; HASH_SIZE] = *b"agenc-manual-validation-v2-seed!";
+
 /// Agent capability flags (bitmask).
 ///
 /// Capabilities are represented as a 64-bit bitmask where each bit indicates
@@ -140,6 +144,32 @@ pub enum TaskType {
     /// Bid-market exclusive task. Direct `claim_task` is disallowed; the creator
     /// must explicitly accept a bid before a normal `TaskClaim` is created.
     BidExclusive = 3,
+}
+
+/// Validation mode configured for a task.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+#[repr(u8)]
+pub enum ValidationMode {
+    /// Existing behavior: workers complete tasks and are paid immediately.
+    #[default]
+    Auto = 0,
+    /// Worker submissions require explicit creator review before settlement.
+    CreatorReview = 1,
+}
+
+/// Task submission lifecycle for creator-review validation.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+#[repr(u8)]
+pub enum SubmissionStatus {
+    /// Account is initialized but has no active submission yet.
+    #[default]
+    Idle = 0,
+    /// Awaiting creator review.
+    Submitted = 1,
+    /// Accepted and settled.
+    Accepted = 2,
+    /// Rejected and may be resubmitted.
+    Rejected = 3,
 }
 
 /// Bid book state for Marketplace V2.
@@ -503,6 +533,93 @@ pub struct AuthorityRateLimit {
 
 impl AuthorityRateLimit {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
+}
+
+/// Task-level validation configuration.
+/// PDA seeds: ["task_validation", task]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskValidationConfig {
+    /// Task this config belongs to.
+    pub task: Pubkey,
+    /// Task creator / reviewer authority.
+    pub creator: Pubkey,
+    /// Active validation mode.
+    pub mode: ValidationMode,
+    /// Review window in seconds before the submission may be escalated off-path.
+    pub review_window_secs: i64,
+    /// Creation timestamp.
+    pub created_at: i64,
+    /// Last update timestamp.
+    pub updated_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future validation variants.
+    pub _reserved: [u8; 7],
+}
+
+impl TaskValidationConfig {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Claim-level submission state for creator-review validation.
+/// PDA seeds: ["task_submission", claim]
+#[account]
+#[derive(InitSpace)]
+pub struct TaskSubmission {
+    /// Task being submitted.
+    pub task: Pubkey,
+    /// Claim tied to this submission.
+    pub claim: Pubkey,
+    /// Worker that submitted the result.
+    pub worker: Pubkey,
+    /// Current submission status.
+    pub status: SubmissionStatus,
+    /// Latest proof hash supplied by the worker.
+    pub proof_hash: [u8; HASH_SIZE],
+    /// Latest result payload supplied by the worker.
+    pub result_data: [u8; RESULT_DATA_SIZE],
+    /// Number of times this claim has been submitted for review.
+    pub submission_count: u16,
+    /// Timestamp of latest submission.
+    pub submitted_at: i64,
+    /// Timestamp after which the review window has elapsed.
+    pub review_deadline_at: i64,
+    /// Acceptance timestamp (0 when unresolved).
+    pub accepted_at: i64,
+    /// Rejection timestamp (0 when unresolved).
+    pub rejected_at: i64,
+    /// Optional rejection reason hash.
+    pub rejection_hash: [u8; HASH_SIZE],
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future attestation metadata.
+    pub _reserved: [u8; 5],
+}
+
+impl TaskSubmission {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+impl Default for TaskSubmission {
+    fn default() -> Self {
+        Self {
+            task: Pubkey::default(),
+            claim: Pubkey::default(),
+            worker: Pubkey::default(),
+            status: SubmissionStatus::Idle,
+            proof_hash: [0u8; HASH_SIZE],
+            result_data: [0u8; RESULT_DATA_SIZE],
+            submission_count: 0,
+            submitted_at: 0,
+            review_deadline_at: 0,
+            accepted_at: 0,
+            rejected_at: 0,
+            rejection_hash: [0u8; HASH_SIZE],
+            bump: 0,
+            _reserved: [0u8; 5],
+        }
+    }
 }
 
 /// Task account

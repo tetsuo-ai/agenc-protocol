@@ -2,7 +2,10 @@
 
 use crate::errors::CoordinationError;
 use crate::instructions::constants::{MAX_DEADLINE_SECONDS, MAX_REPUTATION};
-use crate::state::{DependencyType, ProtocolConfig, Task, TaskEscrow, TaskStatus, TaskType};
+use crate::state::{
+    DependencyType, ProtocolConfig, Task, TaskEscrow, TaskStatus, TaskType,
+    MANUAL_VALIDATION_SENTINEL,
+};
 use anchor_lang::prelude::*;
 
 /// Validates common task parameters shared between create_task and create_dependent_task.
@@ -100,6 +103,13 @@ pub fn init_task_fields(
     min_reputation: u16,
     reward_mint: Option<Pubkey>,
 ) -> Result<()> {
+    if let Some(hash) = constraint_hash {
+        require!(
+            hash != MANUAL_VALIDATION_SENTINEL,
+            CoordinationError::InvalidInput
+        );
+    }
+
     task.task_id = task_id;
     task.creator = creator;
     task.required_capabilities = required_capabilities;

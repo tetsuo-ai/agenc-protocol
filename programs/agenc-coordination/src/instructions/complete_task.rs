@@ -9,6 +9,7 @@ use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
     validate_completion_prereqs, validate_task_dependency,
 };
+use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
     AgentRegistration, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
@@ -174,6 +175,10 @@ fn handle_complete_task<'info>(
     // CRITICAL: Private tasks MUST use complete_task_private (ZK proof verification).
     // Without this guard, an attacker could bypass ZK proof requirements by calling
     // the public completion path on a task with a non-zero constraint_hash.
+    require!(
+        !is_manual_validation_task(task),
+        CoordinationError::ManualValidationRequiresReviewFlow
+    );
     require!(
         task.constraint_hash == [0u8; HASH_SIZE],
         CoordinationError::PrivateTaskRequiresZkProof

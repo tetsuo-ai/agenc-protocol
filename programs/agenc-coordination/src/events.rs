@@ -113,6 +113,50 @@ pub struct TaskCompleted {
     pub timestamp: i64,
 }
 
+/// Emitted when Task Validation V2 is configured for a task.
+#[event]
+pub struct TaskValidationConfigured {
+    pub task: Pubkey,
+    pub creator: Pubkey,
+    pub mode: u8,
+    pub review_window_secs: i64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a worker submits a result for creator review.
+#[event]
+pub struct TaskResultSubmitted {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker: Pubkey,
+    pub proof_hash: [u8; HASH_SIZE],
+    pub result_data: [u8; 64],
+    pub submission_count: u16,
+    pub submitted_at: i64,
+    pub review_deadline_at: i64,
+}
+
+/// Emitted when a creator-reviewed result is accepted.
+#[event]
+pub struct TaskResultAccepted {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker: Pubkey,
+    pub accepted_by: Pubkey,
+    pub accepted_at: i64,
+}
+
+/// Emitted when a creator-reviewed result is rejected.
+#[event]
+pub struct TaskResultRejected {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker: Pubkey,
+    pub rejected_by: Pubkey,
+    pub rejection_hash: [u8; HASH_SIZE],
+    pub rejected_at: i64,
+}
+
 /// Emitted when a task is cancelled
 #[event]
 pub struct TaskCancelled {

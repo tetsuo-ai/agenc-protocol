@@ -142,6 +142,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         task.status != TaskStatus::Disputed,
         CoordinationError::InvalidStatusTransition
     );
+    require!(
+        task.status == TaskStatus::InProgress,
+        CoordinationError::TaskNotInProgress
+    );
 
     // Grace period protection (Issue #421):
     // During the grace period after expiry, only the worker authority can expire

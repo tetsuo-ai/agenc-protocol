@@ -317,6 +317,15 @@ pub mod agenc_coordination {
         instructions::claim_task::handler(ctx)
     }
 
+    /// Enable Task Validation V2 creator review for an open task.
+    pub fn configure_task_validation(
+        ctx: Context<ConfigureTaskValidation>,
+        mode: u8,
+        review_window_secs: i64,
+    ) -> Result<()> {
+        instructions::configure_task_validation::handler(ctx, mode, review_window_secs)
+    }
+
     /// Expire a stale claim to free up task slot.
     /// Can only be called after claim.expires_at has passed.
     pub fn expire_claim<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Result<()> {
@@ -325,6 +334,30 @@ pub mod agenc_coordination {
             CoordinationError::InvalidInput
         );
         instructions::expire_claim::handler(ctx)
+    }
+
+    /// Submit a result for creator review before final settlement.
+    pub fn submit_task_result(
+        ctx: Context<SubmitTaskResult>,
+        proof_hash: [u8; 32],
+        result_data: Option<[u8; 64]>,
+    ) -> Result<()> {
+        instructions::submit_task_result::handler(ctx, proof_hash, result_data)
+    }
+
+    /// Accept a creator-reviewed submission and settle rewards.
+    pub fn accept_task_result<'info>(
+        ctx: Context<'_, '_, '_, 'info, AcceptTaskResult<'info>>,
+    ) -> Result<()> {
+        instructions::accept_task_result::handler(ctx)
+    }
+
+    /// Reject a creator-reviewed submission and return the task to active work.
+    pub fn reject_task_result(
+        ctx: Context<RejectTaskResult>,
+        rejection_hash: [u8; 32],
+    ) -> Result<()> {
+        instructions::reject_task_result::handler(ctx, rejection_hash)
     }
 
     /// Submit proof of work and mark task portion as complete.

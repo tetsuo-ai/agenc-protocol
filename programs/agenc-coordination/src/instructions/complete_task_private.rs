@@ -9,6 +9,7 @@ use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
     validate_completion_prereqs, validate_task_dependency,
 };
+use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
     AgentRegistration, BindingSpend, NullifierSpend, ProtocolConfig, Task, TaskClaim, TaskEscrow,
@@ -465,6 +466,10 @@ fn validate_completion_inputs<'info>(
     validate_task_dependency(task, remaining_accounts, program_id)?;
     validate_completion_prereqs(task, claim, clock)?;
 
+    require!(
+        !is_manual_validation_task(task),
+        CoordinationError::ManualValidationRequiresReviewFlow
+    );
     require!(
         task.constraint_hash != [0u8; HASH_SIZE],
         CoordinationError::NotPrivateTask

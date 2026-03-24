@@ -27,10 +27,12 @@ pub mod lamport_transfer;
 pub mod rate_limit_helpers;
 pub mod slash_helpers;
 pub mod task_init_helpers;
+pub mod task_validation_helpers;
 pub mod token_helpers;
 pub mod validation;
 pub mod zk_config_helpers;
 
+pub mod accept_task_result;
 pub mod apply_dispute_slash;
 pub mod apply_initiator_slash;
 pub mod bid_marketplace;
@@ -40,6 +42,7 @@ pub mod cancel_task;
 pub mod claim_task;
 pub mod complete_task;
 pub mod complete_task_private;
+pub mod configure_task_validation;
 pub mod create_dependent_task;
 pub mod create_proposal;
 pub mod create_task;
@@ -58,9 +61,11 @@ pub mod purchase_skill;
 pub mod rate_skill;
 pub mod register_agent;
 pub mod register_skill;
+pub mod reject_task_result;
 pub mod resolve_dispute;
 pub mod revoke_delegation;
 pub mod stake_reputation;
+pub mod submit_task_result;
 pub mod suspend_agent;
 pub mod unsuspend_agent;
 pub mod update_agent;
@@ -79,6 +84,8 @@ pub mod withdraw_reputation_stake;
 // Glob re-exports are required for Anchor's #[program] macro to access generated
 // types from #[derive(Accounts)]. See module documentation for details.
 #[allow(ambiguous_glob_reexports)]
+pub use accept_task_result::*;
+#[allow(ambiguous_glob_reexports)]
 pub use apply_dispute_slash::*;
 #[allow(ambiguous_glob_reexports)]
 pub use apply_initiator_slash::*;
@@ -96,6 +103,8 @@ pub use claim_task::*;
 pub use complete_task::*;
 #[allow(ambiguous_glob_reexports)]
 pub use complete_task_private::*;
+#[allow(ambiguous_glob_reexports)]
+pub use configure_task_validation::*;
 #[allow(ambiguous_glob_reexports)]
 pub use create_dependent_task::*;
 #[allow(ambiguous_glob_reexports)]
@@ -131,11 +140,15 @@ pub use register_agent::*;
 #[allow(ambiguous_glob_reexports)]
 pub use register_skill::*;
 #[allow(ambiguous_glob_reexports)]
+pub use reject_task_result::*;
+#[allow(ambiguous_glob_reexports)]
 pub use resolve_dispute::*;
 #[allow(ambiguous_glob_reexports)]
 pub use revoke_delegation::*;
 #[allow(ambiguous_glob_reexports)]
 pub use stake_reputation::*;
+#[allow(ambiguous_glob_reexports)]
+pub use submit_task_result::*;
 #[allow(ambiguous_glob_reexports)]
 pub use suspend_agent::*;
 #[allow(ambiguous_glob_reexports)]
