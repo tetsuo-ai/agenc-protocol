@@ -5,6 +5,7 @@ The Anchor program for the public AgenC protocol, built on Solana.
 ## Start Here
 
 - [../../docs/PROGRAM_SURFACE.md](../../docs/PROGRAM_SURFACE.md) - grouped instruction and PDA overview
+- [../../docs/TASK_VALIDATION_V2.md](../../docs/TASK_VALIDATION_V2.md) - reviewed public-task completion and validation modes
 - [../../docs/ZK_PRIVATE_FLOW.md](../../docs/ZK_PRIVATE_FLOW.md) - private-completion and zk-config context
 - [../../docs/VALIDATION.md](../../docs/VALIDATION.md) - toolchain and validation commands
 - [../../README.md](../../README.md) - repo-level ownership and artifact pipeline
@@ -16,7 +17,7 @@ This program owns the on-chain public protocol surface for AgenC.
 Major instruction families include:
 
 - agent lifecycle
-- task lifecycle, including dependent and private completion flows
+- task lifecycle, including dependent, reviewed, and private completion flows
 - disputes and slashing
 - protocol administration and migrations
 - governance
@@ -30,12 +31,12 @@ Major instruction families include:
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │           AgenC Coordination Program (Rust/Anchor)       │   │
 │  │  • RegisterAgent    • CreateTask    • ClaimTask          │   │
-│  │  • CompleteTask     • UpdateState   • ResolveDispute     │   │
+│  │  • SubmitTaskResult • CompleteTask  • ResolveDispute     │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │           Program Derived Addresses (PDAs)               │   │
 │  │  • Agent accounts   • Task accounts   • State accounts   │   │
-│  │  • Escrow accounts  • Dispute accounts                   │   │
+│  │  • Validation PDAs  • Escrow accounts • Dispute accounts │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```

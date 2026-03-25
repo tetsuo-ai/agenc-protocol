@@ -10,6 +10,7 @@ Public protocol source of truth for AgenC.
 - [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md) - RFC for Marketplace V2 bid accounts, lifecycle, settlement, and controls
 - [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md) - artifact sync rules
 - [docs/VALIDATION.md](docs/VALIDATION.md) - local toolchain and CI-equivalent commands
+- [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md) - reviewed public-task completion, validation modes, and PDA model
 - [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) - private-completion and zk-config flow
 
 This repository owns:
@@ -72,6 +73,16 @@ npm run pack:smoke
 ```
 
 Use `anchor build` before `npm run artifacts:refresh` when the program or IDL changes.
+
+## Completion Modes
+
+The protocol currently supports three distinct completion paths:
+
+- auto-settled public completion through `complete_task`
+- reviewed public completion through Task Validation V2
+- private zk-backed completion through `complete_task_private`
+
+Use [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md) for the reviewed path and [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) for the private path.
 
 ## Scope Rules
 

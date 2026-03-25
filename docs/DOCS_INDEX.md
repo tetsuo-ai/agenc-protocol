@@ -10,6 +10,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md) - RFC for bid-book accounts, lifecycle, settlement hooks, and anti-spam controls
 - [./ARTIFACT_PIPELINE.md](./ARTIFACT_PIPELINE.md) - how `anchor build` output becomes committed and published artifacts
 - [./VALIDATION.md](./VALIDATION.md) - local toolchain and CI-equivalent commands
+- [./TASK_VALIDATION_V2.md](./TASK_VALIDATION_V2.md) - reviewed public-task completion and validation-account model
 - [./ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md) - private-completion and zk-config flow
 
 ## Other Active Docs
@@ -26,4 +27,5 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - I need the Marketplace V2 bid design: [MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md)
 - I need artifact sync rules: [ARTIFACT_PIPELINE.md](./ARTIFACT_PIPELINE.md)
 - I need CI or local validation: [VALIDATION.md](./VALIDATION.md)
+- I need reviewed public-task completion: [TASK_VALIDATION_V2.md](./TASK_VALIDATION_V2.md)
 - I need private completion or zk-config context: [ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md)

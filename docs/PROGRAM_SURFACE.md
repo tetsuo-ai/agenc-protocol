@@ -23,8 +23,14 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 
 - create task
 - create dependent task
+- configure task validation
 - claim
 - expire claim
+- submit task result
+- accept task result
+- reject task result
+- auto accept task result
+- validate task result
 - complete task
 - complete task private
 - cancel task
@@ -73,6 +79,7 @@ The complete model lives in `src/state.rs`. Important state families include:
 - zk config
 - agent accounts
 - task and claim accounts
+- task validation config, attestor config, submissions, and validation votes
 - Marketplace V2 bid marketplace config, bidder market state, bid books, and bids
 - escrow accounts
 - dispute and vote accounts
