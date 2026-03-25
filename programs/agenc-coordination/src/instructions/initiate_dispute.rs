@@ -4,7 +4,7 @@ use crate::errors::CoordinationError;
 use crate::events::DisputeInitiated;
 use crate::state::{
     AgentRegistration, AgentStatus, AuthorityRateLimit, Dispute, DisputeStatus, ProtocolConfig,
-    ResolutionType, Task, TaskClaim, TaskStatus,
+    ResolutionType, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -73,14 +73,17 @@ pub struct InitiateDispute<'info> {
     /// Optional: Worker's claim (required when worker_agent is provided)
     pub worker_claim: Option<Account<'info, TaskClaim>>,
 
+    /// Optional durable submission record used once the claim slot has been released.
+    pub task_submission: Option<Account<'info, TaskSubmission>>,
+
     #[account(mut)]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(
-    ctx: Context<InitiateDispute>,
+pub fn handler<'info>(
+    ctx: Context<'_, '_, '_, 'info, InitiateDispute<'info>>,
     dispute_id: [u8; 32],
     task_id: [u8; 32],
     evidence_hash: [u8; 32],
@@ -91,6 +94,18 @@ pub fn handler(
     let task = &mut ctx.accounts.task;
     let config = &ctx.accounts.protocol_config;
     let clock = Clock::get()?;
+    let task_submission = ctx
+        .accounts
+        .task_submission
+        .as_ref()
+        .map(|task_submission| {
+            require!(
+                task_submission.task == task.key(),
+                CoordinationError::TaskSubmissionRequired
+            );
+            Ok((task_submission.worker, task_submission.status))
+        })
+        .transpose()?;
 
     check_version_compatible(config)?;
 
@@ -100,28 +115,49 @@ pub fn handler(
         CoordinationError::AgentNotActive
     );
 
+    let submission_is_disputable = task_submission
+        .as_ref()
+        .map(|(_, status)| {
+            *status == SubmissionStatus::Submitted || *status == SubmissionStatus::Rejected
+        })
+        .unwrap_or(false);
+
     // Verify task is in a disputable state
     require!(
-        task.status == TaskStatus::InProgress || task.status == TaskStatus::PendingValidation,
+        task.status == TaskStatus::InProgress
+            || task.status == TaskStatus::PendingValidation
+            || submission_is_disputable,
         CoordinationError::TaskNotInProgress
     );
 
-    // Validate status transition is allowed (fix #538)
-    require!(
-        task.status.can_transition_to(TaskStatus::Disputed),
-        CoordinationError::InvalidStatusTransition
-    );
+    if !submission_is_disputable {
+        // Validate status transition is allowed (fix #538)
+        require!(
+            task.status.can_transition_to(TaskStatus::Disputed),
+            CoordinationError::InvalidStatusTransition
+        );
+    }
 
     // Verify task has workers to dispute (fix #502)
-    require!(task.current_workers > 0, CoordinationError::NoWorkers);
+    require!(
+        task.current_workers > 0 || submission_is_disputable,
+        CoordinationError::NoWorkers
+    );
 
     // Verify initiator is task participant (creator or has claim)
     // Compare task.creator (wallet) with authority (signer's wallet), not agent PDA
     let is_creator = task.creator == ctx.accounts.authority.key();
     let has_claim = ctx.accounts.initiator_claim.is_some();
+    let has_submission = task_submission
+        .as_ref()
+        .map(|(worker, status)| {
+            *worker == ctx.accounts.agent.key()
+                && (*status == SubmissionStatus::Submitted || *status == SubmissionStatus::Rejected)
+        })
+        .unwrap_or(false);
 
     require!(
-        is_creator || has_claim,
+        is_creator || has_claim || has_submission,
         CoordinationError::NotTaskParticipant
     );
 
@@ -193,7 +229,7 @@ pub fn handler(
     // === Determine Worker Stake to Snapshot (fix #550) ===
     // Snapshot the worker's stake at dispute initiation time to prevent
     // attackers from withdrawing stake before being slashed.
-    let worker_stake = if has_claim {
+    let worker_stake = if has_claim || has_submission {
         // Initiator is the worker - use their stake
         agent.stake
     } else {
@@ -203,18 +239,21 @@ pub fn handler(
             .worker_agent
             .as_ref()
             .ok_or(CoordinationError::WorkerAgentRequired)?;
-        let w_claim = ctx
-            .accounts
-            .worker_claim
-            .as_ref()
-            .ok_or(CoordinationError::WorkerClaimRequired)?;
-
-        // Verify worker_claim is for this task and this worker
-        require!(w_claim.task == task.key(), CoordinationError::TaskNotFound);
-        require!(
-            w_claim.worker == worker.key(),
-            CoordinationError::UnauthorizedAgent
-        );
+        if let Some(w_claim) = ctx.accounts.worker_claim.as_ref() {
+            require!(w_claim.task == task.key(), CoordinationError::TaskNotFound);
+            require!(
+                w_claim.worker == worker.key(),
+                CoordinationError::UnauthorizedAgent
+            );
+        } else {
+            let submission = task_submission
+                .as_ref()
+                .ok_or(CoordinationError::TaskSubmissionRequired)?;
+            require!(
+                submission.0 == worker.key(),
+                CoordinationError::UnauthorizedAgent
+            );
+        }
 
         worker.stake
     };

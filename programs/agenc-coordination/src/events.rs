@@ -120,10 +120,12 @@ pub struct TaskValidationConfigured {
     pub creator: Pubkey,
     pub mode: u8,
     pub review_window_secs: i64,
+    pub validator_quorum: u8,
+    pub attestor: Option<Pubkey>,
     pub timestamp: i64,
 }
 
-/// Emitted when a worker submits a result for creator review.
+/// Emitted when a worker submits a result for manual validation.
 #[event]
 pub struct TaskResultSubmitted {
     pub task: Pubkey,
@@ -136,7 +138,7 @@ pub struct TaskResultSubmitted {
     pub review_deadline_at: i64,
 }
 
-/// Emitted when a creator-reviewed result is accepted.
+/// Emitted when a manual-validation result is accepted.
 #[event]
 pub struct TaskResultAccepted {
     pub task: Pubkey,
@@ -146,7 +148,7 @@ pub struct TaskResultAccepted {
     pub accepted_at: i64,
 }
 
-/// Emitted when a creator-reviewed result is rejected.
+/// Emitted when a manual-validation result is rejected.
 #[event]
 pub struct TaskResultRejected {
     pub task: Pubkey,
@@ -155,6 +157,20 @@ pub struct TaskResultRejected {
     pub rejected_by: Pubkey,
     pub rejection_hash: [u8; HASH_SIZE],
     pub rejected_at: i64,
+}
+
+/// Emitted when a validator or attestor records an approval / rejection.
+#[event]
+pub struct TaskResultValidationRecorded {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub reviewer: Pubkey,
+    pub reviewer_agent: Pubkey,
+    pub approved: bool,
+    pub submission_count: u16,
+    pub approval_count: u8,
+    pub rejection_count: u8,
+    pub recorded_at: i64,
 }
 
 /// Emitted when a task is cancelled

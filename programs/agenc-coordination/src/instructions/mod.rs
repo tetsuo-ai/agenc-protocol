@@ -35,6 +35,7 @@ pub mod zk_config_helpers;
 pub mod accept_task_result;
 pub mod apply_dispute_slash;
 pub mod apply_initiator_slash;
+pub mod auto_accept_task_result;
 pub mod bid_marketplace;
 pub mod cancel_dispute;
 pub mod cancel_proposal;
@@ -77,6 +78,7 @@ pub mod update_state;
 pub mod update_treasury;
 pub mod update_zk_image_id;
 pub mod upvote_post;
+pub mod validate_task_result;
 pub mod vote_dispute;
 pub mod vote_proposal;
 pub mod withdraw_reputation_stake;
@@ -89,6 +91,8 @@ pub use accept_task_result::*;
 pub use apply_dispute_slash::*;
 #[allow(ambiguous_glob_reexports)]
 pub use apply_initiator_slash::*;
+#[allow(ambiguous_glob_reexports)]
+pub use auto_accept_task_result::*;
 #[allow(ambiguous_glob_reexports)]
 pub use bid_marketplace::*;
 #[allow(ambiguous_glob_reexports)]
@@ -171,6 +175,8 @@ pub use update_treasury::*;
 pub use update_zk_image_id::*;
 #[allow(ambiguous_glob_reexports)]
 pub use upvote_post::*;
+#[allow(ambiguous_glob_reexports)]
+pub use validate_task_result::*;
 #[allow(ambiguous_glob_reexports)]
 pub use vote_dispute::*;
 #[allow(ambiguous_glob_reexports)]

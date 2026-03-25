@@ -19,9 +19,12 @@ use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
+use crate::instructions::task_validation_helpers::{
+    ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
+};
 use crate::state::{
-    AgentRegistration, BidMarketplaceConfig, ProtocolConfig, Task, TaskClaim, TaskEscrow,
-    TaskStatus, TaskType,
+    AgentRegistration, BidMarketplaceConfig, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
+    TaskEscrow, TaskStatus, TaskSubmission, TaskType, TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -55,7 +58,7 @@ pub struct ExpireClaim<'info> {
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         mut,
@@ -63,7 +66,7 @@ pub struct ExpireClaim<'info> {
         bump = escrow.bump,
         constraint = escrow.task == task.key() @ CoordinationError::InvalidInput
     )]
-    pub escrow: Account<'info, TaskEscrow>,
+    pub escrow: Box<Account<'info, TaskEscrow>>,
 
     #[account(
         mut,
@@ -72,20 +75,32 @@ pub struct ExpireClaim<'info> {
         bump = claim.bump,
         constraint = claim.task == task.key() @ CoordinationError::InvalidInput
     )]
-    pub claim: Account<'info, TaskClaim>,
+    pub claim: Box<Account<'info, TaskClaim>>,
 
     #[account(
         mut,
         seeds = [b"agent", worker.agent_id.as_ref()],
         bump = worker.bump
     )]
-    pub worker: Account<'info, AgentRegistration>,
+    pub worker: Box<Account<'info, AgentRegistration>>,
 
     #[account(
         seeds = [b"protocol"],
         bump = protocol_config.bump
     )]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
+    #[account(
+        seeds = [b"task_validation", task.key().as_ref()],
+        bump = task_validation_config.bump
+    )]
+    pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
+
+    #[account(
+        seeds = [b"task_submission", claim.key().as_ref()],
+        bump = task_submission.bump
+    )]
+    pub task_submission: Option<Box<Account<'info, TaskSubmission>>>,
 
     /// CHECK: Receives rent from closed claim account - validated to be worker authority
     #[account(
@@ -142,8 +157,15 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         task.status != TaskStatus::Disputed,
         CoordinationError::InvalidStatusTransition
     );
+    let claim_has_pending_submission = ctx
+        .accounts
+        .task_submission
+        .as_ref()
+        .map(|submission| submission.status == SubmissionStatus::Submitted)
+        .unwrap_or(false);
     require!(
-        task.status == TaskStatus::InProgress,
+        task.status == TaskStatus::InProgress
+            || (task.status == TaskStatus::PendingValidation && !claim_has_pending_submission),
         CoordinationError::TaskNotInProgress
     );
 
@@ -184,9 +206,17 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         .checked_sub(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
-    // Reopen task if no workers left AND task is still in progress
-    // (Don't reopen cancelled/completed/disputed tasks - prevents zombie task attack)
-    if task.current_workers == 0 && task.status == TaskStatus::InProgress {
+    if is_manual_validation_task(task) {
+        let validation_config = ctx
+            .accounts
+            .task_validation_config
+            .as_ref()
+            .ok_or(CoordinationError::TaskValidationConfigRequired)?;
+        ensure_validation_config(validation_config, &task.key(), task)?;
+        sync_task_validation_status(task, validation_config);
+    } else if task.current_workers == 0 && task.status == TaskStatus::InProgress {
+        // Reopen task if no workers left AND task is still in progress
+        // (Don't reopen cancelled/completed/disputed tasks - prevents zombie task attack)
         task.status = TaskStatus::Open;
     }
 

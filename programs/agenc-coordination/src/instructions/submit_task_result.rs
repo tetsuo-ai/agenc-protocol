@@ -1,9 +1,9 @@
-//! Submit a task result for Task Validation V2 creator review.
+//! Submit a task result for Task Validation V2 review or attestation.
 
 use crate::errors::CoordinationError;
 use crate::events::TaskResultSubmitted;
 use crate::instructions::task_validation_helpers::{
-    ensure_creator_review_config, is_manual_validation_task,
+    ensure_validation_config, increment_pending_submission_count, is_manual_validation_task,
 };
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
@@ -73,28 +73,33 @@ pub fn handler(
     let clock = Clock::get()?;
 
     require!(
-        ctx.accounts.task.status == TaskStatus::InProgress,
+        ctx.accounts.task.status == TaskStatus::InProgress
+            || ctx.accounts.task.status == TaskStatus::PendingValidation,
         CoordinationError::TaskNotInProgress
     );
     require!(
-        ctx.accounts
-            .task
-            .status
-            .can_transition_to(TaskStatus::PendingValidation),
+        ctx.accounts.task.status == TaskStatus::PendingValidation
+            || ctx
+                .accounts
+                .task
+                .status
+                .can_transition_to(TaskStatus::PendingValidation),
         CoordinationError::InvalidStatusTransition
     );
     require!(
         is_manual_validation_task(&ctx.accounts.task),
         CoordinationError::TaskValidationConfigRequired
     );
-    ensure_creator_review_config(
+    ensure_validation_config(
         &ctx.accounts.task_validation_config,
         &ctx.accounts.task.key(),
         &ctx.accounts.task,
     )?;
 
+    let review_window_secs = ctx.accounts.task_validation_config.review_window_secs;
     let task = &mut ctx.accounts.task;
     let claim = &mut ctx.accounts.claim;
+    let validation_config = &mut ctx.accounts.task_validation_config;
     let submission = &mut ctx.accounts.task_submission;
 
     require!(
@@ -117,6 +122,7 @@ pub fn handler(
         clock.unix_timestamp <= claim.expires_at,
         CoordinationError::ClaimExpired
     );
+    require!(claim.claimed_at > 0, CoordinationError::NotClaimed);
     require!(
         !claim.is_completed,
         CoordinationError::ClaimAlreadyCompleted
@@ -130,12 +136,12 @@ pub fn handler(
         CoordinationError::SubmissionAlreadyResolved
     );
 
-    let review_window_secs = ctx.accounts.task_validation_config.review_window_secs;
     let next_submission_count = submission
         .submission_count
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     let result_bytes = result_data.unwrap_or([0u8; RESULT_DATA_SIZE]);
+    increment_pending_submission_count(validation_config)?;
 
     claim.proof_hash = proof_hash;
     claim.result_data = result_bytes;
@@ -158,6 +164,7 @@ pub fn handler(
     submission.accepted_at = 0;
     submission.rejected_at = 0;
     submission.rejection_hash = [0u8; HASH_SIZE];
+    submission.clear_validation_counts();
     submission.bump = ctx.bumps.task_submission;
 
     task.status = TaskStatus::PendingValidation;

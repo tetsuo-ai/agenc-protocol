@@ -322,8 +322,16 @@ pub mod agenc_coordination {
         ctx: Context<ConfigureTaskValidation>,
         mode: u8,
         review_window_secs: i64,
+        validator_quorum: u8,
+        attestor: Option<Pubkey>,
     ) -> Result<()> {
-        instructions::configure_task_validation::handler(ctx, mode, review_window_secs)
+        instructions::configure_task_validation::handler(
+            ctx,
+            mode,
+            review_window_secs,
+            validator_quorum,
+            attestor,
+        )
     }
 
     /// Expire a stale claim to free up task slot.
@@ -346,18 +354,29 @@ pub mod agenc_coordination {
     }
 
     /// Accept a creator-reviewed submission and settle rewards.
-    pub fn accept_task_result<'info>(
-        ctx: Context<'_, '_, '_, 'info, AcceptTaskResult<'info>>,
-    ) -> Result<()> {
+    pub fn accept_task_result(ctx: Context<AcceptTaskResult>) -> Result<()> {
         instructions::accept_task_result::handler(ctx)
     }
 
+    /// Permissionlessly auto-accept a creator-reviewed submission after timeout.
+    pub fn auto_accept_task_result(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
+        instructions::auto_accept_task_result::handler(ctx)
+    }
+
     /// Reject a creator-reviewed submission and return the task to active work.
-    pub fn reject_task_result(
-        ctx: Context<RejectTaskResult>,
+    pub fn reject_task_result<'info>(
+        ctx: Context<'_, '_, '_, 'info, RejectTaskResult<'info>>,
         rejection_hash: [u8; 32],
     ) -> Result<()> {
         instructions::reject_task_result::handler(ctx, rejection_hash)
+    }
+
+    /// Record a validator quorum vote or external attestation for a submission.
+    pub fn validate_task_result<'info>(
+        ctx: Context<'_, '_, '_, 'info, ValidateTaskResult<'info>>,
+        approved: bool,
+    ) -> Result<()> {
+        instructions::validate_task_result::handler(ctx, approved)
     }
 
     /// Submit proof of work and mark task portion as complete.
@@ -450,8 +469,8 @@ pub mod agenc_coordination {
     /// * `task_id` - Related task ID
     /// * `evidence_hash` - Hash of evidence supporting the dispute
     /// * `resolution_type` - 0=refund, 1=complete, 2=split
-    pub fn initiate_dispute(
-        ctx: Context<InitiateDispute>,
+    pub fn initiate_dispute<'info>(
+        ctx: Context<'_, '_, '_, 'info, InitiateDispute<'info>>,
         dispute_id: [u8; 32],
         task_id: [u8; 32],
         evidence_hash: [u8; 32],

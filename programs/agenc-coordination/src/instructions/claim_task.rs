@@ -5,6 +5,7 @@ use crate::events::{reputation_reason, ReputationChanged, TaskClaimed};
 use crate::instructions::constants::{
     MAX_REPUTATION, REPUTATION_DECAY_MIN, REPUTATION_DECAY_PERIOD, REPUTATION_DECAY_RATE,
 };
+use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::state::{
     AgentRegistration, AgentStatus, ProtocolConfig, Task, TaskClaim, TaskStatus, TaskType,
 };
@@ -79,9 +80,15 @@ pub fn handler(ctx: Context<ClaimTask>) -> Result<()> {
         return Err(CoordinationError::AlreadyClaimed.into());
     }
 
-    // Validate task state - must be Open or InProgress (for collaborative tasks)
+    // Validate task state - manual-validation collaborative tasks may continue to accept
+    // new claims while earlier submissions are pending review.
+    let claimable_during_pending_validation = task.status == TaskStatus::PendingValidation
+        && task.task_type == TaskType::Collaborative
+        && is_manual_validation_task(task);
     require!(
-        task.status == TaskStatus::Open || task.status == TaskStatus::InProgress,
+        task.status == TaskStatus::Open
+            || task.status == TaskStatus::InProgress
+            || claimable_during_pending_validation,
         CoordinationError::TaskNotOpen
     );
     require!(
@@ -200,7 +207,9 @@ pub fn handler(ctx: Context<ClaimTask>) -> Result<()> {
         .current_workers
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
-    task.status = TaskStatus::InProgress;
+    if task.status != TaskStatus::PendingValidation {
+        task.status = TaskStatus::InProgress;
+    }
 
     // Update worker
     worker.active_tasks = worker

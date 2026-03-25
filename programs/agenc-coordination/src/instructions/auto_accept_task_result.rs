@@ -1,4 +1,4 @@
-//! Accept a Task Validation V2 submission and settle the task reward.
+//! Auto-accept a creator-reviewed submission after the review window expires.
 
 use crate::errors::CoordinationError;
 use crate::events::TaskResultAccepted;
@@ -23,7 +23,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 #[derive(Accounts)]
-pub struct AcceptTaskResult<'info> {
+pub struct AutoAcceptTaskResult<'info> {
     #[account(
         mut,
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
@@ -90,7 +90,7 @@ pub struct AcceptTaskResult<'info> {
         mut,
         constraint = creator.key() == task.creator @ CoordinationError::InvalidCreator
     )]
-    pub creator: Signer<'info>,
+    pub creator: UncheckedAccount<'info>,
 
     /// CHECK: Receives reward payout, validated against worker.authority.
     #[account(
@@ -99,11 +99,13 @@ pub struct AcceptTaskResult<'info> {
     )]
     pub worker_authority: UncheckedAccount<'info>,
 
-    // === Optional SPL Token accounts (only required for token-denominated tasks) ===
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
     #[account(mut)]
     pub token_escrow_ata: Option<Account<'info, TokenAccount>>,
 
-    /// CHECK: Validated in handler; ATA may be created ahead of review settlement.
+    /// CHECK: Validated in handler; ATA may be created ahead of settlement.
     #[account(mut)]
     pub worker_token_account: Option<UncheckedAccount<'info>>,
 
@@ -117,7 +119,7 @@ pub struct AcceptTaskResult<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
+pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
 
@@ -141,6 +143,10 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     require!(
         ctx.accounts.task_submission.status == SubmissionStatus::Submitted,
         CoordinationError::SubmissionNotPending
+    );
+    require!(
+        clock.unix_timestamp >= ctx.accounts.task_submission.review_deadline_at,
+        CoordinationError::ReviewWindowNotElapsed
     );
 
     validate_task_dependency(
@@ -273,7 +279,7 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         task: ctx.accounts.task.key(),
         claim: ctx.accounts.claim.key(),
         worker: ctx.accounts.worker.key(),
-        accepted_by: ctx.accounts.creator.key(),
+        accepted_by: ctx.accounts.authority.key(),
         accepted_at: clock.unix_timestamp,
     });
 

@@ -260,6 +260,9 @@ pub enum CoordinationError {
     #[msg("Task submission is required")]
     TaskSubmissionRequired,
 
+    #[msg("Task attestor configuration is required")]
+    TaskAttestorConfigRequired,
+
     #[msg("Task submission already pending review")]
     SubmissionAlreadyPending,
 
@@ -277,6 +280,27 @@ pub enum CoordinationError {
 
     #[msg("Creator-review validation is not supported for private tasks yet")]
     ManualValidationPrivateTaskUnsupported,
+
+    #[msg("Validation instruction does not match the task's configured validation mode")]
+    ValidationModeMismatch,
+
+    #[msg("Validator quorum must be greater than zero")]
+    InvalidValidatorQuorum,
+
+    #[msg("External attestor must be a valid non-default wallet")]
+    InvalidAttestor,
+
+    #[msg("Review window has not elapsed yet")]
+    ReviewWindowNotElapsed,
+
+    #[msg("Validation for this submission round has already been recorded")]
+    ValidationAlreadyRecorded,
+
+    #[msg("Validator agent account is required for validator-quorum mode")]
+    ValidatorAgentRequired,
+
+    #[msg("Reviewer is not authorized to validate this task result")]
+    UnauthorizedTaskValidator,
 
     // Dispute errors (6300-6399)
     #[msg("Dispute is not active")]

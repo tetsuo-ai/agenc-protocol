@@ -17,7 +17,7 @@ pub const HASH_SIZE: usize = 32;
 pub const RESULT_DATA_SIZE: usize = 64;
 
 /// Reserved sentinel stored in `Task.constraint_hash` to indicate that the task
-/// uses the Task Validation V2 creator-review flow rather than immediate payout.
+/// uses the Task Validation V2 review / attestation flow rather than immediate payout.
 pub const MANUAL_VALIDATION_SENTINEL: [u8; HASH_SIZE] = *b"agenc-manual-validation-v2-seed!";
 
 /// Agent capability flags (bitmask).
@@ -100,11 +100,15 @@ impl TaskStatus {
     ///
     /// Valid transitions:
     /// - Open → InProgress (when task is claimed)
+    /// - Open → Disputed (post-submission dispute after slot release)
     /// - Open → Cancelled (when task is cancelled before any claims)
     /// - InProgress → Completed (when task is completed)
     /// - InProgress → Cancelled (when task is cancelled after deadline with no completions)
     /// - InProgress → Disputed (when a dispute is initiated)
-    /// - InProgress → PendingValidation (reserved for future validation flow)
+    /// - InProgress → PendingValidation (manual validation flow)
+    /// - PendingValidation → PendingValidation (additional submissions while review is active)
+    /// - PendingValidation → InProgress (pending submissions resolved, active claims remain)
+    /// - PendingValidation → Open (pending submissions resolved, task needs new claims)
     /// - PendingValidation → Completed (after validation passes)
     /// - PendingValidation → Disputed (when validation is contested)
     /// - Disputed → Completed (dispute resolved in favor of completion)
@@ -116,12 +120,14 @@ impl TaskStatus {
         matches!(
             (self, new_status),
             // From Open
-            (Open, InProgress) | (Open, Cancelled) |
+            (Open, InProgress) | (Open, Cancelled) | (Open, Disputed) |
             // From InProgress (InProgress -> InProgress for additional claims on collaborative tasks)
             (InProgress, InProgress) | (InProgress, Completed) | (InProgress, Cancelled) |
             (InProgress, Disputed) | (InProgress, PendingValidation) |
             // From PendingValidation
-            (PendingValidation, Completed) | (PendingValidation, Disputed) |
+            (PendingValidation, PendingValidation) | (PendingValidation, InProgress) |
+            (PendingValidation, Open) | (PendingValidation, Completed) |
+            (PendingValidation, Disputed) |
             // From Disputed
             (Disputed, Completed) | (Disputed, Cancelled)
         )
@@ -155,9 +161,13 @@ pub enum ValidationMode {
     Auto = 0,
     /// Worker submissions require explicit creator review before settlement.
     CreatorReview = 1,
+    /// Validators vote on a submission before settlement.
+    ValidatorQuorum = 2,
+    /// A configured external attestor approves or rejects the submission.
+    ExternalAttestation = 3,
 }
 
-/// Task submission lifecycle for creator-review validation.
+/// Task submission lifecycle for manual validation.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
 #[repr(u8)]
 pub enum SubmissionStatus {
@@ -560,9 +570,52 @@ pub struct TaskValidationConfig {
 
 impl TaskValidationConfig {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn validator_quorum(&self) -> u8 {
+        self._reserved[0]
+    }
+
+    pub fn set_validator_quorum(&mut self, quorum: u8) {
+        self._reserved[0] = quorum;
+    }
+
+    pub fn pending_submission_count(&self) -> u16 {
+        u16::from_le_bytes([self._reserved[1], self._reserved[2]])
+    }
+
+    pub fn set_pending_submission_count(&mut self, count: u16) {
+        let bytes = count.to_le_bytes();
+        self._reserved[1] = bytes[0];
+        self._reserved[2] = bytes[1];
+    }
 }
 
-/// Claim-level submission state for creator-review validation.
+/// Task-level external attestor configuration.
+/// PDA seeds: ["task_attestor", task]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskAttestorConfig {
+    /// Task this config belongs to.
+    pub task: Pubkey,
+    /// Task creator / reviewer authority.
+    pub creator: Pubkey,
+    /// Wallet allowed to attest the outcome.
+    pub attestor: Pubkey,
+    /// Creation timestamp.
+    pub created_at: i64,
+    /// Last update timestamp.
+    pub updated_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future attestor metadata.
+    pub _reserved: [u8; 7],
+}
+
+impl TaskAttestorConfig {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Claim-level submission state for manual validation.
 /// PDA seeds: ["task_submission", claim]
 #[account]
 #[derive(InitSpace)]
@@ -599,6 +652,27 @@ pub struct TaskSubmission {
 
 impl TaskSubmission {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn approval_count(&self) -> u8 {
+        self._reserved[0]
+    }
+
+    pub fn set_approval_count(&mut self, approvals: u8) {
+        self._reserved[0] = approvals;
+    }
+
+    pub fn rejection_count(&self) -> u8 {
+        self._reserved[1]
+    }
+
+    pub fn set_rejection_count(&mut self, rejections: u8) {
+        self._reserved[1] = rejections;
+    }
+
+    pub fn clear_validation_counts(&mut self) {
+        self._reserved[0] = 0;
+        self._reserved[1] = 0;
+    }
 }
 
 impl Default for TaskSubmission {
@@ -620,6 +694,33 @@ impl Default for TaskSubmission {
             _reserved: [0u8; 5],
         }
     }
+}
+
+/// Reviewer vote or attestation recorded for a task submission round.
+/// PDA seeds: ["task_validation_vote", task_submission, reviewer]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskValidationVote {
+    /// Submission being validated.
+    pub submission: Pubkey,
+    /// Reviewer wallet that cast the vote / attestation.
+    pub reviewer: Pubkey,
+    /// Reviewer agent used for validator-quorum mode (default pubkey for attestors).
+    pub reviewer_agent: Pubkey,
+    /// Submission round the vote applies to.
+    pub submission_round: u16,
+    /// Whether the reviewer approved the result.
+    pub approved: bool,
+    /// Timestamp of the vote / attestation.
+    pub voted_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future metadata.
+    pub _reserved: [u8; 5],
+}
+
+impl TaskValidationVote {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 
 /// Task account
@@ -1612,6 +1713,25 @@ mod tests {
     #[test]
     fn test_reputation_delegation_size() {
         test_size_constant!(ReputationDelegation);
+    }
+
+    #[test]
+    fn test_task_status_allows_manual_validation_lifecycle_transitions() {
+        assert!(TaskStatus::Open.can_transition_to(TaskStatus::Disputed));
+        assert!(TaskStatus::InProgress.can_transition_to(TaskStatus::PendingValidation));
+        assert!(TaskStatus::PendingValidation.can_transition_to(TaskStatus::PendingValidation));
+        assert!(TaskStatus::PendingValidation.can_transition_to(TaskStatus::InProgress));
+        assert!(TaskStatus::PendingValidation.can_transition_to(TaskStatus::Open));
+        assert!(TaskStatus::PendingValidation.can_transition_to(TaskStatus::Completed));
+        assert!(TaskStatus::PendingValidation.can_transition_to(TaskStatus::Disputed));
+    }
+
+    #[test]
+    fn test_task_status_rejects_invalid_manual_validation_transitions() {
+        assert!(!TaskStatus::Open.can_transition_to(TaskStatus::PendingValidation));
+        assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::Disputed));
+        assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::PendingValidation));
+        assert!(!TaskStatus::Cancelled.can_transition_to(TaskStatus::InProgress));
     }
 
     #[test]
