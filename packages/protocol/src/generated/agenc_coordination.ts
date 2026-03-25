@@ -218,6 +218,250 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "acceptTaskResult",
+      "docs": [
+        "Accept a creator-reviewed submission and settle rewards."
+      ],
+      "discriminator": [
+        89,
+        230,
+        51,
+        25,
+        0,
+        219,
+        5,
+        137
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "workerAuthority",
+          "writable": true
+        },
+        {
+          "name": "tokenEscrowAta",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "treasuryTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "rewardMint",
+          "optional": true
+        },
+        {
+          "name": "tokenProgram",
+          "optional": true,
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "applyDisputeSlash",
       "docs": [
         "Apply slashing to a worker after losing a dispute."
@@ -525,6 +769,254 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "autoAcceptTaskResult",
+      "docs": [
+        "Permissionlessly auto-accept a creator-reviewed submission after timeout."
+      ],
+      "discriminator": [
+        217,
+        200,
+        76,
+        0,
+        144,
+        80,
+        23,
+        241
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "writable": true
+        },
+        {
+          "name": "workerAuthority",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "tokenEscrowAta",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "treasuryTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "rewardMint",
+          "optional": true
+        },
+        {
+          "name": "tokenProgram",
+          "optional": true,
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": []
@@ -1711,6 +2203,162 @@ export type AgencCoordination = {
             "defined": {
               "name": "privateCompletionPayload"
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "configureTaskValidation",
+      "docs": [
+        "Enable Task Validation V2 creator review for an open task."
+      ],
+      "discriminator": [
+        11,
+        79,
+        19,
+        188,
+        13,
+        32,
+        244,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskAttestorConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "mode",
+          "type": "u8"
+        },
+        {
+          "name": "reviewWindowSecs",
+          "type": "i64"
+        },
+        {
+          "name": "validatorQuorum",
+          "type": "u8"
+        },
+        {
+          "name": "attestor",
+          "type": {
+            "option": "pubkey"
           }
         }
       ]
@@ -3319,6 +3967,70 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "taskValidationConfig",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
           "name": "rentRecipient",
           "writable": true
         },
@@ -4229,6 +4941,13 @@ export type AgencCoordination = {
           "optional": true
         },
         {
+          "name": "taskSubmission",
+          "docs": [
+            "Optional durable submission record used once the claim slot has been released."
+          ],
+          "optional": true
+        },
+        {
           "name": "authority",
           "writable": true,
           "signer": true,
@@ -5120,6 +5839,205 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "rejectTaskResult",
+      "docs": [
+        "Reject a creator-reviewed submission and return the task to active work."
+      ],
+      "discriminator": [
+        144,
+        7,
+        58,
+        232,
+        157,
+        167,
+        85,
+        214
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "taskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "workerAuthority",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "rejectionHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "resolveDispute",
       "docs": [
         "Execute the resolved dispute outcome.",
@@ -5485,6 +6403,216 @@ export type AgencCoordination = {
         {
           "name": "amount",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "submitTaskResult",
+      "docs": [
+        "Submit a result for creator review before final settlement."
+      ],
+      "discriminator": [
+        39,
+        108,
+        74,
+        4,
+        66,
+        125,
+        157,
+        7
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "worker"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "proofHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "resultData",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
         }
       ]
     },
@@ -6759,6 +7887,337 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "validateTaskResult",
+      "docs": [
+        "Record a validator quorum vote or external attestation for a submission."
+      ],
+      "discriminator": [
+        141,
+        192,
+        86,
+        228,
+        233,
+        168,
+        41,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskAttestorConfig",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationVote",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  118,
+                  111,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "taskSubmission"
+              },
+              {
+                "kind": "account",
+                "path": "reviewer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "validatorAgent",
+          "docs": [
+            "Optional validator agent for validator-quorum mode, validated in handler."
+          ],
+          "optional": true
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "writable": true
+        },
+        {
+          "name": "workerAuthority",
+          "writable": true
+        },
+        {
+          "name": "reviewer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "tokenEscrowAta",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "treasuryTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "rewardMint",
+          "optional": true
+        },
+        {
+          "name": "tokenProgram",
+          "optional": true,
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "approved",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "voteDispute",
       "docs": [
         "Vote on a dispute resolution.",
@@ -7522,6 +8981,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "taskAttestorConfig",
+      "discriminator": [
+        103,
+        130,
+        20,
+        87,
+        207,
+        120,
+        111,
+        34
+      ]
+    },
+    {
       "name": "taskBid",
       "discriminator": [
         173,
@@ -7571,6 +9043,45 @@ export type AgencCoordination = {
         55,
         3,
         187
+      ]
+    },
+    {
+      "name": "taskSubmission",
+      "discriminator": [
+        111,
+        64,
+        190,
+        132,
+        148,
+        33,
+        215,
+        63
+      ]
+    },
+    {
+      "name": "taskValidationConfig",
+      "discriminator": [
+        101,
+        204,
+        19,
+        0,
+        210,
+        2,
+        191,
+        0
+      ]
+    },
+    {
+      "name": "taskValidationVote",
+      "discriminator": [
+        48,
+        129,
+        51,
+        174,
+        154,
+        5,
+        68,
+        65
       ]
     },
     {
@@ -8278,6 +9789,71 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "taskResultAccepted",
+      "discriminator": [
+        53,
+        41,
+        200,
+        102,
+        151,
+        116,
+        8,
+        45
+      ]
+    },
+    {
+      "name": "taskResultRejected",
+      "discriminator": [
+        83,
+        89,
+        77,
+        160,
+        227,
+        233,
+        11,
+        170
+      ]
+    },
+    {
+      "name": "taskResultSubmitted",
+      "discriminator": [
+        138,
+        65,
+        217,
+        42,
+        15,
+        246,
+        83,
+        32
+      ]
+    },
+    {
+      "name": "taskResultValidationRecorded",
+      "discriminator": [
+        191,
+        181,
+        62,
+        163,
+        174,
+        55,
+        13,
+        81
+      ]
+    },
+    {
+      "name": "taskValidationConfigured",
+      "discriminator": [
+        12,
+        0,
+        218,
+        201,
+        255,
+        123,
+        232,
+        163
+      ]
+    },
+    {
       "name": "treasuryUpdated",
       "discriminator": [
         80,
@@ -8700,706 +10276,811 @@ export type AgencCoordination = {
     },
     {
       "code": 6076,
+      "name": "validationModeUnsupportedTaskType",
+      "msg": "Task Validation V2 is only supported for exclusive task flows"
+    },
+    {
+      "code": 6077,
+      "name": "invalidValidationMode",
+      "msg": "Invalid validation mode"
+    },
+    {
+      "code": 6078,
+      "name": "invalidReviewWindow",
+      "msg": "Invalid review window"
+    },
+    {
+      "code": 6079,
+      "name": "taskValidationConfigRequired",
+      "msg": "Task validation configuration required"
+    },
+    {
+      "code": 6080,
+      "name": "taskValidationAlreadyConfigured",
+      "msg": "Task already has validation configured"
+    },
+    {
+      "code": 6081,
+      "name": "taskValidationImmutableAfterClaim",
+      "msg": "Task validation cannot be reconfigured once work has started"
+    },
+    {
+      "code": 6082,
+      "name": "taskSubmissionRequired",
+      "msg": "Task submission is required"
+    },
+    {
+      "code": 6083,
+      "name": "taskAttestorConfigRequired",
+      "msg": "Task attestor configuration is required"
+    },
+    {
+      "code": 6084,
+      "name": "submissionAlreadyPending",
+      "msg": "Task submission already pending review"
+    },
+    {
+      "code": 6085,
+      "name": "submissionNotPending",
+      "msg": "Task submission is not pending review"
+    },
+    {
+      "code": 6086,
+      "name": "submissionAlreadyResolved",
+      "msg": "Task submission has already been resolved"
+    },
+    {
+      "code": 6087,
+      "name": "taskNotPendingValidation",
+      "msg": "Task is not pending validation"
+    },
+    {
+      "code": 6088,
+      "name": "manualValidationRequiresReviewFlow",
+      "msg": "Task uses creator-review validation and must submit through Task Validation V2"
+    },
+    {
+      "code": 6089,
+      "name": "manualValidationPrivateTaskUnsupported",
+      "msg": "Creator-review validation is not supported for private tasks yet"
+    },
+    {
+      "code": 6090,
+      "name": "validationModeMismatch",
+      "msg": "Validation instruction does not match the task's configured validation mode"
+    },
+    {
+      "code": 6091,
+      "name": "invalidValidatorQuorum",
+      "msg": "Validator quorum must be greater than zero"
+    },
+    {
+      "code": 6092,
+      "name": "invalidAttestor",
+      "msg": "External attestor must be a valid non-default wallet"
+    },
+    {
+      "code": 6093,
+      "name": "reviewWindowNotElapsed",
+      "msg": "Review window has not elapsed yet"
+    },
+    {
+      "code": 6094,
+      "name": "validationAlreadyRecorded",
+      "msg": "Validation for this submission round has already been recorded"
+    },
+    {
+      "code": 6095,
+      "name": "validatorAgentRequired",
+      "msg": "Validator agent account is required for validator-quorum mode"
+    },
+    {
+      "code": 6096,
+      "name": "unauthorizedTaskValidator",
+      "msg": "Reviewer is not authorized to validate this task result"
+    },
+    {
+      "code": 6097,
       "name": "disputeNotActive",
       "msg": "Dispute is not active"
     },
     {
-      "code": 6077,
+      "code": 6098,
       "name": "votingEnded",
       "msg": "Voting period has ended"
     },
     {
-      "code": 6078,
+      "code": 6099,
       "name": "votingNotEnded",
       "msg": "Voting period has not ended"
     },
     {
-      "code": 6079,
+      "code": 6100,
       "name": "alreadyVoted",
       "msg": "Already voted on this dispute"
     },
     {
-      "code": 6080,
+      "code": 6101,
       "name": "notArbiter",
       "msg": "Not authorized to vote (not an arbiter)"
     },
     {
-      "code": 6081,
+      "code": 6102,
       "name": "insufficientVotes",
       "msg": "Insufficient votes to resolve"
     },
     {
-      "code": 6082,
+      "code": 6103,
       "name": "disputeAlreadyResolved",
       "msg": "Dispute has already been resolved"
     },
     {
-      "code": 6083,
+      "code": 6104,
       "name": "unauthorizedResolver",
       "msg": "Only protocol authority or dispute initiator can resolve disputes"
     },
     {
-      "code": 6084,
+      "code": 6105,
       "name": "activeDisputeVotes",
       "msg": "Agent has active dispute votes pending resolution"
     },
     {
-      "code": 6085,
+      "code": 6106,
       "name": "recentVoteActivity",
       "msg": "Agent must wait 24 hours after voting before deregistering"
     },
     {
-      "code": 6086,
+      "code": 6107,
       "name": "authorityAlreadyVoted",
       "msg": "Authority has already voted on this dispute"
     },
     {
-      "code": 6087,
+      "code": 6108,
       "name": "insufficientEvidence",
       "msg": "Insufficient dispute evidence provided"
     },
     {
-      "code": 6088,
+      "code": 6109,
       "name": "evidenceTooLong",
       "msg": "Dispute evidence exceeds maximum allowed length"
     },
     {
-      "code": 6089,
+      "code": 6110,
       "name": "disputeNotExpired",
       "msg": "Dispute has not expired"
     },
     {
-      "code": 6090,
+      "code": 6111,
       "name": "slashAlreadyApplied",
       "msg": "Dispute slashing already applied"
     },
     {
-      "code": 6091,
+      "code": 6112,
       "name": "slashWindowExpired",
       "msg": "Slash window expired: must apply slashing within 7 days of resolution"
     },
     {
-      "code": 6092,
+      "code": 6113,
       "name": "disputeNotResolved",
       "msg": "Dispute has not been resolved"
     },
     {
-      "code": 6093,
+      "code": 6114,
       "name": "notTaskParticipant",
       "msg": "Only task creator or workers can initiate disputes"
     },
     {
-      "code": 6094,
+      "code": 6115,
       "name": "invalidEvidenceHash",
       "msg": "Invalid evidence hash: cannot be all zeros"
     },
     {
-      "code": 6095,
+      "code": 6116,
       "name": "arbiterIsDisputeParticipant",
       "msg": "Arbiter cannot vote on disputes they are a participant in"
     },
     {
-      "code": 6096,
+      "code": 6117,
       "name": "insufficientQuorum",
       "msg": "Insufficient quorum: minimum number of voters not reached"
     },
     {
-      "code": 6097,
+      "code": 6118,
       "name": "activeDisputesExist",
       "msg": "Agent has active disputes as defendant and cannot deregister"
     },
     {
-      "code": 6098,
+      "code": 6119,
       "name": "tooManyDisputeVoters",
       "msg": "Dispute has reached maximum voter capacity"
     },
     {
-      "code": 6099,
+      "code": 6120,
       "name": "workerAgentRequired",
       "msg": "Worker agent account required when creator initiates dispute"
     },
     {
-      "code": 6100,
+      "code": 6121,
       "name": "workerClaimRequired",
       "msg": "Worker claim account required when creator initiates dispute"
     },
     {
-      "code": 6101,
+      "code": 6122,
       "name": "workerNotInDispute",
       "msg": "Worker was not involved in this dispute"
     },
     {
-      "code": 6102,
+      "code": 6123,
       "name": "initiatorCannotResolve",
       "msg": "Dispute initiator cannot resolve their own dispute"
     },
     {
-      "code": 6103,
+      "code": 6124,
       "name": "versionMismatch",
       "msg": "State version mismatch (concurrent modification)"
     },
     {
-      "code": 6104,
+      "code": 6125,
       "name": "stateKeyExists",
       "msg": "State key already exists"
     },
     {
-      "code": 6105,
+      "code": 6126,
       "name": "stateNotFound",
       "msg": "State not found"
     },
     {
-      "code": 6106,
+      "code": 6127,
       "name": "invalidStateValue",
       "msg": "Invalid state value: state_value cannot be all zeros"
     },
     {
-      "code": 6107,
+      "code": 6128,
       "name": "stateOwnershipViolation",
       "msg": "State ownership violation: only the creator agent can update this state"
     },
     {
-      "code": 6108,
+      "code": 6129,
       "name": "invalidStateKey",
       "msg": "Invalid state key: state_key cannot be all zeros"
     },
     {
-      "code": 6109,
+      "code": 6130,
       "name": "protocolAlreadyInitialized",
       "msg": "Protocol is already initialized"
     },
     {
-      "code": 6110,
+      "code": 6131,
       "name": "protocolNotInitialized",
       "msg": "Protocol is not initialized"
     },
     {
-      "code": 6111,
+      "code": 6132,
       "name": "invalidProtocolFee",
       "msg": "Invalid protocol fee (must be <= 1000 bps)"
     },
     {
-      "code": 6112,
+      "code": 6133,
       "name": "invalidTreasury",
       "msg": "Invalid treasury: treasury account cannot be default pubkey"
     },
     {
-      "code": 6113,
+      "code": 6134,
       "name": "invalidDisputeThreshold",
       "msg": "Invalid dispute threshold: must be 1-100 (percentage of votes required)"
     },
     {
-      "code": 6114,
+      "code": 6135,
       "name": "insufficientStake",
       "msg": "Insufficient stake for arbiter registration"
     },
     {
-      "code": 6115,
+      "code": 6136,
       "name": "multisigInvalidThreshold",
       "msg": "Invalid multisig threshold"
     },
     {
-      "code": 6116,
+      "code": 6137,
       "name": "multisigInvalidSigners",
       "msg": "Invalid multisig signer configuration"
     },
     {
-      "code": 6117,
+      "code": 6138,
       "name": "multisigNotEnoughSigners",
       "msg": "Not enough multisig signers"
     },
     {
-      "code": 6118,
+      "code": 6139,
       "name": "multisigDuplicateSigner",
       "msg": "Duplicate multisig signer provided"
     },
     {
-      "code": 6119,
+      "code": 6140,
       "name": "multisigDefaultSigner",
       "msg": "Multisig signer cannot be default pubkey"
     },
     {
-      "code": 6120,
+      "code": 6141,
       "name": "multisigSignerNotSystemOwned",
       "msg": "Multisig signer account not owned by System Program"
     },
     {
-      "code": 6121,
+      "code": 6142,
       "name": "invalidInput",
       "msg": "Invalid input parameter"
     },
     {
-      "code": 6122,
+      "code": 6143,
       "name": "arithmeticOverflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6123,
+      "code": 6144,
       "name": "voteOverflow",
       "msg": "Vote count overflow"
     },
     {
-      "code": 6124,
+      "code": 6145,
       "name": "insufficientFunds",
       "msg": "Insufficient funds"
     },
     {
-      "code": 6125,
+      "code": 6146,
       "name": "rewardTooSmall",
       "msg": "Reward too small: worker must receive at least 1 lamport"
     },
     {
-      "code": 6126,
+      "code": 6147,
       "name": "corruptedData",
       "msg": "Account data is corrupted"
     },
     {
-      "code": 6127,
+      "code": 6148,
       "name": "stringTooLong",
       "msg": "String too long"
     },
     {
-      "code": 6128,
+      "code": 6149,
       "name": "invalidAccountOwner",
       "msg": "Account owner validation failed: account not owned by this program"
     },
     {
-      "code": 6129,
+      "code": 6150,
       "name": "rateLimitExceeded",
       "msg": "Rate limit exceeded: maximum actions per 24h window reached"
     },
     {
-      "code": 6130,
+      "code": 6151,
       "name": "cooldownNotElapsed",
       "msg": "Cooldown period has not elapsed since last action"
     },
     {
-      "code": 6131,
+      "code": 6152,
       "name": "updateTooFrequent",
       "msg": "Agent update too frequent: must wait cooldown period"
     },
     {
-      "code": 6132,
+      "code": 6153,
       "name": "invalidCooldown",
       "msg": "Cooldown value cannot be negative"
     },
     {
-      "code": 6133,
+      "code": 6154,
       "name": "cooldownTooLarge",
       "msg": "Cooldown value exceeds maximum (24 hours)"
     },
     {
-      "code": 6134,
+      "code": 6155,
       "name": "rateLimitTooHigh",
       "msg": "Rate limit value exceeds maximum allowed (1000)"
     },
     {
-      "code": 6135,
+      "code": 6156,
       "name": "cooldownTooLong",
       "msg": "Cooldown value exceeds maximum allowed (1 week)"
     },
     {
-      "code": 6136,
+      "code": 6157,
       "name": "insufficientStakeForDispute",
       "msg": "Insufficient stake to initiate dispute"
     },
     {
-      "code": 6137,
+      "code": 6158,
       "name": "insufficientStakeForCreatorDispute",
       "msg": "Creator-initiated disputes require 2x the minimum stake"
     },
     {
-      "code": 6138,
+      "code": 6159,
       "name": "versionMismatchProtocol",
       "msg": "Protocol version mismatch: account version incompatible with current program"
     },
     {
-      "code": 6139,
+      "code": 6160,
       "name": "accountVersionTooOld",
       "msg": "Account version too old: migration required"
     },
     {
-      "code": 6140,
+      "code": 6161,
       "name": "accountVersionTooNew",
       "msg": "Account version too new: program upgrade required"
     },
     {
-      "code": 6141,
+      "code": 6162,
       "name": "invalidMigrationSource",
       "msg": "Migration not allowed: invalid source version"
     },
     {
-      "code": 6142,
+      "code": 6163,
       "name": "invalidMigrationTarget",
       "msg": "Migration not allowed: invalid target version"
     },
     {
-      "code": 6143,
+      "code": 6164,
       "name": "unauthorizedUpgrade",
       "msg": "Only upgrade authority can perform this action"
     },
     {
-      "code": 6144,
+      "code": 6165,
       "name": "unauthorizedProtocolAuthority",
       "msg": "Only protocol authority can perform this action"
     },
     {
-      "code": 6145,
+      "code": 6166,
       "name": "invalidMinVersion",
       "msg": "Minimum version cannot exceed current protocol version"
     },
     {
-      "code": 6146,
+      "code": 6167,
       "name": "protocolConfigRequired",
       "msg": "Protocol config account required: suspending an agent requires the protocol config PDA in remaining_accounts"
     },
     {
-      "code": 6147,
+      "code": 6168,
       "name": "parentTaskCancelled",
       "msg": "Parent task has been cancelled"
     },
     {
-      "code": 6148,
+      "code": 6169,
       "name": "parentTaskDisputed",
       "msg": "Parent task is in disputed state"
     },
     {
-      "code": 6149,
+      "code": 6170,
       "name": "invalidDependencyType",
       "msg": "Invalid dependency type"
     },
     {
-      "code": 6150,
+      "code": 6171,
       "name": "parentTaskNotCompleted",
       "msg": "Parent task must be completed before completing a proof-dependent task"
     },
     {
-      "code": 6151,
+      "code": 6172,
       "name": "parentTaskAccountRequired",
       "msg": "Parent task account required for proof-dependent task completion"
     },
     {
-      "code": 6152,
+      "code": 6173,
       "name": "unauthorizedCreator",
       "msg": "Parent task does not belong to the same creator"
     },
     {
-      "code": 6153,
+      "code": 6174,
       "name": "nullifierAlreadySpent",
       "msg": "Nullifier has already been spent - proof/knowledge reuse detected"
     },
     {
-      "code": 6154,
+      "code": 6175,
       "name": "invalidNullifier",
       "msg": "Invalid nullifier: nullifier value cannot be all zeros"
     },
     {
-      "code": 6155,
+      "code": 6176,
       "name": "incompleteWorkerAccounts",
       "msg": "All worker accounts must be provided when cancelling a task with active claims"
     },
     {
-      "code": 6156,
+      "code": 6177,
       "name": "workerAccountsRequired",
       "msg": "Worker accounts required when task has active workers"
     },
     {
-      "code": 6157,
+      "code": 6178,
       "name": "duplicateArbiter",
       "msg": "Duplicate arbiter provided in remaining_accounts"
     },
     {
-      "code": 6158,
+      "code": 6179,
       "name": "insufficientEscrowBalance",
       "msg": "Escrow has insufficient balance for reward transfer"
     },
     {
-      "code": 6159,
+      "code": 6180,
       "name": "invalidStatusTransition",
       "msg": "Invalid task status transition"
     },
     {
-      "code": 6160,
+      "code": 6181,
       "name": "stakeTooLow",
       "msg": "Stake value is below minimum required (0.001 SOL)"
     },
     {
-      "code": 6161,
+      "code": 6182,
       "name": "invalidMinStake",
       "msg": "min_stake_for_dispute must be greater than zero"
     },
     {
-      "code": 6162,
+      "code": 6183,
       "name": "invalidSlashAmount",
       "msg": "Slash amount must be greater than zero"
     },
     {
-      "code": 6163,
+      "code": 6184,
       "name": "bondAmountTooLow",
       "msg": "Bond amount too low"
     },
     {
-      "code": 6164,
+      "code": 6185,
       "name": "bondAlreadyExists",
       "msg": "Bond already exists"
     },
     {
-      "code": 6165,
+      "code": 6186,
       "name": "bondNotFound",
       "msg": "Bond not found"
     },
     {
-      "code": 6166,
+      "code": 6187,
       "name": "bondNotMatured",
       "msg": "Bond not yet matured"
     },
     {
-      "code": 6167,
+      "code": 6188,
       "name": "insufficientReputation",
       "msg": "Agent reputation below task minimum requirement"
     },
     {
-      "code": 6168,
+      "code": 6189,
       "name": "invalidMinReputation",
       "msg": "Invalid minimum reputation: must be <= 10000"
     },
     {
-      "code": 6169,
+      "code": 6190,
       "name": "developmentKeyNotAllowed",
       "msg": "Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use."
     },
     {
-      "code": 6170,
+      "code": 6191,
       "name": "selfTaskNotAllowed",
       "msg": "Cannot claim own task: worker authority matches task creator"
     },
     {
-      "code": 6171,
+      "code": 6192,
       "name": "missingTokenAccounts",
       "msg": "Token accounts not provided for token-denominated task"
     },
     {
-      "code": 6172,
+      "code": 6193,
       "name": "invalidTokenEscrow",
       "msg": "Token escrow ATA does not match expected derivation"
     },
     {
-      "code": 6173,
+      "code": 6194,
       "name": "invalidTokenMint",
       "msg": "Provided mint does not match task's reward_mint"
     },
     {
-      "code": 6174,
+      "code": 6195,
       "name": "tokenTransferFailed",
       "msg": "SPL token transfer CPI failed"
     },
     {
-      "code": 6175,
+      "code": 6196,
       "name": "proposalNotActive",
       "msg": "Proposal is not active"
     },
     {
-      "code": 6176,
+      "code": 6197,
       "name": "proposalVotingNotEnded",
       "msg": "Voting period has not ended"
     },
     {
-      "code": 6177,
+      "code": 6198,
       "name": "proposalVotingEnded",
       "msg": "Voting period has ended"
     },
     {
-      "code": 6178,
+      "code": 6199,
       "name": "proposalAlreadyExecuted",
       "msg": "Proposal has already been executed"
     },
     {
-      "code": 6179,
+      "code": 6200,
       "name": "proposalInsufficientQuorum",
       "msg": "Insufficient quorum for proposal execution"
     },
     {
-      "code": 6180,
+      "code": 6201,
       "name": "proposalNotApproved",
       "msg": "Proposal did not achieve majority"
     },
     {
-      "code": 6181,
+      "code": 6202,
       "name": "proposalUnauthorizedCancel",
       "msg": "Only the proposer can cancel this proposal"
     },
     {
-      "code": 6182,
+      "code": 6203,
       "name": "proposalInsufficientStake",
       "msg": "Insufficient stake to create a proposal"
     },
     {
-      "code": 6183,
+      "code": 6204,
       "name": "invalidProposalPayload",
       "msg": "Invalid proposal payload"
     },
     {
-      "code": 6184,
+      "code": 6205,
       "name": "invalidProposalType",
       "msg": "Invalid proposal type"
     },
     {
-      "code": 6185,
+      "code": 6206,
       "name": "treasuryInsufficientBalance",
       "msg": "Treasury spend amount exceeds available balance"
     },
     {
-      "code": 6186,
+      "code": 6207,
       "name": "timelockNotElapsed",
       "msg": "Execution timelock has not elapsed"
     },
     {
-      "code": 6187,
+      "code": 6208,
       "name": "invalidGovernanceParam",
       "msg": "Invalid governance configuration parameter"
     },
     {
-      "code": 6188,
+      "code": 6209,
       "name": "treasuryNotProgramOwned",
       "msg": "Treasury must be a program-owned PDA"
     },
     {
-      "code": 6189,
+      "code": 6210,
       "name": "treasuryNotSpendable",
       "msg": "Treasury must be program-owned, or a signer system account for governance spends"
     },
     {
-      "code": 6190,
+      "code": 6211,
       "name": "skillInvalidId",
       "msg": "Skill ID cannot be all zeros"
     },
     {
-      "code": 6191,
+      "code": 6212,
       "name": "skillInvalidName",
       "msg": "Skill name cannot be all zeros"
     },
     {
-      "code": 6192,
+      "code": 6213,
       "name": "skillInvalidContentHash",
       "msg": "Skill content hash cannot be all zeros"
     },
     {
-      "code": 6193,
+      "code": 6214,
       "name": "skillNotActive",
       "msg": "Skill is not active"
     },
     {
-      "code": 6194,
+      "code": 6215,
       "name": "skillInvalidRating",
       "msg": "Rating must be between 1 and 5"
     },
     {
-      "code": 6195,
+      "code": 6216,
       "name": "skillSelfRating",
       "msg": "Cannot rate own skill"
     },
     {
-      "code": 6196,
+      "code": 6217,
       "name": "skillUnauthorizedUpdate",
       "msg": "Only the skill author can update this skill"
     },
     {
-      "code": 6197,
+      "code": 6218,
       "name": "skillSelfPurchase",
       "msg": "Cannot purchase own skill"
     },
     {
-      "code": 6198,
+      "code": 6219,
       "name": "feedInvalidContentHash",
       "msg": "Feed content hash cannot be all zeros"
     },
     {
-      "code": 6199,
+      "code": 6220,
       "name": "feedInvalidTopic",
       "msg": "Feed topic cannot be all zeros"
     },
     {
-      "code": 6200,
+      "code": 6221,
       "name": "feedPostNotFound",
       "msg": "Feed post not found"
     },
     {
-      "code": 6201,
+      "code": 6222,
       "name": "feedSelfUpvote",
       "msg": "Cannot upvote own post"
     },
     {
-      "code": 6202,
+      "code": 6223,
       "name": "reputationStakeAmountTooLow",
       "msg": "Reputation stake amount must be greater than zero"
     },
     {
-      "code": 6203,
+      "code": 6224,
       "name": "reputationStakeLocked",
       "msg": "Reputation stake is locked: withdrawal before cooldown"
     },
     {
-      "code": 6204,
+      "code": 6225,
       "name": "reputationStakeInsufficientBalance",
       "msg": "Reputation stake has insufficient balance for withdrawal"
     },
     {
-      "code": 6205,
+      "code": 6226,
       "name": "reputationDelegationAmountInvalid",
       "msg": "Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT"
     },
     {
-      "code": 6206,
+      "code": 6227,
       "name": "reputationCannotDelegateSelf",
       "msg": "Cannot delegate reputation to self"
     },
     {
-      "code": 6207,
+      "code": 6228,
       "name": "reputationDelegationExpired",
       "msg": "Reputation delegation has expired"
     },
     {
-      "code": 6208,
+      "code": 6229,
       "name": "reputationAgentNotActive",
       "msg": "Agent must be Active to participate in reputation economy"
     },
     {
-      "code": 6209,
+      "code": 6230,
       "name": "reputationDisputesPending",
       "msg": "Agent has pending disputes as defendant: cannot withdraw stake"
     },
     {
-      "code": 6210,
+      "code": 6231,
       "name": "privateTaskRequiresZkProof",
       "msg": "Private tasks (non-zero constraint_hash) must use complete_task_private"
     },
     {
-      "code": 6211,
+      "code": 6232,
       "name": "invalidTokenAccountOwner",
       "msg": "Token account owner does not match expected authority"
     },
     {
-      "code": 6212,
+      "code": 6233,
       "name": "insufficientSeedEntropy",
       "msg": "Binding or nullifier seed has insufficient byte diversity (min 8 distinct bytes required)"
     },
     {
-      "code": 6213,
+      "code": 6234,
       "name": "skillPriceBelowMinimum",
       "msg": "Skill price below minimum required"
     },
     {
-      "code": 6214,
+      "code": 6235,
       "name": "skillPriceChanged",
       "msg": "Skill price changed since transaction was prepared"
     },
     {
-      "code": 6215,
+      "code": 6236,
       "name": "delegationCooldownNotElapsed",
       "msg": "Delegation must be active for minimum duration before revocation"
     },
     {
-      "code": 6216,
+      "code": 6237,
       "name": "rateLimitBelowMinimum",
       "msg": "Rate limit value below protocol minimum"
     }
@@ -13334,6 +15015,32 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "submissionStatus",
+      "docs": [
+        "Task submission lifecycle for manual validation."
+      ],
+      "repr": {
+        "kind": "rust"
+      },
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "idle"
+          },
+          {
+            "name": "submitted"
+          },
+          {
+            "name": "accepted"
+          },
+          {
+            "name": "rejected"
+          }
+        ]
+      }
+    },
+    {
       "name": "task",
       "docs": [
         "Task account",
@@ -13545,6 +15252,72 @@ export type AgencCoordination = {
             ],
             "type": {
               "option": "pubkey"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskAttestorConfig",
+      "docs": [
+        "Task-level external attestor configuration.",
+        "PDA seeds: [\"task_attestor\", task]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "Task this config belongs to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "docs": [
+              "Task creator / reviewer authority."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "attestor",
+            "docs": [
+              "Wallet allowed to attest the outcome."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "createdAt",
+            "docs": [
+              "Creation timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "docs": [
+              "Last update timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future attestor metadata."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
             }
           }
         ]
@@ -14052,6 +15825,177 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "taskResultAccepted",
+      "docs": [
+        "Emitted when a manual-validation result is accepted."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "acceptedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "acceptedAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskResultRejected",
+      "docs": [
+        "Emitted when a manual-validation result is rejected."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "rejectedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "rejectionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rejectedAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskResultSubmitted",
+      "docs": [
+        "Emitted when a worker submits a result for manual validation."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "proofHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "resultData",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "submissionCount",
+            "type": "u16"
+          },
+          {
+            "name": "submittedAt",
+            "type": "i64"
+          },
+          {
+            "name": "reviewDeadlineAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskResultValidationRecorded",
+      "docs": [
+        "Emitted when a validator or attestor records an approval / rejection."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "reviewer",
+            "type": "pubkey"
+          },
+          {
+            "name": "reviewerAgent",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved",
+            "type": "bool"
+          },
+          {
+            "name": "submissionCount",
+            "type": "u16"
+          },
+          {
+            "name": "approvalCount",
+            "type": "u8"
+          },
+          {
+            "name": "rejectionCount",
+            "type": "u8"
+          },
+          {
+            "name": "recordedAt",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "taskStatus",
       "docs": [
         "Task status"
@@ -14084,6 +16028,140 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "taskSubmission",
+      "docs": [
+        "Claim-level submission state for manual validation.",
+        "PDA seeds: [\"task_submission\", claim]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "Task being submitted."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "docs": [
+              "Claim tied to this submission."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "docs": [
+              "Worker that submitted the result."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "docs": [
+              "Current submission status."
+            ],
+            "type": {
+              "defined": {
+                "name": "submissionStatus"
+              }
+            }
+          },
+          {
+            "name": "proofHash",
+            "docs": [
+              "Latest proof hash supplied by the worker."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "resultData",
+            "docs": [
+              "Latest result payload supplied by the worker."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "submissionCount",
+            "docs": [
+              "Number of times this claim has been submitted for review."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "submittedAt",
+            "docs": [
+              "Timestamp of latest submission."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "reviewDeadlineAt",
+            "docs": [
+              "Timestamp after which the review window has elapsed."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "acceptedAt",
+            "docs": [
+              "Acceptance timestamp (0 when unresolved)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "rejectedAt",
+            "docs": [
+              "Rejection timestamp (0 when unresolved)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "rejectionHash",
+            "docs": [
+              "Optional rejection reason hash."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future attestation metadata."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                5
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "taskType",
       "docs": [
         "Task type enumeration"
@@ -14105,6 +16183,197 @@ export type AgencCoordination = {
           },
           {
             "name": "bidExclusive"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskValidationConfig",
+      "docs": [
+        "Task-level validation configuration.",
+        "PDA seeds: [\"task_validation\", task]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "Task this config belongs to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "docs": [
+              "Task creator / reviewer authority."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "mode",
+            "docs": [
+              "Active validation mode."
+            ],
+            "type": {
+              "defined": {
+                "name": "validationMode"
+              }
+            }
+          },
+          {
+            "name": "reviewWindowSecs",
+            "docs": [
+              "Review window in seconds before the submission may be escalated off-path."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "createdAt",
+            "docs": [
+              "Creation timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "docs": [
+              "Last update timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future validation variants."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskValidationConfigured",
+      "docs": [
+        "Emitted when Task Validation V2 is configured for a task."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "mode",
+            "type": "u8"
+          },
+          {
+            "name": "reviewWindowSecs",
+            "type": "i64"
+          },
+          {
+            "name": "validatorQuorum",
+            "type": "u8"
+          },
+          {
+            "name": "attestor",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskValidationVote",
+      "docs": [
+        "Reviewer vote or attestation recorded for a task submission round.",
+        "PDA seeds: [\"task_validation_vote\", task_submission, reviewer]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "submission",
+            "docs": [
+              "Submission being validated."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reviewer",
+            "docs": [
+              "Reviewer wallet that cast the vote / attestation."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reviewerAgent",
+            "docs": [
+              "Reviewer agent used for validator-quorum mode (default pubkey for attestors)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "submissionRound",
+            "docs": [
+              "Submission round the vote applies to."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "approved",
+            "docs": [
+              "Whether the reviewer approved the result."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "votedAt",
+            "docs": [
+              "Timestamp of the vote / attestation."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future metadata."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                5
+              ]
+            }
           }
         ]
       }
@@ -14132,6 +16401,32 @@ export type AgencCoordination = {
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "validationMode",
+      "docs": [
+        "Validation mode configured for a task."
+      ],
+      "repr": {
+        "kind": "rust"
+      },
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "auto"
+          },
+          {
+            "name": "creatorReview"
+          },
+          {
+            "name": "validatorQuorum"
+          },
+          {
+            "name": "externalAttestation"
           }
         ]
       }
