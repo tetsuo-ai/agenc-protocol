@@ -2,7 +2,7 @@
 //!
 //! Tests invariants:
 //! - T1: Valid state transitions across claim/complete/cancel/dispute
-//! - T2: No claim/complete/cancel/expire from terminal states
+//! - T2: No claim/complete/cancel/expire/dispute from terminal states
 //! - T6: Suspended agent cannot claim or complete
 //!
 //! Run with: cargo test --release -p agenc-coordination-fuzz task_lifecycle
@@ -88,7 +88,7 @@ proptest! {
 
             // Terminal state restrictions:
             // - Cancelled is terminal for all actions
-            // - Completed is terminal for all task actions, but may allow dispute initiation
+            // - Completed is terminal for all task actions
             if prev_task_status == task_status::CANCELLED {
                 prop_assert!(
                     !result.is_success(),
@@ -99,15 +99,12 @@ proptest! {
             }
 
             if prev_task_status == task_status::COMPLETED {
-                match action {
-                    LifecycleAction::InitiateDispute { .. } => {}
-                    _ => prop_assert!(
-                        !result.is_success(),
-                        "Action succeeded from Completed state.\nAction: {:?}\nSeq: {:?}",
-                        action,
-                        seq
-                    ),
-                }
+                prop_assert!(
+                    !result.is_success(),
+                    "Action succeeded from Completed state.\nAction: {:?}\nSeq: {:?}",
+                    action,
+                    seq
+                );
             }
 
             // T6: Suspended worker cannot claim or complete

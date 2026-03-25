@@ -1,7 +1,7 @@
 //! Fuzz target for full dispute lifecycle
 //!
 //! Tests invariants:
-//! - D1: Dispute can only be initiated on InProgress or Completed tasks
+//! - D1: Dispute can only be initiated on modeled disputable task states
 //! - D3: Voting window enforcement
 //! - D4: Resolution requires voting deadline passed and at least one vote
 //! - D5: Slash amounts bounded by stake (simulated)
@@ -81,7 +81,7 @@ proptest! {
             "Invariant violation on dispute init: {:?}\nSeq: {:?}", init_result, seq);
 
         let disputable = seq.initial_task_status == task_status::IN_PROGRESS
-            || seq.initial_task_status == task_status::COMPLETED;
+            || seq.initial_task_status == task_status::PENDING_VALIDATION;
 
         if disputable {
             prop_assert!(init_result.is_success(),

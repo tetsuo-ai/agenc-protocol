@@ -686,7 +686,7 @@ pub fn simulate_dispute_open(
     dispute: &mut SimulatedDispute,
 ) -> SimulationResult {
     // Pre-condition checks
-    if task.status != task_status::IN_PROGRESS && task.status != task_status::COMPLETED {
+    if task.status != task_status::IN_PROGRESS && task.status != task_status::PENDING_VALIDATION {
         return SimulationResult::Error("TaskNotDisputable".to_string());
     }
 
@@ -1458,6 +1458,34 @@ mod tests {
         assert_eq!(task.status, task_status::COMPLETED);
         assert!(escrow.is_closed);
         assert!(worker.reputation > 5000);
+    }
+
+    #[test]
+    fn test_dispute_open_from_pending_validation_succeeds() {
+        let mut task = build_valid_task_fixture();
+        task.status = task_status::PENDING_VALIDATION;
+
+        let mut dispute = SimulatedDispute::default();
+        let result = simulate_dispute_open(&mut task, &mut dispute);
+
+        assert!(
+            result.is_success(),
+            "Pending validation should be disputable"
+        );
+        assert_eq!(task.status, task_status::DISPUTED);
+        assert_eq!(dispute.status, dispute_status::ACTIVE);
+    }
+
+    #[test]
+    fn test_dispute_open_from_completed_is_rejected() {
+        let mut task = build_valid_task_fixture();
+        task.status = task_status::COMPLETED;
+
+        let mut dispute = SimulatedDispute::default();
+        let result = simulate_dispute_open(&mut task, &mut dispute);
+
+        assert!(result.is_error(), "Completed tasks should be terminal");
+        assert_eq!(task.status, task_status::COMPLETED);
     }
 
     proptest! {

@@ -618,6 +618,7 @@ impl Arbitrary for DisputeLifecycleSequence {
             prop_oneof![
                 Just(0u8), // OPEN
                 Just(1u8), // IN_PROGRESS
+                Just(2u8), // PENDING_VALIDATION
                 Just(3u8), // COMPLETED
                 Just(4u8), // CANCELLED
                 Just(5u8), // DISPUTED

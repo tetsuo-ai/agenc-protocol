@@ -157,29 +157,28 @@ pub mod agent_status {
 
 /// T1: Valid State Transitions
 pub fn check_task_state_transition(from: u8, to: u8) -> TaskInvariantResult {
-    let valid = match (from, to) {
-        // Open -> InProgress (claim_task)
-        (task_status::OPEN, task_status::IN_PROGRESS) => true,
-        // Open -> Cancelled (cancel_task)
-        (task_status::OPEN, task_status::CANCELLED) => true,
-        // InProgress -> Completed (complete_task)
-        (task_status::IN_PROGRESS, task_status::COMPLETED) => true,
-        // InProgress -> Cancelled (cancel_task after deadline)
-        (task_status::IN_PROGRESS, task_status::CANCELLED) => true,
-        // InProgress -> Disputed (initiate_dispute)
-        (task_status::IN_PROGRESS, task_status::DISPUTED) => true,
-        // Completed -> Disputed (initiate_dispute after completion)
-        (task_status::COMPLETED, task_status::DISPUTED) => true,
-        // Disputed -> Completed (resolve_dispute)
-        (task_status::DISPUTED, task_status::COMPLETED) => true,
-        // Disputed -> Cancelled (resolve_dispute)
-        (task_status::DISPUTED, task_status::CANCELLED) => true,
-        // InProgress can stay InProgress (additional claims on collaborative)
-        (task_status::IN_PROGRESS, task_status::IN_PROGRESS) => true,
-        // Same state is always valid (no-op)
-        (a, b) if a == b => true,
-        _ => false,
-    };
+    let valid = matches!(
+        (from, to),
+        // From Open
+        (task_status::OPEN, task_status::IN_PROGRESS)
+            | (task_status::OPEN, task_status::CANCELLED)
+            | (task_status::OPEN, task_status::DISPUTED)
+            // From InProgress
+            | (task_status::IN_PROGRESS, task_status::IN_PROGRESS)
+            | (task_status::IN_PROGRESS, task_status::COMPLETED)
+            | (task_status::IN_PROGRESS, task_status::CANCELLED)
+            | (task_status::IN_PROGRESS, task_status::DISPUTED)
+            | (task_status::IN_PROGRESS, task_status::PENDING_VALIDATION)
+            // From PendingValidation
+            | (task_status::PENDING_VALIDATION, task_status::PENDING_VALIDATION)
+            | (task_status::PENDING_VALIDATION, task_status::IN_PROGRESS)
+            | (task_status::PENDING_VALIDATION, task_status::OPEN)
+            | (task_status::PENDING_VALIDATION, task_status::COMPLETED)
+            | (task_status::PENDING_VALIDATION, task_status::DISPUTED)
+            // From Disputed
+            | (task_status::DISPUTED, task_status::COMPLETED)
+            | (task_status::DISPUTED, task_status::CANCELLED)
+    );
 
     if valid {
         TaskInvariantResult::Valid
@@ -504,9 +503,33 @@ mod tests {
 
     #[test]
     fn test_task_state_transitions() {
-        // Valid transitions
+        // Canonical lifecycle transitions
         assert_eq!(
             check_task_state_transition(task_status::OPEN, task_status::IN_PROGRESS),
+            TaskInvariantResult::Valid
+        );
+        assert_eq!(
+            check_task_state_transition(task_status::OPEN, task_status::DISPUTED),
+            TaskInvariantResult::Valid
+        );
+        assert_eq!(
+            check_task_state_transition(task_status::IN_PROGRESS, task_status::PENDING_VALIDATION),
+            TaskInvariantResult::Valid
+        );
+        assert_eq!(
+            check_task_state_transition(task_status::PENDING_VALIDATION, task_status::IN_PROGRESS),
+            TaskInvariantResult::Valid
+        );
+        assert_eq!(
+            check_task_state_transition(task_status::PENDING_VALIDATION, task_status::OPEN),
+            TaskInvariantResult::Valid
+        );
+        assert_eq!(
+            check_task_state_transition(task_status::PENDING_VALIDATION, task_status::COMPLETED),
+            TaskInvariantResult::Valid
+        );
+        assert_eq!(
+            check_task_state_transition(task_status::PENDING_VALIDATION, task_status::DISPUTED),
             TaskInvariantResult::Valid
         );
         assert_eq!(
@@ -516,7 +539,15 @@ mod tests {
 
         // Invalid transitions
         assert!(matches!(
+            check_task_state_transition(task_status::OPEN, task_status::PENDING_VALIDATION),
+            TaskInvariantResult::InvalidStateTransition { .. }
+        ));
+        assert!(matches!(
             check_task_state_transition(task_status::COMPLETED, task_status::OPEN),
+            TaskInvariantResult::InvalidStateTransition { .. }
+        ));
+        assert!(matches!(
+            check_task_state_transition(task_status::COMPLETED, task_status::DISPUTED),
             TaskInvariantResult::InvalidStateTransition { .. }
         ));
     }
