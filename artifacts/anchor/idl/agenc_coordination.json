@@ -6471,6 +6471,7 @@
         },
         {
           "name": "task_validation_config",
+          "writable": true,
           "pda": {
             "seeds": [
               {

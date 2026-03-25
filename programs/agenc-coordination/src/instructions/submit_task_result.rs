@@ -31,6 +31,7 @@ pub struct SubmitTaskResult<'info> {
     pub claim: Box<Account<'info, TaskClaim>>,
 
     #[account(
+        mut,
         seeds = [b"task_validation", task.key().as_ref()],
         bump = task_validation_config.bump
     )]
@@ -181,4 +182,36 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use anchor_lang::prelude::Pubkey;
+    use anchor_lang::ToAccountMetas;
+
+    #[test]
+    fn test_submit_task_result_marks_validation_config_writable() {
+        let task_validation_config = Pubkey::new_unique();
+        let accounts = crate::__client_accounts_submit_task_result::SubmitTaskResult {
+            task: Pubkey::new_unique(),
+            claim: Pubkey::new_unique(),
+            task_validation_config,
+            task_submission: Pubkey::new_unique(),
+            protocol_config: Pubkey::new_unique(),
+            worker: Pubkey::new_unique(),
+            authority: Pubkey::new_unique(),
+            system_program: Pubkey::new_unique(),
+        };
+
+        let validation_meta = accounts
+            .to_account_metas(None)
+            .into_iter()
+            .find(|meta| meta.pubkey == task_validation_config)
+            .expect("task validation config meta should be present");
+
+        assert!(
+            validation_meta.is_writable,
+            "submit_task_result must keep task_validation_config writable so pending submissions persist",
+        );
+    }
 }

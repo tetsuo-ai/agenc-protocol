@@ -288,4 +288,31 @@ mod tests {
 
         assert!(release_claim_slot(&mut task, &mut worker, 42).is_err());
     }
+
+    #[test]
+    fn test_pending_submission_count_round_trip() {
+        let mut config = TaskValidationConfig::default();
+
+        increment_pending_submission_count(&mut config).expect("increment should succeed");
+        increment_pending_submission_count(&mut config).expect("second increment should succeed");
+        assert_eq!(config.pending_submission_count(), 2);
+
+        decrement_pending_submission_count(&mut config).expect("decrement should succeed");
+        assert_eq!(config.pending_submission_count(), 1);
+    }
+
+    #[test]
+    fn test_pending_submission_count_rejects_underflow() {
+        let mut config = TaskValidationConfig::default();
+
+        assert!(decrement_pending_submission_count(&mut config).is_err());
+    }
+
+    #[test]
+    fn test_pending_submission_count_rejects_overflow() {
+        let mut config = TaskValidationConfig::default();
+        config.set_pending_submission_count(u16::MAX);
+
+        assert!(increment_pending_submission_count(&mut config).is_err());
+    }
 }

@@ -6477,6 +6477,7 @@ export type AgencCoordination = {
         },
         {
           "name": "taskValidationConfig",
+          "writable": true,
           "pda": {
             "seeds": [
               {
