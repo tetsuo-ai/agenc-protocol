@@ -1,6 +1,6 @@
 # Marketplace V2 Devnet Readiness Matrix
 
-Status: In progress (`17` pass, `0` fail, `1` remaining)
+Status: In progress for the full matrix (`17` pass, `0` fail, `1` remaining)
 
 Issue: [agenc-protocol#17](https://github.com/tetsuo-ai/agenc-protocol/issues/17)
 
@@ -17,8 +17,16 @@ As of `2026-03-27`, the validation effort is no longer in draft state.
 
 - Shared-devnet green evidence remains the baseline for `DV-01`, `DV-02`, `DV-03A/B/C/D`, `DV-04A/B`, `DV-06A/B`, and `DV-09`.
 - The dedicated validation deployment cleared the previously red timing-sensitive scenarios `DV-05`, `DV-07A`, `DV-07B`, `DV-07C`, `DV-08A`, and `DV-08B`.
-- The only remaining open scenario is `DV-03E`, which still needs a proof fixture or live prover aligned to the validation deployment's active zk image ID.
+- The only remaining open scenario in the full matrix is `DV-03E`, which still needs a proof fixture or live prover aligned to the validation deployment's active zk image ID.
 - The current source of truth is [../artifacts/devnet-readiness/readiness-report.json](../artifacts/devnet-readiness/readiness-report.json), which records `17` pass and `1` not-run scenario.
+
+## Mainnet Release Scope
+
+- The first mainnet release includes the public and reviewed settlement paths.
+- The first mainnet release does not include `complete_task_private`.
+- `DV-03E` remains a post-launch validation item because the private path depends on H200-backed
+  proving infrastructure and prover / image-id alignment work.
+- Do not treat `DV-03E` as a day-1 mainnet blocker unless the release scope changes.
 
 ## Purpose
 
@@ -327,6 +335,8 @@ This matrix is green only when:
 - no scenario leaves dangling counters or stale accepted-bid pointers
 - no scenario leaks lamports or leaves unrecoverable bond custody
 - a readiness report records pass/fail status and open blockers
+- the readiness report also records a scoped `release1` summary so launch gating is separate from
+  the full post-launch matrix
 
 The harness-level aggregate report should be written to:
 
