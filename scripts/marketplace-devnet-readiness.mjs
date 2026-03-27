@@ -125,6 +125,7 @@ const scenarioDefinitions = [
     id: "DV-03E",
     title: "Successful settlement via complete_task_private",
     instructionPath: ["accept_bid", "complete_task_private"],
+    releaseScope: "post-launch",
     requiredAccountLabels: [
       "task",
       "claim",
@@ -1338,6 +1339,31 @@ function compareBundleRecency(leftBundle, rightBundle) {
   return rightTimestamp - leftTimestamp;
 }
 
+function summarizeScenarioStatuses(scenarios) {
+  return scenarios.reduce(
+    (running, scenario) => {
+      running.total += 1;
+      running[scenario.status] = (running[scenario.status] ?? 0) + 1;
+      return running;
+    },
+    {
+      total: 0,
+      pass: 0,
+      fail: 0,
+      not_run: 0,
+      unknown: 0,
+    },
+  );
+}
+
+function buildScopeStatus(summary) {
+  if (summary.fail > 0 || summary.not_run > 0 || summary.unknown > 0) {
+    return "red";
+  }
+
+  return "green";
+}
+
 export function buildReadinessReport(bundleRecords) {
   const latestByScenario = new Map();
 
@@ -1372,6 +1398,7 @@ export function buildReadinessReport(bundleRecords) {
       scenarioId: scenarioDefinition.id,
       title: scenarioDefinition.title,
       recommendedFirst: Boolean(scenarioDefinition.recommendedFirst),
+      releaseScope: scenarioDefinition.releaseScope ?? "release-1",
       status: latestBundle.verdict?.status ?? "unknown",
       bundleDir: latestBundle.bundleDir,
       capturedAt:
@@ -1385,23 +1412,19 @@ export function buildReadinessReport(bundleRecords) {
     };
   });
 
-  const summary = scenarios.reduce(
-    (running, scenario) => {
-      running.total += 1;
-      running[scenario.status] = (running[scenario.status] ?? 0) + 1;
-      return running;
-    },
-    {
-      total: 0,
-      pass: 0,
-      fail: 0,
-      not_run: 0,
-      unknown: 0,
-    },
-  );
+  const summary = summarizeScenarioStatuses(scenarios);
 
   const status = summary.pass === scenarioDefinitions.length ? "green" : "red";
   const openBlockers = scenarios.flatMap((scenario) =>
+    (scenario.blockers ?? []).map((blocker) => ({
+      scenarioId: scenario.scenarioId,
+      blocker,
+    })),
+  );
+  const release1Scenarios = scenarios.filter((scenario) => scenario.releaseScope === "release-1");
+  const deferredScenarios = scenarios.filter((scenario) => scenario.releaseScope !== "release-1");
+  const release1Summary = summarizeScenarioStatuses(release1Scenarios);
+  const release1OpenBlockers = release1Scenarios.flatMap((scenario) =>
     (scenario.blockers ?? []).map((blocker) => ({
       scenarioId: scenario.scenarioId,
       blocker,
@@ -1414,6 +1437,18 @@ export function buildReadinessReport(bundleRecords) {
     summary,
     scenarios,
     openBlockers,
+    releaseScopes: {
+      release1: {
+        label: "Mainnet release-1",
+        description:
+          "Public settlement and Task Validation V2 review flows only. complete_task_private is deferred until the H200-backed prover path is ready.",
+        status: buildScopeStatus(release1Summary),
+        summary: release1Summary,
+        includedScenarioIds: release1Scenarios.map((scenario) => scenario.scenarioId),
+        deferredScenarioIds: deferredScenarios.map((scenario) => scenario.scenarioId),
+        openBlockers: release1OpenBlockers,
+      },
+    },
   };
 }
 
@@ -1597,6 +1632,12 @@ async function runReport(options) {
   console.log(
     `Scenarios: ${report.summary.pass} pass, ${report.summary.fail} fail, ${report.summary.not_run} not-run`,
   );
+  if (report.releaseScopes?.release1) {
+    const release1 = report.releaseScopes.release1;
+    console.log(
+      `Release-1 scope: ${release1.status} (${release1.summary.pass} pass, ${release1.summary.fail} fail, ${release1.summary.not_run} not-run)`,
+    );
+  }
 
   if (report.openBlockers.length > 0) {
     console.log("Open blockers:");

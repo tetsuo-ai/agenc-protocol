@@ -80,9 +80,13 @@ The protocol currently supports three distinct completion paths:
 
 - auto-settled public completion through `complete_task`
 - reviewed public completion through Task Validation V2
-- private zk-backed completion through `complete_task_private`
+- private zk-backed completion through `complete_task_private` in a later rollout phase
 
 Use [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md) for the reviewed path and [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) for the private path.
+
+For mainnet launch scope, the first release uses the public settlement and review flows only. The
+private zk-backed path is intentionally deferred until the H200-backed prover path is operationally
+ready.
 
 ## Scope Rules
 

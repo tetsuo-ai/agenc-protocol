@@ -41,6 +41,14 @@ The matrix defines:
 - minimum evidence bundle for each run
 - release-readiness exit criteria
 
+## Mainnet Release Scope
+
+- The first mainnet release includes the public settlement paths and Task Validation V2 review
+  flows.
+- The first mainnet release does not include `complete_task_private`.
+- Keep `DV-03E` and H200-backed prover bring-up tracked as a later-phase readiness item; do not
+  block release-1 on private-path proving unless the release scope changes.
+
 The first harness commands are:
 
 ```bash
@@ -56,7 +64,8 @@ captures pre-state snapshots. Execute the devnet transactions separately, then u
 persist post-state, lamport deltas, optional transaction evidence, and `ordering-check.json` for
 the terminal instruction when signatures are supplied. `capture` also writes `event-summary.json`
 and `verdict.json` so each bundle has a direct pass/fail outcome. `report` aggregates the latest
-bundle per scenario into `artifacts/devnet-readiness/readiness-report.json`.
+bundle per scenario into `artifacts/devnet-readiness/readiness-report.json`, including both the
+full-matrix summary and the scoped `release1` summary for the first mainnet release.
 
 When running against a dedicated validation deployment instead of the shared devnet program,
 set these root fields in the harness config:
