@@ -9,6 +9,7 @@ Related docs:
 - [./PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md)
 - [./VALIDATION.md](./VALIDATION.md)
 - [../artifacts/devnet-readiness/readiness-report.json](../artifacts/devnet-readiness/readiness-report.json)
+- [../artifacts/devnet-readiness/RELEASE1_PUBLIC_LAUNCH_REVIEW_20260327.md](../artifacts/devnet-readiness/RELEASE1_PUBLIC_LAUNCH_REVIEW_20260327.md)
 - [../artifacts/devnet-readiness/VALIDATION_DEPLOYMENT_SPEC_20260327.md](../artifacts/devnet-readiness/VALIDATION_DEPLOYMENT_SPEC_20260327.md)
 
 ## Current Status

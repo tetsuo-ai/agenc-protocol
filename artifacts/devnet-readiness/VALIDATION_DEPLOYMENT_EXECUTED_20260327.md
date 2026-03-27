@@ -60,6 +60,7 @@ Execution status:
 Primary follow-up artifact:
 
 - `readiness-report.json` records the current aggregate state: `17` pass, `0` fail, `1` not-run.
+- `RELEASE1_PUBLIC_LAUNCH_REVIEW_20260327.md` records the scoped launch decision for the public and reviewed settlement scope.
 
 Roadmap update after the validation PRs:
 
