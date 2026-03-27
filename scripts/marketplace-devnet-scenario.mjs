@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { mkdir, writeFile } from "node:fs/promises";
+import { PublicKey } from "@solana/web3.js";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -113,6 +114,18 @@ const SCENARIOS = {
     ],
     evidenceInstruction: "expire_dispute",
   },
+  "DV-03E": {
+    orderedInstructionList: [
+      "register_agent",
+      "create_task",
+      "create_dependent_task",
+      "initialize_bid_book",
+      "create_bid",
+      "accept_bid",
+      "complete_task_private",
+    ],
+    evidenceInstruction: "complete_task_private",
+  },
 };
 
 function scenarioNeedsArbiters(scenarioId) {
@@ -136,6 +149,12 @@ Optional flags:
   --artifact-dir <path>   Defaults to ${DEFAULT_ARTIFACT_DIR}
   --scenario <id>         One of ${Object.keys(SCENARIOS).join(", ")}
   --help                  Show this help
+
+DV-03E prover configuration:
+  AGENC_PROVER_ENDPOINT=https://prover.example.com
+  AGENC_PROVER_API_KEY=<token>            Optional, sent as Authorization: Bearer <token>
+  AGENC_PROVER_HEADERS_JSON='{"x-foo":"bar"}'
+  AGENC_PROVER_TIMEOUT_MS=300000
 `);
 }
 
@@ -202,6 +221,108 @@ function resolveFromRoot(value) {
 
 function timestampStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function generateNonZeroFieldElement() {
+  let value = 0n;
+  while (value === 0n) {
+    value = sdk.generateSalt();
+  }
+  return value;
+}
+
+function parsePositiveTimeoutMs(rawValue) {
+  if (rawValue == null || rawValue === "") {
+    return undefined;
+  }
+
+  const timeoutMs = Number(rawValue);
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("AGENC_PROVER_TIMEOUT_MS must be a positive integer.");
+  }
+
+  return timeoutMs;
+}
+
+function parseProverHeadersJson(rawValue) {
+  if (!rawValue) {
+    return {};
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch (error) {
+    throw new Error(
+      `AGENC_PROVER_HEADERS_JSON must be valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("AGENC_PROVER_HEADERS_JSON must be a JSON object.");
+  }
+
+  const headers = {};
+  for (const [headerName, headerValue] of Object.entries(parsed)) {
+    if (typeof headerValue !== "string" || headerValue.trim().length === 0) {
+      throw new Error(
+        `AGENC_PROVER_HEADERS_JSON header "${headerName}" must be a non-empty string.`,
+      );
+    }
+    headers[headerName] = headerValue.trim();
+  }
+
+  return headers;
+}
+
+function mergeProverHeaders(baseHeaders, overrideHeaders) {
+  return {
+    ...baseHeaders,
+    ...overrideHeaders,
+  };
+}
+
+function buildRemoteProverConfigFromEnv(envSource = process.env) {
+  const endpoint = envSource.AGENC_PROVER_ENDPOINT?.trim();
+  if (!endpoint) {
+    throw new Error("AGENC_PROVER_ENDPOINT is required for DV-03E.");
+  }
+  sdk.validateProverEndpoint(endpoint);
+
+  const baseHeaders = {};
+  const apiKey = envSource.AGENC_PROVER_API_KEY?.trim();
+  if (apiKey) {
+    baseHeaders.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const overrideHeaders = parseProverHeadersJson(
+    envSource.AGENC_PROVER_HEADERS_JSON,
+  );
+  const headers = mergeProverHeaders(baseHeaders, overrideHeaders);
+  const timeoutMs = parsePositiveTimeoutMs(envSource.AGENC_PROVER_TIMEOUT_MS);
+
+  return {
+    kind: "remote",
+    endpoint,
+    ...(timeoutMs ? { timeoutMs } : {}),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  };
+}
+
+function derivePrivateSettlementSpendAccounts(programId, proofResult) {
+  const [bindingSpend] = PublicKey.findProgramAddressSync(
+    [Buffer.from("binding_spend"), Buffer.from(proofResult.bindingSeed)],
+    programId,
+  );
+  const [nullifierSpend] = PublicKey.findProgramAddressSync(
+    [Buffer.from("nullifier_spend"), Buffer.from(proofResult.nullifierSeed)],
+    programId,
+  );
+
+  return {
+    bindingSpend,
+    nullifierSpend,
+  };
 }
 
 async function sleepSeconds(seconds, label) {
@@ -475,15 +596,17 @@ async function registerParticipants(context) {
 
 async function createAcceptedBidFixture(context, registrations, options = {}) {
   const now = Math.floor(Date.now() / 1000);
-  const taskId = randomBytes32();
+  const taskId = options.taskId ?? randomBytes32();
   const taskDescription = fixedUtf8Bytes(
-    `${context.scenarioId} accepted bid fixture`,
+    options.taskDescription ?? `${context.scenarioId} accepted bid fixture`,
     64,
   );
   let parentTask = null;
   let createdTask;
+  const taskDeadline = options.deadline ?? now + 1800;
+  const useDependentTask = options.deadlineZero || options.forceDependentTask;
 
-  if (options.deadlineZero) {
+  if (useDependentTask) {
     // BidExclusive tasks still need deadline=0 to exercise the short claim-expiry
     // path, but create_task now rejects zero deadlines. A dependent task keeps the
     // fixture valid without changing on-chain code.
@@ -501,7 +624,7 @@ async function createAcceptedBidFixture(context, registrations, options = {}) {
         ),
         rewardAmount: 1_000_000n,
         maxWorkers: 1,
-        deadline: now + 1800,
+        deadline: taskDeadline,
         taskType: 0,
         constraintHash: null,
         minReputation: 0,
@@ -525,9 +648,9 @@ async function createAcceptedBidFixture(context, registrations, options = {}) {
         description: taskDescription,
         rewardAmount: context.rewardLamports,
         maxWorkers: 1,
-        deadline: 0,
+        deadline: options.deadlineZero ? 0 : taskDeadline,
         taskType: TASK_TYPE_BID_EXCLUSIVE,
-        constraintHash: null,
+        constraintHash: options.constraintHash ?? null,
         dependencyType: 1,
         minReputation: 0,
         rewardMint: null,
@@ -545,9 +668,9 @@ async function createAcceptedBidFixture(context, registrations, options = {}) {
         description: taskDescription,
         rewardAmount: context.rewardLamports,
         maxWorkers: 1,
-        deadline: now + 1800,
+        deadline: taskDeadline,
         taskType: TASK_TYPE_BID_EXCLUSIVE,
-        constraintHash: null,
+        constraintHash: options.constraintHash ?? null,
         minReputation: 0,
         rewardMint: null,
       },
@@ -1175,6 +1298,193 @@ async function runExpiredDisputeScenario(context, { workerCompleted }) {
   };
 }
 
+async function runDv03e(context) {
+  const { registrations, txSignatures } = await registerParticipants(context);
+  const proverConfig = buildRemoteProverConfigFromEnv();
+  const taskId = randomBytes32();
+  const taskPda = sdk.deriveTaskPda(
+    context.keypairs.creator.publicKey,
+    taskId,
+    context.programs.creator.programId,
+  );
+  const output = [11n, 22n, 33n, 44n];
+  const salt = generateNonZeroFieldElement();
+  const agentSecret = generateNonZeroFieldElement();
+  const expectedHashes = sdk.computeHashes(
+    taskPda,
+    context.keypairs.worker.publicKey,
+    output,
+    salt,
+    agentSecret,
+  );
+
+  const fixture = await createAcceptedBidFixture(context, registrations, {
+    taskId,
+    taskDescription: `${context.scenarioId} private settlement fixture`,
+    constraintHash: sdk.bigintToBytes32(expectedHashes.constraintHash),
+    forceDependentTask: true,
+  });
+
+  const taskAfterAccept = await sdk.getTask(
+    context.programs.creator,
+    fixture.createdTask.taskPda,
+  );
+  assert(taskAfterAccept, "Private task missing immediately after accept_bid.");
+  assert(
+    taskAfterAccept.state === sdk.TaskState.InProgress,
+    `Private task should be InProgress after accept_bid, received ${taskAfterAccept.state}.`,
+  );
+  assert(
+    Buffer.from(taskAfterAccept.constraintHash ?? []).equals(
+      sdk.bigintToBytes32(expectedHashes.constraintHash),
+    ),
+    "Task constraintHash did not persist the expected proof dependency hash.",
+  );
+  assert(fixture.parentTask, "DV-03E requires a dependent parent task.");
+
+  const zkConfig = await sdk.getZkConfig(context.programs.creator);
+  assert(zkConfig, "zkConfig account is missing on the validation deployment.");
+
+  const proofGeneratedAtMs = Date.now();
+  const proof = await sdk.generateProof(
+    {
+      taskPda: fixture.createdTask.taskPda,
+      agentPubkey: context.keypairs.worker.publicKey,
+      output,
+      salt,
+      agentSecret,
+    },
+    proverConfig,
+  );
+  const proofAccounts = derivePrivateSettlementSpendAccounts(
+    context.programs.creator.programId,
+    proof,
+  );
+
+  const completed = await sdk.completeTaskPrivateSafe(
+    context.connection,
+    context.programs.worker,
+    context.keypairs.worker,
+    registrations.worker.agentId,
+    fixture.createdTask.taskPda,
+    proof,
+    {
+      runProofSubmissionPreflight: true,
+      proofGeneratedAtMs,
+      parentTaskPda: fixture.parentTask.taskPda,
+      acceptedBidSettlement: {
+        bidBook: fixture.createdBid.bidBookPda,
+        acceptedBid: fixture.createdBid.bidPda,
+        bidderMarketState: fixture.createdBid.bidderMarketStatePda,
+      },
+      bidderAuthority: context.keypairs.worker.publicKey,
+    },
+  );
+
+  const [
+    taskAfter,
+    bidBookAfter,
+    bidAfter,
+    bidderStateAfter,
+    claimAfter,
+    bindingSpendAccount,
+    nullifierSpendAccount,
+  ] = await Promise.all([
+    sdk.getTask(context.programs.creator, fixture.createdTask.taskPda),
+    sdk.getBidBook(context.programs.creator, fixture.createdBid.bidBookPda),
+    sdk.getBid(context.programs.creator, fixture.createdBid.bidPda),
+    sdk.getBidderMarketState(
+      context.programs.creator,
+      fixture.createdBid.bidderMarketStatePda,
+    ),
+    maybeFetchAccount(() =>
+      fetchRawClaim(context.programs.creator, fixture.acceptedBid.claimPda),
+    ),
+    context.connection.getAccountInfo(proofAccounts.bindingSpend, "confirmed"),
+    context.connection.getAccountInfo(proofAccounts.nullifierSpend, "confirmed"),
+  ]);
+
+  assert(taskAfter, "Task missing after complete_task_private.");
+  assert(
+    taskAfter.state === sdk.TaskState.Completed,
+    `Task should be Completed after complete_task_private, received ${taskAfter.state}.`,
+  );
+  assert(
+    bidBookAfter?.state === sdk.TaskBidBookLifecycleState.Closed,
+    `Bid book should be Closed after complete_task_private, received ${bidBookAfter?.state}.`,
+  );
+  assert(
+    bidAfter === null,
+    "Accepted bid account should be closed after complete_task_private.",
+  );
+  assert(
+    bidderStateAfter?.activeBidCount === 0,
+    `Bidder active bid count should return to zero, received ${bidderStateAfter?.activeBidCount}.`,
+  );
+  assert(claimAfter === null, "Claim account should be closed after complete_task_private.");
+  assert(bindingSpendAccount, "Binding spend PDA was not created by complete_task_private.");
+  assert(
+    nullifierSpendAccount,
+    "Nullifier spend PDA was not created by complete_task_private.",
+  );
+
+  const remainingAccounts = [
+    fixture.parentTask.taskPda,
+    fixture.createdBid.bidBookPda,
+    fixture.createdBid.bidPda,
+    fixture.createdBid.bidderMarketStatePda,
+    context.keypairs.worker.publicKey,
+  ];
+
+  return {
+    txSignatures: {
+      ...txSignatures,
+      createParentTask: fixture.parentTask.txSignature,
+      createTask: fixture.createdTask.txSignature,
+      initializeBidBook: fixture.initializedBidBook.txSignature,
+      createBid: fixture.createdBid.txSignature,
+      acceptBid: fixture.acceptedBid.txSignature,
+      completeTaskPrivate: completed.txSignature,
+    },
+    accounts: {
+      parentTask: fixture.parentTask.taskPda,
+      task: fixture.createdTask.taskPda,
+      claim: fixture.acceptedBid.claimPda,
+      taskBidBook: fixture.createdBid.bidBookPda,
+      acceptedBid: fixture.createdBid.bidPda,
+      bidderMarketState: fixture.createdBid.bidderMarketStatePda,
+      bidderAuthority: context.keypairs.worker.publicKey,
+      workerAgent: fixture.createdBid.bidderAgentPda,
+      bindingSpend: proofAccounts.bindingSpend,
+      nullifierSpend: proofAccounts.nullifierSpend,
+    },
+    remainingAccounts,
+    finalStates: {
+      taskState: taskAfter.state,
+      bidBookState: bidBookAfter?.state ?? null,
+      bidClosed: bidAfter === null,
+      claimClosed: claimAfter === null,
+      bidderActiveBidCount: bidderStateAfter?.activeBidCount ?? null,
+      bindingSpendCreated: bindingSpendAccount !== null,
+      nullifierSpendCreated: nullifierSpendAccount !== null,
+      activeImageId: Buffer.from(zkConfig.activeImageId).toString("hex"),
+      proofImageId: Buffer.from(proof.imageId).toString("hex"),
+      proofGenerationMs: proof.generationTime,
+      preflightValid: completed.validationResult?.valid ?? null,
+    },
+    captureSignatures: [
+      fixture.acceptedBid.txSignature,
+      completed.txSignature,
+    ],
+    notes: [
+      "DV-03E uses a proof-dependent BidExclusive task so the live devnet transaction proves the parent-task remaining-account offset.",
+      "Remote prover authentication is normalized from AGENC_PROVER_API_KEY into an Authorization bearer header unless overridden by AGENC_PROVER_HEADERS_JSON.",
+      `Active zk image: ${Buffer.from(zkConfig.activeImageId).toString("hex")}.`,
+      `Proof image: ${Buffer.from(proof.imageId).toString("hex")}.`,
+    ],
+  };
+}
+
 function buildHarnessScenario(context, result) {
   const scenarioDefinition = SCENARIOS[context.scenarioId];
   return {
@@ -1274,6 +1584,9 @@ async function main() {
     case "DV-08B":
       result = await runExpiredDisputeScenario(context, { workerCompleted: false });
       break;
+    case "DV-03E":
+      result = await runDv03e(context);
+      break;
     default:
       throw new Error(`Unhandled scenario ${context.scenarioId}`);
   }
@@ -1286,8 +1599,25 @@ async function main() {
   console.log("[success] scenario run completed");
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.stack ?? error.message : String(error);
-  console.error(`[failure] ${message}`);
-  process.exitCode = 1;
-});
+const executedAsScript =
+  process.argv[1] != null &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (executedAsScript) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    console.error(`[failure] ${message}`);
+    process.exitCode = 1;
+  });
+}
+
+export {
+  SCENARIOS,
+  buildRemoteProverConfigFromEnv,
+  derivePrivateSettlementSpendAccounts,
+  generateNonZeroFieldElement,
+  main,
+  mergeProverHeaders,
+  parsePositiveTimeoutMs,
+  parseProverHeadersJson,
+};
