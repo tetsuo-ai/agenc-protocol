@@ -15,7 +15,13 @@
     "build": "npm run build --workspace=@tetsuo-ai/protocol",
     "typecheck": "npm run typecheck --workspace=@tetsuo-ai/protocol",
     "pack:smoke": "npm run pack:smoke --workspace=@tetsuo-ai/protocol",
-    "validate": "npm run build && npm run typecheck && npm run pack:smoke"
+    "validate": "npm run build && npm run typecheck && npm run pack:smoke",
+    "devnet:marketplace:matrix": "node scripts/marketplace-devnet-readiness.mjs matrix",
+    "devnet:marketplace:prepare": "node scripts/marketplace-devnet-readiness.mjs prepare",
+    "devnet:marketplace:capture": "node scripts/marketplace-devnet-readiness.mjs capture",
+    "devnet:marketplace:report": "node scripts/marketplace-devnet-readiness.mjs report",
+    "devnet:marketplace:scenario": "node scripts/marketplace-devnet-scenario.mjs",
+    "devnet:validation:preflight": "node scripts/validation-deploy-preflight.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.4.0",

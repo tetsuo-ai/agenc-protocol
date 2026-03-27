@@ -1,0 +1,90 @@
+{
+  "scenarioId": "DV-05",
+  "createdAt": "2026-03-27T15:53:36.862Z",
+  "rpcUrl": "https://api.devnet.solana.com",
+  "idlPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/anchor/idl/agenc_coordination.json",
+  "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "wallets": {
+    "creator": "AYwAQmXxTLB3ukpRPHV2LC6qA4DCo2hsuSTneNn9xnQN",
+    "worker": "4YRpGXNp5gfPE8XqcUAL3FV6xHMJaQkxVccPTSy8hutg",
+    "authority": "E9ws2V2vuv53HXRh8ydX5PRGAiCsg2QTmsTZAu145Frg"
+  },
+  "txSignatures": {
+    "registerCreator": "4KqornrCbccFurJpJSeeynYUPtp2iDJoFNFB1JtQfCsB2q7oVbV7bQ97mvdCuUVajEsX9kXKTBXC8PfXdWmvm8Pd",
+    "registerWorker": "Wpxr8jW6T9mepZV3JHpVC6cJfoDdGcXMANKJ9n9AxckJqrKmHYhpFbb94MepVnFkFg2d3qpb4TpzkfgY1EpcpVK",
+    "createParentTask": "3VEe8k6VuGCm8CoSb5T1GU394BEyKa3kcoTfJNzK7C47qnirQ3UZbJF3ekLHbLVnbrWmja1fWUzQKce6vzcxM7Xu",
+    "createTask": "2ux13isrDpfcPK7eQ6TtaH5ja8oJLeCf1J6emkuvci1VN1NqBosnW311JsA5BHY5svr5pK68Hm3gasXpX3mm2uyf",
+    "initializeBidBook": "3StKxiNsVH4zB2CxsxMSaft2ZA1UZTMmMwdpaekzSLLcph5t6n1EZjGDWtKaV8M2u6K3AoPLqZi1C46w8DJwWpiM",
+    "createBid": "21fQMdhVuFWeFChDjWaH3mQ3r7Hs61aJn6pGJmHFb2r9vauJyFUhko6U4LzeKVNcXQ828wtMHHbvKoZ7eHvXmZvj",
+    "acceptBid": "65QAodfEi2q6bwa9L1HYumnjpSi18FfyrK3W7HU1wXKGcTVfHCTNGaefjFpqR3e75CphecDXQFY8eZmYZyeHsdzY",
+    "expireClaim": "4uprGH42ZncQzHgF2q9bea6SQmrF5ca2afeCMRsbTuDYTxMf4sonVTrwe1PHAVtkKteXQZjrACb8fUgSo7in5b43"
+  },
+  "captureSignatures": [
+    "65QAodfEi2q6bwa9L1HYumnjpSi18FfyrK3W7HU1wXKGcTVfHCTNGaefjFpqR3e75CphecDXQFY8eZmYZyeHsdzY",
+    "4uprGH42ZncQzHgF2q9bea6SQmrF5ca2afeCMRsbTuDYTxMf4sonVTrwe1PHAVtkKteXQZjrACb8fUgSo7in5b43"
+  ],
+  "accounts": {
+    "parentTask": "8RPoKHBKoKowV3FNMD7iswdD9SLyNTzJv5tagKLcAL6W",
+    "task": "AiJ5rPoAm9F3KrakGmDVhjQeSZAQC9FqVMMasj3XJxS5",
+    "claim": "Bg4d8tdLpGCk3RcV8gaKh8JAks2TXSN2PNCQagfSmPmY",
+    "taskBidBook": "8ZSLpGtpo78vvTPanKQsQdq8vBvso4xsR9d33sdAH9XX",
+    "acceptedBid": "3XFifdSCqBSAwvRw5kjgGhVYNgRcpJ2jYQdkEkek7ZfB",
+    "bidderMarketState": "H3Za9hcyG61iaUnXaRGfnicqjMAJULUdpSQBJnYF8QwN",
+    "bidMarketplaceConfig": "9eNWSqqiKU9UQ8fz1EtcN3ErxRpZGfUPjL3njjLMF7i8",
+    "creatorAuthority": "AYwAQmXxTLB3ukpRPHV2LC6qA4DCo2hsuSTneNn9xnQN",
+    "rentRecipient": "4YRpGXNp5gfPE8XqcUAL3FV6xHMJaQkxVccPTSy8hutg",
+    "workerAgent": "5djnyogSiWPEdZ8Y1G3QfDyPNdmXLifahDNnuLUZWa6x"
+  },
+  "remainingAccounts": [
+    "9eNWSqqiKU9UQ8fz1EtcN3ErxRpZGfUPjL3njjLMF7i8",
+    "8ZSLpGtpo78vvTPanKQsQdq8vBvso4xsR9d33sdAH9XX",
+    "3XFifdSCqBSAwvRw5kjgGhVYNgRcpJ2jYQdkEkek7ZfB",
+    "H3Za9hcyG61iaUnXaRGfnicqjMAJULUdpSQBJnYF8QwN",
+    "AYwAQmXxTLB3ukpRPHV2LC6qA4DCo2hsuSTneNn9xnQN"
+  ],
+  "finalStates": {
+    "taskState": 0,
+    "bidBookState": 0,
+    "bidClosed": true,
+    "claimClosed": true,
+    "bidderActiveBidCount": 0,
+    "claimExpiresAt": 1774626813
+  },
+  "harnessScenario": {
+    "orderedInstructionList": [
+      "register_agent",
+      "create_task",
+      "initialize_bid_book",
+      "create_bid",
+      "accept_bid",
+      "expire_claim"
+    ],
+    "evidenceInstruction": "expire_claim",
+    "accounts": {
+      "parentTask": "8RPoKHBKoKowV3FNMD7iswdD9SLyNTzJv5tagKLcAL6W",
+      "task": "AiJ5rPoAm9F3KrakGmDVhjQeSZAQC9FqVMMasj3XJxS5",
+      "claim": "Bg4d8tdLpGCk3RcV8gaKh8JAks2TXSN2PNCQagfSmPmY",
+      "taskBidBook": "8ZSLpGtpo78vvTPanKQsQdq8vBvso4xsR9d33sdAH9XX",
+      "acceptedBid": "3XFifdSCqBSAwvRw5kjgGhVYNgRcpJ2jYQdkEkek7ZfB",
+      "bidderMarketState": "H3Za9hcyG61iaUnXaRGfnicqjMAJULUdpSQBJnYF8QwN",
+      "bidMarketplaceConfig": "9eNWSqqiKU9UQ8fz1EtcN3ErxRpZGfUPjL3njjLMF7i8",
+      "creatorAuthority": "AYwAQmXxTLB3ukpRPHV2LC6qA4DCo2hsuSTneNn9xnQN",
+      "rentRecipient": "4YRpGXNp5gfPE8XqcUAL3FV6xHMJaQkxVccPTSy8hutg",
+      "workerAgent": "5djnyogSiWPEdZ8Y1G3QfDyPNdmXLifahDNnuLUZWa6x"
+    },
+    "remainingAccounts": [
+      "9eNWSqqiKU9UQ8fz1EtcN3ErxRpZGfUPjL3njjLMF7i8",
+      "8ZSLpGtpo78vvTPanKQsQdq8vBvso4xsR9d33sdAH9XX",
+      "3XFifdSCqBSAwvRw5kjgGhVYNgRcpJ2jYQdkEkek7ZfB",
+      "H3Za9hcyG61iaUnXaRGfnicqjMAJULUdpSQBJnYF8QwN",
+      "AYwAQmXxTLB3ukpRPHV2LC6qA4DCo2hsuSTneNn9xnQN"
+    ],
+    "notes": "DV-05 uses a dependent BidExclusive task with deadline=0 because create_task now rejects zero deadlines in this validation branch. Claim expiry reached at 2026-03-27T15:53:33.000Z. expire_claim was executed by the worker authority during the grace window to avoid an extra 60s wait."
+  },
+  "captureCommand": "npm run devnet:marketplace:capture -- --bundle artifacts/devnet-readiness/scenario-runs/DV-05/2026-03-27T15-53-36-861Z --signature 65QAodfEi2q6bwa9L1HYumnjpSi18FfyrK3W7HU1wXKGcTVfHCTNGaefjFpqR3e75CphecDXQFY8eZmYZyeHsdzY --signature 4uprGH42ZncQzHgF2q9bea6SQmrF5ca2afeCMRsbTuDYTxMf4sonVTrwe1PHAVtkKteXQZjrACb8fUgSo7in5b43 --idl artifacts/anchor/idl/agenc_coordination.json --program-id GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "notes": [
+    "DV-05 uses a dependent BidExclusive task with deadline=0 because create_task now rejects zero deadlines in this validation branch.",
+    "Claim expiry reached at 2026-03-27T15:53:33.000Z.",
+    "expire_claim was executed by the worker authority during the grace window to avoid an extra 60s wait."
+  ]
+}

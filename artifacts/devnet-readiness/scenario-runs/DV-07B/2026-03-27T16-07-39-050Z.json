@@ -1,0 +1,111 @@
+{
+  "scenarioId": "DV-07B",
+  "createdAt": "2026-03-27T16:07:39.051Z",
+  "rpcUrl": "https://api.devnet.solana.com",
+  "idlPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/anchor/idl/agenc_coordination.json",
+  "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "wallets": {
+    "creator": "Cd3iHR7vFWFgPMu1iG36dj43LqKBS3bxAmneHJZHrWV7",
+    "worker": "5Zds3zJSBXeRzdeUHynTJG7oaWWMiAKjkLkDbkWsX1q3",
+    "authority": "E9ws2V2vuv53HXRh8ydX5PRGAiCsg2QTmsTZAu145Frg",
+    "arbiterA": "5ZxT5AdiGM2jvEkbCyr6WyUFm8RVP6f2aMVqzs6iiCFs",
+    "arbiterB": "7TFGCLp12uzKRTJ1p5iDKRbknsEfaaw2c8NhzNS3SskW",
+    "arbiterC": "7jGN9UMMp3Wrd6UeQ3XozoUs2xpAxKVe6Tiip5XXp74e"
+  },
+  "txSignatures": {
+    "registerCreator": "4GbU1fMc25V4bLvwbxae1KjpaLPSgNVZBS6UFeLF9a7swZSrHCBS3LCx5aFoWumyEW5cguZVPSqnH5eGKMUQ7KwB",
+    "registerWorker": "4cWm6fsxSQY1HorojhrQpQyV1pVBgPUybaAnzfkZCvCPkDza23uKNbMuYc9Ctysr1NN2ssnrrJVNDPtkkyPXj54Y",
+    "registerArbiterA": "aAvfS4ZkLYvwjxaojMCJdj3RGn65fegGWzxQtMTHChTaxbM7tiupeZCAFJPuL6MnnBT3CttzuRXtN7bjheKByBG",
+    "registerArbiterB": "2V4ApU1s4fb5zp73uww6AP32z1EpyubWC7dx9aGg1tmJbWMJ93Ba9vJyUDoH9MSitSoES9xcmmu1xyegpsmtRAFa",
+    "registerArbiterC": "5X7mwtpYcJ3YgmGBswjUgjJ81za4Y9UUB8bPq3tp5JeagAozTjKzRfNT1fKP4LViC7hPtKvGoyDFcW9n9uoHvhnv",
+    "createTask": "29fQCyhT1vf3WKKsniYC4YSpEn9Na9Y312YTEtRe4BkDFmZwFVW2oRnPBMxiXBSUmrz1ng6Ci2T6pTkVVYLaepuj",
+    "initializeBidBook": "62tuXvmpX6d7ceEeYRWgvMcTJuWRyRvAy3Fi4r79fZ8384dgXHpTjxB2WaV1brunN4zramUzF1k8LvpaR8NTbM2h",
+    "createBid": "5i3yDN8EkzMfCSWQJbj3vLn651EqnNucJ2tJVah1KLDDn3AiQmrjop7gn2LpXjQad5zwjyuqbocEevPVsQBgYim5",
+    "acceptBid": "2GgVJwdzCYdd2Y9WGQ37imnTnfLKHwpFRvQddNLYPew82xCMkaqP6LJsq1ZWFi9XSNLKr85Jn3Mqmbw6C91S1as7",
+    "initiateDispute": "xuAFpRyv7QfTM2CS2VfdPJjwVUsjF9RpEMH5MqQVT8m2GLf1A9oGFEvqqaT5gqCG8r1K68fWQJT81UVUj43TrvJ",
+    "voteArbiterA": "52nztcFDYzMRUBMwcGdfoLeW5jv5jF9XmZVkryss4Zg9QricyfJhnnbXiXDzEHbbpSjMdaLjFzWbiFvYvvWyk24Y",
+    "voteArbiterB": "42enjkA2ag2FHYEV4z7ZtCtpBQi1ECiPHp3qc8TxvoTA8FyTxFvoSP3HjkwLRqTkcERnnGFWU7coCTbqtfXbKBqQ",
+    "voteArbiterC": "GLyETdqYi7QmbifFwtUZDGCHeoRaj1HKsa4eMYhdCdaLi5WKNugrpvSGo7rj3CaHsmLCC9aqmA5dqbBUiNSc8KP",
+    "resolveDispute": "4H53a6YHE3txgL3dPUu1fuVoPAz8rsVi6ruXezBZUwrG77UbHiLwBg59Xj2iXWuTQHw6wZJkPUDZom3QeyC2GvSY"
+  },
+  "captureSignatures": [
+    "2GgVJwdzCYdd2Y9WGQ37imnTnfLKHwpFRvQddNLYPew82xCMkaqP6LJsq1ZWFi9XSNLKr85Jn3Mqmbw6C91S1as7",
+    "xuAFpRyv7QfTM2CS2VfdPJjwVUsjF9RpEMH5MqQVT8m2GLf1A9oGFEvqqaT5gqCG8r1K68fWQJT81UVUj43TrvJ",
+    "52nztcFDYzMRUBMwcGdfoLeW5jv5jF9XmZVkryss4Zg9QricyfJhnnbXiXDzEHbbpSjMdaLjFzWbiFvYvvWyk24Y",
+    "42enjkA2ag2FHYEV4z7ZtCtpBQi1ECiPHp3qc8TxvoTA8FyTxFvoSP3HjkwLRqTkcERnnGFWU7coCTbqtfXbKBqQ",
+    "GLyETdqYi7QmbifFwtUZDGCHeoRaj1HKsa4eMYhdCdaLi5WKNugrpvSGo7rj3CaHsmLCC9aqmA5dqbBUiNSc8KP",
+    "4H53a6YHE3txgL3dPUu1fuVoPAz8rsVi6ruXezBZUwrG77UbHiLwBg59Xj2iXWuTQHw6wZJkPUDZom3QeyC2GvSY"
+  ],
+  "accounts": {
+    "task": "94r8tGD7hq6XaPfvovnjyLSu8g4WkngSfpocaJHiHbRe",
+    "escrow": "69ZzbPfRbG6H5VUnfpyHCshsBRfd9ZAxEY9kGm3GRuDk",
+    "dispute": "Fcaijax6aPftRwNKRKH6ekvJuoUG5JcP5F7EFNJqsJpZ",
+    "workerClaim": "A4Ur41UcVuQ4Yo3MXjuHHheatt1yPpaywYjeiVur7TDn",
+    "workerWallet": "5Zds3zJSBXeRzdeUHynTJG7oaWWMiAKjkLkDbkWsX1q3",
+    "taskBidBook": "6hsaHoNQqiWet1ZZKE5MNsh16zViL11E4t7vxqjrWJFr",
+    "acceptedBid": "2UjVRqMoQwzRhnYaQbzC64dKZsAtfq5vvh8WLg5j7YKR",
+    "bidderMarketState": "8KiECrTgbhCsBQ2LeSuRSffZ2JdqTQjyQTmLppyebBw4",
+    "creatorAuthority": "Cd3iHR7vFWFgPMu1iG36dj43LqKBS3bxAmneHJZHrWV7"
+  },
+  "remainingAccounts": [
+    "C6dmKoa8ChM3m4CmMU7iFjd6kyTSj8e1Smtdd9RBSRFA",
+    "C6JDrarcATgfogReWfapg2kEyY6im31EzRT7cXmB9w15",
+    "2hZPDctk8uMVaEy6VgjpajNaxpnydjGmWDq2PVh3irzG",
+    "CQ14j5zuGLRADQaUJWvVpW3dcZLb151VmxcqC58rGPz2",
+    "3LzuBr9Xyo3y8mQD1sySEEEwNvuyKJCnvfxyD3EN7CaA",
+    "B41uLtFhiu4FEcdS2M6eHwSiakUHUKRBUHqUP95jyVLY",
+    "6hsaHoNQqiWet1ZZKE5MNsh16zViL11E4t7vxqjrWJFr",
+    "2UjVRqMoQwzRhnYaQbzC64dKZsAtfq5vvh8WLg5j7YKR",
+    "8KiECrTgbhCsBQ2LeSuRSffZ2JdqTQjyQTmLppyebBw4"
+  ],
+  "finalStates": {
+    "taskState": 3,
+    "disputeStatus": 1,
+    "bidBookState": 2,
+    "bidClosed": true,
+    "votesFor": "1500000",
+    "votesAgainst": "0",
+    "votingDeadline": 1774627654
+  },
+  "harnessScenario": {
+    "orderedInstructionList": [
+      "register_agent",
+      "create_task",
+      "initialize_bid_book",
+      "create_bid",
+      "accept_bid",
+      "initiate_dispute",
+      "vote_dispute",
+      "resolve_dispute"
+    ],
+    "evidenceInstruction": "resolve_dispute",
+    "accounts": {
+      "task": "94r8tGD7hq6XaPfvovnjyLSu8g4WkngSfpocaJHiHbRe",
+      "escrow": "69ZzbPfRbG6H5VUnfpyHCshsBRfd9ZAxEY9kGm3GRuDk",
+      "dispute": "Fcaijax6aPftRwNKRKH6ekvJuoUG5JcP5F7EFNJqsJpZ",
+      "workerClaim": "A4Ur41UcVuQ4Yo3MXjuHHheatt1yPpaywYjeiVur7TDn",
+      "workerWallet": "5Zds3zJSBXeRzdeUHynTJG7oaWWMiAKjkLkDbkWsX1q3",
+      "taskBidBook": "6hsaHoNQqiWet1ZZKE5MNsh16zViL11E4t7vxqjrWJFr",
+      "acceptedBid": "2UjVRqMoQwzRhnYaQbzC64dKZsAtfq5vvh8WLg5j7YKR",
+      "bidderMarketState": "8KiECrTgbhCsBQ2LeSuRSffZ2JdqTQjyQTmLppyebBw4",
+      "creatorAuthority": "Cd3iHR7vFWFgPMu1iG36dj43LqKBS3bxAmneHJZHrWV7"
+    },
+    "remainingAccounts": [
+      "C6dmKoa8ChM3m4CmMU7iFjd6kyTSj8e1Smtdd9RBSRFA",
+      "C6JDrarcATgfogReWfapg2kEyY6im31EzRT7cXmB9w15",
+      "2hZPDctk8uMVaEy6VgjpajNaxpnydjGmWDq2PVh3irzG",
+      "CQ14j5zuGLRADQaUJWvVpW3dcZLb151VmxcqC58rGPz2",
+      "3LzuBr9Xyo3y8mQD1sySEEEwNvuyKJCnvfxyD3EN7CaA",
+      "B41uLtFhiu4FEcdS2M6eHwSiakUHUKRBUHqUP95jyVLY",
+      "6hsaHoNQqiWet1ZZKE5MNsh16zViL11E4t7vxqjrWJFr",
+      "2UjVRqMoQwzRhnYaQbzC64dKZsAtfq5vvh8WLg5j7YKR",
+      "8KiECrTgbhCsBQ2LeSuRSffZ2JdqTQjyQTmLppyebBw4"
+    ],
+    "notes": "Voting deadline reached at 2026-03-27T16:07:34.000Z. Resolution type 1 was approved by all three arbiters."
+  },
+  "captureCommand": "npm run devnet:marketplace:capture -- --bundle artifacts/devnet-readiness/scenario-runs/DV-07B/2026-03-27T16-07-39-050Z --signature 2GgVJwdzCYdd2Y9WGQ37imnTnfLKHwpFRvQddNLYPew82xCMkaqP6LJsq1ZWFi9XSNLKr85Jn3Mqmbw6C91S1as7 --signature xuAFpRyv7QfTM2CS2VfdPJjwVUsjF9RpEMH5MqQVT8m2GLf1A9oGFEvqqaT5gqCG8r1K68fWQJT81UVUj43TrvJ --signature 52nztcFDYzMRUBMwcGdfoLeW5jv5jF9XmZVkryss4Zg9QricyfJhnnbXiXDzEHbbpSjMdaLjFzWbiFvYvvWyk24Y --signature 42enjkA2ag2FHYEV4z7ZtCtpBQi1ECiPHp3qc8TxvoTA8FyTxFvoSP3HjkwLRqTkcERnnGFWU7coCTbqtfXbKBqQ --signature GLyETdqYi7QmbifFwtUZDGCHeoRaj1HKsa4eMYhdCdaLi5WKNugrpvSGo7rj3CaHsmLCC9aqmA5dqbBUiNSc8KP --signature 4H53a6YHE3txgL3dPUu1fuVoPAz8rsVi6ruXezBZUwrG77UbHiLwBg59Xj2iXWuTQHw6wZJkPUDZom3QeyC2GvSY --idl artifacts/anchor/idl/agenc_coordination.json --program-id GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "notes": [
+    "Voting deadline reached at 2026-03-27T16:07:34.000Z.",
+    "Resolution type 1 was approved by all three arbiters."
+  ]
+}

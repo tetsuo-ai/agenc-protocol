@@ -1,0 +1,144 @@
+{
+  "generatedAt": "2026-03-27T00:00:00.000Z",
+  "notes": [
+    "Shared-devnet green evidence retained by the validation deployment spec.",
+    "Dedicated validation deployment evidence should override these entries when newer scenario artifacts exist."
+  ],
+  "scenarios": [
+    {
+      "scenarioId": "DV-01",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-02",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03A",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03B",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03C",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03D",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03E",
+      "status": "not_run",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [
+        "Validation deployment still needs a proof fixture or live prover aligned to the active zk image ID for complete_task_private."
+      ],
+      "warnings": [
+        "Marked from the validation deployment spec until proof material exists."
+      ],
+      "metrics": {
+        "evidenceSource": "validation-deployment-spec"
+      }
+    },
+    {
+      "scenarioId": "DV-04A",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-04B",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-06A",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-06B",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-09",
+      "status": "pass",
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    }
+  ]
+}

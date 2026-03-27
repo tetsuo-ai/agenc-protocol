@@ -1,0 +1,71 @@
+{
+  "rpcUrl": "https://api.devnet.solana.com",
+  "commitment": "confirmed",
+  "defaultArtifactDir": "artifacts/devnet-readiness",
+  "idlPath": "packages/protocol/src/generated/agenc_coordination.json",
+  "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "scenarios": {
+    "DV-01": {
+      "orderedInstructionList": [
+        "initialize_bid_book",
+        "create_bid",
+        "update_bid",
+        "cancel_bid"
+      ],
+      "evidenceInstruction": "cancel_bid",
+      "accounts": {
+        "task": "<TASK_PUBKEY>",
+        "taskBidBook": "<TASK_BID_BOOK_PUBKEY>",
+        "taskBid": "<TASK_BID_PUBKEY>",
+        "bidderMarketState": "<BIDDER_MARKET_STATE_PUBKEY>",
+        "bidderAuthority": "<BIDDER_AUTHORITY_PUBKEY>"
+      },
+      "remainingAccounts": [],
+      "notes": "Optional setup primitive. Fill this first if you want bundle evidence for the basic bid lifecycle."
+    },
+    "DV-02": {
+      "orderedInstructionList": [
+        "create_bid",
+        "accept_bid"
+      ],
+      "evidenceInstruction": "accept_bid",
+      "accounts": {
+        "task": "<TASK_PUBKEY>",
+        "claim": "<CLAIM_PUBKEY>",
+        "taskBidBook": "<TASK_BID_BOOK_PUBKEY>",
+        "acceptedBid": "<ACCEPTED_BID_PUBKEY>",
+        "bidderMarketState": "<BIDDER_MARKET_STATE_PUBKEY>",
+        "workerAgent": "<WORKER_AGENT_PUBKEY>",
+        "creatorAuthority": "<CREATOR_AUTHORITY_PUBKEY>"
+      },
+      "remainingAccounts": [],
+      "notes": "Optional setup primitive. Use the accepted bid from this scenario as the input to DV-03A."
+    },
+    "DV-03A": {
+      "orderedInstructionList": [
+        "accept_bid",
+        "accept_task_result"
+      ],
+      "evidenceInstruction": "accept_task_result",
+      "accounts": {
+        "task": "<TASK_PUBKEY>",
+        "claim": "<CLAIM_PUBKEY>",
+        "escrow": "<ESCROW_PUBKEY>",
+        "taskBidBook": "<TASK_BID_BOOK_PUBKEY>",
+        "acceptedBid": "<ACCEPTED_BID_PUBKEY>",
+        "bidderMarketState": "<BIDDER_MARKET_STATE_PUBKEY>",
+        "bidderAuthority": "<BIDDER_AUTHORITY_PUBKEY>",
+        "workerAgent": "<WORKER_AGENT_PUBKEY>",
+        "creatorAuthority": "<CREATOR_AUTHORITY_PUBKEY>",
+        "treasuryAuthority": "<TREASURY_PUBKEY>"
+      },
+      "remainingAccounts": [
+        "<TASK_BID_BOOK_PUBKEY>",
+        "<ACCEPTED_BID_PUBKEY>",
+        "<BIDDER_MARKET_STATE_PUBKEY>",
+        "<BIDDER_AUTHORITY_PUBKEY>"
+      ],
+      "notes": "Recommended first green scenario. Replace placeholders with real devnet pubkeys before running the harness."
+    }
+  }
+}

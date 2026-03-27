@@ -1,0 +1,101 @@
+{
+  "scenarioId": "DV-08A",
+  "createdAt": "2026-03-27T16:18:21.344Z",
+  "rpcUrl": "https://api.devnet.solana.com",
+  "idlPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/anchor/idl/agenc_coordination.json",
+  "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "wallets": {
+    "creator": "Cd3iHR7vFWFgPMu1iG36dj43LqKBS3bxAmneHJZHrWV7",
+    "worker": "5Zds3zJSBXeRzdeUHynTJG7oaWWMiAKjkLkDbkWsX1q3",
+    "authority": "E9ws2V2vuv53HXRh8ydX5PRGAiCsg2QTmsTZAu145Frg",
+    "arbiterA": "5ZxT5AdiGM2jvEkbCyr6WyUFm8RVP6f2aMVqzs6iiCFs",
+    "arbiterB": "7TFGCLp12uzKRTJ1p5iDKRbknsEfaaw2c8NhzNS3SskW",
+    "arbiterC": "7jGN9UMMp3Wrd6UeQ3XozoUs2xpAxKVe6Tiip5XXp74e"
+  },
+  "txSignatures": {
+    "registerCreator": "J2pJ2hCSQaFMhb7qEDGmDApoxtSTXqkWjRsiocYQGjBzuhFDMzd75X6eKEmeZGokMn8NTNH38R9DCUCEfyMuXLi",
+    "registerWorker": "46bF38PPtG8igfogssYzR5aLr78VZEMtW5iqnqzTNj147FMV5EsEc8q1HgPFxwD91NH5v1uBWZdVtp678gMsWvvg",
+    "registerArbiterA": "61TdJPg5mECzywUmfbiLcC9GzVk1CLNC7K1L84sgKrdjX4hF2XcWPFgwPoKeXFssgy2gzFjRkGejg1c5oMJ1nkLB",
+    "registerArbiterB": "2T3byDPauH7WrVLpw6nraKi3BBTe8fepmJWWV97TE5eZqpQPZXUPchweAiyanSFZdW6Ed1ecNrVhpWqDuBdHXj2q",
+    "registerArbiterC": "5xaGqBMY14dCY8WCMUDsJcLifmaXvjbZpxMqZ8nG1VyKsv9jTQs2tsX9qFnavRedLoepAjeCgrH3m3tA5sXzc5d8",
+    "createTask": "2Sko4j1buz7N1wfYhB9MDNuXp8xHeSLrVB83e2Jb485FdoCLboQ4EcF48nFYucVztb5muyt1BMSrnSFss3ewPSTt",
+    "initializeBidBook": "Xr5xnKzqPirgwGrYe2baUD4bpLHFuhnW5Sifz95usu2YEEUxzQbq1Jrcar65NNwafHNTTLWCGoS7DbAsEfiKNMe",
+    "createBid": "3PecgukUhiJsU6fRLxVz7opf8ViUWBpBWGGEKSyLqxcpL6vt4qxhYbB9YXxgM89dHL3YjEnAvwWyDxpsLxXV7GUV",
+    "acceptBid": "Wvn5PEY6aWazDN1q7z9LH7aSaXUJzFbx2wHFHPipe5jxUQMgJKwkxQ4Wn53QyHcX8JpotsasZXZJmKgbeo4Tn7P",
+    "configureTaskValidation": "4hMV9inFaU9ASmpE5R4rA3P73PjhcxAh2F9FV1ntRbmVFVw6sL39L4S5E143kFXYoF5R8YAJHxs4yFi4EdZHNmER",
+    "submitTaskResult": "3vfMCtP4JL1kxCrtfP6uTKE3YXdK6Fkpk4xB7ApoMfzKxUZxDVL3aDpuG1FgeA7SRJ4D5ScP4Ayuu738pUCxwPz9",
+    "initiateDispute": "5BfcMrNfBHtWfxnRfcPxNhYswFLkFvUfmJyXAdcw8Npw3wKBaCVq1Cai2QTSTv5f3WsJt8DEeygeisvpyVrV3mhK",
+    "expireDispute": "3AwcFpAvzwBCcMYbRz28dXtARutp3LVNAHoTyqGqgjz9HM6K4oXrHxLwYTPkXmP9zQKXECYFVQNNmNfJou3JAA5i"
+  },
+  "captureSignatures": [
+    "Wvn5PEY6aWazDN1q7z9LH7aSaXUJzFbx2wHFHPipe5jxUQMgJKwkxQ4Wn53QyHcX8JpotsasZXZJmKgbeo4Tn7P",
+    "3vfMCtP4JL1kxCrtfP6uTKE3YXdK6Fkpk4xB7ApoMfzKxUZxDVL3aDpuG1FgeA7SRJ4D5ScP4Ayuu738pUCxwPz9",
+    "5BfcMrNfBHtWfxnRfcPxNhYswFLkFvUfmJyXAdcw8Npw3wKBaCVq1Cai2QTSTv5f3WsJt8DEeygeisvpyVrV3mhK",
+    "3AwcFpAvzwBCcMYbRz28dXtARutp3LVNAHoTyqGqgjz9HM6K4oXrHxLwYTPkXmP9zQKXECYFVQNNmNfJou3JAA5i"
+  ],
+  "accounts": {
+    "task": "4psrZy49wkxyyCxQXjRpEXaKhkRAEmbJWsgCzNstst9g",
+    "escrow": "3yDpq7WbWcgUHk3rR6rZjhbrWuNLqvgSGeRNYKJWB4rC",
+    "dispute": "7k2joBETB9MsujQ8jCCBk9aNUvbBU8L7se3PhuXF7SQ8",
+    "workerClaim": "B8EupmEytJD7bzPtnL7mH6GebDJGBNiLjCmUzJ8iT7uK",
+    "workerWallet": "5Zds3zJSBXeRzdeUHynTJG7oaWWMiAKjkLkDbkWsX1q3",
+    "taskBidBook": "7abuU91Y9eJYdZYssgAxCPA7DS92CWgmDqQzixk2c8Bd",
+    "acceptedBid": "DtmL23yRqBXgiuKHEqpzLC3fKQnQH3TsUSrv7n2n1buK",
+    "bidderMarketState": "8ZjfndfyJjvznFFTMvvE2U61bqcYdiLjc1TGFMVjoVTa",
+    "creatorAuthority": "Cd3iHR7vFWFgPMu1iG36dj43LqKBS3bxAmneHJZHrWV7"
+  },
+  "remainingAccounts": [
+    "7abuU91Y9eJYdZYssgAxCPA7DS92CWgmDqQzixk2c8Bd",
+    "DtmL23yRqBXgiuKHEqpzLC3fKQnQH3TsUSrv7n2n1buK",
+    "8ZjfndfyJjvznFFTMvvE2U61bqcYdiLjc1TGFMVjoVTa"
+  ],
+  "finalStates": {
+    "taskState": 4,
+    "disputeStatus": 2,
+    "bidBookState": 2,
+    "bidClosed": true,
+    "claimClosed": true,
+    "workerCompleted": true,
+    "votesFor": "0",
+    "votesAgainst": "0",
+    "votingDeadline": 1774628177,
+    "expireEligibleAt": 1774628297,
+    "taskSubmissionStatus": "[object Object]"
+  },
+  "harnessScenario": {
+    "orderedInstructionList": [
+      "register_agent",
+      "create_task",
+      "initialize_bid_book",
+      "create_bid",
+      "accept_bid",
+      "configure_task_validation",
+      "submit_task_result",
+      "initiate_dispute",
+      "expire_dispute"
+    ],
+    "evidenceInstruction": "expire_dispute",
+    "accounts": {
+      "task": "4psrZy49wkxyyCxQXjRpEXaKhkRAEmbJWsgCzNstst9g",
+      "escrow": "3yDpq7WbWcgUHk3rR6rZjhbrWuNLqvgSGeRNYKJWB4rC",
+      "dispute": "7k2joBETB9MsujQ8jCCBk9aNUvbBU8L7se3PhuXF7SQ8",
+      "workerClaim": "B8EupmEytJD7bzPtnL7mH6GebDJGBNiLjCmUzJ8iT7uK",
+      "workerWallet": "5Zds3zJSBXeRzdeUHynTJG7oaWWMiAKjkLkDbkWsX1q3",
+      "taskBidBook": "7abuU91Y9eJYdZYssgAxCPA7DS92CWgmDqQzixk2c8Bd",
+      "acceptedBid": "DtmL23yRqBXgiuKHEqpzLC3fKQnQH3TsUSrv7n2n1buK",
+      "bidderMarketState": "8ZjfndfyJjvznFFTMvvE2U61bqcYdiLjc1TGFMVjoVTa",
+      "creatorAuthority": "Cd3iHR7vFWFgPMu1iG36dj43LqKBS3bxAmneHJZHrWV7"
+    },
+    "remainingAccounts": [
+      "7abuU91Y9eJYdZYssgAxCPA7DS92CWgmDqQzixk2c8Bd",
+      "DtmL23yRqBXgiuKHEqpzLC3fKQnQH3TsUSrv7n2n1buK",
+      "8ZjfndfyJjvznFFTMvvE2U61bqcYdiLjc1TGFMVjoVTa"
+    ],
+    "notes": "Dispute became expire-eligible at 2026-03-27T16:18:17.000Z. Worker submission was created before the dispute and no arbiter votes were cast."
+  },
+  "captureCommand": "npm run devnet:marketplace:capture -- --bundle artifacts/devnet-readiness/scenario-runs/DV-08A/2026-03-27T16-18-21-344Z --signature Wvn5PEY6aWazDN1q7z9LH7aSaXUJzFbx2wHFHPipe5jxUQMgJKwkxQ4Wn53QyHcX8JpotsasZXZJmKgbeo4Tn7P --signature 3vfMCtP4JL1kxCrtfP6uTKE3YXdK6Fkpk4xB7ApoMfzKxUZxDVL3aDpuG1FgeA7SRJ4D5ScP4Ayuu738pUCxwPz9 --signature 5BfcMrNfBHtWfxnRfcPxNhYswFLkFvUfmJyXAdcw8Npw3wKBaCVq1Cai2QTSTv5f3WsJt8DEeygeisvpyVrV3mhK --signature 3AwcFpAvzwBCcMYbRz28dXtARutp3LVNAHoTyqGqgjz9HM6K4oXrHxLwYTPkXmP9zQKXECYFVQNNmNfJou3JAA5i --idl artifacts/anchor/idl/agenc_coordination.json --program-id GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "notes": [
+    "Dispute became expire-eligible at 2026-03-27T16:18:17.000Z.",
+    "Worker submission was created before the dispute and no arbiter votes were cast."
+  ]
+}

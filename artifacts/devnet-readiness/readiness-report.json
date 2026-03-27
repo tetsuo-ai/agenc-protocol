@@ -1,0 +1,384 @@
+{
+  "capturedAt": "2026-03-27T16:46:38.205Z",
+  "status": "red",
+  "summary": {
+    "total": 18,
+    "pass": 17,
+    "fail": 0,
+    "not_run": 1,
+    "unknown": 0
+  },
+  "scenarios": [
+    {
+      "scenarioId": "DV-01",
+      "title": "Bid lifecycle roundtrip",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-02",
+      "title": "Accept bid transitions task and book correctly",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03A",
+      "title": "Successful settlement via accept_task_result on a non-proof task",
+      "recommendedFirst": true,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03B",
+      "title": "Successful settlement via complete_task on a proof-dependent task",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03C",
+      "title": "Successful settlement via validate_task_result(approved)",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03D",
+      "title": "Successful settlement via auto_accept_task_result",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-03E",
+      "title": "Successful settlement via complete_task_private",
+      "recommendedFirst": false,
+      "status": "not_run",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [
+        "Validation deployment still needs a proof fixture or live prover aligned to the active zk image ID for complete_task_private."
+      ],
+      "warnings": [
+        "Marked from the validation deployment spec until proof material exists."
+      ],
+      "metrics": {
+        "evidenceSource": "validation-deployment-spec"
+      }
+    },
+    {
+      "scenarioId": "DV-04A",
+      "title": "Rejection via reject_task_result reopens the bid book",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-04B",
+      "title": "Rejection via validate_task_result(rejected) reopens the bid book",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-05",
+      "title": "Claim expiry / no-show slash",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-05/2026-03-27T15-53-36-861Z.json",
+      "capturedAt": "2026-03-27T15:53:36.862Z",
+      "blockers": [],
+      "warnings": [],
+      "metrics": {
+        "evidenceSource": "scenario-run-artifact",
+        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-05/2026-03-27T15-53-36-861Z.json",
+        "remainingAccountCount": 5,
+        "captureSignatureCount": 2,
+        "finalStates": {
+          "taskState": 0,
+          "bidBookState": 0,
+          "bidClosed": true,
+          "claimClosed": true,
+          "bidderActiveBidCount": 0,
+          "claimExpiresAt": 1774626813
+        },
+        "notes": [
+          "DV-05 uses a dependent BidExclusive task with deadline=0 because create_task now rejects zero deadlines in this validation branch.",
+          "Claim expiry reached at 2026-03-27T15:53:33.000Z.",
+          "expire_claim was executed by the worker authority during the grace window to avoid an extra 60s wait."
+        ]
+      }
+    },
+    {
+      "scenarioId": "DV-06A",
+      "title": "Task cancellation with no accepted bid",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-06B",
+      "title": "Task cancellation with an accepted bid",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    },
+    {
+      "scenarioId": "DV-07A",
+      "title": "Dispute resolution with refund",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07A/2026-03-27T16-07-35-500Z.json",
+      "capturedAt": "2026-03-27T16:07:35.500Z",
+      "blockers": [],
+      "warnings": [],
+      "metrics": {
+        "evidenceSource": "scenario-run-artifact",
+        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07A/2026-03-27T16-07-35-500Z.json",
+        "remainingAccountCount": 9,
+        "captureSignatureCount": 6,
+        "finalStates": {
+          "taskState": 4,
+          "disputeStatus": 1,
+          "bidBookState": 2,
+          "bidClosed": true,
+          "votesFor": "1500000",
+          "votesAgainst": "0",
+          "votingDeadline": 1774627651
+        },
+        "notes": [
+          "Voting deadline reached at 2026-03-27T16:07:31.000Z.",
+          "Resolution type 0 was approved by all three arbiters."
+        ]
+      }
+    },
+    {
+      "scenarioId": "DV-07B",
+      "title": "Dispute resolution with complete",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07B/2026-03-27T16-07-39-050Z.json",
+      "capturedAt": "2026-03-27T16:07:39.051Z",
+      "blockers": [],
+      "warnings": [],
+      "metrics": {
+        "evidenceSource": "scenario-run-artifact",
+        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07B/2026-03-27T16-07-39-050Z.json",
+        "remainingAccountCount": 9,
+        "captureSignatureCount": 6,
+        "finalStates": {
+          "taskState": 3,
+          "disputeStatus": 1,
+          "bidBookState": 2,
+          "bidClosed": true,
+          "votesFor": "1500000",
+          "votesAgainst": "0",
+          "votingDeadline": 1774627654
+        },
+        "notes": [
+          "Voting deadline reached at 2026-03-27T16:07:34.000Z.",
+          "Resolution type 1 was approved by all three arbiters."
+        ]
+      }
+    },
+    {
+      "scenarioId": "DV-07C",
+      "title": "Dispute resolution with split",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07C/2026-03-27T16-17-22-938Z.json",
+      "capturedAt": "2026-03-27T16:17:22.938Z",
+      "blockers": [],
+      "warnings": [],
+      "metrics": {
+        "evidenceSource": "scenario-run-artifact",
+        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07C/2026-03-27T16-17-22-938Z.json",
+        "remainingAccountCount": 9,
+        "captureSignatureCount": 6,
+        "finalStates": {
+          "taskState": 4,
+          "disputeStatus": 1,
+          "bidBookState": 2,
+          "bidClosed": true,
+          "votesFor": "1500000",
+          "votesAgainst": "0",
+          "votingDeadline": 1774628238
+        },
+        "notes": [
+          "Voting deadline reached at 2026-03-27T16:17:18.000Z.",
+          "Resolution type 2 was approved by all three arbiters."
+        ]
+      }
+    },
+    {
+      "scenarioId": "DV-08A",
+      "title": "Expired dispute with bond refund",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08A/2026-03-27T16-18-21-344Z.json",
+      "capturedAt": "2026-03-27T16:18:21.344Z",
+      "blockers": [],
+      "warnings": [
+        "Scenario artifact serialized taskSubmissionStatus as [object Object]; treat that field as cosmetic."
+      ],
+      "metrics": {
+        "evidenceSource": "scenario-run-artifact",
+        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08A/2026-03-27T16-18-21-344Z.json",
+        "remainingAccountCount": 3,
+        "captureSignatureCount": 4,
+        "finalStates": {
+          "taskState": 4,
+          "disputeStatus": 2,
+          "bidBookState": 2,
+          "bidClosed": true,
+          "claimClosed": true,
+          "workerCompleted": true,
+          "votesFor": "0",
+          "votesAgainst": "0",
+          "votingDeadline": 1774628177,
+          "expireEligibleAt": 1774628297,
+          "taskSubmissionStatus": "[object Object]"
+        },
+        "notes": [
+          "Dispute became expire-eligible at 2026-03-27T16:18:17.000Z.",
+          "Worker submission was created before the dispute and no arbiter votes were cast."
+        ]
+      }
+    },
+    {
+      "scenarioId": "DV-08B",
+      "title": "Expired dispute with bond slash",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08B/2026-03-27T16-35-09-121Z.json",
+      "capturedAt": "2026-03-27T16:35:09.121Z",
+      "blockers": [],
+      "warnings": [],
+      "metrics": {
+        "evidenceSource": "scenario-run-artifact",
+        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08B/2026-03-27T16-35-09-121Z.json",
+        "remainingAccountCount": 3,
+        "captureSignatureCount": 3,
+        "finalStates": {
+          "taskState": 4,
+          "disputeStatus": 2,
+          "bidBookState": 2,
+          "bidClosed": true,
+          "claimClosed": true,
+          "workerCompleted": false,
+          "votesFor": "0",
+          "votesAgainst": "0",
+          "votingDeadline": 1774629183,
+          "expireEligibleAt": 1774629303
+        },
+        "notes": [
+          "Dispute became expire-eligible at 2026-03-27T16:35:03.000Z.",
+          "No worker completion or arbiter votes were recorded before expire_dispute."
+        ]
+      }
+    },
+    {
+      "scenarioId": "DV-09",
+      "title": "Residual non-accepted bid cleanup",
+      "recommendedFirst": false,
+      "status": "pass",
+      "bundleDir": null,
+      "capturedAt": "2026-03-27T00:00:00.000Z",
+      "blockers": [],
+      "warnings": [
+        "Shared-devnet green baseline retained by VALIDATION_DEPLOYMENT_SPEC_20260327.md."
+      ],
+      "metrics": {
+        "evidenceSource": "shared-devnet-baseline"
+      }
+    }
+  ],
+  "openBlockers": [
+    {
+      "scenarioId": "DV-03E",
+      "blocker": "Validation deployment still needs a proof fixture or live prover aligned to the active zk image ID for complete_task_private."
+    }
+  ]
+}
