@@ -7,10 +7,10 @@ seeds = true
 skip-lint = false
 
 [programs.localnet]
-agenc_coordination = "6UcJzbTEemBz3aY5wK5qKHGMD7bdRsmR4smND29gB2ab"
+agenc_coordination = "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3"
 
 [programs.devnet]
-agenc_coordination = "6UcJzbTEemBz3aY5wK5qKHGMD7bdRsmR4smND29gB2ab"
+agenc_coordination = "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3"
 
 # Mainnet intentionally not configured yet.
 # Add [programs.mainnet] only after pre-mainnet security sign-off.

@@ -13,7 +13,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("6UcJzbTEemBz3aY5wK5qKHGMD7bdRsmR4smND29gB2ab");
+declare_id!("GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3");
 
 pub mod errors;
 pub mod events;

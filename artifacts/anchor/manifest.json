@@ -1,18 +1,18 @@
 {
   "program": {
     "name": "agenc_coordination",
-    "address": "6UcJzbTEemBz3aY5wK5qKHGMD7bdRsmR4smND29gB2ab",
+    "address": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
     "version": "0.1.0",
     "spec": "0.1.0"
   },
   "artifacts": {
     "idl": {
       "path": "artifacts/anchor/idl/agenc_coordination.json",
-      "sha256": "e7888e9e191331e8e632a5e3a73d0ddb02423ad493678ed07283a5c841f56ef0"
+      "sha256": "d4476fc6ccee9d01a9bf77a242b6983b35c6cb76cbb63da5a78b19c026652f04"
     },
     "types": {
       "path": "artifacts/anchor/types/agenc_coordination.ts",
-      "sha256": "eb5a79898daf7b4049297a15fda797bf8073c6bc319c79074d2d322f66911994"
+      "sha256": "e98719e09e553b1457a4dff77d7c691eabd680db42ecef86ce776b436e0a9040"
     },
     "verifierRouterIdl": {
       "path": "scripts/idl/verifier_router.json"

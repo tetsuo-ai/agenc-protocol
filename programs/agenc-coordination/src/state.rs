@@ -388,16 +388,31 @@ impl Default for ProtocolConfig {
     }
 }
 
+#[cfg(feature = "validation-timings")]
+const PROTOCOL_DEFAULT_MAX_CLAIM_DURATION: i64 = 300; // 5 minutes
+#[cfg(not(feature = "validation-timings"))]
+const PROTOCOL_DEFAULT_MAX_CLAIM_DURATION: i64 = 604_800; // 7 days
+
+#[cfg(feature = "validation-timings")]
+const PROTOCOL_DEFAULT_MAX_DISPUTE_DURATION: i64 = 600; // 10 minutes
+#[cfg(not(feature = "validation-timings"))]
+const PROTOCOL_DEFAULT_MAX_DISPUTE_DURATION: i64 = 604_800; // 7 days
+
+#[cfg(feature = "validation-timings")]
+const PROTOCOL_DEFAULT_VOTING_PERIOD: i64 = 300; // 5 minutes
+#[cfg(not(feature = "validation-timings"))]
+const PROTOCOL_DEFAULT_VOTING_PERIOD: i64 = 86_400; // 24 hours
+
 impl ProtocolConfig {
     pub const MAX_MULTISIG_OWNERS: usize = 5;
-    pub const DEFAULT_MAX_CLAIM_DURATION: i64 = 604_800; // 7 days
-    pub const DEFAULT_MAX_DISPUTE_DURATION: i64 = 604_800; // 7 days
+    pub const DEFAULT_MAX_CLAIM_DURATION: i64 = PROTOCOL_DEFAULT_MAX_CLAIM_DURATION;
+    pub const DEFAULT_MAX_DISPUTE_DURATION: i64 = PROTOCOL_DEFAULT_MAX_DISPUTE_DURATION;
     /// Default percentage of stake slashed for malicious behavior.
     /// Increased from 10% to 25% to provide stronger deterrence against bad actors
     /// while remaining proportionate to typical violation severity.
     pub const DEFAULT_SLASH_PERCENTAGE: u8 = 25;
-    /// Default voting period for disputes: 24 hours
-    pub const DEFAULT_VOTING_PERIOD: i64 = 86_400;
+    /// Default voting period for disputes.
+    pub const DEFAULT_VOTING_PERIOD: i64 = PROTOCOL_DEFAULT_VOTING_PERIOD;
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // multisig owners
 
     /// Validates that padding bytes are zeroed.
@@ -1598,6 +1613,23 @@ mod tests {
     #[test]
     fn test_task_claim_size() {
         test_size_constant!(TaskClaim);
+    }
+
+    #[test]
+    fn test_protocol_timing_profile_matches_build_mode() {
+        #[cfg(feature = "validation-timings")]
+        {
+            assert_eq!(ProtocolConfig::DEFAULT_MAX_CLAIM_DURATION, 300);
+            assert_eq!(ProtocolConfig::DEFAULT_MAX_DISPUTE_DURATION, 600);
+            assert_eq!(ProtocolConfig::DEFAULT_VOTING_PERIOD, 300);
+        }
+
+        #[cfg(not(feature = "validation-timings"))]
+        {
+            assert_eq!(ProtocolConfig::DEFAULT_MAX_CLAIM_DURATION, 604_800);
+            assert_eq!(ProtocolConfig::DEFAULT_MAX_DISPUTE_DURATION, 604_800);
+            assert_eq!(ProtocolConfig::DEFAULT_VOTING_PERIOD, 86_400);
+        }
     }
 
     #[test]
