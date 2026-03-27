@@ -50,11 +50,24 @@ Execution status:
   - `DV-07C`
   - `DV-08A`
   - `DV-08B`
+- The scoped `release-1` launch summary is green:
+  - `17` pass
+  - `0` fail
+  - `0` not-run
+  - `0` open blockers
 - The remaining open item is `DV-03E`, which still needs a proof fixture or live prover aligned to this deployment's active zk image ID.
 
 Primary follow-up artifact:
 
 - `readiness-report.json` records the current aggregate state: `17` pass, `0` fail, `1` not-run.
+- `RELEASE1_PUBLIC_LAUNCH_REVIEW_20260327.md` records the scoped launch decision for the public and reviewed settlement scope.
+
+Roadmap update after the validation PRs:
+
+- Launch now proceeds on the public settlement and reviewed settlement scope.
+- `complete_task_private` remains explicitly out of scope for release-1.
+- The next launch-facing step is public launch review using the scoped `release-1` result.
+- The next protocol-validation step after launch is to resume `DV-03E` once prover-aligned proof material exists.
 
 Scenario run artifacts:
 
