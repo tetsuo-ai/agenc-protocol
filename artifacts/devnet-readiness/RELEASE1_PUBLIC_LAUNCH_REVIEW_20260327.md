@@ -64,6 +64,26 @@ Use this document for launch review and launch communication:
 - do not block launch on `DV-03E`
 - keep any private-path discussion clearly labeled as post-launch follow-up
 
+## Launch Review Checklist
+
+Use this checklist during the public launch review:
+
+- [ ] Confirm the launch scope is still limited to public settlement and Task Validation V2 review flows
+- [ ] Confirm the scoped `release-1` summary in `readiness-report.json` is still `green`
+- [ ] Confirm the in-scope result remains `17` pass, `0` fail, `0` not-run, `0` blockers
+- [ ] Confirm `DV-03E` remains explicitly out of scope for this launch
+- [ ] Confirm launch review comments and launch communication refer to the scoped `release-1` result, not to the full post-launch matrix
+- [ ] Confirm no new protocol blocker has been introduced after the March 27, 2026 readiness capture
+
+## Signoff Record
+
+Record the launch review outcome here:
+
+- Launch decision: `Approved` / `Blocked`
+- Reviewed by:
+- Review date:
+- Notes:
+
 ## Next Step
 
 Proceed with public launch review using the scoped `release-1` result as the gate artifact.
