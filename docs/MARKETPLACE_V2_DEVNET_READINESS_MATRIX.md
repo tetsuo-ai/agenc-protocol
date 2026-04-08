@@ -20,6 +20,7 @@ As of `2026-03-27`, the validation effort is no longer in draft state.
 - The dedicated validation deployment cleared the previously red timing-sensitive scenarios `DV-05`, `DV-07A`, `DV-07B`, `DV-07C`, `DV-08A`, and `DV-08B`.
 - The scoped `release-1` launch gate is green: `17/17` in-scope scenarios passed, `0` failed, and `0` release-blocking items remain open.
 - The only remaining open scenario in the full matrix is `DV-03E`, which still needs a proof fixture or live prover aligned to the validation deployment's active zk image ID.
+- The protocol-owned DV-03E runner now accepts config-backed rpc, idl, wallet, and prover defaults, but no live prover evidence has been captured from this repo checkout yet.
 - The current source of truth is [../artifacts/devnet-readiness/readiness-report.json](../artifacts/devnet-readiness/readiness-report.json), which records `17` pass and `1` not-run scenario.
 
 ## Mainnet Release Scope
@@ -39,6 +40,8 @@ For the current launch scope, the roadmap is now split in two tracks:
    - use the scoped `release-1` summary in `readiness-report.json` as the launch gate artifact
    - keep launch review and launch communication anchored to the `17/17` in-scope result, not to the full post-launch matrix
 2. Post-launch:
+   - use `npm run devnet:marketplace:scenario -- --scenario DV-03E --config scripts/marketplace-devnet.config.example.json` as the protocol-owned rehearsal entrypoint
+   - fill `scenarioRunner.prover` with non-secret defaults and provide live secrets through environment overrides
    - resume `DV-03E` only when a proof fixture or live prover is available for the active validation deployment image ID
    - update the full matrix from `17/18` to `18/18` after private-path evidence exists
 

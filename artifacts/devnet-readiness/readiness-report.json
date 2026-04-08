@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-03-27T19:35:41.474Z",
+  "capturedAt": "2026-04-08T08:47:10.538Z",
   "status": "red",
   "summary": {
     "total": 18,
@@ -161,13 +161,13 @@
       "recommendedFirst": false,
       "releaseScope": "release-1",
       "status": "pass",
-      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-05/2026-03-27T15-53-36-861Z.json",
+      "bundleDir": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-05/2026-03-27T15-53-36-861Z.json",
       "capturedAt": "2026-03-27T15:53:36.862Z",
       "blockers": [],
       "warnings": [],
       "metrics": {
         "evidenceSource": "scenario-run-artifact",
-        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-05/2026-03-27T15-53-36-861Z.json",
+        "artifactPath": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-05/2026-03-27T15-53-36-861Z.json",
         "remainingAccountCount": 5,
         "captureSignatureCount": 2,
         "finalStates": {
@@ -223,13 +223,13 @@
       "recommendedFirst": false,
       "releaseScope": "release-1",
       "status": "pass",
-      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07A/2026-03-27T16-07-35-500Z.json",
+      "bundleDir": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-07A/2026-03-27T16-07-35-500Z.json",
       "capturedAt": "2026-03-27T16:07:35.500Z",
       "blockers": [],
       "warnings": [],
       "metrics": {
         "evidenceSource": "scenario-run-artifact",
-        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07A/2026-03-27T16-07-35-500Z.json",
+        "artifactPath": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-07A/2026-03-27T16-07-35-500Z.json",
         "remainingAccountCount": 9,
         "captureSignatureCount": 6,
         "finalStates": {
@@ -253,13 +253,13 @@
       "recommendedFirst": false,
       "releaseScope": "release-1",
       "status": "pass",
-      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07B/2026-03-27T16-07-39-050Z.json",
+      "bundleDir": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-07B/2026-03-27T16-07-39-050Z.json",
       "capturedAt": "2026-03-27T16:07:39.051Z",
       "blockers": [],
       "warnings": [],
       "metrics": {
         "evidenceSource": "scenario-run-artifact",
-        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07B/2026-03-27T16-07-39-050Z.json",
+        "artifactPath": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-07B/2026-03-27T16-07-39-050Z.json",
         "remainingAccountCount": 9,
         "captureSignatureCount": 6,
         "finalStates": {
@@ -283,13 +283,13 @@
       "recommendedFirst": false,
       "releaseScope": "release-1",
       "status": "pass",
-      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07C/2026-03-27T16-17-22-938Z.json",
+      "bundleDir": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-07C/2026-03-27T16-17-22-938Z.json",
       "capturedAt": "2026-03-27T16:17:22.938Z",
       "blockers": [],
       "warnings": [],
       "metrics": {
         "evidenceSource": "scenario-run-artifact",
-        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-07C/2026-03-27T16-17-22-938Z.json",
+        "artifactPath": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-07C/2026-03-27T16-17-22-938Z.json",
         "remainingAccountCount": 9,
         "captureSignatureCount": 6,
         "finalStates": {
@@ -313,7 +313,7 @@
       "recommendedFirst": false,
       "releaseScope": "release-1",
       "status": "pass",
-      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08A/2026-03-27T16-18-21-344Z.json",
+      "bundleDir": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-08A/2026-03-27T16-18-21-344Z.json",
       "capturedAt": "2026-03-27T16:18:21.344Z",
       "blockers": [],
       "warnings": [
@@ -321,7 +321,7 @@
       ],
       "metrics": {
         "evidenceSource": "scenario-run-artifact",
-        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08A/2026-03-27T16-18-21-344Z.json",
+        "artifactPath": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-08A/2026-03-27T16-18-21-344Z.json",
         "remainingAccountCount": 3,
         "captureSignatureCount": 4,
         "finalStates": {
@@ -349,13 +349,13 @@
       "recommendedFirst": false,
       "releaseScope": "release-1",
       "status": "pass",
-      "bundleDir": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08B/2026-03-27T16-35-09-121Z.json",
+      "bundleDir": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-08B/2026-03-27T16-35-09-121Z.json",
       "capturedAt": "2026-03-27T16:35:09.121Z",
       "blockers": [],
       "warnings": [],
       "metrics": {
         "evidenceSource": "scenario-run-artifact",
-        "artifactPath": "/Users/pchmirenko/agenc-protocol-validation-v2-validation/artifacts/devnet-readiness/scenario-runs/DV-08B/2026-03-27T16-35-09-121Z.json",
+        "artifactPath": "/Users/tetsuoarena/Desktop/AgenC-main-2026-04-08/agenc-protocol/artifacts/devnet-readiness/scenario-runs/DV-08B/2026-03-27T16-35-09-121Z.json",
         "remainingAccountCount": 3,
         "captureSignatureCount": 3,
         "finalStates": {
@@ -434,6 +434,27 @@
         "DV-03E"
       ],
       "openBlockers": []
+    },
+    "postLaunch": {
+      "label": "Post-launch private settlement",
+      "description": "Private-path settlement rehearsal for complete_task_private. This stays red until prover auth, image-id alignment, and artifact evidence are captured.",
+      "status": "red",
+      "summary": {
+        "total": 1,
+        "pass": 0,
+        "fail": 0,
+        "not_run": 1,
+        "unknown": 0
+      },
+      "includedScenarioIds": [
+        "DV-03E"
+      ],
+      "openBlockers": [
+        {
+          "scenarioId": "DV-03E",
+          "blocker": "Validation deployment still needs a proof fixture or live prover aligned to the active zk image ID for complete_task_private."
+        }
+      ]
     }
   }
 }

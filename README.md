@@ -88,6 +88,13 @@ For mainnet launch scope, the first release uses the public settlement and revie
 private zk-backed path is intentionally deferred until the H200-backed prover path is operationally
 ready.
 
+When prover infrastructure is available, rehearse DV-03E with:
+
+`npm run devnet:marketplace:scenario -- --scenario DV-03E --config scripts/marketplace-devnet.config.example.json`
+
+Put non-secret runner defaults under `scenarioRunner` in the config file. Live environment
+variables still override config values, especially prover auth and header settings.
+
 ## Scope Rules
 
 - Do not add runtime, MCP, app, or control-plane code here.

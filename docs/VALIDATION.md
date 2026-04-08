@@ -65,7 +65,18 @@ persist post-state, lamport deltas, optional transaction evidence, and `ordering
 the terminal instruction when signatures are supplied. `capture` also writes `event-summary.json`
 and `verdict.json` so each bundle has a direct pass/fail outcome. `report` aggregates the latest
 bundle per scenario into `artifacts/devnet-readiness/readiness-report.json`, including both the
-full-matrix summary and the scoped `release1` summary for the first mainnet release.
+full-matrix summary and the scoped `release1` and `postLaunch` summaries.
+
+For DV-03E rehearsal runs, the scenario runner also accepts config-backed rpc, idl, wallet, and
+prover defaults:
+
+`npm run devnet:marketplace:scenario -- --scenario DV-03E --config scripts/marketplace-devnet.config.example.json`
+
+Store non-secret defaults under `scenarioRunner`. Environment variables still override config
+values, especially `AGENC_PROVER_ENDPOINT`, `AGENC_PROVER_API_KEY`,
+`AGENC_PROVER_HEADERS_JSON`, and `AGENC_PROVER_TIMEOUT_MS`. This repo does not ship live prover
+credentials or operator wallets, so DV-03E evidence remains pending until those inputs are
+supplied.
 
 When running against a dedicated validation deployment instead of the shared devnet program,
 set these root fields in the harness config:

@@ -1422,9 +1422,16 @@ export function buildReadinessReport(bundleRecords) {
     })),
   );
   const release1Scenarios = scenarios.filter((scenario) => scenario.releaseScope === "release-1");
-  const deferredScenarios = scenarios.filter((scenario) => scenario.releaseScope !== "release-1");
+  const postLaunchScenarios = scenarios.filter((scenario) => scenario.releaseScope !== "release-1");
   const release1Summary = summarizeScenarioStatuses(release1Scenarios);
+  const postLaunchSummary = summarizeScenarioStatuses(postLaunchScenarios);
   const release1OpenBlockers = release1Scenarios.flatMap((scenario) =>
+    (scenario.blockers ?? []).map((blocker) => ({
+      scenarioId: scenario.scenarioId,
+      blocker,
+    })),
+  );
+  const postLaunchOpenBlockers = postLaunchScenarios.flatMap((scenario) =>
     (scenario.blockers ?? []).map((blocker) => ({
       scenarioId: scenario.scenarioId,
       blocker,
@@ -1445,8 +1452,17 @@ export function buildReadinessReport(bundleRecords) {
         status: buildScopeStatus(release1Summary),
         summary: release1Summary,
         includedScenarioIds: release1Scenarios.map((scenario) => scenario.scenarioId),
-        deferredScenarioIds: deferredScenarios.map((scenario) => scenario.scenarioId),
+        deferredScenarioIds: postLaunchScenarios.map((scenario) => scenario.scenarioId),
         openBlockers: release1OpenBlockers,
+      },
+      postLaunch: {
+        label: "Post-launch private settlement",
+        description:
+          "Private-path settlement rehearsal for complete_task_private. This stays red until prover auth, image-id alignment, and artifact evidence are captured.",
+        status: buildScopeStatus(postLaunchSummary),
+        summary: postLaunchSummary,
+        includedScenarioIds: postLaunchScenarios.map((scenario) => scenario.scenarioId),
+        openBlockers: postLaunchOpenBlockers,
       },
     },
   };
@@ -1636,6 +1652,12 @@ async function runReport(options) {
     const release1 = report.releaseScopes.release1;
     console.log(
       `Release-1 scope: ${release1.status} (${release1.summary.pass} pass, ${release1.summary.fail} fail, ${release1.summary.not_run} not-run)`,
+    );
+  }
+  if (report.releaseScopes?.postLaunch) {
+    const postLaunch = report.releaseScopes.postLaunch;
+    console.log(
+      `Post-launch scope: ${postLaunch.status} (${postLaunch.summary.pass} pass, ${postLaunch.summary.fail} fail, ${postLaunch.summary.not_run} not-run)`,
     );
   }
 

@@ -10,6 +10,19 @@ This file documents the protocol-owned private-completion and zk-config surfaces
 - Mainnet rollout of `complete_task_private` is deferred until the H200-backed prover path and the
   zk image-id rotation procedure are validated end to end.
 
+## DV-03E Runner Inputs
+
+Use the protocol-owned rehearsal entrypoint when prover infrastructure is available:
+
+`npm run devnet:marketplace:scenario -- --scenario DV-03E --config scripts/marketplace-devnet.config.example.json`
+
+- put rpc, idl, wallet, and non-secret prover defaults under `scenarioRunner`
+- use `scenarioRunner.prover.apiKeyEnvVar` when operators want a DV-03E-specific secret name
+- keep in mind that `AGENC_PROVER_ENDPOINT`, `AGENC_PROVER_API_KEY`,
+  `AGENC_PROVER_HEADERS_JSON`, and `AGENC_PROVER_TIMEOUT_MS` override config values
+- do not mark DV-03E green until the captured artifact bundle proves `complete_task_private`
+  against the active validation deployment image ID
+
 ## Repo-Owned Pieces
 
 - `programs/agenc-coordination/src/instructions/complete_task_private.rs`

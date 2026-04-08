@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { PublicKey } from "@solana/web3.js";
 import path from "node:path";
 import process from "node:process";
@@ -8,10 +8,18 @@ import { fileURLToPath } from "node:url";
 
 import * as sdk from "../../agenc-sdk-validation-v2/dist/index.mjs";
 import {
+  SCENARIOS,
+  buildRemoteProverConfig,
+  buildRemoteProverConfigFromEnv,
+  mergeProverHeaders,
+  parsePositiveTimeoutMs,
+  parseProverHeadersJson,
+  scenarioNeedsArbiters,
+} from "./marketplace-devnet-scenario-shared.mjs";
+import {
   DEFAULT_AGENT_ENDPOINT,
   ensureBalance,
   ensureDistinctWallets,
-  env,
   fixedUtf8Bytes,
   formatUnix,
   loadPrograms,
@@ -37,101 +45,6 @@ const TASK_TYPE_BID_EXCLUSIVE = 3;
 const CAP_COMPUTE = 1n;
 const CAP_ARBITER = 1n << 7n;
 
-const SCENARIOS = {
-  "DV-05": {
-    orderedInstructionList: [
-      "register_agent",
-      "create_task",
-      "initialize_bid_book",
-      "create_bid",
-      "accept_bid",
-      "expire_claim",
-    ],
-    evidenceInstruction: "expire_claim",
-  },
-  "DV-07A": {
-    orderedInstructionList: [
-      "register_agent",
-      "create_task",
-      "initialize_bid_book",
-      "create_bid",
-      "accept_bid",
-      "initiate_dispute",
-      "vote_dispute",
-      "resolve_dispute",
-    ],
-    evidenceInstruction: "resolve_dispute",
-  },
-  "DV-07B": {
-    orderedInstructionList: [
-      "register_agent",
-      "create_task",
-      "initialize_bid_book",
-      "create_bid",
-      "accept_bid",
-      "initiate_dispute",
-      "vote_dispute",
-      "resolve_dispute",
-    ],
-    evidenceInstruction: "resolve_dispute",
-  },
-  "DV-07C": {
-    orderedInstructionList: [
-      "register_agent",
-      "create_task",
-      "initialize_bid_book",
-      "create_bid",
-      "accept_bid",
-      "initiate_dispute",
-      "vote_dispute",
-      "resolve_dispute",
-    ],
-    evidenceInstruction: "resolve_dispute",
-  },
-  "DV-08A": {
-    orderedInstructionList: [
-      "register_agent",
-      "create_task",
-      "initialize_bid_book",
-      "create_bid",
-      "accept_bid",
-      "configure_task_validation",
-      "submit_task_result",
-      "initiate_dispute",
-      "expire_dispute",
-    ],
-    evidenceInstruction: "expire_dispute",
-  },
-  "DV-08B": {
-    orderedInstructionList: [
-      "register_agent",
-      "create_task",
-      "initialize_bid_book",
-      "create_bid",
-      "accept_bid",
-      "initiate_dispute",
-      "expire_dispute",
-    ],
-    evidenceInstruction: "expire_dispute",
-  },
-  "DV-03E": {
-    orderedInstructionList: [
-      "register_agent",
-      "create_task",
-      "create_dependent_task",
-      "initialize_bid_book",
-      "create_bid",
-      "accept_bid",
-      "complete_task_private",
-    ],
-    evidenceInstruction: "complete_task_private",
-  },
-};
-
-function scenarioNeedsArbiters(scenarioId) {
-  return SCENARIOS[scenarioId]?.orderedInstructionList.includes("vote_dispute") ?? false;
-}
-
 function usage() {
   console.log(`Usage:
   CREATOR_WALLET=/path/to/creator.json \\
@@ -146,7 +59,8 @@ Dispute scenarios also require:
   ARBITER_C_WALLET=/path/to/arbiter-c.json
 
 Optional flags:
-  --artifact-dir <path>   Defaults to ${DEFAULT_ARTIFACT_DIR}
+  --artifact-dir <path>   Overrides the scenario artifact output directory
+  --config <path>         Optional runner config (rpc/idl/wallet/prover defaults)
   --scenario <id>         One of ${Object.keys(SCENARIOS).join(", ")}
   --help                  Show this help
 
@@ -161,7 +75,8 @@ DV-03E prover configuration:
 function parseArgs(argv) {
   const parsed = {
     scenario: null,
-    artifactDir: DEFAULT_ARTIFACT_DIR,
+    artifactDir: null,
+    config: null,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -176,7 +91,12 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--artifact-dir") {
-      parsed.artifactDir = argv[index + 1] ?? DEFAULT_ARTIFACT_DIR;
+      parsed.artifactDir = argv[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg === "--config") {
+      parsed.config = argv[index + 1] ?? null;
       index += 1;
       continue;
     }
@@ -219,6 +139,81 @@ function resolveFromRoot(value) {
   return path.isAbsolute(expanded) ? expanded : path.join(rootDir, expanded);
 }
 
+async function readJsonFile(filePath) {
+  return JSON.parse(await readFile(filePath, "utf8"));
+}
+
+function pickConfiguredValue(...values) {
+  for (const value of values) {
+    if (typeof value === "string") {
+      if (value.trim().length > 0) {
+        return value.trim();
+      }
+      continue;
+    }
+
+    if (value != null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+async function loadScenarioRunnerConfig(configPath) {
+  if (!configPath) {
+    return {
+      config: null,
+      scenarioRunner: {},
+      resolvedConfigPath: null,
+    };
+  }
+
+  const resolvedConfigPath = resolveFromRoot(configPath);
+  const config = await readJsonFile(resolvedConfigPath);
+  const scenarioRunner =
+    config &&
+    typeof config === "object" &&
+    !Array.isArray(config) &&
+    config.scenarioRunner &&
+    typeof config.scenarioRunner === "object" &&
+    !Array.isArray(config.scenarioRunner)
+      ? config.scenarioRunner
+      : {};
+
+  return {
+    config,
+    scenarioRunner,
+    resolvedConfigPath,
+  };
+}
+
+function deriveScenarioArtifactDir(parsedArgs, runnerConfig) {
+  const configuredDefaultArtifactDir =
+    typeof runnerConfig.config?.defaultArtifactDir === "string"
+      ? path.join(runnerConfig.config.defaultArtifactDir, "scenario-runs")
+      : null;
+  const artifactDir = pickConfiguredValue(
+    parsedArgs.artifactDir,
+    runnerConfig.scenarioRunner?.artifactDir,
+    configuredDefaultArtifactDir,
+    DEFAULT_ARTIFACT_DIR,
+  );
+
+  return resolveFromRoot(artifactDir);
+}
+
+function resolveWalletPath(envName, configuredValue, configLabel) {
+  const walletPath = pickConfiguredValue(process.env[envName], configuredValue);
+  if (!walletPath) {
+    throw new Error(
+      `Missing ${envName}. Set ${envName} or ${configLabel} in --config.`,
+    );
+  }
+
+  return resolveFromRoot(walletPath);
+}
+
 function timestampStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
@@ -229,84 +224,6 @@ function generateNonZeroFieldElement() {
     value = sdk.generateSalt();
   }
   return value;
-}
-
-function parsePositiveTimeoutMs(rawValue) {
-  if (rawValue == null || rawValue === "") {
-    return undefined;
-  }
-
-  const timeoutMs = Number(rawValue);
-  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new Error("AGENC_PROVER_TIMEOUT_MS must be a positive integer.");
-  }
-
-  return timeoutMs;
-}
-
-function parseProverHeadersJson(rawValue) {
-  if (!rawValue) {
-    return {};
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(rawValue);
-  } catch (error) {
-    throw new Error(
-      `AGENC_PROVER_HEADERS_JSON must be valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new Error("AGENC_PROVER_HEADERS_JSON must be a JSON object.");
-  }
-
-  const headers = {};
-  for (const [headerName, headerValue] of Object.entries(parsed)) {
-    if (typeof headerValue !== "string" || headerValue.trim().length === 0) {
-      throw new Error(
-        `AGENC_PROVER_HEADERS_JSON header "${headerName}" must be a non-empty string.`,
-      );
-    }
-    headers[headerName] = headerValue.trim();
-  }
-
-  return headers;
-}
-
-function mergeProverHeaders(baseHeaders, overrideHeaders) {
-  return {
-    ...baseHeaders,
-    ...overrideHeaders,
-  };
-}
-
-function buildRemoteProverConfigFromEnv(envSource = process.env) {
-  const endpoint = envSource.AGENC_PROVER_ENDPOINT?.trim();
-  if (!endpoint) {
-    throw new Error("AGENC_PROVER_ENDPOINT is required for DV-03E.");
-  }
-  sdk.validateProverEndpoint(endpoint);
-
-  const baseHeaders = {};
-  const apiKey = envSource.AGENC_PROVER_API_KEY?.trim();
-  if (apiKey) {
-    baseHeaders.Authorization = `Bearer ${apiKey}`;
-  }
-
-  const overrideHeaders = parseProverHeadersJson(
-    envSource.AGENC_PROVER_HEADERS_JSON,
-  );
-  const headers = mergeProverHeaders(baseHeaders, overrideHeaders);
-  const timeoutMs = parsePositiveTimeoutMs(envSource.AGENC_PROVER_TIMEOUT_MS);
-
-  return {
-    kind: "remote",
-    endpoint,
-    ...(timeoutMs ? { timeoutMs } : {}),
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-  };
 }
 
 function derivePrivateSettlementSpendAccounts(programId, proofResult) {
@@ -406,19 +323,60 @@ async function registerAgentWithRole({
 
 async function loadScenarioContext(parsedArgs) {
   const scenarioId = parsedArgs.scenario;
-  const artifactDir = resolveFromRoot(parsedArgs.artifactDir);
-  const rpcUrl = process.env.AGENC_RPC_URL ?? DEFAULT_RPC_URL;
+  const runnerConfig = await loadScenarioRunnerConfig(parsedArgs.config);
+  const artifactDir = deriveScenarioArtifactDir(parsedArgs, runnerConfig);
+  const rpcUrl = pickConfiguredValue(
+    process.env.AGENC_RPC_URL,
+    runnerConfig.scenarioRunner?.rpcUrl,
+    runnerConfig.config?.rpcUrl,
+    DEFAULT_RPC_URL,
+  );
   const idlPath = resolveIdlPath(
-    path.join(rootDir, "packages/protocol/src/generated/agenc_coordination.json"),
+    pickConfiguredValue(
+      runnerConfig.scenarioRunner?.idlPath,
+      runnerConfig.config?.idlPath,
+      path.join(rootDir, "packages/protocol/src/generated/agenc_coordination.json"),
+    ),
   );
 
-  const creatorWalletPath = env("CREATOR_WALLET");
-  const workerWalletPath = env("WORKER_WALLET");
-  const authorityWalletPath = env("PROTOCOL_AUTHORITY_WALLET");
+  const configuredWallets = runnerConfig.scenarioRunner?.wallets ?? {};
+  const creatorWalletPath = resolveWalletPath(
+    "CREATOR_WALLET",
+    configuredWallets.creator,
+    "scenarioRunner.wallets.creator",
+  );
+  const workerWalletPath = resolveWalletPath(
+    "WORKER_WALLET",
+    configuredWallets.worker,
+    "scenarioRunner.wallets.worker",
+  );
+  const authorityWalletPath = resolveWalletPath(
+    "PROTOCOL_AUTHORITY_WALLET",
+    configuredWallets.authority,
+    "scenarioRunner.wallets.authority",
+  );
   const needsArbiters = scenarioNeedsArbiters(scenarioId);
-  const arbiterAWalletPath = needsArbiters ? env("ARBITER_A_WALLET") : null;
-  const arbiterBWalletPath = needsArbiters ? env("ARBITER_B_WALLET") : null;
-  const arbiterCWalletPath = needsArbiters ? env("ARBITER_C_WALLET") : null;
+  const arbiterAWalletPath = needsArbiters
+    ? resolveWalletPath(
+        "ARBITER_A_WALLET",
+        configuredWallets.arbiterA,
+        "scenarioRunner.wallets.arbiterA",
+      )
+    : null;
+  const arbiterBWalletPath = needsArbiters
+    ? resolveWalletPath(
+        "ARBITER_B_WALLET",
+        configuredWallets.arbiterB,
+        "scenarioRunner.wallets.arbiterB",
+      )
+    : null;
+  const arbiterCWalletPath = needsArbiters
+    ? resolveWalletPath(
+        "ARBITER_C_WALLET",
+        configuredWallets.arbiterC,
+        "scenarioRunner.wallets.arbiterC",
+      )
+    : null;
 
   const { connection, keypairs, programs } = await loadPrograms({
     rpcUrl,
@@ -515,6 +473,7 @@ async function loadScenarioContext(parsedArgs) {
   return {
     scenarioId,
     artifactDir,
+    configPath: runnerConfig.resolvedConfigPath,
     rpcUrl,
     idlPath,
     connection,
@@ -529,6 +488,7 @@ async function loadScenarioContext(parsedArgs) {
     arbiterStake,
     taskCreationCooldownSeconds,
     disputeCreationCooldownSeconds,
+    scenarioRunnerConfig: runnerConfig.scenarioRunner,
     needsArbiters,
     maxWaitSeconds: DEFAULT_MAX_WAIT_SECONDS,
   };
@@ -1300,7 +1260,9 @@ async function runExpiredDisputeScenario(context, { workerCompleted }) {
 
 async function runDv03e(context) {
   const { registrations, txSignatures } = await registerParticipants(context);
-  const proverConfig = buildRemoteProverConfigFromEnv();
+  const proverConfig = buildRemoteProverConfig(
+    context.scenarioRunnerConfig?.prover ?? {},
+  );
   const taskId = randomBytes32();
   const taskPda = sdk.deriveTaskPda(
     context.keypairs.creator.publicKey,
@@ -1478,7 +1440,7 @@ async function runDv03e(context) {
     ],
     notes: [
       "DV-03E uses a proof-dependent BidExclusive task so the live devnet transaction proves the parent-task remaining-account offset.",
-      "Remote prover authentication is normalized from AGENC_PROVER_API_KEY into an Authorization bearer header unless overridden by AGENC_PROVER_HEADERS_JSON.",
+      "Remote prover authentication can come from AGENC_PROVER_API_KEY or scenarioRunner.prover.apiKeyEnvVar, and AGENC_PROVER_HEADERS_JSON overrides config-backed headers when present.",
       `Active zk image: ${Buffer.from(zkConfig.activeImageId).toString("hex")}.`,
       `Proof image: ${Buffer.from(proof.imageId).toString("hex")}.`,
     ],
@@ -1522,6 +1484,7 @@ async function writeScenarioArtifact(context, result) {
     createdAt: new Date().toISOString(),
     rpcUrl: context.rpcUrl,
     idlPath: context.idlPath,
+    configPath: context.configPath,
     programId: base58(context.programs.creator.programId),
     wallets: {
       creator: base58(context.keypairs.creator.publicKey),
@@ -1558,6 +1521,9 @@ async function main() {
   console.log(`[config] scenario: ${context.scenarioId}`);
   console.log(`[config] rpc: ${context.rpcUrl}`);
   console.log(`[config] idl path: ${context.idlPath}`);
+  if (context.configPath) {
+    console.log(`[config] runner config: ${context.configPath}`);
+  }
   console.log(`[config] program id: ${base58(context.programs.creator.programId)}`);
   console.log(`[config] artifact dir: ${context.artifactDir}`);
   console.log(
@@ -1613,6 +1579,7 @@ if (executedAsScript) {
 
 export {
   SCENARIOS,
+  buildRemoteProverConfig,
   buildRemoteProverConfigFromEnv,
   derivePrivateSettlementSpendAccounts,
   generateNonZeroFieldElement,

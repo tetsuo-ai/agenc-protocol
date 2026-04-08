@@ -4,6 +4,28 @@
   "defaultArtifactDir": "artifacts/devnet-readiness",
   "idlPath": "packages/protocol/src/generated/agenc_coordination.json",
   "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "scenarioRunner": {
+    "rpcUrl": "https://api.devnet.solana.com",
+    "idlPath": "packages/protocol/src/generated/agenc_coordination.json",
+    "artifactDir": "artifacts/devnet-readiness/scenario-runs",
+    "wallets": {
+      "creator": "wallets/devnet-creator.json",
+      "worker": "wallets/devnet-worker.json",
+      "authority": "wallets/devnet-authority.json",
+      "arbiterA": "wallets/devnet-arbiter-a.json",
+      "arbiterB": "wallets/devnet-arbiter-b.json",
+      "arbiterC": "wallets/devnet-arbiter-c.json"
+    },
+    "prover": {
+      "endpoint": "https://prover.example.com",
+      "timeoutMs": 300000,
+      "headers": {
+        "x-proof-mode": "remote",
+        "x-prover-env": "validation"
+      },
+      "apiKeyEnvVar": "DV03E_PROVER_API_KEY"
+    }
+  },
   "scenarios": {
     "DV-01": {
       "orderedInstructionList": [
@@ -66,6 +88,32 @@
         "<BIDDER_AUTHORITY_PUBKEY>"
       ],
       "notes": "Recommended first green scenario. Replace placeholders with real devnet pubkeys before running the harness."
+    },
+    "DV-03E": {
+      "orderedInstructionList": [
+        "accept_bid",
+        "complete_task_private"
+      ],
+      "evidenceInstruction": "complete_task_private",
+      "accounts": {
+        "task": "<TASK_PUBKEY>",
+        "claim": "<CLAIM_PUBKEY>",
+        "escrow": "<ESCROW_PUBKEY>",
+        "taskBidBook": "<TASK_BID_BOOK_PUBKEY>",
+        "acceptedBid": "<ACCEPTED_BID_PUBKEY>",
+        "bidderMarketState": "<BIDDER_MARKET_STATE_PUBKEY>",
+        "bidderAuthority": "<BIDDER_AUTHORITY_PUBKEY>",
+        "workerAgent": "<WORKER_AGENT_PUBKEY>",
+        "creatorAuthority": "<CREATOR_AUTHORITY_PUBKEY>",
+        "treasuryAuthority": "<TREASURY_PUBKEY>"
+      },
+      "remainingAccounts": [
+        "<TASK_BID_BOOK_PUBKEY>",
+        "<ACCEPTED_BID_PUBKEY>",
+        "<BIDDER_MARKET_STATE_PUBKEY>",
+        "<BIDDER_AUTHORITY_PUBKEY>"
+      ],
+      "notes": "Post-launch private-path scaffold. Pair this with scenarioRunner wallet/prover settings once the active zk image ID and remote prover are aligned."
     }
   }
 }
