@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.0
+
+- add marketplace v2 bid lifecycle and settlement flows to the public protocol surface
+- add wallet rate-limit bypass protections across agents
+- add dedicated devnet readiness validation for the publishable protocol package
+
 ## v0.1.1
 
 - add the publishable `@tetsuo-ai/protocol` package under `packages/protocol`

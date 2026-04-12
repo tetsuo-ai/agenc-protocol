@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/protocol",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Public protocol artifacts and trust-surface constants for AgenC",
   "packageManager": "npm@11.7.0",
   "main": "./dist/index.js",
