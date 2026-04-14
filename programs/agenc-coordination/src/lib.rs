@@ -127,6 +127,15 @@ pub mod agenc_coordination {
         )
     }
 
+    /// Attach or update a content-addressed off-chain job specification pointer for a task.
+    pub fn set_task_job_spec(
+        ctx: Context<SetTaskJobSpec>,
+        job_spec_hash: [u8; 32],
+        job_spec_uri: String,
+    ) -> Result<()> {
+        instructions::set_task_job_spec::handler(ctx, job_spec_hash, job_spec_uri)
+    }
+
     /// Create a new task that depends on an existing parent task.
     /// The parent task must not be cancelled or disputed.
     ///
@@ -315,6 +324,11 @@ pub mod agenc_coordination {
     /// Agent must have required capabilities and task must be claimable.
     pub fn claim_task(ctx: Context<ClaimTask>) -> Result<()> {
         instructions::claim_task::handler(ctx)
+    }
+
+    /// Claim a task only when its content-addressed job specification pointer exists.
+    pub fn claim_task_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
+        instructions::claim_task::handler_with_job_spec(ctx)
     }
 
     /// Enable Task Validation V2 creator review for an open task.

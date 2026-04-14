@@ -738,6 +738,37 @@ impl TaskValidationVote {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 
+/// Maximum byte length for a task job specification URI.
+pub const TASK_JOB_SPEC_URI_MAX_LEN: usize = 256;
+
+/// Content-addressed pointer to a task's full off-chain job specification.
+/// PDA seeds: ["task_job_spec", task]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskJobSpec {
+    /// Task this job specification belongs to.
+    pub task: Pubkey,
+    /// Task creator authorized to set or update the pointer.
+    pub creator: Pubkey,
+    /// SHA-256 hash of the canonicalized job specification payload.
+    pub job_spec_hash: [u8; HASH_SIZE],
+    /// URI where the canonicalized job specification payload can be fetched.
+    #[max_len(256)]
+    pub job_spec_uri: String,
+    /// Creation timestamp.
+    pub created_at: i64,
+    /// Last update timestamp.
+    pub updated_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future metadata flags.
+    pub _reserved: [u8; 7],
+}
+
+impl TaskJobSpec {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
 /// Task account
 /// PDA seeds: ["task", creator, task_id]
 #[account]
@@ -1608,6 +1639,11 @@ mod tests {
     #[test]
     fn test_task_size() {
         test_size_constant!(Task);
+    }
+
+    #[test]
+    fn test_task_job_spec_size() {
+        test_size_constant!(TaskJobSpec);
     }
 
     #[test]

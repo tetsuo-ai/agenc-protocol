@@ -1567,6 +1567,162 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "claimTaskWithJobSpec",
+      "docs": [
+        "Claim a task only when its content-addressed job specification pointer exists."
+      ],
+      "discriminator": [
+        230,
+        40,
+        107,
+        109,
+        208,
+        228,
+        175,
+        31
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskJobSpec",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "worker"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "completeTask",
       "docs": [
         "Submit proof of work and mark task portion as complete.",
@@ -6334,6 +6490,104 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "setTaskJobSpec",
+      "docs": [
+        "Attach or update a content-addressed off-chain job specification pointer for a task."
+      ],
+      "discriminator": [
+        134,
+        102,
+        102,
+        86,
+        31,
+        164,
+        202,
+        193
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskJobSpec",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "jobSpecHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "jobSpecUri",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "stakeReputation",
       "docs": [
         "Stake SOL on agent reputation.",
@@ -9047,6 +9301,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "taskJobSpec",
+      "discriminator": [
+        249,
+        63,
+        211,
+        94,
+        228,
+        165,
+        3,
+        196
+      ]
+    },
+    {
       "name": "taskSubmission",
       "discriminator": [
         111,
@@ -9787,6 +10054,19 @@ export type AgencCoordination = {
         159,
         69,
         175
+      ]
+    },
+    {
+      "name": "taskJobSpecSet",
+      "discriminator": [
+        155,
+        2,
+        153,
+        121,
+        179,
+        90,
+        208,
+        183
       ]
     },
     {
@@ -11084,6 +11364,21 @@ export type AgencCoordination = {
       "code": 6237,
       "name": "rateLimitBelowMinimum",
       "msg": "Rate limit value below protocol minimum"
+    },
+    {
+      "code": 6238,
+      "name": "invalidTaskJobSpecHash",
+      "msg": "Invalid task job specification hash"
+    },
+    {
+      "code": 6239,
+      "name": "invalidTaskJobSpecUri",
+      "msg": "Invalid task job specification URI"
+    },
+    {
+      "code": 6240,
+      "name": "taskJobSpecTaskMismatch",
+      "msg": "Task job specification account does not belong to this task"
     }
   ],
   "types": [
@@ -15821,6 +16116,120 @@ export type AgencCoordination = {
               "Bump seed"
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskJobSpec",
+      "docs": [
+        "Content-addressed pointer to a task's full off-chain job specification.",
+        "PDA seeds: [\"task_job_spec\", task]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "Task this job specification belongs to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "docs": [
+              "Task creator authorized to set or update the pointer."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "jobSpecHash",
+            "docs": [
+              "SHA-256 hash of the canonicalized job specification payload."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "jobSpecUri",
+            "docs": [
+              "URI where the canonicalized job specification payload can be fetched."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "createdAt",
+            "docs": [
+              "Creation timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "docs": [
+              "Last update timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future metadata flags."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskJobSpecSet",
+      "docs": [
+        "Emitted when a task's full off-chain job specification pointer is set."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "jobSpecHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "jobSpecUri",
+            "type": "string"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }

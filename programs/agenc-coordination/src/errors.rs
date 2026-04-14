@@ -750,4 +750,13 @@ pub enum CoordinationError {
 
     #[msg("Rate limit value below protocol minimum")]
     RateLimitBelowMinimum,
+
+    #[msg("Invalid task job specification hash")]
+    InvalidTaskJobSpecHash,
+
+    #[msg("Invalid task job specification URI")]
+    InvalidTaskJobSpecUri,
+
+    #[msg("Task job specification account does not belong to this task")]
+    TaskJobSpecTaskMismatch,
 }

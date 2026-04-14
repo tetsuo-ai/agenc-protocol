@@ -7,7 +7,8 @@ use crate::instructions::constants::{
 };
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::state::{
-    AgentRegistration, AgentStatus, ProtocolConfig, Task, TaskClaim, TaskStatus, TaskType,
+    AgentRegistration, AgentStatus, ProtocolConfig, Task, TaskClaim, TaskJobSpec, TaskStatus,
+    TaskType,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -19,7 +20,7 @@ pub struct ClaimTask<'info> {
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         init_if_needed,
@@ -29,13 +30,13 @@ pub struct ClaimTask<'info> {
         bump,
         constraint = claim.key() != task.key() @ CoordinationError::InvalidInput
     )]
-    pub claim: Account<'info, TaskClaim>,
+    pub claim: Box<Account<'info, TaskClaim>>,
 
     #[account(
         seeds = [b"protocol"],
         bump = protocol_config.bump
     )]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
     #[account(
         mut,
@@ -43,7 +44,54 @@ pub struct ClaimTask<'info> {
         bump = worker.bump,
         has_one = authority @ CoordinationError::UnauthorizedAgent
     )]
-    pub worker: Account<'info, AgentRegistration>,
+    pub worker: Box<Account<'info, AgentRegistration>>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimTaskWithJobSpec<'info> {
+    #[account(
+        mut,
+        seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
+        bump = task.bump
+    )]
+    pub task: Box<Account<'info, Task>>,
+
+    #[account(
+        seeds = [b"task_job_spec", task.key().as_ref()],
+        bump = task_job_spec.bump,
+        constraint = task_job_spec.task == task.key() @ CoordinationError::TaskJobSpecTaskMismatch,
+        constraint = task_job_spec.creator == task.creator @ CoordinationError::UnauthorizedTaskAction
+    )]
+    pub task_job_spec: Box<Account<'info, TaskJobSpec>>,
+
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = TaskClaim::SIZE,
+        seeds = [b"claim", task.key().as_ref(), worker.key().as_ref()],
+        bump,
+        constraint = claim.key() != task.key() @ CoordinationError::InvalidInput
+    )]
+    pub claim: Box<Account<'info, TaskClaim>>,
+
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
+    #[account(
+        mut,
+        seeds = [b"agent", worker.agent_id.as_ref()],
+        bump = worker.bump,
+        has_one = authority @ CoordinationError::UnauthorizedAgent
+    )]
+    pub worker: Box<Account<'info, AgentRegistration>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -52,10 +100,98 @@ pub struct ClaimTask<'info> {
 }
 
 pub fn handler(ctx: Context<ClaimTask>) -> Result<()> {
-    let task = &mut ctx.accounts.task;
-    let worker = &mut ctx.accounts.worker;
-    let claim = &mut ctx.accounts.claim;
-    let config = &ctx.accounts.protocol_config;
+    let task_key = ctx.accounts.task.key();
+    let worker_key = ctx.accounts.worker.key();
+
+    process_claim(
+        task_key,
+        ctx.accounts.task.as_mut(),
+        ctx.accounts.claim.as_mut(),
+        ctx.accounts.protocol_config.as_ref(),
+        worker_key,
+        ctx.accounts.worker.as_mut(),
+        ctx.bumps.claim,
+    )
+}
+
+pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
+    validate_job_spec_pointer(ctx.accounts.task_job_spec.as_ref())?;
+
+    let task_key = ctx.accounts.task.key();
+    let worker_key = ctx.accounts.worker.key();
+
+    process_claim(
+        task_key,
+        ctx.accounts.task.as_mut(),
+        ctx.accounts.claim.as_mut(),
+        ctx.accounts.protocol_config.as_ref(),
+        worker_key,
+        ctx.accounts.worker.as_mut(),
+        ctx.bumps.claim,
+    )
+}
+
+fn validate_job_spec_pointer(task_job_spec: &TaskJobSpec) -> Result<()> {
+    require!(
+        task_job_spec.job_spec_hash.iter().any(|byte| *byte != 0),
+        CoordinationError::InvalidTaskJobSpecHash
+    );
+    require!(
+        !task_job_spec.job_spec_uri.trim().is_empty(),
+        CoordinationError::InvalidTaskJobSpecUri
+    );
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_job_spec(job_spec_hash: [u8; 32], job_spec_uri: &str) -> TaskJobSpec {
+        TaskJobSpec {
+            task: Pubkey::new_unique(),
+            creator: Pubkey::new_unique(),
+            job_spec_hash,
+            job_spec_uri: job_spec_uri.to_string(),
+            created_at: 1,
+            updated_at: 1,
+            bump: 255,
+            _reserved: [0; 7],
+        }
+    }
+
+    #[test]
+    fn validates_non_empty_job_spec_pointer() {
+        let pointer = task_job_spec([1; 32], "agenc://job-spec/sha256/test");
+
+        assert!(validate_job_spec_pointer(&pointer).is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_hash_job_spec_pointer() {
+        let pointer = task_job_spec([0; 32], "agenc://job-spec/sha256/test");
+
+        assert!(validate_job_spec_pointer(&pointer).is_err());
+    }
+
+    #[test]
+    fn rejects_blank_uri_job_spec_pointer() {
+        let pointer = task_job_spec([1; 32], "   ");
+
+        assert!(validate_job_spec_pointer(&pointer).is_err());
+    }
+}
+
+fn process_claim(
+    task_key: Pubkey,
+    task: &mut Account<Task>,
+    claim: &mut Account<TaskClaim>,
+    config: &Account<ProtocolConfig>,
+    worker_key: Pubkey,
+    worker: &mut Account<AgentRegistration>,
+    claim_bump: u8,
+) -> Result<()> {
     let clock = Clock::get()?;
 
     check_version_compatible(config)?;
@@ -190,8 +326,8 @@ pub fn handler(ctx: Context<ClaimTask>) -> Result<()> {
     };
 
     // Initialize claim
-    claim.task = task.key();
-    claim.worker = worker.key();
+    claim.task = task_key;
+    claim.worker = worker_key;
     claim.claimed_at = clock.unix_timestamp;
     claim.expires_at = expires_at;
     claim.completed_at = 0;
@@ -200,7 +336,7 @@ pub fn handler(ctx: Context<ClaimTask>) -> Result<()> {
     claim.is_completed = false;
     claim.is_validated = false;
     claim.reward_paid = 0;
-    claim.bump = ctx.bumps.claim;
+    claim.bump = claim_bump;
 
     // Update task
     task.current_workers = task
@@ -220,7 +356,7 @@ pub fn handler(ctx: Context<ClaimTask>) -> Result<()> {
 
     emit!(TaskClaimed {
         task_id: task.task_id,
-        worker: worker.key(),
+        worker: worker_key,
         current_workers: task.current_workers,
         max_workers: task.max_workers,
         timestamp: clock.unix_timestamp,
