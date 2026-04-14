@@ -117,32 +117,14 @@ pub fn handler<'info>(
 
     let submission_is_disputable = task_submission
         .as_ref()
-        .map(|(_, status)| {
-            *status == SubmissionStatus::Submitted || *status == SubmissionStatus::Rejected
-        })
+        .map(|(_, status)| is_disputable_submission_status(*status))
         .unwrap_or(false);
 
     // Verify task is in a disputable state
-    require!(
-        task.status == TaskStatus::InProgress
-            || task.status == TaskStatus::PendingValidation
-            || submission_is_disputable,
-        CoordinationError::TaskNotInProgress
-    );
-
-    if !submission_is_disputable {
-        // Validate status transition is allowed (fix #538)
-        require!(
-            task.status.can_transition_to(TaskStatus::Disputed),
-            CoordinationError::InvalidStatusTransition
-        );
-    }
+    validate_disputable_task_state(task.status, submission_is_disputable)?;
 
     // Verify task has workers to dispute (fix #502)
-    require!(
-        task.current_workers > 0 || submission_is_disputable,
-        CoordinationError::NoWorkers
-    );
+    validate_disputable_worker_count(task.current_workers, submission_is_disputable)?;
 
     // Verify initiator is task participant (creator or has claim)
     // Compare task.creator (wallet) with authority (signer's wallet), not agent PDA
@@ -151,8 +133,7 @@ pub fn handler<'info>(
     let has_submission = task_submission
         .as_ref()
         .map(|(worker, status)| {
-            *worker == ctx.accounts.agent.key()
-                && (*status == SubmissionStatus::Submitted || *status == SubmissionStatus::Rejected)
+            *worker == ctx.accounts.agent.key() && is_disputable_submission_status(*status)
         })
         .unwrap_or(false);
 
@@ -340,4 +321,76 @@ fn increment_defendant_counter(worker: &mut Account<AgentRegistration>) -> Resul
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     Ok(())
+}
+
+fn is_disputable_submission_status(status: SubmissionStatus) -> bool {
+    status == SubmissionStatus::Submitted
+}
+
+fn validate_disputable_task_state(
+    status: TaskStatus,
+    submission_is_disputable: bool,
+) -> Result<()> {
+    require!(
+        status == TaskStatus::InProgress
+            || status == TaskStatus::PendingValidation
+            || submission_is_disputable,
+        CoordinationError::TaskNotInProgress
+    );
+
+    if !submission_is_disputable {
+        require!(
+            status.can_transition_to(TaskStatus::Disputed),
+            CoordinationError::InvalidStatusTransition
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_disputable_worker_count(
+    current_workers: u8,
+    submission_is_disputable: bool,
+) -> Result<()> {
+    require!(
+        current_workers > 0 || submission_is_disputable,
+        CoordinationError::NoWorkers
+    );
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn submitted_submission_can_use_durable_dispute_path() {
+        assert!(is_disputable_submission_status(SubmissionStatus::Submitted));
+    }
+
+    #[test]
+    fn rejected_submission_cannot_use_durable_dispute_path() {
+        assert!(!is_disputable_submission_status(SubmissionStatus::Rejected));
+    }
+
+    #[test]
+    fn rejected_submission_does_not_bypass_terminal_task_state() {
+        let err = validate_disputable_task_state(TaskStatus::Completed, false).unwrap_err();
+
+        assert_eq!(err, CoordinationError::TaskNotInProgress.into());
+    }
+
+    #[test]
+    fn rejected_submission_does_not_bypass_missing_worker_count() {
+        let err = validate_disputable_worker_count(0, false).unwrap_err();
+
+        assert_eq!(err, CoordinationError::NoWorkers.into());
+    }
+
+    #[test]
+    fn active_submission_still_allows_released_slot_dispute_path() {
+        assert!(validate_disputable_task_state(TaskStatus::Open, true).is_ok());
+        assert!(validate_disputable_worker_count(0, true).is_ok());
+    }
 }

@@ -118,10 +118,6 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         dispute.status == DisputeStatus::Resolved,
         CoordinationError::DisputeNotResolved
     );
-    require!(
-        !dispute.slash_applied,
-        CoordinationError::SlashAlreadyApplied
-    );
 
     let clock = Clock::get()?;
     let slash_window_open =
@@ -155,17 +151,19 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
 
     // Any provided token settlement accounts indicate an explicit token-settlement
     // attempt (used to unlock deferred token slash reserves).
-    let token_accounts_provided = ctx.accounts.escrow.is_some()
-        || ctx.accounts.token_escrow_ata.is_some()
-        || ctx.accounts.treasury_token_account.is_some()
-        || ctx.accounts.reward_mint.is_some()
-        || ctx.accounts.token_program.is_some();
+    let token_accounts_provided = token_slash_accounts_provided(
+        ctx.accounts.escrow.is_some(),
+        ctx.accounts.token_escrow_ata.is_some(),
+        ctx.accounts.treasury_token_account.is_some(),
+        ctx.accounts.reward_mint.is_some(),
+        ctx.accounts.token_program.is_some(),
+    );
+    validate_slash_application_window(dispute.slash_applied, token_accounts_provided)?;
 
-    // Token-denominated disputes that slash a losing worker must settle reserved
-    // tokens during this instruction. Treat explicit token account sets as a
-    // settlement intent to avoid false SlashWindowExpired rejections.
+    // Only explicit token account sets require token settlement. Token tasks can
+    // have zero deferred token reserve while still requiring a stake slash.
     let token_task_requires_settlement =
-        worker_lost && (ctx.accounts.task.reward_mint.is_some() || token_accounts_provided);
+        token_slash_settlement_required(worker_lost, token_accounts_provided);
 
     // If the slash window has elapsed, disallow lamport/reputation slashing but
     // still allow settlement of deferred token slash reserves so escrow cannot
@@ -175,7 +173,8 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     }
 
     // Calculate slash from stake snapshot and cap by current stake (fix #836).
-    let slash_amount = if slash_window_open {
+    let apply_stake_slash = should_apply_stake_slash(dispute.slash_applied, slash_window_open);
+    let slash_amount = if apply_stake_slash {
         calculate_slash_amount(
             dispute.worker_stake_at_dispute,
             worker_agent.stake,
@@ -185,7 +184,7 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         0
     };
 
-    if slash_window_open {
+    if apply_stake_slash {
         // Apply reputation penalty for losing the dispute (before lamport transfer to satisfy borrow checker)
         apply_reputation_penalty(worker_agent, &clock)?;
         if slash_amount > 0 {
@@ -194,7 +193,7 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
                 .checked_sub(slash_amount)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
         }
-    } else {
+    } else if !slash_window_open {
         msg!("slash window expired; settling token reserve without stake/reputation slash");
     }
 
@@ -309,9 +308,89 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         )?;
     }
 
-    worker_agent.disputes_as_defendant = worker_agent.disputes_as_defendant.saturating_sub(1);
-    worker_agent.last_active = clock.unix_timestamp;
-    dispute.slash_applied = true;
+    if !dispute.slash_applied {
+        worker_agent.disputes_as_defendant = worker_agent.disputes_as_defendant.saturating_sub(1);
+        worker_agent.last_active = clock.unix_timestamp;
+        dispute.slash_applied = true;
+    }
 
     Ok(())
+}
+
+fn token_slash_accounts_provided(
+    escrow: bool,
+    token_escrow: bool,
+    treasury_token_account: bool,
+    reward_mint: bool,
+    token_program: bool,
+) -> bool {
+    escrow || token_escrow || treasury_token_account || reward_mint || token_program
+}
+
+fn validate_slash_application_window(
+    slash_applied: bool,
+    token_accounts_provided: bool,
+) -> Result<()> {
+    require!(
+        !slash_applied || token_accounts_provided,
+        CoordinationError::SlashAlreadyApplied
+    );
+
+    Ok(())
+}
+
+fn token_slash_settlement_required(worker_lost: bool, token_accounts_provided: bool) -> bool {
+    worker_lost && token_accounts_provided
+}
+
+fn should_apply_stake_slash(slash_applied: bool, slash_window_open: bool) -> bool {
+    !slash_applied && slash_window_open
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_task_without_token_accounts_does_not_force_token_settlement() {
+        assert!(!token_slash_settlement_required(true, false));
+    }
+
+    #[test]
+    fn explicit_token_accounts_request_token_settlement() {
+        assert!(token_slash_settlement_required(true, true));
+    }
+
+    #[test]
+    fn already_applied_stake_slash_can_continue_with_token_settlement() {
+        assert!(validate_slash_application_window(true, true).is_ok());
+    }
+
+    #[test]
+    fn already_applied_stake_slash_rejects_duplicate_stake_only_call() {
+        let err = validate_slash_application_window(true, false).unwrap_err();
+
+        assert_eq!(err, CoordinationError::SlashAlreadyApplied.into());
+    }
+
+    #[test]
+    fn stake_slash_is_skipped_after_it_has_already_been_applied() {
+        assert!(!should_apply_stake_slash(true, true));
+    }
+
+    #[test]
+    fn stake_slash_applies_only_inside_the_slash_window() {
+        assert!(should_apply_stake_slash(false, true));
+        assert!(!should_apply_stake_slash(false, false));
+    }
+
+    #[test]
+    fn any_token_settlement_account_counts_as_explicit_settlement_attempt() {
+        assert!(token_slash_accounts_provided(
+            false, true, false, false, false
+        ));
+        assert!(!token_slash_accounts_provided(
+            false, false, false, false, false
+        ));
+    }
 }

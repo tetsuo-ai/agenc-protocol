@@ -2,7 +2,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskJobSpecSet;
-use crate::state::{Task, TaskJobSpec, HASH_SIZE, TASK_JOB_SPEC_URI_MAX_LEN};
+use crate::state::{Task, TaskJobSpec, TaskStatus, HASH_SIZE, TASK_JOB_SPEC_URI_MAX_LEN};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -39,6 +39,7 @@ pub fn handler(
     let clock = Clock::get()?;
     let task_key = ctx.accounts.task.key();
     let task = &ctx.accounts.task;
+    validate_task_job_spec_mutable(task)?;
     let task_job_spec = &mut ctx.accounts.task_job_spec;
 
     if task_job_spec.task != Pubkey::default() {
@@ -69,6 +70,15 @@ pub fn handler(
         job_spec_uri,
         timestamp: clock.unix_timestamp,
     });
+
+    Ok(())
+}
+
+pub fn validate_task_job_spec_mutable(task: &Task) -> Result<()> {
+    require!(
+        task.status == TaskStatus::Open && task.current_workers == 0 && task.completions == 0,
+        CoordinationError::TaskValidationImmutableAfterClaim
+    );
 
     Ok(())
 }
@@ -130,5 +140,72 @@ mod tests {
         let err = validate_task_job_spec_inputs(&hash, &uri).unwrap_err();
 
         assert_eq!(err, CoordinationError::InvalidTaskJobSpecUri.into());
+    }
+
+    #[test]
+    fn allows_job_spec_mutation_before_work_starts() {
+        let task = Task {
+            status: TaskStatus::Open,
+            current_workers: 0,
+            completions: 0,
+            ..Task::default()
+        };
+
+        assert!(validate_task_job_spec_mutable(&task).is_ok());
+    }
+
+    #[test]
+    fn rejects_job_spec_mutation_after_claim() {
+        let task = Task {
+            status: TaskStatus::InProgress,
+            current_workers: 1,
+            completions: 0,
+            ..Task::default()
+        };
+        let err = validate_task_job_spec_mutable(&task).unwrap_err();
+
+        assert_eq!(
+            err,
+            CoordinationError::TaskValidationImmutableAfterClaim.into()
+        );
+    }
+
+    #[test]
+    fn rejects_job_spec_mutation_after_completion_recorded() {
+        let task = Task {
+            status: TaskStatus::Open,
+            current_workers: 0,
+            completions: 1,
+            ..Task::default()
+        };
+        let err = validate_task_job_spec_mutable(&task).unwrap_err();
+
+        assert_eq!(
+            err,
+            CoordinationError::TaskValidationImmutableAfterClaim.into()
+        );
+    }
+
+    #[test]
+    fn rejects_job_spec_mutation_in_terminal_or_disputed_states() {
+        for status in [
+            TaskStatus::PendingValidation,
+            TaskStatus::Completed,
+            TaskStatus::Cancelled,
+            TaskStatus::Disputed,
+        ] {
+            let task = Task {
+                status,
+                current_workers: 0,
+                completions: 0,
+                ..Task::default()
+            };
+            let err = validate_task_job_spec_mutable(&task).unwrap_err();
+
+            assert_eq!(
+                err,
+                CoordinationError::TaskValidationImmutableAfterClaim.into()
+            );
+        }
     }
 }
