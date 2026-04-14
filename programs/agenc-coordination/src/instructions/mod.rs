@@ -65,6 +65,7 @@ pub mod register_skill;
 pub mod reject_task_result;
 pub mod resolve_dispute;
 pub mod revoke_delegation;
+pub mod set_task_job_spec;
 pub mod stake_reputation;
 pub mod submit_task_result;
 pub mod suspend_agent;
@@ -149,6 +150,8 @@ pub use reject_task_result::*;
 pub use resolve_dispute::*;
 #[allow(ambiguous_glob_reexports)]
 pub use revoke_delegation::*;
+#[allow(ambiguous_glob_reexports)]
+pub use set_task_job_spec::*;
 #[allow(ambiguous_glob_reexports)]
 pub use stake_reputation::*;
 #[allow(ambiguous_glob_reexports)]

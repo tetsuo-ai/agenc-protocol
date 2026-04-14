@@ -80,6 +80,16 @@ pub struct TaskCreated {
     pub timestamp: i64,
 }
 
+/// Emitted when a task's full off-chain job specification pointer is set.
+#[event]
+pub struct TaskJobSpecSet {
+    pub task: Pubkey,
+    pub creator: Pubkey,
+    pub job_spec_hash: [u8; HASH_SIZE],
+    pub job_spec_uri: String,
+    pub timestamp: i64,
+}
+
 /// Emitted when a task with dependencies is created
 #[event]
 pub struct DependentTaskCreated {

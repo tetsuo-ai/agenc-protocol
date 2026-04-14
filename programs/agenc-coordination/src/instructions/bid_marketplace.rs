@@ -269,7 +269,7 @@ pub struct InitializeBidBook<'info> {
         bump = task.bump,
         constraint = task.creator == creator.key() @ CoordinationError::UnauthorizedTaskAction
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         init,
@@ -278,7 +278,7 @@ pub struct InitializeBidBook<'info> {
         seeds = [b"bid_book", task.key().as_ref()],
         bump
     )]
-    pub bid_book: Account<'info, TaskBidBook>,
+    pub bid_book: Box<Account<'info, TaskBidBook>>,
 
     #[account(
         seeds = [b"protocol"],
@@ -595,7 +595,7 @@ pub struct UpdateBid<'info> {
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         mut,
@@ -603,7 +603,7 @@ pub struct UpdateBid<'info> {
         bump = bid_book.bump,
         constraint = bid_book.task == task.key() @ CoordinationError::InvalidInput
     )]
-    pub bid_book: Account<'info, TaskBidBook>,
+    pub bid_book: Box<Account<'info, TaskBidBook>>,
 
     #[account(
         mut,
@@ -612,7 +612,7 @@ pub struct UpdateBid<'info> {
         constraint = bid.task == task.key() @ CoordinationError::InvalidInput,
         constraint = bid.bid_book == bid_book.key() @ CoordinationError::InvalidInput
     )]
-    pub bid: Account<'info, TaskBid>,
+    pub bid: Box<Account<'info, TaskBid>>,
 
     #[account(
         mut,
@@ -620,7 +620,7 @@ pub struct UpdateBid<'info> {
         bump = bidder.bump,
         has_one = authority @ CoordinationError::UnauthorizedAgent
     )]
-    pub bidder: Account<'info, AgentRegistration>,
+    pub bidder: Box<Account<'info, AgentRegistration>>,
 
     pub authority: Signer<'info>,
 
@@ -628,13 +628,13 @@ pub struct UpdateBid<'info> {
         seeds = [b"bid_marketplace"],
         bump = bid_marketplace.bump
     )]
-    pub bid_marketplace: Account<'info, BidMarketplaceConfig>,
+    pub bid_marketplace: Box<Account<'info, BidMarketplaceConfig>>,
 
     #[account(
         seeds = [b"protocol"],
         bump = protocol_config.bump
     )]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -692,7 +692,7 @@ pub fn update_bid_handler(
     let bidder_key = ctx.accounts.bidder.key();
     let bid_book_key = ctx.accounts.bid_book.key();
 
-    let bid = &mut ctx.accounts.bid;
+    let bid = ctx.accounts.bid.as_mut();
     bid.requested_reward_lamports = requested_reward_lamports;
     bid.eta_seconds = eta_seconds;
     bid.confidence_bps = confidence_bps;
@@ -702,7 +702,7 @@ pub fn update_bid_handler(
     bid.expires_at = expires_at;
     bid.updated_at = now;
 
-    let bid_book = &mut ctx.accounts.bid_book;
+    let bid_book = ctx.accounts.bid_book.as_mut();
     bid_book.version = bid_book
         .version
         .checked_add(1)
@@ -730,7 +730,7 @@ pub struct CancelBid<'info> {
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         mut,
@@ -738,7 +738,7 @@ pub struct CancelBid<'info> {
         bump = bid_book.bump,
         constraint = bid_book.task == task.key() @ CoordinationError::InvalidInput
     )]
-    pub bid_book: Account<'info, TaskBidBook>,
+    pub bid_book: Box<Account<'info, TaskBidBook>>,
 
     #[account(
         mut,
@@ -748,7 +748,7 @@ pub struct CancelBid<'info> {
         constraint = bid.task == task.key() @ CoordinationError::InvalidInput,
         constraint = bid.bidder_authority == authority.key() @ CoordinationError::UnauthorizedAgent
     )]
-    pub bid: Account<'info, TaskBid>,
+    pub bid: Box<Account<'info, TaskBid>>,
 
     #[account(
         mut,
@@ -756,13 +756,13 @@ pub struct CancelBid<'info> {
         bump = bidder_market_state.bump,
         constraint = bidder_market_state.bidder == bidder.key() @ CoordinationError::InvalidInput
     )]
-    pub bidder_market_state: Account<'info, BidderMarketState>,
+    pub bidder_market_state: Box<Account<'info, BidderMarketState>>,
 
     #[account(
         seeds = [b"agent", bidder.agent_id.as_ref()],
         bump = bidder.bump
     )]
-    pub bidder: Account<'info, AgentRegistration>,
+    pub bidder: Box<Account<'info, AgentRegistration>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -791,7 +791,7 @@ pub fn cancel_bid_handler(ctx: Context<CancelBid>) -> Result<()> {
     let bid_key = ctx.accounts.bid.key();
     let bidder_key = ctx.accounts.bidder.key();
     let bid_book_key = ctx.accounts.bid_book.key();
-    let bid_book = &mut ctx.accounts.bid_book;
+    let bid_book = ctx.accounts.bid_book.as_mut();
     bid_book.active_bids = bid_book
         .active_bids
         .checked_sub(1)
@@ -802,7 +802,7 @@ pub fn cancel_bid_handler(ctx: Context<CancelBid>) -> Result<()> {
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
 
-    let bidder_state = &mut ctx.accounts.bidder_market_state;
+    let bidder_state = ctx.accounts.bidder_market_state.as_mut();
     bidder_state.active_bid_count = bidder_state
         .active_bid_count
         .checked_sub(1)

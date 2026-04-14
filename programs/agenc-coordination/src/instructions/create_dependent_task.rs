@@ -29,7 +29,7 @@ pub struct CreateDependentTask<'info> {
         seeds = [b"task", creator.key().as_ref(), task_id.as_ref()],
         bump
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         init,
@@ -38,7 +38,7 @@ pub struct CreateDependentTask<'info> {
         seeds = [b"escrow", task.key().as_ref()],
         bump
     )]
-    pub escrow: Account<'info, TaskEscrow>,
+    pub escrow: Box<Account<'info, TaskEscrow>>,
 
     /// The parent task this new task depends on
     /// Note: Uses Box to reduce stack usage for this large account
@@ -62,7 +62,7 @@ pub struct CreateDependentTask<'info> {
         bump = creator_agent.bump,
         has_one = authority @ CoordinationError::UnauthorizedAgent
     )]
-    pub creator_agent: Account<'info, AgentRegistration>,
+    pub creator_agent: Box<Account<'info, AgentRegistration>>,
 
     /// Wallet-scoped task/dispute rate limit state shared across all agents
     #[account(
@@ -72,7 +72,7 @@ pub struct CreateDependentTask<'info> {
         seeds = [b"authority_rate_limit", authority.key().as_ref()],
         bump
     )]
-    pub authority_rate_limit: Account<'info, AuthorityRateLimit>,
+    pub authority_rate_limit: Box<Account<'info, AuthorityRateLimit>>,
 
     /// The authority that owns the creator_agent
     pub authority: Signer<'info>,
@@ -142,15 +142,15 @@ pub fn handler(
     );
 
     let clock = Clock::get()?;
-    let config = &ctx.accounts.protocol_config;
+    let config = ctx.accounts.protocol_config.as_ref();
 
     check_version_compatible(config)?;
 
     // Validate deadline if set (optional for dependent tasks)
     validate_deadline(deadline, &clock, false)?;
 
-    let creator_agent = &ctx.accounts.creator_agent;
-    let authority_rate_limit = &mut ctx.accounts.authority_rate_limit;
+    let creator_agent = ctx.accounts.creator_agent.as_ref();
+    let authority_rate_limit = ctx.accounts.authority_rate_limit.as_mut();
 
     // Check wallet-scoped rate limits to prevent multi-agent bypasses under one authority.
     check_authority_task_creation_rate_limits(
@@ -170,7 +170,7 @@ pub fn handler(
     // depend on a stale view of freshly funded PDAs.
     let escrow_key = ctx.accounts.escrow.key();
     let protocol_fee_bps = config.protocol_fee_bps;
-    let task = &mut ctx.accounts.task;
+    let task = ctx.accounts.task.as_mut();
     init_task_fields(
         task,
         task_id,
@@ -313,11 +313,11 @@ pub fn handler(
     };
 
     // Initialize escrow
-    let escrow = &mut ctx.accounts.escrow;
+    let escrow = ctx.accounts.escrow.as_mut();
     init_escrow_fields(escrow, task.key(), reward_amount, ctx.bumps.escrow);
 
     // Update protocol stats
-    let protocol_config = &mut ctx.accounts.protocol_config;
+    let protocol_config = ctx.accounts.protocol_config.as_mut();
     increment_total_tasks(protocol_config)?;
 
     emit!(DependentTaskCreated {

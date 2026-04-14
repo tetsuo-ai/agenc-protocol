@@ -24,7 +24,7 @@ pub struct InitiateDispute<'info> {
         seeds = [b"dispute", dispute_id.as_ref()],
         bump
     )]
-    pub dispute: Account<'info, Dispute>,
+    pub dispute: Box<Account<'info, Dispute>>,
 
     #[account(
         mut,
@@ -51,30 +51,30 @@ pub struct InitiateDispute<'info> {
         seeds = [b"authority_rate_limit", authority.key().as_ref()],
         bump
     )]
-    pub authority_rate_limit: Account<'info, AuthorityRateLimit>,
+    pub authority_rate_limit: Box<Account<'info, AuthorityRateLimit>>,
 
     #[account(
         seeds = [b"protocol"],
         bump = protocol_config.bump
     )]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
     /// Optional: Initiator's claim if they are a worker (not the creator)
     #[account(
         seeds = [b"claim", task.key().as_ref(), agent.key().as_ref()],
         bump,
     )]
-    pub initiator_claim: Option<Account<'info, TaskClaim>>,
+    pub initiator_claim: Option<Box<Account<'info, TaskClaim>>>,
 
     /// Optional: Worker agent to be disputed (required when initiator is task creator)
     #[account(mut)]
     pub worker_agent: Option<Box<Account<'info, AgentRegistration>>>,
 
     /// Optional: Worker's claim (required when worker_agent is provided)
-    pub worker_claim: Option<Account<'info, TaskClaim>>,
+    pub worker_claim: Option<Box<Account<'info, TaskClaim>>>,
 
     /// Optional durable submission record used once the claim slot has been released.
-    pub task_submission: Option<Account<'info, TaskSubmission>>,
+    pub task_submission: Option<Box<Account<'info, TaskSubmission>>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -90,9 +90,9 @@ pub fn handler<'info>(
     resolution_type: u8,
     evidence: String,
 ) -> Result<()> {
-    let dispute = &mut ctx.accounts.dispute;
-    let task = &mut ctx.accounts.task;
-    let config = &ctx.accounts.protocol_config;
+    let dispute = ctx.accounts.dispute.as_mut();
+    let task = ctx.accounts.task.as_mut();
+    let config = ctx.accounts.protocol_config.as_ref();
     let clock = Clock::get()?;
     let task_submission = ctx
         .accounts
@@ -215,7 +215,7 @@ pub fn handler<'info>(
     // Check wallet-scoped rate limits to prevent multi-agent bypasses under one authority.
     let agent_id = ctx.accounts.agent.agent_id;
     check_authority_rate_limits(
-        &mut ctx.accounts.authority_rate_limit,
+        ctx.accounts.authority_rate_limit.as_mut(),
         ctx.accounts.authority.key(),
         ctx.bumps.authority_rate_limit,
         agent_id,
@@ -224,7 +224,7 @@ pub fn handler<'info>(
         RateLimitAction::DisputeInitiation,
     )?;
 
-    let agent = &mut ctx.accounts.agent;
+    let agent = ctx.accounts.agent.as_mut();
 
     // === Determine Worker Stake to Snapshot (fix #550) ===
     // Snapshot the worker's stake at dispute initiation time to prevent
@@ -316,7 +316,7 @@ pub fn handler<'info>(
             .worker_agent
             .as_mut()
             .ok_or(CoordinationError::WorkerAgentRequired)?;
-        increment_defendant_counter(defendant_worker)?;
+        increment_defendant_counter(defendant_worker.as_mut())?;
     } else {
         increment_defendant_counter(agent)?;
     }
