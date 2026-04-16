@@ -410,9 +410,10 @@ pub fn calculate_fee_with_reputation(task_protocol_fee_bps: u16, worker_reputati
 /// Shared by both `complete_task` (public) and `complete_task_private` (ZK) handlers.
 ///
 /// When all required completions are done (`task.completions >= task.required_completions`),
-/// the escrow is manually closed: remaining lamports are transferred to the creator and
-/// the escrow account data is zeroed. For collaborative tasks with multiple workers,
-/// the escrow stays open until the final completion.
+/// the escrow account is closed with Anchor's close helper so remaining lamports
+/// are transferred to the creator and the account is assigned back to the system
+/// program. For collaborative tasks with multiple workers, the escrow stays open
+/// until the final completion.
 ///
 /// # Preconditions
 ///
@@ -534,39 +535,21 @@ pub fn execute_completion_rewards<'a, 'info>(
                 ta.token_program,
             )?;
         }
-        // Always close the escrow PDA (returns rent-exempt SOL to creator)
+        // Always close the escrow PDA (returns rent-exempt SOL to creator).
+        // Anchor's close helper also assigns the account to the system program and
+        // resizes it to zero, preventing exit serialization from writing TaskEscrow
+        // data back into a zero-lamport account and failing the runtime rent check.
         close_escrow_to_creator(escrow, creator_info)?;
     }
 
     Ok(())
 }
 
-/// Manually close the escrow account by transferring all remaining lamports to the
-/// creator and zeroing the account data.
-///
-/// This replaces Anchor's `close` attribute to enable conditional closure — the escrow
-/// must stay open for collaborative tasks until all required completions are done.
 fn close_escrow_to_creator<'info>(
     escrow: &mut Account<'info, TaskEscrow>,
     creator_info: &AccountInfo<'info>,
 ) -> Result<()> {
-    let escrow_info = escrow.to_account_info();
-    let remaining_lamports = escrow_info.lamports();
-
-    // Transfer remaining lamports (rent + any leftover) from escrow to creator
-    **escrow_info.try_borrow_mut_lamports()? = 0;
-    **creator_info.try_borrow_mut_lamports()? = creator_info
-        .lamports()
-        .checked_add(remaining_lamports)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-
-    // Zero the escrow account data to mark it as closed
-    let mut data = escrow_info.try_borrow_mut_data()?;
-    for byte in data.iter_mut() {
-        *byte = 0;
-    }
-
-    Ok(())
+    escrow.close(creator_info.clone())
 }
 
 #[cfg(test)]
@@ -718,6 +701,63 @@ mod tests {
                 load_task_claim_or_not_claimed(&claim_account, &expected_task),
                 CoordinationError::NotClaimed,
             );
+        }
+    }
+
+    mod close_escrow_to_creator_tests {
+        use super::*;
+        use anchor_lang::solana_program::system_program;
+
+        #[test]
+        fn closes_escrow_without_exit_serializing_zero_lamport_data() {
+            let escrow_key = Pubkey::new_unique();
+            let creator_key = Pubkey::new_unique();
+            let starting_escrow_lamports = 5_000;
+            let starting_creator_lamports = 100;
+            let escrow_state = TaskEscrow {
+                task: Pubkey::new_unique(),
+                amount: 10_000,
+                distributed: 10_000,
+                is_closed: true,
+                bump: 1,
+            };
+            let escrow_info = AccountInfo::new(
+                leak_pubkey(escrow_key),
+                false,
+                true,
+                leak_lamports(starting_escrow_lamports),
+                leak_data(serialize_account(&escrow_state)),
+                leak_pubkey(crate::ID),
+                false,
+                0,
+            );
+            let creator_info = AccountInfo::new(
+                leak_pubkey(creator_key),
+                false,
+                true,
+                leak_lamports(starting_creator_lamports),
+                leak_data(Vec::new()),
+                leak_pubkey(system_program::ID),
+                false,
+                0,
+            );
+            let mut escrow = Account::<TaskEscrow>::try_from(Box::leak(Box::new(escrow_info)))
+                .expect("escrow account should deserialize");
+
+            close_escrow_to_creator(&mut escrow, &creator_info)
+                .expect("escrow close should succeed");
+            escrow
+                .exit(&crate::ID)
+                .expect("closed escrow should not be serialized on exit");
+
+            let closed_escrow = escrow.to_account_info();
+            assert_eq!(closed_escrow.lamports(), 0);
+            assert_eq!(
+                creator_info.lamports(),
+                starting_creator_lamports + starting_escrow_lamports
+            );
+            assert_eq!(closed_escrow.owner, &system_program::ID);
+            assert!(closed_escrow.data_is_empty());
         }
     }
 
