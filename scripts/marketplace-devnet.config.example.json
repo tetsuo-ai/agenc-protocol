@@ -3,7 +3,7 @@
   "commitment": "confirmed",
   "defaultArtifactDir": "artifacts/devnet-readiness",
   "idlPath": "packages/protocol/src/generated/agenc_coordination.json",
-  "programId": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "programId": "2jdBSJ8U5ixfwgs1bRLPtRRnpZAPm8Xv1tEdu8yjHJC7",
   "scenarioRunner": {
     "rpcUrl": "https://api.devnet.solana.com",
     "idlPath": "packages/protocol/src/generated/agenc_coordination.json",

@@ -5,7 +5,7 @@
  * IDL can be found at `@tetsuo-ai/protocol/idl/agenc_coordination.json`.
  */
 export type AgencCoordination = {
-  "address": "GN69CoBM1XUt8MJtA6Kwd7WRwLzTNtVqLwf5o3fwWDV3",
+  "address": "2jdBSJ8U5ixfwgs1bRLPtRRnpZAPm8Xv1tEdu8yjHJC7",
   "metadata": {
     "name": "agencCoordination",
     "version": "0.1.0",
