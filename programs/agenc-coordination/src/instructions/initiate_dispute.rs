@@ -2,6 +2,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeInitiated;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::state::{
     AgentRegistration, AgentStatus, AuthorityRateLimit, Dispute, DisputeStatus, ProtocolConfig,
     ResolutionType, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
@@ -108,6 +109,7 @@ pub fn handler<'info>(
         .transpose()?;
 
     check_version_compatible(config)?;
+    require_task_type_enabled(config, task.task_type)?;
 
     // Verify agent is active
     require!(

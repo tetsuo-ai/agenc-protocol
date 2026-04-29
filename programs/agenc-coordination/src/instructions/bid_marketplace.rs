@@ -8,6 +8,7 @@ use crate::events::{
     BidAccepted, BidBookInitialized, BidCancelled, BidCreated, BidExpired,
     BidMarketplaceInitialized, BidUpdated, TaskClaimed,
 };
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::state::{
     AgentRegistration, AgentStatus, BidBookState, BidMarketplaceConfig, BidderMarketState,
     MatchingPolicy, ProtocolConfig, Task, TaskBid, TaskBidBook, TaskBidState, TaskClaim,
@@ -313,6 +314,7 @@ pub fn initialize_bid_book_handler(
     );
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     require!(
         ctx.accounts.task.status == TaskStatus::Open,
         CoordinationError::TaskNotOpen
@@ -437,6 +439,7 @@ pub fn create_bid_handler(
     );
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     require!(
         ctx.accounts.task.status == TaskStatus::Open,
         CoordinationError::TaskNotOpen
@@ -649,6 +652,7 @@ pub fn update_bid_handler(
 ) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     require!(
         ctx.accounts.bid.state == TaskBidState::Active,
         CoordinationError::BidNotActive
@@ -898,6 +902,7 @@ pub fn accept_bid_handler(ctx: Context<AcceptBid>) -> Result<()> {
 
     check_version_compatible(config)?;
     require_bid_task(task)?;
+    require_task_type_enabled(config, task.task_type)?;
     require!(
         task.status == TaskStatus::Open,
         CoordinationError::TaskNotOpen
@@ -1060,6 +1065,7 @@ pub struct ExpireBid<'info> {
 pub fn expire_bid_handler(ctx: Context<ExpireBid>) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     require!(
         ctx.accounts.bid.state == TaskBidState::Active,
         CoordinationError::BidNotActive

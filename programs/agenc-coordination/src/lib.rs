@@ -649,6 +649,22 @@ pub mod agenc_coordination {
         )
     }
 
+    /// Update emergency launch controls (multisig gated).
+    ///
+    /// `protocol_paused` globally pauses version-gated mutable protocol paths.
+    /// `disabled_task_type_mask` disables task types by `TaskType` repr bit index.
+    pub fn update_launch_controls(
+        ctx: Context<UpdateLaunchControls>,
+        protocol_paused: bool,
+        disabled_task_type_mask: u8,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::update_launch_controls::handler(ctx, protocol_paused, disabled_task_type_mask)
+    }
+
     /// Migrate protocol to a new version (multisig gated).
     /// Handles state migration when upgrading the program.
     ///

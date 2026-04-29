@@ -12,6 +12,7 @@ use anchor_lang::system_program;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
+use super::launch_controls::require_task_type_index_enabled;
 use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use super::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_bid_task_mode,
@@ -145,6 +146,7 @@ pub fn handler(
     let config = ctx.accounts.protocol_config.as_ref();
 
     check_version_compatible(config)?;
+    require_task_type_index_enabled(config, task_type)?;
 
     // Validate deadline if set (optional for dependent tasks)
     validate_deadline(deadline, &clock, false)?;

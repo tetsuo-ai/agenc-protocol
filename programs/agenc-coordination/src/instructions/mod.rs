@@ -24,6 +24,7 @@ pub mod completion_helpers;
 pub mod constants;
 pub mod dispute_helpers;
 pub mod lamport_transfer;
+pub mod launch_controls;
 pub mod rate_limit_helpers;
 pub mod slash_helpers;
 pub mod task_init_helpers;
@@ -71,6 +72,7 @@ pub mod submit_task_result;
 pub mod suspend_agent;
 pub mod unsuspend_agent;
 pub mod update_agent;
+pub mod update_launch_controls;
 pub mod update_multisig;
 pub mod update_protocol_fee;
 pub mod update_rate_limits;
@@ -162,6 +164,8 @@ pub use suspend_agent::*;
 pub use unsuspend_agent::*;
 #[allow(ambiguous_glob_reexports)]
 pub use update_agent::*;
+#[allow(ambiguous_glob_reexports)]
+pub use update_launch_controls::*;
 #[allow(ambiguous_glob_reexports)]
 pub use update_multisig::*;
 #[allow(ambiguous_glob_reexports)]

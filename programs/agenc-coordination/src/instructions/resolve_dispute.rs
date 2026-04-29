@@ -12,6 +12,7 @@ use crate::instructions::dispute_helpers::{
     process_worker_claim_pair, validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::slash_helpers::calculate_slash_amount;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
@@ -145,6 +146,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
     let clock = Clock::get()?;
 
     check_version_compatible(config)?;
+    require_task_type_enabled(config, task.task_type)?;
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedResolver

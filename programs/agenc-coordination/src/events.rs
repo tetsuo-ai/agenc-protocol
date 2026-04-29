@@ -90,6 +90,15 @@ pub struct TaskJobSpecSet {
     pub timestamp: i64,
 }
 
+/// Emitted when multisig launch controls are updated.
+#[event]
+pub struct LaunchControlsUpdated {
+    pub authority: Pubkey,
+    pub protocol_paused: bool,
+    pub disabled_task_type_mask: u8,
+    pub timestamp: i64,
+}
+
 /// Emitted when a task with dependencies is created
 #[event]
 pub struct DependentTaskCreated {

@@ -210,7 +210,8 @@ mod tests {
         apply_migration(&mut config, 1).unwrap();
         assert_eq!(config.protocol_fee_bps, original_fee);
         assert_eq!(config.dispute_threshold, original_threshold);
-        assert_eq!(config._padding, [0u8; 2]);
+        assert!(!config.protocol_paused);
+        assert_eq!(config.disabled_task_type_mask, 0);
     }
 
     #[test]
@@ -219,7 +220,8 @@ mod tests {
         let original_fee = config.protocol_fee_bps;
         apply_migration(&mut config, 2).unwrap();
         assert_eq!(config.protocol_fee_bps, original_fee);
-        assert_eq!(config._padding, [0u8; 2]);
+        assert!(!config.protocol_paused);
+        assert_eq!(config.disabled_task_type_mask, 0);
     }
 
     #[test]
@@ -241,7 +243,8 @@ mod tests {
         let mut config = default_config();
         apply_migration(&mut config, 1).unwrap();
         apply_migration(&mut config, 2).unwrap();
-        assert_eq!(config._padding, [0u8; 2]);
+        assert!(!config.protocol_paused);
+        assert_eq!(config.disabled_task_type_mask, 0);
     }
 
     #[test]

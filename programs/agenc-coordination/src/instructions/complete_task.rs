@@ -9,6 +9,7 @@ use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
     validate_completion_prereqs, validate_task_dependency,
 };
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
@@ -151,6 +152,7 @@ fn handle_complete_task<'info>(
     let clock = Clock::get()?;
 
     check_version_compatible(&accounts.protocol_config)?;
+    require_task_type_enabled(&accounts.protocol_config, task.task_type)?;
 
     // If task has a proof dependency, verify parent task is completed (shared helper)
     validate_task_dependency(task, remaining_accounts, program_id)?;

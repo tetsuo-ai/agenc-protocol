@@ -2,6 +2,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskResultSubmitted;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, increment_pending_submission_count, is_manual_validation_task,
 };
@@ -71,6 +72,7 @@ pub fn handler(
     result_data: Option<[u8; RESULT_DATA_SIZE]>,
 ) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     let clock = Clock::get()?;
 
     require!(

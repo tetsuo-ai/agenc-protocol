@@ -5,6 +5,7 @@ use crate::events::TaskResultRejected;
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, release_claim_slot, sync_task_validation_status,
@@ -87,6 +88,7 @@ pub fn handler<'info>(
     rejection_hash: [u8; HASH_SIZE],
 ) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     let clock = Clock::get()?;
 
     require!(

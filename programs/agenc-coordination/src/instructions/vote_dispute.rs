@@ -3,6 +3,7 @@
 use crate::errors::CoordinationError;
 use crate::events::DisputeVoteCast;
 use crate::instructions::constants::MAX_DISPUTE_VOTERS;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::state::{
     capability, AgentRegistration, AgentStatus, AuthorityDisputeVote, Dispute, DisputeStatus,
     DisputeVote, ProtocolConfig, Task, TaskClaim,
@@ -94,6 +95,7 @@ pub fn handler(ctx: Context<VoteDispute>, approve: bool) -> Result<()> {
     let clock = Clock::get()?;
 
     check_version_compatible(config)?;
+    require_task_type_enabled(config, task.task_type)?;
 
     // Verify arbiter is not a dispute participant (fix #391, #461, #824)
     validate_arbiter_not_participant(

@@ -9,6 +9,7 @@ use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
 };
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, sync_task_validation_status,
@@ -119,6 +120,7 @@ pub struct AcceptTaskResult<'info> {
 
 pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     let clock = Clock::get()?;
 
     require!(

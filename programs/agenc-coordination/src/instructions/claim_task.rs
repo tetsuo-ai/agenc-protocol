@@ -5,6 +5,7 @@ use crate::events::{reputation_reason, ReputationChanged, TaskClaimed};
 use crate::instructions::constants::{
     MAX_REPUTATION, REPUTATION_DECAY_MIN, REPUTATION_DECAY_PERIOD, REPUTATION_DECAY_RATE,
 };
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::state::{
     AgentRegistration, AgentStatus, ProtocolConfig, Task, TaskClaim, TaskJobSpec, TaskStatus,
@@ -195,6 +196,7 @@ fn process_claim(
     let clock = Clock::get()?;
 
     check_version_compatible(config)?;
+    require_task_type_enabled(config, task.task_type)?;
 
     // Prevent self-task claiming: worker authority must differ from task creator (fix #831)
     // Without this check, the same wallet can create, claim, and complete its own task,

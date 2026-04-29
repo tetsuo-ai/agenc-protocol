@@ -15,6 +15,11 @@ use anchor_lang::prelude::*;
 /// * `Err(CoordinationError::AccountVersionTooNew)` if program needs upgrade
 /// * `Err(CoordinationError::VersionMismatchProtocol)` if config is inconsistent
 pub fn check_version_compatible(config: &ProtocolConfig) -> Result<()> {
+    if config.protocol_paused {
+        msg!("Protocol is paused by multisig launch controls");
+        return Err(CoordinationError::ProtocolPaused.into());
+    }
+
     // Check if account version is below its minimum supported version
     if config.protocol_version < config.min_supported_version {
         msg!(
@@ -67,6 +72,13 @@ mod tests {
     fn test_check_version_compatible_ok() {
         let config = make_config(1, 1);
         assert!(check_version_compatible(&config).is_ok());
+    }
+
+    #[test]
+    fn test_check_version_rejects_paused_protocol() {
+        let mut config = make_config(1, 1);
+        config.protocol_paused = true;
+        assert!(check_version_compatible(&config).is_err());
     }
 
     #[test]

@@ -10,6 +10,7 @@
 
 use crate::errors::CoordinationError;
 use crate::instructions::constants::PERCENT_BASE;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::slash_helpers::{
     apply_reputation_penalty, calculate_approval_percentage, transfer_slash_to_treasury,
     validate_slash_window,
@@ -70,6 +71,7 @@ pub fn handler(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
     let config = &ctx.accounts.protocol_config;
 
     check_version_compatible(config)?;
+    require_task_type_enabled(config, task.task_type)?;
     require!(
         dispute.status == DisputeStatus::Resolved || dispute.status == DisputeStatus::Cancelled,
         CoordinationError::DisputeNotResolved

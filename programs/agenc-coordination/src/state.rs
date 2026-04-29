@@ -337,9 +337,10 @@ pub struct ProtocolConfig {
     pub protocol_version: u8,
     /// Minimum supported version for backward compatibility
     pub min_supported_version: u8,
-    /// Padding for future use and alignment
-    /// Currently unused but reserved for backwards-compatible additions
-    pub _padding: [u8; 2],
+    /// Emergency global pause. When true, version-gated mutable protocol paths fail closed.
+    pub protocol_paused: bool,
+    /// Bitmask of disabled task types. Bit index matches `TaskType` repr.
+    pub disabled_task_type_mask: u8,
     /// Multisig owners for admin-gated protocol changes.
     ///
     /// Updated via multisig-gated `update_multisig` with strict validation:
@@ -382,7 +383,8 @@ impl Default for ProtocolConfig {
             // Versioning
             protocol_version: CURRENT_PROTOCOL_VERSION,
             min_supported_version: MIN_SUPPORTED_VERSION,
-            _padding: [0u8; 2],
+            protocol_paused: false,
+            disabled_task_type_mask: 0,
             multisig_owners: [Pubkey::default(); ProtocolConfig::MAX_MULTISIG_OWNERS],
         }
     }
@@ -405,6 +407,7 @@ const PROTOCOL_DEFAULT_VOTING_PERIOD: i64 = 86_400; // 24 hours
 
 impl ProtocolConfig {
     pub const MAX_MULTISIG_OWNERS: usize = 5;
+    pub const TASK_TYPE_DISABLE_MASK: u8 = 0b0000_1111;
     pub const DEFAULT_MAX_CLAIM_DURATION: i64 = PROTOCOL_DEFAULT_MAX_CLAIM_DURATION;
     pub const DEFAULT_MAX_DISPUTE_DURATION: i64 = PROTOCOL_DEFAULT_MAX_DISPUTE_DURATION;
     /// Default percentage of stake slashed for malicious behavior.
@@ -415,10 +418,10 @@ impl ProtocolConfig {
     pub const DEFAULT_VOTING_PERIOD: i64 = PROTOCOL_DEFAULT_VOTING_PERIOD;
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // multisig owners
 
-    /// Validates that padding bytes are zeroed.
-    /// Called during migration to ensure no data corruption.
+    /// Validates that launch control bytes do not contain unknown task-type bits.
+    /// Kept under the old name so existing migration tests remain source-compatible.
     pub fn validate_padding_fields(&self) -> bool {
-        self._padding == [0u8; 2]
+        self.disabled_task_type_mask & !Self::TASK_TYPE_DISABLE_MASK == 0
     }
 }
 
@@ -1811,7 +1814,8 @@ mod tests {
     #[test]
     fn test_protocol_config_padding_defaults_to_zero() {
         let config = ProtocolConfig::default();
-        assert_eq!(config._padding, [0u8; 2]);
+        assert!(!config.protocol_paused);
+        assert_eq!(config.disabled_task_type_mask, 0);
     }
 
     #[test]
@@ -1836,7 +1840,11 @@ mod tests {
     #[test]
     fn test_config_validate_padding_fields_corrupted() {
         let mut config = ProtocolConfig::default();
-        config._padding[0] = 0xFF;
+        config.protocol_paused = true;
+        assert!(config.validate_padding_fields());
+
+        config.protocol_paused = false;
+        config.disabled_task_type_mask = 0b0001_0000;
         assert!(!config.validate_padding_fields());
     }
 

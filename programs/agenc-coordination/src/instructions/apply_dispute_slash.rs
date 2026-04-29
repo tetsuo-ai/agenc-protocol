@@ -9,6 +9,7 @@
 //! After this window, slashing can no longer be applied.
 
 use crate::errors::CoordinationError;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::slash_helpers::{
     apply_reputation_penalty, calculate_approval_percentage, calculate_slash_amount,
     transfer_slash_to_treasury, SLASH_WINDOW,
@@ -100,6 +101,7 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     let config = &ctx.accounts.protocol_config;
 
     check_version_compatible(config)?;
+    require_task_type_enabled(config, ctx.accounts.task.task_type)?;
     // Verify the worker being slashed is the actual defendant (fix #827)
     // Prevents slashing wrong worker on collaborative tasks with multiple claimants
     require!(

@@ -9,6 +9,7 @@ use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
     validate_completion_prereqs, validate_task_dependency,
 };
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
@@ -463,6 +464,7 @@ fn validate_completion_inputs<'info>(
     );
 
     check_version_compatible(protocol_config)?;
+    require_task_type_enabled(protocol_config, task.task_type)?;
     validate_task_dependency(task, remaining_accounts, program_id)?;
     validate_completion_prereqs(task, claim, clock)?;
 

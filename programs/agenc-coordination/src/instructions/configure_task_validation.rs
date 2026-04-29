@@ -2,6 +2,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskValidationConfigured;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     validate_attestor, validate_configurable_task, validate_review_window_for_mode,
     validate_task_supports_validation_mode, validate_validation_mode, validate_validator_quorum,
@@ -61,6 +62,7 @@ pub fn handler(
     attestor: Option<Pubkey>,
 ) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
+    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
 
     let parsed_mode = validate_validation_mode(mode)?;
     require!(

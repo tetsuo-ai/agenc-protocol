@@ -256,7 +256,8 @@ pub fn handler(
     // Versioning
     config.protocol_version = CURRENT_PROTOCOL_VERSION;
     config.min_supported_version = MIN_SUPPORTED_VERSION;
-    config._padding = [0u8; 2];
+    config.protocol_paused = false;
+    config.disabled_task_type_mask = 0;
     // Fix #497: Explicitly zero all slots before populating to ensure no data leakage.
     config.multisig_owners = [Pubkey::default(); ProtocolConfig::MAX_MULTISIG_OWNERS];
     for (index, owner) in multisig_owners.iter().enumerate() {

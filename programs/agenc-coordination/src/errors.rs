@@ -759,4 +759,10 @@ pub enum CoordinationError {
 
     #[msg("Task job specification account does not belong to this task")]
     TaskJobSpecTaskMismatch,
+
+    #[msg("Protocol is paused by multisig launch controls")]
+    ProtocolPaused,
+
+    #[msg("Task type is disabled by multisig launch controls")]
+    TaskTypeDisabled,
 }
