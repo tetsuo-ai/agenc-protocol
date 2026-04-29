@@ -12,12 +12,20 @@
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeCancelled;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::validation::validate_account_owner;
-use crate::state::{AgentRegistration, Dispute, DisputeStatus, Task, TaskStatus};
+use crate::state::{AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskStatus};
+use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 pub struct CancelDispute<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
     #[account(
         mut,
         seeds = [b"dispute", dispute.dispute_id.as_ref()],
@@ -46,8 +54,10 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
         ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedResolver
     );
+    check_version_compatible(&ctx.accounts.protocol_config)?;
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
+    require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     let clock = Clock::get()?;
 
     // Can only cancel if no votes have been cast

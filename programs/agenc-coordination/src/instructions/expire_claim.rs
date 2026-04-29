@@ -19,6 +19,7 @@ use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
+use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
 };
@@ -131,6 +132,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
     );
 
     let task = &mut ctx.accounts.task;
+    require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     let worker = &mut ctx.accounts.worker;
     let escrow = &mut ctx.accounts.escrow;
     let claim = &ctx.accounts.claim;

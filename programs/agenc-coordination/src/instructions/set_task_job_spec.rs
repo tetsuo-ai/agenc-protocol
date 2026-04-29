@@ -2,11 +2,21 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskJobSpecSet;
-use crate::state::{Task, TaskJobSpec, TaskStatus, HASH_SIZE, TASK_JOB_SPEC_URI_MAX_LEN};
+use crate::instructions::launch_controls::require_task_type_enabled;
+use crate::state::{
+    ProtocolConfig, Task, TaskJobSpec, TaskStatus, HASH_SIZE, TASK_JOB_SPEC_URI_MAX_LEN,
+};
+use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 pub struct SetTaskJobSpec<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
     #[account(
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump,
@@ -35,10 +45,12 @@ pub fn handler(
     job_spec_uri: String,
 ) -> Result<()> {
     validate_task_job_spec_inputs(&job_spec_hash, &job_spec_uri)?;
+    check_version_compatible(&ctx.accounts.protocol_config)?;
 
     let clock = Clock::get()?;
     let task_key = ctx.accounts.task.key();
     let task = &ctx.accounts.task;
+    require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     validate_task_job_spec_mutable(task)?;
     let task_job_spec = &mut ctx.accounts.task_job_spec;
 
