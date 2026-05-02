@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1
+
+- refresh public protocol artifacts for the current reviewed-public marketplace devnet surface
+- include launch-control/task-job-spec instructions such as `set_task_job_spec`
+- include current CreatorReview settlement account layouts for `accept_task_result` and `reject_task_result`
+
 ## v0.2.0
 
 - add marketplace v2 bid lifecycle and settlement flows to the public protocol surface
