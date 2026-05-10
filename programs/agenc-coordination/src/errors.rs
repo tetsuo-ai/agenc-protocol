@@ -765,4 +765,34 @@ pub enum CoordinationError {
 
     #[msg("Task type is disabled by multisig launch controls")]
     TaskTypeDisabled,
+
+    #[msg("Task moderation is not configured or enabled")]
+    TaskModerationRequired,
+
+    #[msg("Invalid task moderation authority")]
+    InvalidTaskModerationAuthority,
+
+    #[msg("Only the configured moderation authority can record moderation decisions")]
+    UnauthorizedTaskModerator,
+
+    #[msg("Invalid task moderation status")]
+    InvalidTaskModerationStatus,
+
+    #[msg("Invalid task moderation risk score")]
+    InvalidTaskModerationRiskScore,
+
+    #[msg("Task moderation account does not belong to this task")]
+    TaskModerationTaskMismatch,
+
+    #[msg("Task moderation account does not match this job specification hash")]
+    TaskModerationHashMismatch,
+
+    #[msg("Task moderation decision is expired")]
+    TaskModerationExpired,
+
+    #[msg("Task moderation decision does not allow publishing this job specification")]
+    TaskModerationRejected,
+
+    #[msg("Task claim requires a moderated job specification pointer")]
+    TaskJobSpecRequired,
 }

@@ -127,6 +127,39 @@ pub mod agenc_coordination {
         )
     }
 
+    /// Configure the moderation authority required before task job-spec publication.
+    pub fn configure_task_moderation(
+        ctx: Context<ConfigureTaskModeration>,
+        moderation_authority: Pubkey,
+        enabled: bool,
+    ) -> Result<()> {
+        instructions::configure_task_moderation::handler(ctx, moderation_authority, enabled)
+    }
+
+    /// Record a moderation decision for a task/job-spec hash.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_task_moderation(
+        ctx: Context<RecordTaskModeration>,
+        job_spec_hash: [u8; 32],
+        status: u8,
+        risk_score: u8,
+        category_mask: u64,
+        policy_hash: [u8; 32],
+        scanner_hash: [u8; 32],
+        expires_at: i64,
+    ) -> Result<()> {
+        instructions::record_task_moderation::handler(
+            ctx,
+            job_spec_hash,
+            status,
+            risk_score,
+            category_mask,
+            policy_hash,
+            scanner_hash,
+            expires_at,
+        )
+    }
+
     /// Attach or update a content-addressed off-chain job specification pointer for a task.
     pub fn set_task_job_spec(
         ctx: Context<SetTaskJobSpec>,

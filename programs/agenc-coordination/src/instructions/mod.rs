@@ -44,6 +44,7 @@ pub mod cancel_task;
 pub mod claim_task;
 pub mod complete_task;
 pub mod complete_task_private;
+pub mod configure_task_moderation;
 pub mod configure_task_validation;
 pub mod create_dependent_task;
 pub mod create_proposal;
@@ -61,6 +62,7 @@ pub mod migrate;
 pub mod post_to_feed;
 pub mod purchase_skill;
 pub mod rate_skill;
+pub mod record_task_moderation;
 pub mod register_agent;
 pub mod register_skill;
 pub mod reject_task_result;
@@ -111,6 +113,8 @@ pub use complete_task::*;
 #[allow(ambiguous_glob_reexports)]
 pub use complete_task_private::*;
 #[allow(ambiguous_glob_reexports)]
+pub use configure_task_moderation::*;
+#[allow(ambiguous_glob_reexports)]
 pub use configure_task_validation::*;
 #[allow(ambiguous_glob_reexports)]
 pub use create_dependent_task::*;
@@ -142,6 +146,8 @@ pub use post_to_feed::*;
 pub use purchase_skill::*;
 #[allow(ambiguous_glob_reexports)]
 pub use rate_skill::*;
+#[allow(ambiguous_glob_reexports)]
+pub use record_task_moderation::*;
 #[allow(ambiguous_glob_reexports)]
 pub use register_agent::*;
 #[allow(ambiguous_glob_reexports)]

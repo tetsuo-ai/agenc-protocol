@@ -1184,6 +1184,26 @@
       ],
       "accounts": [
         {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "dispute",
           "writable": true,
           "pda": {
@@ -2354,6 +2374,93 @@
               "name": "PrivateCompletionPayload"
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "configure_task_moderation",
+      "docs": [
+        "Configure the moderation authority required before task job-spec publication."
+      ],
+      "discriminator": [
+        228,
+        57,
+        251,
+        233,
+        203,
+        252,
+        126,
+        31
+      ],
+      "accounts": [
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderation_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "moderation_authority",
+          "type": "pubkey"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
         }
       ]
     },
@@ -5735,6 +5842,169 @@
       ]
     },
     {
+      "name": "record_task_moderation",
+      "docs": [
+        "Record a moderation decision for a task/job-spec hash."
+      ],
+      "discriminator": [
+        156,
+        205,
+        56,
+        24,
+        136,
+        114,
+        93,
+        160
+      ],
+      "accounts": [
+        {
+          "name": "moderation_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "Task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "Task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_moderation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "arg",
+                "path": "job_spec_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "job_spec_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "status",
+          "type": "u8"
+        },
+        {
+          "name": "risk_score",
+          "type": "u8"
+        },
+        {
+          "name": "category_mask",
+          "type": "u64"
+        },
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "scanner_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "register_agent",
       "docs": [
         "Register a new agent on-chain with its capabilities and metadata.",
@@ -6500,6 +6770,26 @@
       ],
       "accounts": [
         {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "task",
           "pda": {
             "seeds": [
@@ -6521,6 +6811,70 @@
                 "kind": "account",
                 "path": "task.task_id",
                 "account": "Task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderation_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_moderation",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "arg",
+                "path": "job_spec_hash"
               }
             ]
           }
@@ -7379,6 +7733,62 @@
         {
           "name": "accepted_no_show_slash_bps",
           "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "update_launch_controls",
+      "docs": [
+        "Update emergency launch controls (multisig gated).",
+        "",
+        "`protocol_paused` globally pauses version-gated mutable protocol paths.",
+        "`disabled_task_type_mask` disables task types by `TaskType` repr bit index."
+      ],
+      "discriminator": [
+        156,
+        19,
+        63,
+        86,
+        117,
+        245,
+        196,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "protocol_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "protocol_paused",
+          "type": "bool"
+        },
+        {
+          "name": "disabled_task_type_mask",
+          "type": "u8"
         }
       ]
     },
@@ -9113,6 +9523,19 @@
       ]
     },
     {
+      "name": "ModerationConfig",
+      "discriminator": [
+        20,
+        180,
+        54,
+        96,
+        191,
+        141,
+        52,
+        148
+      ]
+    },
+    {
       "name": "NullifierSpend",
       "discriminator": [
         254,
@@ -9305,6 +9728,19 @@
         165,
         3,
         196
+      ]
+    },
+    {
+      "name": "TaskModeration",
+      "discriminator": [
+        170,
+        214,
+        132,
+        159,
+        229,
+        119,
+        11,
+        43
       ]
     },
     {
@@ -9687,6 +10123,19 @@
       ]
     },
     {
+      "name": "LaunchControlsUpdated",
+      "discriminator": [
+        206,
+        194,
+        16,
+        155,
+        118,
+        69,
+        215,
+        151
+      ]
+    },
+    {
       "name": "MigrationCompleted",
       "discriminator": [
         223,
@@ -10061,6 +10510,32 @@
         90,
         208,
         183
+      ]
+    },
+    {
+      "name": "TaskModerationConfigUpdated",
+      "discriminator": [
+        151,
+        82,
+        229,
+        50,
+        92,
+        30,
+        212,
+        75
+      ]
+    },
+    {
+      "name": "TaskModerationRecorded",
+      "discriminator": [
+        12,
+        27,
+        87,
+        47,
+        129,
+        163,
+        73,
+        218
       ]
     },
     {
@@ -11373,6 +11848,66 @@
       "code": 6240,
       "name": "TaskJobSpecTaskMismatch",
       "msg": "Task job specification account does not belong to this task"
+    },
+    {
+      "code": 6241,
+      "name": "ProtocolPaused",
+      "msg": "Protocol is paused by multisig launch controls"
+    },
+    {
+      "code": 6242,
+      "name": "TaskTypeDisabled",
+      "msg": "Task type is disabled by multisig launch controls"
+    },
+    {
+      "code": 6243,
+      "name": "TaskModerationRequired",
+      "msg": "Task moderation is not configured or enabled"
+    },
+    {
+      "code": 6244,
+      "name": "InvalidTaskModerationAuthority",
+      "msg": "Invalid task moderation authority"
+    },
+    {
+      "code": 6245,
+      "name": "UnauthorizedTaskModerator",
+      "msg": "Only the configured moderation authority can record moderation decisions"
+    },
+    {
+      "code": 6246,
+      "name": "InvalidTaskModerationStatus",
+      "msg": "Invalid task moderation status"
+    },
+    {
+      "code": 6247,
+      "name": "InvalidTaskModerationRiskScore",
+      "msg": "Invalid task moderation risk score"
+    },
+    {
+      "code": 6248,
+      "name": "TaskModerationTaskMismatch",
+      "msg": "Task moderation account does not belong to this task"
+    },
+    {
+      "code": 6249,
+      "name": "TaskModerationHashMismatch",
+      "msg": "Task moderation account does not match this job specification hash"
+    },
+    {
+      "code": 6250,
+      "name": "TaskModerationExpired",
+      "msg": "Task moderation decision is expired"
+    },
+    {
+      "code": 6251,
+      "name": "TaskModerationRejected",
+      "msg": "Task moderation decision does not allow publishing this job specification"
+    },
+    {
+      "code": 6252,
+      "name": "TaskJobSpecRequired",
+      "msg": "Task claim requires a moderated job specification pointer"
     }
   ],
   "types": [
@@ -13451,6 +13986,33 @@
       }
     },
     {
+      "name": "LaunchControlsUpdated",
+      "docs": [
+        "Emitted when multisig launch controls are updated."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_paused",
+            "type": "bool"
+          },
+          {
+            "name": "disabled_task_type_mask",
+            "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "MatchingPolicy",
       "docs": [
         "Matching policy declared on a bid book."
@@ -13496,6 +14058,72 @@
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ModerationConfig",
+      "docs": [
+        "Global task moderation configuration.",
+        "PDA seeds: [\"moderation_config\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "Protocol authority that configured this moderation gate."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "moderation_authority",
+            "docs": [
+              "Signer allowed to record moderation attestations."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "docs": [
+              "Whether task job-spec publication requires moderation attestations."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Creation timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "docs": [
+              "Last update timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved for future moderation policy flags."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
           }
         ]
       }
@@ -14210,17 +14838,18 @@
             "type": "u8"
           },
           {
-            "name": "_padding",
+            "name": "protocol_paused",
             "docs": [
-              "Padding for future use and alignment",
-              "Currently unused but reserved for backwards-compatible additions"
+              "Emergency global pause. When true, version-gated mutable protocol paths fail closed."
             ],
-            "type": {
-              "array": [
-                "u8",
-                2
-              ]
-            }
+            "type": "bool"
+          },
+          {
+            "name": "disabled_task_type_mask",
+            "docs": [
+              "Bitmask of disabled task types. Bit index matches `TaskType` repr."
+            ],
+            "type": "u8"
           },
           {
             "name": "multisig_owners",
@@ -16220,6 +16849,226 @@
           {
             "name": "job_spec_uri",
             "type": "string"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskModeration",
+      "docs": [
+        "On-chain moderation attestation for a task/job-spec hash.",
+        "PDA seeds: [\"task_moderation\", task, job_spec_hash]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "Task this moderation decision applies to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "docs": [
+              "Task creator at the time the decision was recorded."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "job_spec_hash",
+            "docs": [
+              "Job-spec hash approved/held/rejected by the scanner or reviewer."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "docs": [
+              "One of `task_moderation_status::*`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "risk_score",
+            "docs": [
+              "Normalized 0-100 risk score."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "category_mask",
+            "docs": [
+              "Bitmask of scanner categories, interpreted by off-chain policy docs."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "policy_hash",
+            "docs": [
+              "Hash of the moderation policy/threshold version."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "scanner_hash",
+            "docs": [
+              "Hash of the scanner/model version bundle."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "recorded_at",
+            "docs": [
+              "When the moderation decision was recorded."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "expires_at",
+            "docs": [
+              "Optional expiry timestamp. Zero means no expiry."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "moderator",
+            "docs": [
+              "Signer that recorded the moderation decision."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved for future attestation metadata."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskModerationConfigUpdated",
+      "docs": [
+        "Emitted when the global task moderation ingest gate is configured."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "moderation_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskModerationRecorded",
+      "docs": [
+        "Emitted when the moderation authority records a decision for a task/job-spec hash."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "job_spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "risk_score",
+            "type": "u8"
+          },
+          {
+            "name": "category_mask",
+            "type": "u64"
+          },
+          {
+            "name": "policy_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "scanner_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "moderator",
+            "type": "pubkey"
           },
           {
             "name": "timestamp",

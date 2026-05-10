@@ -744,6 +744,47 @@ impl TaskValidationVote {
 /// Maximum byte length for a task job specification URI.
 pub const TASK_JOB_SPEC_URI_MAX_LEN: usize = 256;
 
+/// Moderation status constants for task/job-spec pre-ingest attestations.
+///
+/// These values are intentionally simple `u8`s so indexers and external
+/// moderation services can interoperate without depending on Rust enum layout.
+pub mod task_moderation_status {
+    /// Scanner found no blocking/suspicious signal.
+    pub const CLEAN: u8 = 0;
+    /// Scanner found risky content; human review is required.
+    pub const SUSPICIOUS: u8 = 1;
+    /// Scanner found high-confidence malicious content.
+    pub const BLOCKED: u8 = 2;
+    /// Scanner was unavailable; fail closed for marketplace ingest.
+    pub const SCANNER_UNAVAILABLE: u8 = 3;
+    /// Human reviewer explicitly approved a held task/job spec.
+    pub const HUMAN_APPROVED: u8 = 4;
+    /// Human reviewer explicitly rejected a held task/job spec.
+    pub const HUMAN_REJECTED: u8 = 5;
+}
+
+/// Maximum normalized risk score accepted by task moderation attestations.
+pub const TASK_MODERATION_RISK_SCORE_MAX: u8 = 100;
+
+pub fn is_valid_task_moderation_status(status: u8) -> bool {
+    matches!(
+        status,
+        task_moderation_status::CLEAN
+            | task_moderation_status::SUSPICIOUS
+            | task_moderation_status::BLOCKED
+            | task_moderation_status::SCANNER_UNAVAILABLE
+            | task_moderation_status::HUMAN_APPROVED
+            | task_moderation_status::HUMAN_REJECTED
+    )
+}
+
+pub fn is_publishable_task_moderation_status(status: u8) -> bool {
+    matches!(
+        status,
+        task_moderation_status::CLEAN | task_moderation_status::HUMAN_APPROVED
+    )
+}
+
 /// Content-addressed pointer to a task's full off-chain job specification.
 /// PDA seeds: ["task_job_spec", task]
 #[account]
@@ -769,6 +810,68 @@ pub struct TaskJobSpec {
 }
 
 impl TaskJobSpec {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Global task moderation configuration.
+/// PDA seeds: ["moderation_config"]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct ModerationConfig {
+    /// Protocol authority that configured this moderation gate.
+    pub authority: Pubkey,
+    /// Signer allowed to record moderation attestations.
+    pub moderation_authority: Pubkey,
+    /// Whether task job-spec publication requires moderation attestations.
+    pub enabled: bool,
+    /// Creation timestamp.
+    pub created_at: i64,
+    /// Last update timestamp.
+    pub updated_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future moderation policy flags.
+    pub _reserved: [u8; 6],
+}
+
+impl ModerationConfig {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// On-chain moderation attestation for a task/job-spec hash.
+/// PDA seeds: ["task_moderation", task, job_spec_hash]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct TaskModeration {
+    /// Task this moderation decision applies to.
+    pub task: Pubkey,
+    /// Task creator at the time the decision was recorded.
+    pub creator: Pubkey,
+    /// Job-spec hash approved/held/rejected by the scanner or reviewer.
+    pub job_spec_hash: [u8; HASH_SIZE],
+    /// One of `task_moderation_status::*`.
+    pub status: u8,
+    /// Normalized 0-100 risk score.
+    pub risk_score: u8,
+    /// Bitmask of scanner categories, interpreted by off-chain policy docs.
+    pub category_mask: u64,
+    /// Hash of the moderation policy/threshold version.
+    pub policy_hash: [u8; HASH_SIZE],
+    /// Hash of the scanner/model version bundle.
+    pub scanner_hash: [u8; HASH_SIZE],
+    /// When the moderation decision was recorded.
+    pub recorded_at: i64,
+    /// Optional expiry timestamp. Zero means no expiry.
+    pub expires_at: i64,
+    /// Signer that recorded the moderation decision.
+    pub moderator: Pubkey,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future attestation metadata.
+    pub _reserved: [u8; 7],
+}
+
+impl TaskModeration {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 

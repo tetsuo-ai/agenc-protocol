@@ -100,19 +100,10 @@ pub struct ClaimTaskWithJobSpec<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<ClaimTask>) -> Result<()> {
-    let task_key = ctx.accounts.task.key();
-    let worker_key = ctx.accounts.worker.key();
-
-    process_claim(
-        task_key,
-        ctx.accounts.task.as_mut(),
-        ctx.accounts.claim.as_mut(),
-        ctx.accounts.protocol_config.as_ref(),
-        worker_key,
-        ctx.accounts.worker.as_mut(),
-        ctx.bumps.claim,
-    )
+pub fn handler(_ctx: Context<ClaimTask>) -> Result<()> {
+    // Legacy claim_task has no TaskJobSpec account, so it cannot prove the worker
+    // saw the moderated immutable job spec. Keep the ABI but fail closed.
+    Err(error!(CoordinationError::TaskJobSpecRequired))
 }
 
 pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {

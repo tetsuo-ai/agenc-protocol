@@ -90,6 +90,31 @@ pub struct TaskJobSpecSet {
     pub timestamp: i64,
 }
 
+/// Emitted when the global task moderation ingest gate is configured.
+#[event]
+pub struct TaskModerationConfigUpdated {
+    pub authority: Pubkey,
+    pub moderation_authority: Pubkey,
+    pub enabled: bool,
+    pub timestamp: i64,
+}
+
+/// Emitted when the moderation authority records a decision for a task/job-spec hash.
+#[event]
+pub struct TaskModerationRecorded {
+    pub task: Pubkey,
+    pub creator: Pubkey,
+    pub job_spec_hash: [u8; HASH_SIZE],
+    pub status: u8,
+    pub risk_score: u8,
+    pub category_mask: u64,
+    pub policy_hash: [u8; HASH_SIZE],
+    pub scanner_hash: [u8; HASH_SIZE],
+    pub expires_at: i64,
+    pub moderator: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when multisig launch controls are updated.
 #[event]
 pub struct LaunchControlsUpdated {
