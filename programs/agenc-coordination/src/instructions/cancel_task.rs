@@ -2,20 +2,23 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskCancelled;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     close_bid_book_without_accepted_bid, settle_accepted_bid, AcceptedBidBondDisposition,
     AcceptedBidBookDisposition,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::launch_controls::require_task_type_enabled;
+#[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
 };
-use crate::state::{
-    AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
-};
+use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::TaskType;
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
+#[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 #[derive(Accounts)]
@@ -51,18 +54,22 @@ pub struct CancelTask<'info> {
     pub system_program: Program<'info, System>,
 
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
+    #[cfg(feature = "spl-token-rewards")]
     /// Token escrow ATA holding reward tokens (optional)
     #[account(mut)]
     pub token_escrow_ata: Option<Account<'info, TokenAccount>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// Creator's token account to receive refund (optional)
     /// CHECK: Validated in handler
     #[account(mut)]
     pub creator_token_account: Option<UncheckedAccount<'info>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// SPL token mint (optional, must match task.reward_mint)
     pub reward_mint: Option<Account<'info, Mint>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
 }
@@ -133,6 +140,7 @@ fn process_cancel_task_impl<'info>(
     let mut escrow = load_task_escrow(&accounts.escrow)?;
     require!(escrow.bump > 0, CoordinationError::CorruptedData);
 
+    #[cfg(not(feature = "mainnet-canary"))]
     let (worker_accounts, bid_book_only, accepted_bid_accounts) =
         if task.task_type == TaskType::BidExclusive {
             if task.current_workers == 0 {
@@ -158,6 +166,8 @@ fn process_cancel_task_impl<'info>(
         } else {
             (remaining_accounts, None, None)
         };
+    #[cfg(feature = "mainnet-canary")]
+    let worker_accounts = remaining_accounts;
 
     // If task has workers, require accounts
     if task.current_workers > 0 {
@@ -175,7 +185,11 @@ fn process_cancel_task_impl<'info>(
 
     // Transfer refund to creator
     let is_token_task = task.reward_mint.is_some();
+    #[cfg(feature = "spl-token-rewards")]
     let mut token_escrow_starting_amount: Option<u64> = None;
+    #[cfg(not(feature = "spl-token-rewards"))]
+    require!(!is_token_task, CoordinationError::InvalidTokenMint);
+    #[cfg(feature = "spl-token-rewards")]
     if is_token_task {
         // Token path: transfer tokens back to creator
         require!(
@@ -241,6 +255,14 @@ fn process_cancel_task_impl<'info>(
             refund_amount,
         )?;
     }
+    #[cfg(not(feature = "spl-token-rewards"))]
+    {
+        transfer_lamports(
+            &escrow.to_account_info(),
+            &accounts.authority.to_account_info(),
+            refund_amount,
+        )?;
+    }
 
     // Update task status
     task.status = TaskStatus::Cancelled;
@@ -253,10 +275,12 @@ fn process_cancel_task_impl<'info>(
         timestamp: clock.unix_timestamp,
     });
 
+    #[cfg(not(feature = "mainnet-canary"))]
     if let Some(bid_book_info) = bid_book_only {
         close_bid_book_without_accepted_bid(&task.key(), bid_book_info, clock.unix_timestamp)?;
     }
 
+    #[cfg(not(feature = "mainnet-canary"))]
     if let Some(bid_accounts) = accepted_bid_accounts {
         let claim_info = &worker_accounts[0];
         let rent_recipient_info = &worker_accounts[2];
@@ -374,6 +398,7 @@ fn process_cancel_task_impl<'info>(
     }
 
     // Close token escrow ATA AFTER all worker claims are processed
+    #[cfg(feature = "spl-token-rewards")]
     if is_token_task {
         let token_escrow = accounts
             .token_escrow_ata

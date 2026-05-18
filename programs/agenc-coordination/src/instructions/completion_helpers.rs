@@ -8,6 +8,7 @@ use crate::instructions::constants::{
     BASIS_POINTS_DIVISOR, MAX_REPUTATION, REPUTATION_PER_COMPLETION,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
+#[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{
     close_token_escrow_account_info, transfer_tokens_from_escrow,
 };
@@ -17,7 +18,10 @@ use crate::state::{
 };
 use crate::utils::compute_budget::{calculate_reputation_fee_discount, calculate_tiered_fee};
 use anchor_lang::prelude::*;
+#[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{self, Token, TokenAccount};
+#[cfg(not(feature = "spl-token-rewards"))]
+use core::marker::PhantomData;
 
 /// Calculate worker reward and protocol fee from task reward amount.
 ///
@@ -105,6 +109,7 @@ fn calculate_reward_per_worker(task: &Task) -> Result<u64> {
 ///
 /// Uses owned `AccountInfo` values (not references) to avoid lifetime conflicts
 /// with mutable borrows of task/claim/escrow in handler functions.
+#[cfg(feature = "spl-token-rewards")]
 pub struct TokenPaymentAccounts<'a, 'info> {
     pub token_escrow_ata: &'a mut Account<'info, TokenAccount>,
     pub token_escrow_starting_amount: u64,
@@ -114,6 +119,12 @@ pub struct TokenPaymentAccounts<'a, 'info> {
     pub escrow_authority: AccountInfo<'info>,
     pub escrow_bump: u8,
     pub task_key: Pubkey,
+}
+
+/// Placeholder used when SPL rewards are not compiled into a canary binary.
+#[cfg(not(feature = "spl-token-rewards"))]
+pub struct TokenPaymentAccounts<'a, 'info> {
+    _marker: PhantomData<(&'a (), &'info ())>,
 }
 
 /// Load a task claim while preserving protocol-level `NotClaimed` semantics.
@@ -141,6 +152,7 @@ pub fn load_task_claim_or_not_claimed<'info>(
 }
 
 /// Transfer tokens from escrow ATA to worker and treasury ATAs via PDA-signed CPI.
+#[cfg(feature = "spl-token-rewards")]
 fn transfer_token_rewards<'a, 'info>(
     ta: &mut TokenPaymentAccounts<'a, 'info>,
     worker_reward: u64,
@@ -496,6 +508,8 @@ pub fn execute_completion_rewards<'a, 'info>(
     });
 
     // Interactions: external CPIs AFTER all state updates and events.
+    #[cfg(feature = "spl-token-rewards")]
+    {
     let mut token_accounts = token_accounts;
     if let Some(ref mut ta) = token_accounts {
         transfer_token_rewards(ta, worker_reward, protocol_fee)?;
@@ -540,6 +554,26 @@ pub fn execute_completion_rewards<'a, 'info>(
         // resizes it to zero, preventing exit serialization from writing TaskEscrow
         // data back into a zero-lamport account and failing the runtime rent check.
         close_escrow_to_creator(escrow, creator_info)?;
+    }
+    }
+
+    #[cfg(not(feature = "spl-token-rewards"))]
+    {
+        let _ = token_accounts;
+        require!(
+            task.reward_mint.is_none(),
+            CoordinationError::InvalidTokenMint
+        );
+        transfer_rewards(
+            escrow,
+            authority_info,
+            treasury_info,
+            worker_reward,
+            protocol_fee,
+        )?;
+        if task_completed {
+            close_escrow_to_creator(escrow, creator_info)?;
+        }
     }
 
     Ok(())
