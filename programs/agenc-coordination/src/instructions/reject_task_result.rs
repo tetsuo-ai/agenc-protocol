@@ -2,6 +2,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskResultRejected;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
@@ -17,6 +18,7 @@ use crate::state::{
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
+#[cfg(not(feature = "mainnet-canary"))]
 fn remaining_account_info<'info>(
     remaining_accounts: &[AccountInfo<'info>],
     index: usize,
@@ -138,6 +140,7 @@ pub fn handler<'info>(
     submission.rejected_at = clock.unix_timestamp;
     submission.rejection_hash = rejection_hash;
 
+    #[cfg(not(feature = "mainnet-canary"))]
     if task.task_type == crate::state::TaskType::BidExclusive {
         require!(
             ctx.remaining_accounts.len() >= 3,

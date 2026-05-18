@@ -15,6 +15,7 @@
 //! to incentivize timely cleanup of expired claims.
 
 use crate::errors::CoordinationError;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
@@ -24,9 +25,11 @@ use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
 };
 use crate::state::{
-    AgentRegistration, BidMarketplaceConfig, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
-    TaskEscrow, TaskStatus, TaskSubmission, TaskType, TaskValidationConfig,
+    AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
+    TaskSubmission, TaskValidationConfig,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::{BidMarketplaceConfig, TaskType};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
@@ -39,6 +42,7 @@ const CLEANUP_REWARD: u64 = 1000;
 /// malicious actors race workers to expire their claims. (Issue #421)
 const GRACE_PERIOD: i64 = 60;
 
+#[cfg(not(feature = "mainnet-canary"))]
 fn remaining_account_info<'info>(
     remaining_accounts: &[AccountInfo<'info>],
     index: usize,
@@ -222,6 +226,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         task.status = TaskStatus::Open;
     }
 
+    #[cfg(not(feature = "mainnet-canary"))]
     if task.task_type == TaskType::BidExclusive {
         require!(
             ctx.remaining_accounts.len() >= 5,

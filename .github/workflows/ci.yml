@@ -39,6 +39,12 @@ jobs:
       - name: Run Marketplace V2 bid scenario tests
         run: cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml bid_marketplace
 
+      - name: Check minimal mainnet canary build
+        run: cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary
+
+      - name: Test minimal mainnet canary build
+        run: cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary
+
       - name: Verify committed protocol artifacts
         run: npm run artifacts:check
 

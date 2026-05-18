@@ -2,9 +2,11 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskResultAccepted;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     finalize_bid_task_completion, load_bid_task_completion_meta,
 };
+#[cfg(feature = "spl-token-rewards")]
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
@@ -14,6 +16,7 @@ use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, sync_task_validation_status,
 };
+#[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
@@ -21,6 +24,7 @@ use crate::state::{
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
+#[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 #[derive(Accounts)]
@@ -101,18 +105,23 @@ pub struct AcceptTaskResult<'info> {
     pub worker_authority: UncheckedAccount<'info>,
 
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
+    #[cfg(feature = "spl-token-rewards")]
     #[account(mut)]
     pub token_escrow_ata: Option<Account<'info, TokenAccount>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// CHECK: Validated in handler; ATA may be created ahead of review settlement.
     #[account(mut)]
     pub worker_token_account: Option<UncheckedAccount<'info>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     #[account(mut)]
     pub treasury_token_account: Option<Account<'info, TokenAccount>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     pub reward_mint: Option<Account<'info, Mint>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     pub token_program: Option<Program<'info, Token>>,
 
     pub system_program: Program<'info, System>,
@@ -152,20 +161,25 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     )?;
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
 
+    #[cfg(not(feature = "mainnet-canary"))]
     let bid_completion_meta = load_bid_task_completion_meta(
         ctx.accounts.task.as_ref(),
         &ctx.accounts.task.key(),
         ctx.accounts.claim.as_ref(),
         ctx.remaining_accounts,
     )?;
+    #[cfg(not(feature = "mainnet-canary"))]
     let reward_amount_override = bid_completion_meta
         .as_ref()
         .map(|meta| meta.accepted_bid_price);
+    #[cfg(feature = "mainnet-canary")]
+    let reward_amount_override = None;
     let protocol_fee_bps = calculate_fee_with_reputation(
         ctx.accounts.task.protocol_fee_bps,
         ctx.accounts.worker.reputation,
     );
 
+    #[cfg(feature = "spl-token-rewards")]
     let token_accounts = if ctx.accounts.task.reward_mint.is_some() {
         require!(
             ctx.accounts.token_escrow_ata.is_some()
@@ -240,6 +254,14 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     } else {
         None
     };
+    #[cfg(not(feature = "spl-token-rewards"))]
+    let token_accounts = {
+        require!(
+            ctx.accounts.task.reward_mint.is_none(),
+            CoordinationError::InvalidTokenMint
+        );
+        None
+    };
 
     ctx.accounts.claim.proof_hash = ctx.accounts.task_submission.proof_hash;
     ctx.accounts.claim.result_data = ctx.accounts.task_submission.result_data;
@@ -279,6 +301,7 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         accepted_at: clock.unix_timestamp,
     });
 
+    #[cfg(not(feature = "mainnet-canary"))]
     if let Some(meta) = bid_completion_meta {
         finalize_bid_task_completion(
             ctx.remaining_accounts,

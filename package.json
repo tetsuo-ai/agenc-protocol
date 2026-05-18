@@ -21,7 +21,11 @@
     "devnet:marketplace:capture": "node scripts/marketplace-devnet-readiness.mjs capture",
     "devnet:marketplace:report": "node scripts/marketplace-devnet-readiness.mjs report",
     "devnet:marketplace:scenario": "node scripts/marketplace-devnet-scenario.mjs",
-    "devnet:validation:preflight": "node scripts/validation-deploy-preflight.mjs"
+    "devnet:validation:preflight": "node scripts/validation-deploy-preflight.mjs",
+    "canary:build": "anchor build --no-idl -- --no-default-features --features mainnet-canary",
+    "canary:idl": "anchor idl build -p agenc_coordination -o target/idl/agenc_coordination.canary.json -- --no-default-features --features mainnet-canary",
+    "canary:check-idl": "node scripts/check-canary-idl.mjs",
+    "canary:test": "cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary"
   },
   "devDependencies": {
     "@types/node": "^25.4.0",

@@ -24,6 +24,7 @@ pub mod utils;
 use crate::errors::CoordinationError;
 use instructions::*;
 
+#[cfg(not(feature = "mainnet-canary"))]
 #[program]
 pub mod agenc_coordination {
     use super::*;
@@ -183,6 +184,7 @@ pub mod agenc_coordination {
     /// * `task_type` - 0=exclusive (single worker), 1=collaborative (multi-worker)
     /// * `constraint_hash` - For private tasks: hash of expected output (None for non-private)
     /// * `dependency_type` - 1=Data, 2=Ordering, 3=Proof
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn create_dependent_task(
         ctx: Context<CreateDependentTask>,
@@ -215,6 +217,7 @@ pub mod agenc_coordination {
     }
 
     /// Initialize Marketplace V2 global configuration.
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn initialize_bid_marketplace(
         ctx: Context<InitializeBidMarketplace>,
@@ -241,6 +244,7 @@ pub mod agenc_coordination {
     }
 
     /// Update Marketplace V2 global configuration.
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn update_bid_marketplace_config(
         ctx: Context<UpdateBidMarketplaceConfig>,
@@ -263,6 +267,7 @@ pub mod agenc_coordination {
     }
 
     /// Initialize a bid book for a Marketplace V2 task.
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn initialize_bid_book(
         ctx: Context<InitializeBidBook>,
@@ -287,6 +292,7 @@ pub mod agenc_coordination {
     }
 
     /// Create a Marketplace V2 bid for a task.
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn create_bid(
         ctx: Context<CreateBid>,
@@ -313,6 +319,7 @@ pub mod agenc_coordination {
     }
 
     /// Update an existing Marketplace V2 bid.
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn update_bid(
         ctx: Context<UpdateBid>,
@@ -335,11 +342,13 @@ pub mod agenc_coordination {
     }
 
     /// Cancel an open or parked Marketplace V2 bid.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn cancel_bid(ctx: Context<CancelBid>) -> Result<()> {
         instructions::bid_marketplace::cancel_bid_handler(ctx)
     }
 
     /// Accept a Marketplace V2 bid and convert it into a normal task claim.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn accept_bid(ctx: Context<AcceptBid>) -> Result<()> {
         require!(
             ctx.accounts.creator.is_signer,
@@ -349,12 +358,14 @@ pub mod agenc_coordination {
     }
 
     /// Expire an unaccepted Marketplace V2 bid.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn expire_bid(ctx: Context<ExpireBid>) -> Result<()> {
         instructions::bid_marketplace::expire_bid_handler(ctx)
     }
 
     /// Claim a task to signal intent to work on it.
     /// Agent must have required capabilities and task must be claimable.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn claim_task(ctx: Context<ClaimTask>) -> Result<()> {
         instructions::claim_task::handler(ctx)
     }
@@ -406,6 +417,7 @@ pub mod agenc_coordination {
     }
 
     /// Permissionlessly auto-accept a creator-reviewed submission after timeout.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn auto_accept_task_result(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         instructions::auto_accept_task_result::handler(ctx)
     }
@@ -419,6 +431,7 @@ pub mod agenc_coordination {
     }
 
     /// Record a validator quorum vote or external attestation for a submission.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn validate_task_result<'info>(
         ctx: Context<'_, '_, '_, 'info, ValidateTaskResult<'info>>,
         approved: bool,
@@ -433,6 +446,7 @@ pub mod agenc_coordination {
     /// * `ctx` - Context with task, worker claim, and reward accounts
     /// * `proof_hash` - 32-byte hash of the proof of work
     /// * `result_data` - Optional result data or pointer
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn complete_task<'info>(
         ctx: Context<'_, '_, '_, 'info, CompleteTask<'info>>,
         proof_hash: [u8; 32],
@@ -446,6 +460,7 @@ pub mod agenc_coordination {
     }
 
     /// Complete a task with private proof verification.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn complete_task_private<'info>(
         ctx: Context<'_, '_, '_, 'info, CompleteTaskPrivate<'info>>,
         task_id: u64,
@@ -459,6 +474,7 @@ pub mod agenc_coordination {
     }
 
     /// Initialize the trusted ZK image ID config.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn initialize_zk_config(
         ctx: Context<InitializeZkConfig>,
         active_image_id: [u8; 32],
@@ -471,6 +487,7 @@ pub mod agenc_coordination {
     }
 
     /// Rotate the trusted ZK image ID.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn update_zk_image_id(ctx: Context<UpdateZkImageId>, new_image_id: [u8; 32]) -> Result<()> {
         instructions::update_zk_image_id::handler(ctx, new_image_id)
     }
@@ -486,6 +503,7 @@ pub mod agenc_coordination {
 
     /// Cancel a dispute before any votes are cast.
     /// Only the dispute initiator can cancel, and only if no arbiter has voted yet.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn cancel_dispute(ctx: Context<CancelDispute>) -> Result<()> {
         instructions::cancel_dispute::handler(ctx)
     }
@@ -498,6 +516,7 @@ pub mod agenc_coordination {
     /// * `state_key` - Key identifying the state variable
     /// * `state_value` - New value for the state
     /// * `version` - Expected current version (for optimistic locking)
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn update_state(
         ctx: Context<UpdateState>,
         state_key: [u8; 32],
@@ -516,6 +535,7 @@ pub mod agenc_coordination {
     /// * `task_id` - Related task ID
     /// * `evidence_hash` - Hash of evidence supporting the dispute
     /// * `resolution_type` - 0=refund, 1=complete, 2=split
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn initiate_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, InitiateDispute<'info>>,
         dispute_id: [u8; 32],
@@ -536,12 +556,14 @@ pub mod agenc_coordination {
 
     /// Vote on a dispute resolution.
     /// Arbiters must be registered agents with arbitration capability.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn vote_dispute(ctx: Context<VoteDispute>, approve: bool) -> Result<()> {
         instructions::vote_dispute::handler(ctx, approve)
     }
 
     /// Execute the resolved dispute outcome.
     /// Requires sufficient votes to meet threshold.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn resolve_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>,
     ) -> Result<()> {
@@ -553,6 +575,7 @@ pub mod agenc_coordination {
     }
 
     /// Apply slashing to a worker after losing a dispute.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn apply_dispute_slash(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
@@ -564,6 +587,7 @@ pub mod agenc_coordination {
     /// Apply slashing to a dispute initiator when their dispute is rejected.
     /// This provides symmetric slashing: workers are slashed for bad work,
     /// initiators are slashed for frivolous disputes.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn apply_initiator_slash(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
@@ -573,6 +597,7 @@ pub mod agenc_coordination {
     }
 
     /// Expire a dispute after the maximum duration has passed.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn expire_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>,
     ) -> Result<()> {
@@ -726,6 +751,7 @@ pub mod agenc_coordination {
 
     /// Initialize governance configuration.
     /// Must be called by the protocol authority.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn initialize_governance(
         ctx: Context<InitializeGovernance>,
         voting_period: i64,
@@ -750,6 +776,7 @@ pub mod agenc_coordination {
 
     /// Create a governance proposal.
     /// Proposer must be an active agent with sufficient stake.
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn create_proposal(
         ctx: Context<CreateProposal>,
@@ -773,12 +800,14 @@ pub mod agenc_coordination {
 
     /// Vote on a governance proposal.
     /// Voter must be an active agent. Double voting prevented by PDA uniqueness.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn vote_proposal(ctx: Context<VoteProposal>, approve: bool) -> Result<()> {
         instructions::vote_proposal::handler(ctx, approve)
     }
 
     /// Execute an approved governance proposal after voting period ends.
     /// Permissionless — anyone can call after quorum + majority is met.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
@@ -789,12 +818,14 @@ pub mod agenc_coordination {
 
     /// Cancel a governance proposal before any votes are cast.
     /// Only the proposer's authority can cancel.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn cancel_proposal(ctx: Context<CancelProposal>) -> Result<()> {
         instructions::cancel_proposal::handler(ctx)
     }
 
     /// Register a new skill on-chain.
     /// Author must be an active agent.
+    #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
     pub fn register_skill(
         ctx: Context<RegisterSkill>,
@@ -818,6 +849,7 @@ pub mod agenc_coordination {
 
     /// Update a skill's content, price, tags, or active status.
     /// Only the skill author can update.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn update_skill(
         ctx: Context<UpdateSkill>,
         content_hash: [u8; 32],
@@ -830,6 +862,7 @@ pub mod agenc_coordination {
 
     /// Rate a skill (1-5, reputation-weighted).
     /// One rating per agent per skill, enforced by PDA uniqueness.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn rate_skill(
         ctx: Context<RateSkill>,
         rating: u8,
@@ -841,12 +874,14 @@ pub mod agenc_coordination {
     /// Purchase a skill (SOL or SPL token).
     /// Protocol fee is deducted and sent to treasury.
     /// expected_price provides slippage protection against front-running.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn purchase_skill(ctx: Context<PurchaseSkill>, expected_price: u64) -> Result<()> {
         instructions::purchase_skill::handler(ctx, expected_price)
     }
 
     /// Post to the agent feed.
     /// Author must be an active agent. Content is stored on IPFS, hash on-chain.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn post_to_feed(
         ctx: Context<PostToFeed>,
         content_hash: [u8; 32],
@@ -859,18 +894,21 @@ pub mod agenc_coordination {
 
     /// Upvote a feed post.
     /// One vote per agent per post, enforced by PDA uniqueness.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn upvote_post(ctx: Context<UpvotePost>) -> Result<()> {
         instructions::upvote_post::handler(ctx)
     }
 
     /// Stake SOL on agent reputation.
     /// Creates or adds to an existing reputation stake account.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn stake_reputation(ctx: Context<StakeReputation>, amount: u64) -> Result<()> {
         instructions::stake_reputation::handler(ctx, amount)
     }
 
     /// Withdraw SOL from reputation stake after cooldown period.
     /// Agent must have no pending disputes as defendant.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn withdraw_reputation_stake(
         ctx: Context<WithdrawReputationStake>,
         amount: u64,
@@ -880,6 +918,7 @@ pub mod agenc_coordination {
 
     /// Delegate reputation points to a trusted peer.
     /// One delegation per (delegator, delegatee) pair.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn delegate_reputation(
         ctx: Context<DelegateReputation>,
         amount: u16,
@@ -890,7 +929,307 @@ pub mod agenc_coordination {
 
     /// Revoke a reputation delegation and close the account.
     /// Rent is returned to the delegator's authority.
+    #[cfg(not(feature = "mainnet-canary"))]
     pub fn revoke_delegation(ctx: Context<RevokeDelegation>) -> Result<()> {
         instructions::revoke_delegation::handler(ctx)
+    }
+}
+
+#[cfg(feature = "mainnet-canary")]
+#[program]
+pub mod agenc_coordination {
+    use super::*;
+
+    /// Register a new agent on-chain with its capabilities and metadata.
+    pub fn register_agent(
+        ctx: Context<RegisterAgent>,
+        agent_id: [u8; 32],
+        capabilities: u64,
+        endpoint: String,
+        metadata_uri: Option<String>,
+        stake_amount: u64,
+    ) -> Result<()> {
+        instructions::register_agent::handler(
+            ctx,
+            agent_id,
+            capabilities,
+            endpoint,
+            metadata_uri,
+            stake_amount,
+        )
+    }
+
+    /// Update an existing agent's registration data.
+    pub fn update_agent(
+        ctx: Context<UpdateAgent>,
+        capabilities: Option<u64>,
+        endpoint: Option<String>,
+        metadata_uri: Option<String>,
+        status: Option<u8>,
+    ) -> Result<()> {
+        instructions::update_agent::handler(ctx, capabilities, endpoint, metadata_uri, status)
+    }
+
+    /// Suspend an agent during a canary incident.
+    pub fn suspend_agent(ctx: Context<SuspendAgent>) -> Result<()> {
+        instructions::suspend_agent::handler(ctx)
+    }
+
+    /// Unsuspend an agent after operator review.
+    pub fn unsuspend_agent(ctx: Context<UnsuspendAgent>) -> Result<()> {
+        instructions::unsuspend_agent::handler(ctx)
+    }
+
+    /// Deregister an agent and reclaim rent.
+    pub fn deregister_agent(ctx: Context<DeregisterAgent>) -> Result<()> {
+        instructions::deregister_agent::handler(ctx)
+    }
+
+    /// Create a canary task. The handler enforces Exclusive, single-worker,
+    /// SOL-only, non-private task creation when `mainnet-canary` is enabled.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_task(
+        ctx: Context<CreateTask>,
+        task_id: [u8; 32],
+        required_capabilities: u64,
+        description: [u8; 64],
+        reward_amount: u64,
+        max_workers: u8,
+        deadline: i64,
+        task_type: u8,
+        constraint_hash: Option<[u8; 32]>,
+        min_reputation: u16,
+        reward_mint: Option<Pubkey>,
+    ) -> Result<()> {
+        instructions::create_task::handler(
+            ctx,
+            task_id,
+            required_capabilities,
+            description,
+            reward_amount,
+            max_workers,
+            deadline,
+            task_type,
+            constraint_hash,
+            min_reputation,
+            reward_mint,
+        )
+    }
+
+    /// Configure the moderation authority required before task job-spec publication.
+    pub fn configure_task_moderation(
+        ctx: Context<ConfigureTaskModeration>,
+        moderation_authority: Pubkey,
+        enabled: bool,
+    ) -> Result<()> {
+        instructions::configure_task_moderation::handler(ctx, moderation_authority, enabled)
+    }
+
+    /// Record a moderation decision for a task/job-spec hash.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_task_moderation(
+        ctx: Context<RecordTaskModeration>,
+        job_spec_hash: [u8; 32],
+        status: u8,
+        risk_score: u8,
+        category_mask: u64,
+        policy_hash: [u8; 32],
+        scanner_hash: [u8; 32],
+        expires_at: i64,
+    ) -> Result<()> {
+        instructions::record_task_moderation::handler(
+            ctx,
+            job_spec_hash,
+            status,
+            risk_score,
+            category_mask,
+            policy_hash,
+            scanner_hash,
+            expires_at,
+        )
+    }
+
+    /// Attach a content-addressed off-chain job specification pointer for a task.
+    pub fn set_task_job_spec(
+        ctx: Context<SetTaskJobSpec>,
+        job_spec_hash: [u8; 32],
+        job_spec_uri: String,
+    ) -> Result<()> {
+        instructions::set_task_job_spec::handler(ctx, job_spec_hash, job_spec_uri)
+    }
+
+    /// Claim a task only when its content-addressed job specification pointer exists.
+    pub fn claim_task_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
+        instructions::claim_task::handler_with_job_spec(ctx)
+    }
+
+    /// Enable creator-review validation for an open canary task.
+    pub fn configure_task_validation(
+        ctx: Context<ConfigureTaskValidation>,
+        mode: u8,
+        review_window_secs: i64,
+        validator_quorum: u8,
+        attestor: Option<Pubkey>,
+    ) -> Result<()> {
+        instructions::configure_task_validation::handler(
+            ctx,
+            mode,
+            review_window_secs,
+            validator_quorum,
+            attestor,
+        )
+    }
+
+    /// Expire a stale claim to free a canary task slot.
+    pub fn expire_claim<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::InvalidInput
+        );
+        instructions::expire_claim::handler(ctx)
+    }
+
+    /// Submit a result for creator review before final settlement.
+    pub fn submit_task_result(
+        ctx: Context<SubmitTaskResult>,
+        proof_hash: [u8; 32],
+        result_data: Option<[u8; 64]>,
+    ) -> Result<()> {
+        instructions::submit_task_result::handler(ctx, proof_hash, result_data)
+    }
+
+    /// Accept a creator-reviewed submission and settle rewards.
+    pub fn accept_task_result(ctx: Context<AcceptTaskResult>) -> Result<()> {
+        instructions::accept_task_result::handler(ctx)
+    }
+
+    /// Reject a creator-reviewed submission and return the task to active work.
+    pub fn reject_task_result<'info>(
+        ctx: Context<'_, '_, '_, 'info, RejectTaskResult<'info>>,
+        rejection_hash: [u8; 32],
+    ) -> Result<()> {
+        instructions::reject_task_result::handler(ctx, rejection_hash)
+    }
+
+    /// Cancel an unclaimed or expired task and reclaim funds.
+    pub fn cancel_task<'info>(ctx: Context<'_, '_, '_, 'info, CancelTask<'info>>) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedTaskAction
+        );
+        instructions::cancel_task::process_cancel_task(ctx)
+    }
+
+    /// Initialize the protocol configuration.
+    pub fn initialize_protocol(
+        ctx: Context<InitializeProtocol>,
+        dispute_threshold: u8,
+        protocol_fee_bps: u16,
+        min_stake: u64,
+        min_stake_for_dispute: u64,
+        multisig_threshold: u8,
+        multisig_owners: Vec<Pubkey>,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::UnauthorizedUpgrade
+        );
+        instructions::initialize_protocol::handler(
+            ctx,
+            dispute_threshold,
+            protocol_fee_bps,
+            min_stake,
+            min_stake_for_dispute,
+            multisig_threshold,
+            multisig_owners,
+        )
+    }
+
+    /// Update the protocol fee.
+    pub fn update_protocol_fee(
+        ctx: Context<UpdateProtocolFee>,
+        protocol_fee_bps: u16,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::update_protocol_fee::handler(ctx, protocol_fee_bps)
+    }
+
+    /// Update protocol treasury destination.
+    pub fn update_treasury(ctx: Context<UpdateTreasury>) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::update_treasury::handler(ctx)
+    }
+
+    /// Rotate multisig owners/threshold.
+    pub fn update_multisig(
+        ctx: Context<UpdateMultisig>,
+        new_threshold: u8,
+        new_owners: Vec<Pubkey>,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::update_multisig::handler(ctx, new_threshold, new_owners)
+    }
+
+    /// Update rate limiting configuration.
+    pub fn update_rate_limits(
+        ctx: Context<UpdateRateLimits>,
+        task_creation_cooldown: i64,
+        max_tasks_per_24h: u8,
+        dispute_initiation_cooldown: i64,
+        max_disputes_per_24h: u8,
+        min_stake_for_dispute: u64,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::update_rate_limits::handler(
+            ctx,
+            task_creation_cooldown,
+            max_tasks_per_24h,
+            dispute_initiation_cooldown,
+            max_disputes_per_24h,
+            min_stake_for_dispute,
+        )
+    }
+
+    /// Update emergency launch controls.
+    pub fn update_launch_controls(
+        ctx: Context<UpdateLaunchControls>,
+        protocol_paused: bool,
+        disabled_task_type_mask: u8,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::update_launch_controls::handler(ctx, protocol_paused, disabled_task_type_mask)
+    }
+
+    /// Migrate protocol to a new version.
+    pub fn migrate_protocol(ctx: Context<MigrateProtocol>, target_version: u8) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::migrate::handler(ctx, target_version)
+    }
+
+    /// Update minimum supported protocol version.
+    pub fn update_min_version(ctx: Context<UpdateMinVersion>, new_min_version: u8) -> Result<()> {
+        require!(
+            ctx.accounts.authority.is_signer,
+            CoordinationError::MultisigNotEnoughSigners
+        );
+        instructions::migrate::update_min_version_handler(ctx, new_min_version)
     }
 }

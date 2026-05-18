@@ -65,6 +65,13 @@ pub fn handler(
     require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
 
     let parsed_mode = validate_validation_mode(mode)?;
+    #[cfg(feature = "mainnet-canary")]
+    {
+        require!(
+            parsed_mode == ValidationMode::CreatorReview,
+            CoordinationError::InvalidValidationMode
+        );
+    }
     require!(
         parsed_mode != ValidationMode::Auto,
         CoordinationError::InvalidValidationMode

@@ -6,7 +6,9 @@ use crate::state::{AgentRegistration, AuthorityRateLimit, ProtocolConfig, Task, 
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
+#[cfg(feature = "spl-token-rewards")]
 use anchor_spl::associated_token::AssociatedToken;
+#[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use super::launch_controls::require_task_type_index_enabled;
@@ -15,6 +17,7 @@ use super::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_bid_task_mode,
     validate_deadline, validate_task_params,
 };
+#[cfg(feature = "spl-token-rewards")]
 use super::token_helpers::ensure_token_escrow_ata;
 
 #[derive(Accounts)]
@@ -77,22 +80,27 @@ pub struct CreateTask<'info> {
     pub system_program: Program<'info, System>,
 
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
+    #[cfg(feature = "spl-token-rewards")]
     /// SPL token mint for reward denomination (optional)
     pub reward_mint: Option<Account<'info, Mint>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// Creator's token account holding reward tokens (optional)
     #[account(mut)]
     pub creator_token_account: Option<Account<'info, TokenAccount>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// Escrow's associated token account for holding reward tokens (optional).
     /// Created via ATA CPI during handler if token task.
     /// CHECK: Validated in handler via ATA derivation check
     #[account(mut)]
     pub token_escrow_ata: Option<UncheckedAccount<'info>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
 
+    #[cfg(feature = "spl-token-rewards")]
     /// Associated Token Account program (optional, required for token tasks)
     pub associated_token_program: Option<Program<'info, AssociatedToken>>,
 }
@@ -125,6 +133,16 @@ pub fn handler(
         min_reputation,
     )?;
     validate_bid_task_mode(task_type, max_workers, reward_mint)?;
+    #[cfg(feature = "mainnet-canary")]
+    {
+        require!(
+            task_type == crate::state::TaskType::Exclusive as u8,
+            CoordinationError::InvalidTaskType
+        );
+        require!(max_workers == 1, CoordinationError::InvalidMaxWorkers);
+        require!(reward_mint.is_none(), CoordinationError::InvalidTokenMint);
+        require!(constraint_hash.is_none(), CoordinationError::InvalidInput);
+    }
     // Validate reward is not zero (#540) - not in shared validator since dependent tasks allow zero
     require!(reward_amount > 0, CoordinationError::InvalidReward);
 
@@ -177,6 +195,7 @@ pub fn handler(
     let escrow = ctx.accounts.escrow.as_mut();
     init_escrow_fields(escrow, task.key(), reward_amount, ctx.bumps.escrow);
 
+    #[cfg(feature = "spl-token-rewards")]
     if let Some(expected_mint) = reward_mint {
         // Token path: validate required token accounts are provided
         require!(
@@ -279,6 +298,20 @@ pub fn handler(
         )?;
     } else {
         // SOL path: existing lamport transfer (unchanged)
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.creator.to_account_info(),
+                    to: ctx.accounts.escrow.to_account_info(),
+                },
+            ),
+            reward_amount,
+        )?;
+    }
+    #[cfg(not(feature = "spl-token-rewards"))]
+    {
+        require!(reward_mint.is_none(), CoordinationError::InvalidTokenMint);
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
