@@ -510,51 +510,51 @@ pub fn execute_completion_rewards<'a, 'info>(
     // Interactions: external CPIs AFTER all state updates and events.
     #[cfg(feature = "spl-token-rewards")]
     {
-    let mut token_accounts = token_accounts;
-    if let Some(ref mut ta) = token_accounts {
-        transfer_token_rewards(ta, worker_reward, protocol_fee)?;
-    } else {
-        transfer_rewards(
-            escrow,
-            authority_info,
-            treasury_info,
-            worker_reward,
-            protocol_fee,
-        )?;
-    }
-
-    // Only close escrow when task is fully completed (all required completions done).
-    // For collaborative tasks with max_workers > 1, this keeps the escrow open
-    // for subsequent workers to complete and receive their share.
-    if task_completed {
+        let mut token_accounts = token_accounts;
         if let Some(ref mut ta) = token_accounts {
-            // Close token escrow ATA first, return rent to creator
-            let task_key_bytes = ta.task_key.to_bytes();
-            let bump_slice = [ta.escrow_bump];
-            let escrow_seeds: &[&[u8]] = &[b"escrow", task_key_bytes.as_ref(), &bump_slice];
-            let transferred_total = worker_reward
-                .checked_add(protocol_fee)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-            let residual_amount = ta
-                .token_escrow_starting_amount
-                .checked_sub(transferred_total)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-            close_token_escrow_account_info(
-                ta.token_escrow_ata,
-                residual_amount,
-                &ta.treasury_token_account,
-                creator_info,
-                &ta.escrow_authority,
-                escrow_seeds,
-                ta.token_program,
+            transfer_token_rewards(ta, worker_reward, protocol_fee)?;
+        } else {
+            transfer_rewards(
+                escrow,
+                authority_info,
+                treasury_info,
+                worker_reward,
+                protocol_fee,
             )?;
         }
-        // Always close the escrow PDA (returns rent-exempt SOL to creator).
-        // Anchor's close helper also assigns the account to the system program and
-        // resizes it to zero, preventing exit serialization from writing TaskEscrow
-        // data back into a zero-lamport account and failing the runtime rent check.
-        close_escrow_to_creator(escrow, creator_info)?;
-    }
+
+        // Only close escrow when task is fully completed (all required completions done).
+        // For collaborative tasks with max_workers > 1, this keeps the escrow open
+        // for subsequent workers to complete and receive their share.
+        if task_completed {
+            if let Some(ref mut ta) = token_accounts {
+                // Close token escrow ATA first, return rent to creator
+                let task_key_bytes = ta.task_key.to_bytes();
+                let bump_slice = [ta.escrow_bump];
+                let escrow_seeds: &[&[u8]] = &[b"escrow", task_key_bytes.as_ref(), &bump_slice];
+                let transferred_total = worker_reward
+                    .checked_add(protocol_fee)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?;
+                let residual_amount = ta
+                    .token_escrow_starting_amount
+                    .checked_sub(transferred_total)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?;
+                close_token_escrow_account_info(
+                    ta.token_escrow_ata,
+                    residual_amount,
+                    &ta.treasury_token_account,
+                    creator_info,
+                    &ta.escrow_authority,
+                    escrow_seeds,
+                    ta.token_program,
+                )?;
+            }
+            // Always close the escrow PDA (returns rent-exempt SOL to creator).
+            // Anchor's close helper also assigns the account to the system program and
+            // resizes it to zero, preventing exit serialization from writing TaskEscrow
+            // data back into a zero-lamport account and failing the runtime rent check.
+            close_escrow_to_creator(escrow, creator_info)?;
+        }
     }
 
     #[cfg(not(feature = "spl-token-rewards"))]

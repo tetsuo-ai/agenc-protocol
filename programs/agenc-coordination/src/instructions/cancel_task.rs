@@ -13,9 +13,9 @@ use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
 };
-use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::TaskType;
+use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 #[cfg(feature = "spl-token-rewards")]
