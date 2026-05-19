@@ -9,7 +9,7 @@ repository = "https://github.com/tetsuo-ai/agenc-protocol"
 
 [lib]
 name = "agenc_coordination"
-crate-type = ["cdylib", "lib"]
+crate-type = ["cdylib"]
 
 [features]
 default = ["private-zk", "spl-token-rewards"]
