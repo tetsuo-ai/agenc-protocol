@@ -7,13 +7,13 @@ seeds = true
 skip-lint = false
 
 [programs.localnet]
-agenc_coordination = "2jdBSJ8U5ixfwgs1bRLPtRRnpZAPm8Xv1tEdu8yjHJC7"
+agenc_coordination = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK"
 
 [programs.devnet]
-agenc_coordination = "2jdBSJ8U5ixfwgs1bRLPtRRnpZAPm8Xv1tEdu8yjHJC7"
+agenc_coordination = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK"
 
-# Mainnet intentionally not configured yet.
-# Add [programs.mainnet] only after pre-mainnet security sign-off.
+[programs.mainnet]
+agenc_coordination = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK"
 
 [registry]
 url = "https://api.apr.dev"
