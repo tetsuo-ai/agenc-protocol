@@ -451,9 +451,6 @@ pub fn execute_completion_rewards<'a, 'info>(
     clock: &Clock,
     token_accounts: Option<TokenPaymentAccounts<'a, 'info>>,
 ) -> Result<()> {
-    #[cfg(feature = "mainnet-canary")]
-    let _ = creator_info;
-
     let settlement_amount = reward_amount_override.unwrap_or(task.reward_amount);
     let (worker_reward, protocol_fee) = match reward_amount_override {
         Some(amount) => calculate_reward_split_for_amount(amount, protocol_fee_bps)?,
@@ -556,7 +553,6 @@ pub fn execute_completion_rewards<'a, 'info>(
             // Anchor's close helper also assigns the account to the system program and
             // resizes it to zero, preventing exit serialization from writing TaskEscrow
             // data back into a zero-lamport account and failing the runtime rent check.
-            #[cfg(not(feature = "mainnet-canary"))]
             close_escrow_to_creator(escrow, creator_info)?;
         }
     }
@@ -575,13 +571,6 @@ pub fn execute_completion_rewards<'a, 'info>(
             worker_reward,
             protocol_fee,
         )?;
-        // Mainnet canary keeps the escrow PDA resident after final settlement.
-        // Live mainnet rehearsal hit a runtime rent check after closing the escrow
-        // PDA in the same CreatorReview accept instruction. Keeping the account
-        // rent-exempt and marked is_closed=true is the minimal safe canary behavior:
-        // rewards/fees settle, terminal task state is preserved, and no under-rent
-        // account is produced. A later cleanup instruction can reclaim this rent.
-        #[cfg(not(feature = "mainnet-canary"))]
         if task_completed {
             close_escrow_to_creator(escrow, creator_info)?;
         }
@@ -590,7 +579,6 @@ pub fn execute_completion_rewards<'a, 'info>(
     Ok(())
 }
 
-#[allow(dead_code)]
 fn close_escrow_to_creator<'info>(
     escrow: &mut Account<'info, TaskEscrow>,
     creator_info: &AccountInfo<'info>,
