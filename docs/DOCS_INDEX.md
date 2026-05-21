@@ -5,6 +5,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 ## Start Here
 
 - [../README.md](../README.md) - repo overview, ownership, and top-level layout
+- [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy
 - [./CODEBASE_MAP.md](./CODEBASE_MAP.md) - path-by-path map for programs, artifacts, packages, scripts, migrations, zkVM, and workflows
 - [./PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md) - grouped instruction and account model for the Anchor program
 - [./MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md) - RFC for bid-book accounts, lifecycle, settlement hooks, and anti-spam controls

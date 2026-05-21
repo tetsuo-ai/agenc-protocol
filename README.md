@@ -2,9 +2,24 @@
 
 Public protocol source of truth for AgenC.
 
+## Mainnet Source Of Truth
+
+`main` is the canonical public source-of-truth branch for the currently
+deployed AgenC mainnet canary program.
+
+- Mainnet program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
+- `declare_id!` location: `programs/agenc-coordination/src/lib.rs`
+- The current `main` source tree matches the deployed mainnet program source
+- Historical rollout branch: `mainnet/hjs-program-id`
+
+If a future mainnet upgrade changes the deployed program source, update `main`
+in the same release window and refresh
+[docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md).
+
 ## Start Here
 
 - [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) - reading order for developers and AI agents
+- [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy
 - [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) - repo layout and ownership map
 - [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md) - grouped instruction and PDA overview
 - [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md) - RFC for Marketplace V2 bid accounts, lifecycle, settlement, and controls
