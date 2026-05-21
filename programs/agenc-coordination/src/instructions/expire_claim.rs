@@ -163,17 +163,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         task.status != TaskStatus::Disputed,
         CoordinationError::InvalidStatusTransition
     );
-    let claim_has_pending_submission = ctx
-        .accounts
-        .task_submission
-        .as_ref()
-        .map(|submission| submission.status == SubmissionStatus::Submitted)
-        .unwrap_or(false);
-    require!(
-        task.status == TaskStatus::InProgress
-            || (task.status == TaskStatus::PendingValidation && !claim_has_pending_submission),
-        CoordinationError::TaskNotInProgress
-    );
+    validate_expirable_task_status(
+        task.status,
+        ctx.accounts
+            .task_submission
+            .as_ref()
+            .map(|submission| submission.status),
+    )?;
 
     // Grace period protection (Issue #421):
     // During the grace period after expiry, only the worker authority can expire
@@ -273,4 +269,74 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
     Ok(())
+}
+
+fn validate_expirable_task_status(
+    task_status: TaskStatus,
+    task_submission_status: Option<SubmissionStatus>,
+) -> Result<()> {
+    match task_status {
+        TaskStatus::InProgress => Ok(()),
+        TaskStatus::PendingValidation => {
+            let submission_status =
+                task_submission_status.ok_or(CoordinationError::TaskSubmissionRequired)?;
+            require!(
+                submission_status != SubmissionStatus::Submitted,
+                CoordinationError::TaskNotInProgress
+            );
+            Ok(())
+        }
+        _ => Err(CoordinationError::TaskNotInProgress.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_anchor_error_code<T>(result: Result<T>, expected: CoordinationError) {
+        let expected_code: u32 = expected.into();
+        match result {
+            Ok(_) => panic!("expected AnchorError code {expected_code}, got success"),
+            Err(anchor_lang::error::Error::AnchorError(anchor_err)) => {
+                assert_eq!(anchor_err.error_code_number, expected_code);
+            }
+            Err(other) => {
+                panic!("expected AnchorError code {expected_code}, got {other:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn in_progress_claim_can_be_expired_without_submission_account() {
+        validate_expirable_task_status(TaskStatus::InProgress, None).unwrap();
+    }
+
+    #[test]
+    fn pending_validation_requires_submission_account_to_avoid_omission_bypass() {
+        assert_anchor_error_code(
+            validate_expirable_task_status(TaskStatus::PendingValidation, None),
+            CoordinationError::TaskSubmissionRequired,
+        );
+    }
+
+    #[test]
+    fn pending_validation_with_submitted_claim_cannot_be_expired() {
+        assert_anchor_error_code(
+            validate_expirable_task_status(
+                TaskStatus::PendingValidation,
+                Some(SubmissionStatus::Submitted),
+            ),
+            CoordinationError::TaskNotInProgress,
+        );
+    }
+
+    #[test]
+    fn pending_validation_with_non_submitted_claim_can_be_expired() {
+        validate_expirable_task_status(
+            TaskStatus::PendingValidation,
+            Some(SubmissionStatus::Rejected),
+        )
+        .unwrap();
+    }
 }
