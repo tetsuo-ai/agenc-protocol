@@ -35,6 +35,27 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 - complete task private
 - cancel task
 
+## Ledger Clear-Signing Commitments
+
+The live mainnet instruction ABI only lets a hardware wallet display values
+that are present in signed transaction bytes.
+
+- `create_task` carries reward, task id, deadline, worker caps, reputation gate,
+  and creator accounts directly.
+- `set_task_job_spec` carries `job_spec_hash` and `job_spec_uri` directly.
+- `submit_task_result` carries `proof_hash` and optional `result_data`; the kit
+  artifact encoder commits artifact results as `artifact:sha256:*`.
+- `claim_task_with_job_spec` verifies the on-chain `TaskJobSpec` account, but
+  does not carry `job_spec_hash` or `job_spec_uri` in instruction data.
+- `accept_task_result` and `cancel_task` settle from task/escrow account state,
+  but do not carry reward/refund amounts in instruction data.
+
+If Ledger must display claim job-spec hashes or settlement reward/refund amounts
+as trusted device fields, add a protocol-level commitment to those instructions
+or introduce a new signed settlement evidence instruction. Do not have the kit
+or Ledger app infer those values from off-chain state and present them as if
+they were signed instruction data.
+
 ### Marketplace V2
 
 - initialize / update bid marketplace config
