@@ -5,6 +5,7 @@ use anchor_lang::prelude::*;
 use crate::errors::CoordinationError;
 use crate::events::TaskModerationConfigUpdated;
 use crate::state::{ModerationConfig, ProtocolConfig};
+use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 
 #[derive(Accounts)]
 pub struct ConfigureTaskModeration<'info> {
@@ -34,15 +35,17 @@ pub fn handler(
     moderation_authority: Pubkey,
     enabled: bool,
 ) -> Result<()> {
+    // The moderation/job-spec gate decides which task claims are allowed, so it
+    // is a protocol security control and must be governed like the other admin
+    // mutators (update_treasury / update_protocol_fee / update_multisig) rather
+    // than by a single key. Require a multisig threshold of distinct multisig
+    // owner signers (passed via remaining_accounts), matching update_treasury.
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::MultisigNotEnoughSigners
     );
-    require_keys_eq!(
-        ctx.accounts.authority.key(),
-        ctx.accounts.protocol_config.authority,
-        CoordinationError::UnauthorizedAgent
-    );
+    let unique_signers = unique_account_infos(ctx.remaining_accounts);
+    require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
     require!(
         moderation_authority != Pubkey::default(),
         CoordinationError::InvalidTaskModerationAuthority
