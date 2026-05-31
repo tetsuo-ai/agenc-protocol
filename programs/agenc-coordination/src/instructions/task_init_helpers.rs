@@ -45,6 +45,31 @@ pub fn validate_task_params(
     Ok(())
 }
 
+/// Enforce that the on-chain `description` carries only a content-commitment hash,
+/// never human-readable prose. The field is `[u8; 64]`; the agent kit commits
+/// `sha256(content)` as the 32-byte digest in bytes `0..32` with bytes `32..64`
+/// zeroed (see agenc-marketplace-agent-kit `toOnChainDescriptionCommitment`). This
+/// rejects any task whose description has a non-zero tail, so a caller bypassing the
+/// kit cannot smuggle up to 64 bytes of readable (potentially un-moderated) text into
+/// the on-chain account. Full task text lives only in the content-addressed,
+/// moderation-gated job spec.
+///
+/// Note: this enforces the hash *layout* (32-byte digest + zero tail). Binding the
+/// digest to a specific moderation attestation (so creation provably matches
+/// moderated content) is the separate pre-task attestation gate (Option A) tracked
+/// in this PR's design doc.
+pub fn validate_description_is_content_hash(description: &[u8; 64]) -> Result<()> {
+    require!(
+        description[32..].iter().all(|&b| b == 0),
+        CoordinationError::InvalidDescription
+    );
+    require!(
+        description[..32].iter().any(|&b| b != 0),
+        CoordinationError::InvalidDescription
+    );
+    Ok(())
+}
+
 /// Validates Marketplace V2 task restrictions that depend on reward denomination.
 pub fn validate_bid_task_mode(
     task_type: u8,
@@ -159,4 +184,39 @@ pub fn increment_total_tasks(protocol_config: &mut ProtocolConfig) -> Result<()>
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod description_hash_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_hash_shaped_description() {
+        let mut d = [0u8; 64];
+        d[..32].copy_from_slice(&[7u8; 32]); // 32-byte digest, zero tail
+        assert!(validate_description_is_content_hash(&d).is_ok());
+    }
+
+    #[test]
+    fn rejects_readable_tail() {
+        let mut d = [0u8; 64];
+        d[..32].copy_from_slice(&[7u8; 32]);
+        d[40] = b'A'; // readable byte in the zero tail
+        assert!(validate_description_is_content_hash(&d).is_err());
+    }
+
+    #[test]
+    fn rejects_all_zero_digest() {
+        let d = [0u8; 64];
+        assert!(validate_description_is_content_hash(&d).is_err());
+    }
+
+    #[test]
+    fn rejects_raw_prose() {
+        // 64 bytes of readable text (the pre-#210 behaviour) has a non-zero tail.
+        let mut d = [0u8; 64];
+        let text = b"this is a long human readable task description that is prose!!";
+        d[..text.len()].copy_from_slice(text);
+        assert!(validate_description_is_content_hash(&d).is_err());
+    }
 }
