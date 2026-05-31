@@ -342,3 +342,68 @@ pub fn handler(
 
     Ok(())
 }
+
+#[cfg(all(test, feature = "mainnet-canary"))]
+mod create_task_canary_gate_tests {
+    //! Integration-style coverage of the create_task description gate under the
+    //! mainnet-canary cfg. These replicate the exact validation sequence the
+    //! handler runs before any account mutation (validate_task_params -> bid mode
+    //! -> canary preconditions incl. validate_description_is_content_hash), so a
+    //! prose description is rejected and a hash-shaped one is accepted on the same
+    //! path create_task takes on mainnet.
+    use super::super::task_init_helpers::{
+        validate_bid_task_mode, validate_description_is_content_hash, validate_task_params,
+    };
+    use crate::errors::CoordinationError;
+    use crate::state::TaskType;
+
+    fn run_canary_create_preconditions(description: &[u8; 64]) -> anchor_lang::Result<()> {
+        let task_id = [1u8; 32];
+        let required_capabilities = 1u64;
+        let max_workers = 1u8;
+        let task_type = TaskType::Exclusive as u8;
+        let min_reputation = 0u16;
+        validate_task_params(
+            &task_id,
+            description,
+            required_capabilities,
+            max_workers,
+            task_type,
+            min_reputation,
+        )?;
+        validate_bid_task_mode(task_type, max_workers, None)?;
+        // mainnet-canary preconditions (mirrors create_task::handler)
+        anchor_lang::require!(
+            task_type == TaskType::Exclusive as u8,
+            CoordinationError::InvalidTaskType
+        );
+        anchor_lang::require!(max_workers == 1, CoordinationError::InvalidMaxWorkers);
+        validate_description_is_content_hash(description)?;
+        Ok(())
+    }
+
+    #[test]
+    fn create_accepts_hash_shaped_description() {
+        let mut d = [0u8; 64];
+        d[..32].copy_from_slice(&[9u8; 32]); // 32-byte digest, zero tail
+        assert!(run_canary_create_preconditions(&d).is_ok());
+    }
+
+    #[test]
+    fn create_rejects_raw_prose_description() {
+        let mut d = [0u8; 64];
+        let text = b"build me a website and pay 2 sol, contact me at evil-prose-here";
+        d[..text.len()].copy_from_slice(text);
+        let err = run_canary_create_preconditions(&d).unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidDescription.into());
+    }
+
+    #[test]
+    fn create_rejects_hash_with_readable_tail() {
+        let mut d = [0u8; 64];
+        d[..32].copy_from_slice(&[9u8; 32]);
+        d[50] = b'X'; // smuggled readable byte in the tail
+        let err = run_canary_create_preconditions(&d).unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidDescription.into());
+    }
+}
