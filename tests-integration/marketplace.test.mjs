@@ -485,6 +485,78 @@ test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
   expectFail(send(w.svm, (await hireIx(w, { listingModeration: listingMod })).ix, [w.buyer]), "TaskModerationRejected", "hire with BLOCKED attestation");
 });
 
+// Record a listing-moderation attestation with explicit fields, returning the result.
+async function recordListingMod(w, { status = 0, risk = 0, expiresAt = 0 } = {}) {
+  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const res = send(w.svm, await makeProgram(w.modAuth).methods
+    .recordListingModeration(arr(w.specHash), status, risk, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(expiresAt))
+    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]);
+  return { res, listingMod };
+}
+
+test("moderation edges (hire): publishable set is exactly CLEAN + HUMAN_APPROVED", async () => {
+  // status -> whether a hire against that attestation is allowed.
+  const cases = [
+    { status: 1, name: "SUSPICIOUS", ok: false },
+    { status: 3, name: "SCANNER_UNAVAILABLE", ok: false },
+    { status: 5, name: "HUMAN_REJECTED", ok: false },
+    { status: 4, name: "HUMAN_APPROVED", ok: true },
+  ];
+  for (const c of cases) {
+    const w = await freshWorld({ moderationEnabled: true });
+    const { res, listingMod } = await recordListingMod(w, { status: c.status });
+    expectOk(res, `record ${c.name}`);
+    const hire = send(w.svm, (await hireIx(w, { listingModeration: listingMod })).ix, [w.buyer]);
+    if (c.ok) expectOk(hire, `hire with ${c.name} (publishable)`);
+    else expectFail(hire, "TaskModerationRejected", `hire with ${c.name} (not publishable)`);
+  }
+});
+
+test("moderation edges (hire): risk-score cap is enforced at the boundary", async () => {
+  // risk_score 100 is the max allowed (CLEAN); 101 is rejected at record time.
+  const wOk = await freshWorld({ moderationEnabled: true });
+  const ok = await recordListingMod(wOk, { status: 0, risk: 100 });
+  expectOk(ok.res, "record CLEAN risk=100");
+  expectOk(send(wOk.svm, (await hireIx(wOk, { listingModeration: ok.listingMod })).ix, [wOk.buyer]), "hire with risk=100");
+
+  const wBad = await freshWorld({ moderationEnabled: true });
+  expectFail((await recordListingMod(wBad, { status: 0, risk: 101 })).res, "InvalidTaskModerationRiskScore", "record risk=101");
+});
+
+test("moderation edges (record): disabled config, invalid status, and past expiry are rejected", async () => {
+  // moderation disabled -> recording is rejected (fail-closed semantics).
+  const wOff = await freshWorld({ moderationEnabled: false });
+  expectFail((await recordListingMod(wOff, { status: 0 })).res, "TaskModerationRequired", "record while moderation disabled");
+
+  // invalid status code (not 0..5) -> rejected.
+  const wStatus = await freshWorld({ moderationEnabled: true });
+  expectFail((await recordListingMod(wStatus, { status: 6 })).res, "InvalidTaskModerationStatus", "record invalid status=6");
+
+  // already-expired attestation (expires_at in the past) -> rejected at record time.
+  const wExp = await freshWorld({ moderationEnabled: true });
+  const past = Number(wExp.svm.getClock().unixTimestamp) - 100;
+  expectFail((await recordListingMod(wExp, { status: 0, expiresAt: past })).res, "TaskModerationExpired", "record past-expiry attestation");
+});
+
+test("moderation edges (set_task_job_spec): a non-publishable task moderation cannot be published", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const m = await setupManualTask(w, { mode: 1 }); // a plain Open task to publish against
+  const jobHash = id32();
+  const [taskMod] = pda([enc("task_moderation"), m.task.toBuffer(), Buffer.from(jobHash)]);
+  const [jobSpec] = pda([enc("task_job_spec"), m.task.toBuffer()]);
+  // record a BLOCKED task moderation, then try to publish the job spec.
+  expectOk(send(w.svm, await makeProgram(w.modAuth).methods
+    .recordTaskModeration(arr(jobHash), 2 /* BLOCKED */, 90, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, task: m.task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]), "record BLOCKED task moderation");
+  expectFail(send(w.svm, await w.buyerProg.methods
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/blocked")
+    .accounts({ protocolConfig: w.protocolPda, task: m.task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "TaskModerationRejected", "publish against BLOCKED moderation");
+  assert.ok(isClosed(w.svm, jobSpec), "no TaskJobSpec created when the gate fails");
+});
+
 /// Drive a task through the Auto settlement path (worker completes + is paid via
 /// execute_completion_rewards — where bonds + the 3-way split live). Requires a
 /// moderation-enabled world (set_task_job_spec is moderation-gated). The freshWorld
