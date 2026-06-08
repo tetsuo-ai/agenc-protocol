@@ -10,7 +10,6 @@ use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
 };
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, is_manual_validation_task,
     release_claim_slot, sync_task_validation_status,
@@ -21,7 +20,7 @@ use crate::state::{
     TaskAttestorConfig, TaskClaim, TaskEscrow, TaskStatus, TaskSubmission, TaskValidationConfig,
     TaskValidationVote, ValidationMode,
 };
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -151,8 +150,11 @@ pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, ValidateTaskResult<'info>>,
     approved: bool,
 ) -> Result<()> {
-    check_version_compatible(&ctx.accounts.protocol_config)?;
-    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
+    // Settlement path: validating a submission resolves an in-flight, already-
+    // escrowed task and settles payout. It must work while the protocol is paused
+    // or the type is disabled (both gate ENTRY only — spec §7, Decision #4 "money
+    // never locks"); a pause must not strand escrowed funds mid-settlement.
+    check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
 
     require!(

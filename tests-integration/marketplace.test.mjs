@@ -455,7 +455,7 @@ test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
 /// execute_completion_rewards — where bonds + the 3-way split live). Requires a
 /// moderation-enabled world (set_task_job_spec is moderation-gated). The freshWorld
 /// buyer (agent) is the creator; the provider agent is the worker. Returns handles.
-async function runAutoSettlement(w) {
+async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   const taskId = id32();
   const jobHash = id32();
   const reward = 5_000_000;
@@ -494,6 +494,11 @@ async function runAutoSettlement(w) {
     .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "settle:claim");
 
+  // Optionally pause the protocol AFTER the claim. Entry paths are now blocked,
+  // but settlement must still succeed (exit allow-list, spec §7) so the worker
+  // is paid for completed work rather than losing it to a later expiry.
+  if (pauseBeforeComplete) await setProtocolPaused(w.svm, true);
+
   // 5) worker completes -> payout via execute_completion_rewards
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
   const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
@@ -517,6 +522,19 @@ test("FULL SETTLEMENT (Auto): create -> moderate -> publish -> claim -> complete
   assert.ok(workerAfter > r.workerBalBefore, "worker received the reward");
   assert.ok(treasuryAfter >= r.treasuryBalBefore, "treasury received the protocol fee");
   assert.ok(isClosed(w.svm, r.escrow), "escrow closed on completion");
+});
+
+test("exit allow-list (settlement): a worker still completes + is paid while the protocol is paused", async () => {
+  // Regression for the iter-5 review finding: forward-settlement (complete_task)
+  // must not be frozen by a pause, or a worker who did the work loses it when the
+  // claim later expires. Pause is injected AFTER the claim, before completion.
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runAutoSettlement(w, { pauseBeforeComplete: true });
+
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.Completed !== undefined, `task Completed despite paused protocol (got ${JSON.stringify(t.status)})`);
+  assert.ok(Number(w.svm.getBalance(r.workerAuthority)) > r.workerBalBefore, "worker paid while paused");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed on completion while paused");
 });
 
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {

@@ -2,7 +2,6 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskResultSubmitted;
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, increment_pending_submission_count, is_manual_validation_task,
 };
@@ -10,7 +9,7 @@ use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
     TaskSubmission, TaskValidationConfig, HASH_SIZE, RESULT_DATA_SIZE,
 };
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -71,8 +70,11 @@ pub fn handler(
     proof_hash: [u8; HASH_SIZE],
     result_data: Option<[u8; RESULT_DATA_SIZE]>,
 ) -> Result<()> {
-    check_version_compatible(&ctx.accounts.protocol_config)?;
-    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
+    // Settlement path: submitting a result fulfils an existing claim and advances
+    // the task toward payout. It must work while the protocol is paused or the
+    // type is disabled (both gate ENTRY only — spec §7, Decision #4 "money never
+    // locks"); otherwise a pause would strand the worker mid-settlement.
+    check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
 
     require!(

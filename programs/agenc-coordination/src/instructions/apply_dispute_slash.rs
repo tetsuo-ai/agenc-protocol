@@ -9,7 +9,6 @@
 //! After this window, slashing can no longer be applied.
 
 use crate::errors::CoordinationError;
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::slash_helpers::{
     apply_reputation_penalty, calculate_approval_percentage, calculate_slash_amount,
     transfer_slash_to_treasury, SLASH_WINDOW,
@@ -21,7 +20,7 @@ use crate::state::{
     AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim,
     TaskEscrow,
 };
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -100,8 +99,14 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     let worker_agent = &mut ctx.accounts.worker_agent;
     let config = &ctx.accounts.protocol_config;
 
-    check_version_compatible(config)?;
-    require_task_type_enabled(config, ctx.accounts.task.task_type)?;
+    // Settlement path: this finalizes the slash + the token slash reserve that
+    // resolve_dispute deferred (resolve_dispute is itself exit-safe). It must work
+    // while the protocol is paused or the type is disabled (both gate ENTRY only —
+    // spec §7, Decision #4 "money never locks"). There is NO alternative unwind
+    // once the dispute is Resolved (expire_dispute requires DisputeStatus::Active),
+    // and the 7-day SLASH_WINDOW means a pause that outlasts it would otherwise
+    // strand the deferred token reserve permanently.
+    check_version_compatible_for_exit(config)?;
     // Verify the worker being slashed is the actual defendant (fix #827)
     // Prevents slashing wrong worker on collaborative tasks with multiple claimants
     require!(

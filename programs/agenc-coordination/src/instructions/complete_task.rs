@@ -9,14 +9,13 @@ use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
     validate_completion_prereqs, validate_task_dependency,
 };
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
     AgentRegistration, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
 };
 use crate::utils::compute_budget::log_compute_units;
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -151,8 +150,11 @@ fn handle_complete_task<'info>(
     let worker = &mut accounts.worker;
     let clock = Clock::get()?;
 
-    check_version_compatible(&accounts.protocol_config)?;
-    require_task_type_enabled(&accounts.protocol_config, task.task_type)?;
+    // Settlement path: an in-flight task must settle even while the protocol is
+    // paused or its type is disabled (both gate ENTRY only — spec §7, Decision #4
+    // "money never locks"). Paying out already-escrowed funds for completed work
+    // is an exit, not new work, so a pause must never strand a worker's reward.
+    check_version_compatible_for_exit(&accounts.protocol_config)?;
 
     // If task has a proof dependency, verify parent task is completed (shared helper)
     validate_task_dependency(task, remaining_accounts, program_id)?;
