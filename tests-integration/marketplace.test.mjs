@@ -201,6 +201,12 @@ async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1
   const svm = new LiteSVM();
   svm.addProgramFromFile(PID, SO);
 
+  // litesvm's clock starts at unixTimestamp 0, which makes claim.claimed_at 0 —
+  // submit_task_result requires claimed_at > 0. Advance to a realistic timestamp.
+  const clock = svm.getClock();
+  clock.unixTimestamp = 1_700_000_000n;
+  svm.setClock(clock);
+
   const admin = Keypair.generate();
   const provider = Keypair.generate();
   const buyer = Keypair.generate();
@@ -857,6 +863,85 @@ test("configure_task_validation: a non-hired task can still be pinned to manual 
     vc.mode?.CreatorReview !== undefined || vc.mode?.creatorReview !== undefined,
     `non-hired task pinned to CreatorReview (got ${JSON.stringify(vc.mode)})`,
   );
+});
+
+/// Drive a manual-validation (V2) task through settlement: create+configure (CreatorReview)
+/// -> moderate -> publish -> claim -> submit_task_result -> accept|reject_task_result.
+/// Requires a moderation-enabled world. Returns handles + the worker balance snapshot.
+async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle = false } = {}) {
+  const modProg = makeProgram(w.modAuth);
+  const m = await setupManualTask(w, { mode: 1 }); // CreatorReview, non-hired
+  const { task, escrow, validation, reward } = m;
+
+  // moderate + publish a job spec (required to claim)
+  const jobHash = id32();
+  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
+  expectOk(send(w.svm, await modProg.methods
+    .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]), "manual:task-mod");
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/manual")
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "manual:publish");
+
+  // worker claims, then submits a result for review
+  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .claimTaskWithJobSpec()
+    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "manual:claim");
+  const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .submitTaskResult(arr(id32()), arr(desc))
+    .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "manual:submit");
+
+  if (pauseBeforeSettle) await setProtocolPaused(w.svm, true);
+
+  // worker_authority (provider) is NOT the signer of accept/reject (creator signs),
+  // so its balance delta reflects payout exactly.
+  const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  if (decision === "accept") {
+    expectOk(send(w.svm, await w.buyerProg.methods
+      .acceptTaskResult()
+      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+      .instruction(), [w.buyer]), "manual:accept");
+  } else if (decision === "reject") {
+    expectOk(send(w.svm, await w.buyerProg.methods
+      .rejectTaskResult(arr(id32()))
+      .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey })
+      .instruction(), [w.buyer]), "manual:reject");
+  }
+  return { task, escrow, claim, validation, submission, jobSpec, workerBalBefore, reward };
+}
+
+test("manual validation (CreatorReview): submit -> accept pays the worker", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runManualSettlement(w, { decision: "accept" });
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.Completed !== undefined, `task Completed after accept (got ${JSON.stringify(t.status)})`);
+  assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > r.workerBalBefore, "worker paid on accept");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed on accept");
+});
+
+test("manual validation (CreatorReview): reject does NOT pay the worker or settle", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runManualSettlement(w, { decision: "reject" });
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.Completed === undefined, `task NOT Completed after reject (got ${JSON.stringify(t.status)})`);
+  assert.ok(!isClosed(w.svm, r.escrow), "escrow still holds the reward after reject");
+});
+
+test("manual validation: accept still settles while the protocol is paused (exit-safe)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runManualSettlement(w, { decision: "accept", pauseBeforeSettle: true });
+  assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed despite pause");
+  assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > r.workerBalBefore, "worker paid while paused");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed while paused");
 });
 
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
