@@ -206,6 +206,43 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "taskJobSpec",
+          "docs": [
+            "Published, moderation-gated job spec for this task (PDA [\"task_job_spec\", task]).",
+            "Required so a bid can only be accepted for work that passed moderation at",
+            "publish time — `set_task_job_spec` is the only way this account can exist and",
+            "it hard-requires a publishable `task_moderation`. This gates `accept_bid`",
+            "before InProgress (spec §6) at parity with `claim_task_with_job_spec`, which",
+            "makes the legacy no-job-spec assignment path unreachable."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
           "name": "creator",
           "writable": true,
           "signer": true

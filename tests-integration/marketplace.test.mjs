@@ -170,6 +170,32 @@ async function injectModerationConfig(svm, admin, modAuth, enabled) {
   return pdaKey;
 }
 
+/// Inject a BidMarketplaceConfig at ["bid_marketplace"]. The real initializer is
+/// multisig-gated (owners>=2/threshold>=2); injecting it directly lets the bid
+/// harness exercise create_bid / accept_bid without standing up a full multisig.
+async function injectBidMarketplace(svm, admin, { minBond = 100_000 } = {}) {
+  const [pdaKey, bump] = pda([enc("bid_marketplace")]);
+  const cfg = {
+    authority: admin.publicKey,
+    min_bid_bond_lamports: new BN(minBond),
+    bid_creation_cooldown_secs: new BN(0),
+    max_bids_per_24h: 100,
+    max_active_bids_per_task: 10,
+    max_bid_lifetime_secs: new BN(86400),
+    accepted_no_show_slash_bps: 0,
+    bump,
+  };
+  const data = await coder.accounts.encode("BidMarketplaceConfig", cfg);
+  svm.setAccount(pdaKey, {
+    lamports: Number(svm.minimumBalanceForRentExemption(BigInt(data.length))),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+  return pdaKey;
+}
+
 /// Build a fully wired world ready to hire: protocol + moderation config + agents + listing.
 async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1, moderationEnabled = false, operator = null, operatorFeeBps = 0 } = {}) {
   const svm = new LiteSVM();
@@ -643,6 +669,92 @@ test("exit allow-list (settlement): a worker still completes + is paid while the
   assert.ok(t.status.Completed !== undefined, `task Completed despite paused protocol (got ${JSON.stringify(t.status)})`);
   assert.ok(Number(w.svm.getBalance(r.workerAuthority)) > r.workerBalBefore, "worker paid while paused");
   assert.ok(isClosed(w.svm, r.escrow), "escrow closed on completion while paused");
+});
+
+/// Build a BidExclusive task with an injected bid marketplace, an open bid book,
+/// and one active bid from the provider agent — in a moderation-enabled world.
+/// When publishJobSpec is true, also record+publish a moderated TaskJobSpec (which
+/// accept_bid now requires). Returns handles for accept_bid.
+async function setupBidTask(w, { publishJobSpec = true } = {}) {
+  const modProg = makeProgram(w.modAuth);
+  const taskId = id32();
+  const reward = 4_000_000;
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+
+  // 1) create a BidExclusive task (task_type = 3).
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null) // task_type=3 (BidExclusive)
+    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "bid:create_task");
+
+  // 2) optionally publish a moderated job spec (required by accept_bid, §6).
+  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
+  if (publishJobSpec) {
+    const jobHash = id32();
+    const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+    expectOk(send(w.svm, await modProg.methods
+      .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [w.modAuth]), "bid:task-mod");
+    expectOk(send(w.svm, await w.buyerProg.methods
+      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid")
+      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [w.buyer]), "bid:publish");
+  }
+
+  // 3) inject the bid marketplace, then init the bid book (creator) + a bid (provider).
+  const bidMarket = await injectBidMarketplace(w.svm, w.admin, {});
+  const [bidBook] = pda([enc("bid_book"), task.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .initializeBidBook(0, 0, 0, 0, 0) // policy 0 = BestPrice (no weight-sum rule)
+    .accounts({ task, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "bid:init-book");
+
+  const [bid] = pda([enc("bid"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  const [bidderMarket] = pda([enc("bidder_market"), w.providerAgent.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .createBid(new BN(reward), 3600, 5000, arr(Buffer.alloc(32, 4)), arr(Buffer.alloc(32, 5)), new BN(now + 1800))
+    .accounts({ protocolConfig: w.protocolPda, bidMarketplace: bidMarket, task, bidBook, bid, bidderMarketState: bidderMarket, bidder: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "bid:create_bid");
+
+  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  return { task, escrow, jobSpec, bidBook, bid, bidderMarket, claim, reward };
+}
+
+test("accept_bid moderation gate: succeeds only with a published (moderated) job spec", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const b = await setupBidTask(w, { publishJobSpec: true });
+
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .acceptBid()
+    .accounts({ task: b.task, claim: b.claim, protocolConfig: w.protocolPda, bidBook: b.bidBook, bid: b.bid, bidderMarketState: b.bidderMarket, bidder: w.providerAgent, taskJobSpec: b.jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "accept_bid with job spec");
+
+  const t = decode(w.svm, "Task", b.task);
+  assert.ok(t.status.InProgress !== undefined, `task InProgress after accept_bid (got ${JSON.stringify(t.status)})`);
+  const claim = decode(w.svm, "TaskClaim", b.claim);
+  assert.equal(claim.worker.toBase58(), w.providerAgent.toBase58(), "claim assigned to the bidder");
+});
+
+test("accept_bid moderation gate: rejected when no job spec was published (§6 entry gate)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const b = await setupBidTask(w, { publishJobSpec: false }); // no TaskJobSpec published
+
+  // The required task_job_spec PDA does not exist -> accept_bid cannot assign work.
+  const res = send(w.svm, await w.buyerProg.methods
+    .acceptBid()
+    .accounts({ task: b.task, claim: b.claim, protocolConfig: w.protocolPda, bidBook: b.bidBook, bid: b.bid, bidderMarketState: b.bidderMarket, bidder: w.providerAgent, taskJobSpec: b.jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]);
+  expectFail(res, "AccountNotInitialized", "accept_bid without a published job spec");
+
+  // The task must remain Open (no worker assigned) since the gate blocked it.
+  const t = decode(w.svm, "Task", b.task);
+  assert.ok(t.status.Open !== undefined, `task stays Open when the gate blocks accept_bid (got ${JSON.stringify(t.status)})`);
 });
 
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
