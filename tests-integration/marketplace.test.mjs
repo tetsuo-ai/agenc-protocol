@@ -17,6 +17,15 @@ import { LiteSVM, FailedTransactionMetadata } from "litesvm";
 import anchorPkg from "@coral-xyz/anchor";
 const { Program, AnchorProvider, BN, Wallet, BorshCoder } = anchorPkg;
 import { Connection, Keypair, PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
+import {
+  MINT_SIZE,
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createInitializeMintInstruction,
+  createAssociatedTokenAccountInstruction,
+  createMintToInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "..");
@@ -47,6 +56,22 @@ function send(svm, ix, signers) {
   tx.feePayer = signers[0].publicKey;
   tx.sign(...signers);
   return svm.sendTransaction(tx);
+}
+
+// Send several instructions in one transaction (used for SPL-token setup).
+function sendMany(svm, ixs, signers) {
+  const tx = new Transaction().add(...ixs);
+  tx.recentBlockhash = svm.latestBlockhash();
+  tx.feePayer = signers[0].publicKey;
+  tx.sign(...signers);
+  return svm.sendTransaction(tx);
+}
+
+// Read an SPL token account's `amount` (u64 LE at offset 64). 0 if absent/closed.
+function tokenAmount(svm, ata) {
+  const acct = svm.getAccount(ata);
+  if (!acct || acct.data.length < 72) return 0n;
+  return Buffer.from(acct.data).readBigUInt64LE(64);
 }
 
 function expectOk(res, label) {
@@ -1072,6 +1097,88 @@ test("dispute: initiate -> expire settles the escrow while the protocol is pause
   // despite the protocol being paused (money never locks).
   assert.ok(isClosed(w.svm, r.escrow), "escrow settled by expire_dispute while paused");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute no longer Active");
+});
+
+/// Drive an SPL-token task through Auto settlement: mint a token, fund the buyer,
+/// create_task(reward_mint) (which CPI-creates + funds the token escrow ATA), moderate
+/// -> publish -> claim -> complete_task with token accounts. Returns the token ATAs.
+async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
+  const modProg = makeProgram(w.modAuth);
+
+  // 1) create + init the mint (admin is the mint authority, 0 decimals).
+  const mint = Keypair.generate();
+  const rent = Number(w.svm.minimumBalanceForRentExemption(BigInt(MINT_SIZE)));
+  expectOk(sendMany(w.svm, [
+    SystemProgram.createAccount({ fromPubkey: w.admin.publicKey, newAccountPubkey: mint.publicKey, lamports: rent, space: MINT_SIZE, programId: TOKEN_PROGRAM_ID }),
+    createInitializeMintInstruction(mint.publicKey, 0, w.admin.publicKey, null),
+  ], [w.admin, mint]), "token:mint");
+
+  // 2) buyer (creator) ATA funded with the reward; treasury + worker ATAs (must pre-exist).
+  const buyerAta = getAssociatedTokenAddressSync(mint.publicKey, w.buyer.publicKey);
+  const treasuryAta = getAssociatedTokenAddressSync(mint.publicKey, w.admin.publicKey);
+  const workerAta = getAssociatedTokenAddressSync(mint.publicKey, w.provider.publicKey);
+  expectOk(sendMany(w.svm, [
+    createAssociatedTokenAccountInstruction(w.admin.publicKey, buyerAta, w.buyer.publicKey, mint.publicKey),
+    createAssociatedTokenAccountInstruction(w.admin.publicKey, treasuryAta, w.admin.publicKey, mint.publicKey),
+    createAssociatedTokenAccountInstruction(w.admin.publicKey, workerAta, w.provider.publicKey, mint.publicKey),
+    createMintToInstruction(mint.publicKey, buyerAta, w.admin.publicKey, reward),
+  ], [w.admin]), "token:atas+fund");
+
+  // 3) create_task with reward_mint (create_task CPI-creates + funds the escrow ATA).
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const escrowAta = getAssociatedTokenAddressSync(mint.publicKey, escrow, true);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, mint.publicKey)
+    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: mint.publicKey, creatorTokenAccount: buyerAta, tokenEscrowAta: escrowAta, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID })
+    .instruction(), [w.buyer]), "token:create_task");
+
+  // 4) moderate -> publish -> claim
+  const jobHash = id32();
+  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
+  expectOk(send(w.svm, await modProg.methods
+    .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]), "token:task-mod");
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/token")
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "token:publish");
+  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .claimTaskWithJobSpec()
+    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "token:claim");
+
+  // 5) complete_task with token accounts (operator leg is SOL-only -> none here).
+  const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .completeTask(arr(id32()), null)
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: escrowAta, workerTokenAccount: workerAta, treasuryTokenAccount: treasuryAta, rewardMint: mint.publicKey, tokenProgram: TOKEN_PROGRAM_ID, hireRecord, operator: null })
+    .instruction(), [w.provider]), "token:complete");
+
+  return { task, escrow, mint: mint.publicKey, buyerAta, treasuryAta, workerAta, escrowAta, reward };
+}
+
+test("SPL-token settlement: complete pays worker + treasury in tokens (conservation), closes token escrow", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runTokenSettlement(w, { reward: 5_000_000 });
+
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.Completed !== undefined, `task Completed (got ${JSON.stringify(t.status)})`);
+  const workerTok = tokenAmount(w.svm, r.workerAta);
+  const treasuryTok = tokenAmount(w.svm, r.treasuryAta);
+  assert.ok(workerTok > 0n, "worker received reward tokens");
+  assert.ok(treasuryTok > 0n, "treasury received the protocol fee in tokens");
+  assert.equal(workerTok + treasuryTok, BigInt(r.reward), "worker + treasury == reward (token conservation)");
+  assert.ok(isClosed(w.svm, r.escrowAta), "token escrow ATA closed on completion");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow PDA closed on completion");
 });
 
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
