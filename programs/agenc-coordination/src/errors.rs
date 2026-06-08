@@ -850,4 +850,7 @@ pub enum CoordinationError {
 
     #[msg("Operator payee account does not match the hire record operator")]
     InvalidOperatorAccount,
+
+    #[msg("A hired task cannot be reconfigured for manual validation; it settles on the hire completion path")]
+    HiredTaskValidationUnsupported,
 }

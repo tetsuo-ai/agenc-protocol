@@ -2862,6 +2862,35 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "hireRecord",
+          "docs": [
+            "Hire link PDA for this task. ALWAYS required — the caller passes the derived",
+            "[\"hire\", task] address even for non-hired tasks (where it is an empty system",
+            "account). If it is a live, program-owned HireRecord the task was hired from a",
+            "listing, and reconfiguring it for manual validation would route settlement",
+            "through accept_task_result, which does not pay the operator leg (the operator",
+            "fee is only settled on the hire/complete_task path) — so the handler rejects",
+            "it. Making it required (not optional) means the gate cannot be skipped."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
           "name": "creator",
           "writable": true,
           "signer": true
@@ -13566,6 +13595,11 @@ export type AgencCoordination = {
       "code": 6270,
       "name": "invalidOperatorAccount",
       "msg": "Operator payee account does not match the hire record operator"
+    },
+    {
+      "code": 6271,
+      "name": "hiredTaskValidationUnsupported",
+      "msg": "A hired task cannot be reconfigured for manual validation; it settles on the hire completion path"
     }
   ],
   "types": [

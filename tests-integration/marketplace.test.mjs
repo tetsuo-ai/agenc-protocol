@@ -801,6 +801,64 @@ test("accept_bid moderation gate: rejected when no job spec was published (§6 e
   assert.ok(t.status.Open !== undefined, `task stays Open when the gate blocks accept_bid (got ${JSON.stringify(t.status)})`);
 });
 
+/// Create a plain (non-hired) Auto task and pin it to manual validation (default
+/// CreatorReview = 1). Passes the empty ["hire", task] PDA (non-hired), so the
+/// hired-task guard lets it through. Returns handles for the manual settlement flow.
+async function setupManualTask(w, { mode = 1, reviewWindow = 3600, reward = 2_000_000, capabilities = 1 } = {}) {
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
+  const [attestor] = pda([enc("task_attestor"), task.toBuffer()]);
+  const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null)
+    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "manual:create_task");
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .configureTaskValidation(mode, new BN(reviewWindow), 0, null)
+    .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "manual:configure");
+  return { task, escrow, validation, attestor, reward };
+}
+
+test("operator-fee protection: a hired task cannot be re-routed to manual validation", async () => {
+  // Regression for the audit finding: configure_task_validation must reject a task
+  // that has a live HireRecord (re-routing it to manual settlement would drop the
+  // operator's fee, which the manual path is not yet hire-aware about).
+  const operatorKp = Keypair.generate();
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
+  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  expectOk(send(w.svm, await makeProgram(w.modAuth).methods
+    .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]), "record listing mod");
+  const { ix: hix, task, hireRecord } = await hireIx(w, { listingModeration: listingMod });
+  expectOk(send(w.svm, hix, [w.buyer]), "hire");
+
+  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
+  const [attestor] = pda([enc("task_attestor"), task.toBuffer()]);
+  const cfgIx = await w.buyerProg.methods
+    .configureTaskValidation(1, new BN(3600), 0, null) // CreatorReview
+    .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction();
+  expectFail(send(w.svm, cfgIx, [w.buyer]), "HiredTaskValidationUnsupported", "configure validation on a hired task");
+});
+
+test("configure_task_validation: a non-hired task can still be pinned to manual validation", async () => {
+  const w = await freshWorld({});
+  const m = await setupManualTask(w, { mode: 1 }); // passes the empty hire PDA, guard lets it through
+  const vc = decode(w.svm, "TaskValidationConfig", m.validation);
+  assert.ok(
+    vc.mode?.CreatorReview !== undefined || vc.mode?.creatorReview !== undefined,
+    `non-hired task pinned to CreatorReview (got ${JSON.stringify(vc.mode)})`,
+  );
+});
+
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
   const w = await freshWorld({});
   const human = Keypair.generate(); // NO AgentRegistration

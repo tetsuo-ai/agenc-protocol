@@ -48,6 +48,20 @@ pub struct ConfigureTaskValidation<'info> {
     )]
     pub protocol_config: Account<'info, ProtocolConfig>,
 
+    /// Hire link PDA for this task. ALWAYS required — the caller passes the derived
+    /// ["hire", task] address even for non-hired tasks (where it is an empty system
+    /// account). If it is a live, program-owned HireRecord the task was hired from a
+    /// listing, and reconfiguring it for manual validation would route settlement
+    /// through accept_task_result, which does not pay the operator leg (the operator
+    /// fee is only settled on the hire/complete_task path) — so the handler rejects
+    /// it. Making it required (not optional) means the gate cannot be skipped.
+    /// CHECK: address fixed by seeds; live-vs-absent decided by `owner` in the handler.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+
     #[account(mut)]
     pub creator: Signer<'info>,
 
@@ -63,6 +77,16 @@ pub fn handler(
 ) -> Result<()> {
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
+
+    // A hired task (live, program-owned HireRecord) must settle on the hire/complete_task
+    // path so its operator fee is paid; reconfiguring it for manual validation would
+    // route settlement through accept_task_result, which is not hire-aware and would
+    // silently drop the operator's cut. Reject it. (Non-hired tasks pass the empty
+    // system-owned ["hire", task] PDA and proceed.)
+    require!(
+        ctx.accounts.hire_record.owner != &crate::ID,
+        CoordinationError::HiredTaskValidationUnsupported
+    );
 
     let parsed_mode = validate_validation_mode(mode)?;
     #[cfg(feature = "mainnet-canary")]
