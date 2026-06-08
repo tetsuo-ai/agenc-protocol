@@ -1041,6 +1041,39 @@ test("close_task children: a program-owned non-child remaining account is reject
   assert.ok(!isClosed(w.svm, r.task), "task NOT closed (tx reverted)");
 });
 
+test("dispute: initiate -> expire settles the escrow while the protocol is paused (exit-safe)", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
+
+  // worker initiates a dispute on their claimed task
+  const taskId = decode(w.svm, "Task", r.task).task_id;
+  const disputeId = id32();
+  const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 0, "evidence")
+    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: rateLimit, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "initiate_dispute");
+  assert.ok(decode(w.svm, "Task", r.task).status.Disputed !== undefined, "task is Disputed");
+  assert.ok(decode(w.svm, "Dispute", dispute).status.Active !== undefined, "dispute is Active");
+
+  // warp past max_dispute_duration, pause, then expire (permissionless last-resort exit).
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 604800n + 100n;
+  w.svm.setClock(clk);
+  await setProtocolPaused(w.svm, true);
+
+  expectOk(send(w.svm, await w.providerProg.methods
+    .expireDispute()
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, authority: w.provider.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, rewardMint: null, tokenProgram: null })
+    .instruction(), [w.provider]), "expire_dispute while paused");
+
+  // exit-safe: the escrow is settled (closed) and the dispute is no longer Active,
+  // despite the protocol being paused (money never locks).
+  assert.ok(isClosed(w.svm, r.escrow), "escrow settled by expire_dispute while paused");
+  assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute no longer Active");
+});
+
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
   const w = await freshWorld({});
   const human = Keypair.generate(); // NO AgentRegistration
