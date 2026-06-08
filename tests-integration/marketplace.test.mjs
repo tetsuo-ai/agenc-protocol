@@ -172,6 +172,26 @@ async function setProtocolPaused(svm, paused) {
   });
 }
 
+/// Set min_arbiter_stake on the live ProtocolConfig (so arbiter votes carry weight).
+async function setMinArbiterStake(svm, amount) {
+  const [protocolPda] = pda([enc("protocol")]);
+  const acct = svm.getAccount(protocolPda);
+  const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+  cfg.min_arbiter_stake = new BN(amount);
+  const data = await coder.accounts.encode("ProtocolConfig", cfg);
+  svm.setAccount(protocolPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
+/// Set an AgentRegistration's `stake` in place (no real staking instruction needed
+/// for tests). Used to give arbiters vote weight and the worker a slashable stake.
+async function injectAgentStake(svm, agentPda, stake) {
+  const acct = svm.getAccount(agentPda);
+  const agent = coder.accounts.decode("AgentRegistration", Buffer.from(acct.data));
+  agent.stake = new BN(stake);
+  const data = await coder.accounts.encode("AgentRegistration", agent);
+  svm.setAccount(agentPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
 /// Inject a ModerationConfig at ["moderation_config"]. enabled=false keeps Model-A.
 async function injectModerationConfig(svm, admin, modAuth, enabled) {
   const [pdaKey, bump] = pda([enc("moderation_config")]);
@@ -1233,6 +1253,68 @@ test("dispute: resolve via arbiter quorum settles while the protocol is paused (
 
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute resolved (no longer Active) while paused");
   assert.ok(decode(w.svm, "Task", r.task).status.Disputed === undefined, "task left Disputed after resolve");
+});
+
+test("dispute: apply_dispute_slash slashes the losing worker while the protocol is paused (exit-safe)", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  await setMinArbiterStake(w.svm, 1_000_000); // arbiter votes carry weight
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
+  await injectAgentStake(w.svm, w.providerAgent, 2_000_000); // worker has a slashable stake
+
+  // CREATOR opens a Refund dispute against the worker (resolution_type 0 = Refund).
+  const taskId = decode(w.svm, "Task", r.task).task_id;
+  const disputeId = id32();
+  const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
+  const [buyerRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 0, "bad work")
+    .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: buyerRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "slash:initiate");
+
+  // 3 staked arbiters approve (worker loses).
+  const arbiterRemaining = [];
+  for (let i = 0; i < 3; i++) {
+    const arb = Keypair.generate();
+    w.svm.airdrop(arb.publicKey, BigInt(10e9));
+    const arbProg = makeProgram(arb);
+    const arbId = id32();
+    const [arbAgent] = pda([enc("agent"), arbId]);
+    expectOk(send(w.svm, await arbProg.methods
+      .registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
+      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [arb]), `slash:register-arb${i}`);
+    await injectAgentStake(w.svm, arbAgent, 1_000_000); // vote weight
+    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
+    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
+    expectOk(send(w.svm, await arbProg.methods
+      .voteDispute(true)
+      .accounts({ dispute, task: r.task, workerClaim: r.claim, defendantAgent: w.providerAgent, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [arb]), `slash:vote${i}`);
+    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true });
+    arbiterRemaining.push({ pubkey: arbAgent, isSigner: false, isWritable: true });
+  }
+
+  // warp past the voting period, resolve (worker loses, slash deferred).
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
+  w.svm.setClock(clk);
+  expectOk(send(w.svm, await makeProgram(w.admin).methods
+    .resolveDispute()
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .remainingAccounts(arbiterRemaining)
+    .instruction(), [w.admin]), "slash:resolve");
+  assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "dispute Resolved (worker lost)");
+  const stakeBefore = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
+
+  // apply the stake slash WHILE PAUSED — the finalizer that has no alternative unwind.
+  await setProtocolPaused(w.svm, true);
+  expectOk(send(w.svm, await makeProgram(w.admin).methods
+    .applyDisputeSlash()
+    .accounts({ dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey, escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .instruction(), [w.admin]), "slash:apply_dispute_slash while paused");
+
+  const stakeAfter = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
+  assert.ok(stakeAfter < stakeBefore, `worker stake slashed while paused (${stakeBefore} -> ${stakeAfter})`);
 });
 
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
