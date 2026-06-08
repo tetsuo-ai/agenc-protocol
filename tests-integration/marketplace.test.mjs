@@ -527,12 +527,14 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   // is paid for completed work rather than losing it to a later expiry.
   if (pauseBeforeComplete) await setProtocolPaused(w.svm, true);
 
-  // 5) worker completes -> payout via execute_completion_rewards
+  // 5) worker completes -> payout via execute_completion_rewards. hire_record is a
+  //    REQUIRED account; an Auto (non-hired) task passes the empty ["hire", task] PDA.
+  const [autoHire] = pda([enc("hire"), task.toBuffer()]);
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
   const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: null, operator: null })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: autoHire, operator: null })
     .instruction(), [w.provider]), "settle:complete");
 
   return { task, escrow, claim, jobSpec, taskMod, workerAuthority: w.provider.publicKey, workerBalBefore, treasuryBalBefore, reward };
@@ -556,7 +558,7 @@ test("FULL SETTLEMENT (Auto): create -> moderate -> publish -> claim -> complete
 /// fee) exists at complete_task time — exercising the §4 3-way split. Mirrors
 /// runAutoSettlement but mints the task via hire_from_listing instead of create_task.
 /// Requires a moderation-enabled world. Returns balance snapshots + reward.
-async function runHireSettlement(w, { pauseBeforeComplete = false } = {}) {
+async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeComplete = false } = {}) {
   const modProg = makeProgram(w.modAuth);
 
   // 0) record a CLEAN ListingModeration so the hire passes the moderation gate.
@@ -596,6 +598,9 @@ async function runHireSettlement(w, { pauseBeforeComplete = false } = {}) {
     .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "hire-settle:claim");
 
+  // Stop here so callers can drive complete_task themselves (e.g. negative operator tests).
+  if (stopBeforeComplete) return { task, escrow, claim, hireRecord, taskMod, jobSpec, reward: w.price };
+
   if (pauseBeforeComplete) await setProtocolPaused(w.svm, true);
 
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
@@ -611,6 +616,41 @@ async function runHireSettlement(w, { pauseBeforeComplete = false } = {}) {
 
   return { task, escrow, claim, hireRecord, taskMod, jobSpec, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
 }
+
+test("operator-fee protection: a hired task cannot be completed without paying the operator", async () => {
+  // Regression for the audit finding: hire_record is now a REQUIRED account, and a
+  // worker cannot omit/forge the operator to pocket the operator's cut.
+  const operatorKp = Keypair.generate();
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+
+  const completeAccounts = (operator) => ({
+    task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent,
+    protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey,
+    systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null,
+    treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator,
+  });
+
+  // (a) omit the operator account on a hired task with a fee -> MissingOperatorAccount
+  expectFail(
+    send(w.svm, await w.providerProg.methods.completeTask(arr(id32()), null).accounts(completeAccounts(null)).instruction(), [w.provider]),
+    "MissingOperatorAccount", "complete hired task with operator omitted",
+  );
+  // (b) pass a WRONG operator -> InvalidOperatorAccount
+  expectFail(
+    send(w.svm, await w.providerProg.methods.completeTask(arr(id32()), null).accounts(completeAccounts(Keypair.generate().publicKey)).instruction(), [w.provider]),
+    "InvalidOperatorAccount", "complete hired task with mismatched operator",
+  );
+  // Both reverted: the task is still InProgress and the operator was never bypassed.
+  assert.ok(decode(w.svm, "Task", r.task).status.InProgress !== undefined, "task remains InProgress after rejected completes");
+
+  // (c) the correct operator settles successfully and is paid its exact cut.
+  expectOk(
+    send(w.svm, await w.providerProg.methods.completeTask(arr(id32()), null).accounts(completeAccounts(operatorKp.publicKey)).instruction(), [w.provider]),
+    "complete with correct operator",
+  );
+  assert.equal(Number(w.svm.getBalance(operatorKp.publicKey)) - 1e9, Math.floor((r.reward * 1000) / 10000), "operator paid its exact cut once the correct account is passed");
+});
 
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
   const operatorKp = Keypair.generate();

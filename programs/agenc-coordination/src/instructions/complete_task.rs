@@ -102,14 +102,24 @@ pub struct CompleteTask<'info> {
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
 
-    // === Optional 3-way-split accounts (only for tasks minted via hire_from_listing) ===
-    /// HireRecord for this task (PDA ["hire", task]); carries the operator payee +
-    /// fee snapshot. When present with a non-zero operator fee, the operator leg is
-    /// paid at settlement (spec §4). Validated against the task in the handler.
-    pub hire_record: Option<Account<'info, HireRecord>>,
+    // === 3-way-split accounts (spec §4) ===
+    /// Hire link PDA for this task. ALWAYS required — the caller passes the derived
+    /// ["hire", task] address even for non-hired tasks (where it is an empty system
+    /// account). A live, program-owned record means the task was hired from a listing
+    /// and its operator fee MUST be paid at settlement, so a worker CANNOT omit the
+    /// account to pocket the operator's cut. Mirrors close_task's required-hire_record
+    /// design (the same dodge an audit caught there).
+    /// CHECK: address fixed by seeds; live-vs-absent is decided by `owner` in the
+    /// handler, and a live record is deserialized + validated there.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
 
     /// CHECK: operator payee — validated in the handler to equal hire_record.operator.
-    /// Receives the operator fee leg in SOL.
+    /// Required only when a live hire carries a non-zero operator fee. Receives the
+    /// operator fee leg in SOL.
     #[account(mut)]
     pub operator: Option<UncheckedAccount<'info>>,
 }
@@ -270,33 +280,36 @@ fn handle_complete_task<'info>(
 
     log_compute_units("complete_task_validated");
 
-    // §4 3-way split: if this task was minted by a hire, its HireRecord carries the
-    // operator payee + fee snapshot. Build the operator leg (None for non-hire
-    // tasks, leaving the 2-way settlement path unchanged).
-    let operator_leg = match accounts.hire_record.as_ref() {
-        Some(hr) => {
-            let (expected, _) =
-                Pubkey::find_program_address(&[b"hire", task_key.as_ref()], program_id);
-            require!(hr.key() == expected, CoordinationError::InvalidHireRecord);
-            require!(hr.task == task_key, CoordinationError::InvalidHireRecord);
-            if hr.operator_fee_bps > 0 && hr.operator != Pubkey::default() {
-                let op = accounts
-                    .operator
-                    .as_ref()
-                    .ok_or(CoordinationError::MissingOperatorAccount)?;
-                require!(
-                    op.key() == hr.operator,
-                    CoordinationError::InvalidOperatorAccount
-                );
-                Some(OperatorLeg {
-                    payee: op.to_account_info(),
-                    fee_bps: hr.operator_fee_bps,
-                })
-            } else {
-                None
-            }
+    // §4 3-way split: hire_record is a REQUIRED account (seeds-fixed to ["hire", task]).
+    // If it is a live, program-owned HireRecord, the task was hired from a listing and
+    // its operator fee MUST be paid — a worker cannot omit the account to dodge the
+    // operator's cut. A non-hired task passes the empty (system-owned) PDA, so the leg
+    // is None and the 2-way settlement path is unchanged.
+    let operator_leg = if accounts.hire_record.owner == &crate::ID {
+        let hire_info = accounts.hire_record.to_account_info();
+        let hire = {
+            let data = hire_info.try_borrow_data()?;
+            HireRecord::try_deserialize(&mut &data[..])?
+        };
+        require!(hire.task == task_key, CoordinationError::InvalidHireRecord);
+        if hire.operator_fee_bps > 0 && hire.operator != Pubkey::default() {
+            let op = accounts
+                .operator
+                .as_ref()
+                .ok_or(CoordinationError::MissingOperatorAccount)?;
+            require!(
+                op.key() == hire.operator,
+                CoordinationError::InvalidOperatorAccount
+            );
+            Some(OperatorLeg {
+                payee: op.to_account_info(),
+                fee_bps: hire.operator_fee_bps,
+            })
+        } else {
+            None
         }
-        None => None,
+    } else {
+        None
     };
 
     // Execute reward transfer, state updates, event emissions, and conditional escrow closure
