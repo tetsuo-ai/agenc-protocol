@@ -1737,6 +1737,197 @@
       "args": []
     },
     {
+      "name": "close_task",
+      "docs": [
+        "Reclaim a terminal task's account rent (and optional leftover job-spec",
+        "pointer). Allowed only when the task is Completed or Cancelled."
+      ],
+      "discriminator": [
+        55,
+        234,
+        77,
+        69,
+        245,
+        208,
+        54,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "Task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "Task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_job_spec",
+          "docs": [
+            "Optional leftover job-spec pointer for this task. When provided it is closed",
+            "alongside the task so its rent is reclaimed too. Bound to this task by seeds",
+            "+ constraint so a caller cannot close another task's pointer."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "docs": [
+            "Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow",
+            "account open (drained, `is_closed = true`) on a terminal task; provide it",
+            "here to reclaim its rent. Bound to this task by seeds + constraint."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hire_record",
+          "docs": [
+            "Hire link PDA for this task. ALWAYS required — the caller passes the derived",
+            "[\"hire\", task] address even for non-hired tasks (where it is an empty system",
+            "account). close_task decides from the on-chain owner whether a live hire must",
+            "be settled, so a caller cannot dodge the capacity decrement by omitting it.",
+            "the handler, and a live record is deserialized + validated there."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "docs": [
+            "Source listing, required when a live hire link is present, so its `open_jobs`",
+            "capacity counter can be decremented. Verified against `hire_record.listing`."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "ServiceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "ServiceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Task creator; receives the reclaimed rent. Mutable to credit lamports."
+          ],
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "complete_task",
       "docs": [
         "Submit proof of work and mark task portion as complete.",
@@ -3330,6 +3521,197 @@
       ]
     },
     {
+      "name": "create_service_listing",
+      "docs": [
+        "Publish a standing service listing (embeddable marketplace)."
+      ],
+      "discriminator": [
+        91,
+        37,
+        216,
+        26,
+        93,
+        146,
+        13,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "listing",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_agent"
+              },
+              {
+                "kind": "arg",
+                "path": "listing_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider_agent",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_agent.agent_id",
+                "account": "AgentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "provider_agent"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "listing_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "name",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "category",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "tags",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        },
+        {
+          "name": "spec_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "spec_uri",
+          "type": "string"
+        },
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "price_mint",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "required_capabilities",
+          "type": "u64"
+        },
+        {
+          "name": "default_deadline_secs",
+          "type": "i64"
+        },
+        {
+          "name": "max_open_jobs",
+          "type": "u16"
+        },
+        {
+          "name": "operator",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "operator_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "create_task",
       "docs": [
         "Create a new task with requirements and optional reward.",
@@ -3614,6 +3996,222 @@
           "type": {
             "option": "pubkey"
           }
+        }
+      ]
+    },
+    {
+      "name": "create_task_humanless",
+      "docs": [
+        "Create a task as a human buyer with no registered agent. Always pins",
+        "ValidationMode::CreatorReview so settlement routes through buyer review."
+      ],
+      "discriminator": [
+        238,
+        0,
+        219,
+        160,
+        208,
+        101,
+        168,
+        202
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "arg",
+                "path": "task_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_validation_config",
+          "docs": [
+            "Forced CreatorReview validation config — initialized here so a humanless task",
+            "can never settle on the auto-pay path."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority_rate_limit",
+          "docs": [
+            "Wallet-scoped rate limit (seeded on the buyer wallet; no agent)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "The human buyer's wallet — owns and pays for the task. No AgentRegistration."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "task_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "required_capabilities",
+          "type": "u64"
+        },
+        {
+          "name": "description",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        },
+        {
+          "name": "reward_amount",
+          "type": "u64"
+        },
+        {
+          "name": "deadline",
+          "type": "i64"
+        },
+        {
+          "name": "min_reputation",
+          "type": "u16"
+        },
+        {
+          "name": "review_window_secs",
+          "type": "i64"
         }
       ]
     },
@@ -4507,6 +5105,346 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "hire_from_listing",
+      "docs": [
+        "Hire a provider from a standing service listing, minting a one-shot task",
+        "that snapshots the listing's terms and funds escrow from the buyer."
+      ],
+      "discriminator": [
+        174,
+        225,
+        81,
+        68,
+        172,
+        19,
+        97,
+        194
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "arg",
+                "path": "task_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hire_record",
+          "docs": [
+            "Links this hire to its source listing so close_task can decrement capacity",
+            "without a Task layout change, and snapshots the operator fee terms."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "docs": [
+            "Standing listing being hired from. Mutable to record the hire",
+            "(`total_hires`, `updated_at`)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "ServiceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "ServiceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderation_config",
+          "docs": [
+            "Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured",
+            "gate (account absent) makes the hire fail = marketplace halt (spec §6). When",
+            "`enabled`, a valid `listing_moderation` is required (checked in the handler)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing_moderation",
+          "docs": [
+            "Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`;",
+            "bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.spec_hash",
+                "account": "ServiceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_agent",
+          "docs": [
+            "Buyer's agent registration for identity/authorization (mirrors create_task)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator_agent.agent_id",
+                "account": "AgentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority_rate_limit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state shared across all agents."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "The authority that owns the buyer's agent."
+          ],
+          "signer": true,
+          "relations": [
+            "creator_agent"
+          ]
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "The buyer who pays for and owns the hired task.",
+            "Must match authority to prevent social-engineering attacks (#375)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "task_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expected_price",
+          "type": "u64"
+        },
+        {
+          "name": "expected_version",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "initialize_bid_book",
@@ -5842,6 +6780,187 @@
       ]
     },
     {
+      "name": "record_listing_moderation",
+      "docs": [
+        "Record a moderation decision for a service listing's pinned job-spec hash,",
+        "so `hire_from_listing` can gate at hire time. Moderation-authority only."
+      ],
+      "discriminator": [
+        83,
+        247,
+        2,
+        131,
+        91,
+        223,
+        49,
+        33
+      ],
+      "accounts": [
+        {
+          "name": "moderation_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "ServiceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "ServiceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing_moderation",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing"
+              },
+              {
+                "kind": "arg",
+                "path": "job_spec_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderator",
+          "docs": [
+            "Must be the configured moderation authority."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "job_spec_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "status",
+          "type": "u8"
+        },
+        {
+          "name": "risk_score",
+          "type": "u8"
+        },
+        {
+          "name": "category_mask",
+          "type": "u64"
+        },
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "scanner_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "record_task_moderation",
       "docs": [
         "Record a moderation decision for a task/job-spec hash."
@@ -6752,6 +7871,95 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_service_listing_state",
+      "docs": [
+        "Pause / reactivate / retire a service listing (provider-only)."
+      ],
+      "discriminator": [
+        87,
+        136,
+        109,
+        167,
+        206,
+        112,
+        223,
+        72
+      ],
+      "accounts": [
+        {
+          "name": "listing",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "ServiceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "ServiceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "listing"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_state",
+          "type": "u8"
+        }
+      ]
     },
     {
       "name": "set_task_job_spec",
@@ -8023,6 +9231,155 @@
         {
           "name": "min_stake_for_dispute",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_service_listing",
+      "docs": [
+        "Update a service listing's terms (provider-only)."
+      ],
+      "discriminator": [
+        15,
+        113,
+        16,
+        201,
+        165,
+        80,
+        182,
+        176
+      ],
+      "accounts": [
+        {
+          "name": "listing",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "ServiceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "ServiceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "listing"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "price",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "spec_hash",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        },
+        {
+          "name": "spec_uri",
+          "type": {
+            "option": "string"
+          }
+        },
+        {
+          "name": "tags",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        },
+        {
+          "name": "required_capabilities",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "default_deadline_secs",
+          "type": {
+            "option": "i64"
+          }
+        },
+        {
+          "name": "max_open_jobs",
+          "type": {
+            "option": "u16"
+          }
+        },
+        {
+          "name": "operator",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "operator_fee_bps",
+          "type": {
+            "option": "u16"
+          }
         }
       ]
     },
@@ -9523,6 +10880,32 @@
       ]
     },
     {
+      "name": "HireRecord",
+      "discriminator": [
+        104,
+        101,
+        55,
+        188,
+        219,
+        31,
+        76,
+        113
+      ]
+    },
+    {
+      "name": "ListingModeration",
+      "discriminator": [
+        157,
+        129,
+        173,
+        120,
+        123,
+        143,
+        215,
+        24
+      ]
+    },
+    {
       "name": "ModerationConfig",
       "discriminator": [
         20,
@@ -9611,6 +10994,19 @@
         108,
         99,
         212
+      ]
+    },
+    {
+      "name": "ServiceListing",
+      "discriminator": [
+        117,
+        173,
+        54,
+        52,
+        146,
+        147,
+        124,
+        211
       ]
     },
     {
@@ -10136,6 +11532,19 @@
       ]
     },
     {
+      "name": "ListingModerationRecorded",
+      "discriminator": [
+        117,
+        81,
+        203,
+        122,
+        217,
+        66,
+        50,
+        66
+      ]
+    },
+    {
       "name": "MigrationCompleted",
       "discriminator": [
         223,
@@ -10370,6 +11779,58 @@
       ]
     },
     {
+      "name": "ServiceListingCreated",
+      "discriminator": [
+        214,
+        51,
+        85,
+        39,
+        92,
+        202,
+        181,
+        120
+      ]
+    },
+    {
+      "name": "ServiceListingHired",
+      "discriminator": [
+        225,
+        53,
+        144,
+        0,
+        179,
+        119,
+        21,
+        125
+      ]
+    },
+    {
+      "name": "ServiceListingStateChanged",
+      "discriminator": [
+        206,
+        72,
+        52,
+        145,
+        37,
+        242,
+        21,
+        225
+      ]
+    },
+    {
+      "name": "ServiceListingUpdated",
+      "discriminator": [
+        234,
+        45,
+        86,
+        218,
+        125,
+        0,
+        37,
+        210
+      ]
+    },
+    {
       "name": "SkillPurchased",
       "discriminator": [
         90,
@@ -10471,6 +11932,19 @@
         15,
         228,
         202
+      ]
+    },
+    {
+      "name": "TaskClosed",
+      "discriminator": [
+        158,
+        183,
+        233,
+        176,
+        74,
+        66,
+        243,
+        77
       ]
     },
     {
@@ -11908,6 +13382,76 @@
       "code": 6252,
       "name": "TaskJobSpecRequired",
       "msg": "Task claim requires a moderated job specification pointer"
+    },
+    {
+      "code": 6253,
+      "name": "ListingInvalidId",
+      "msg": "Service listing ID cannot be all zeros"
+    },
+    {
+      "code": 6254,
+      "name": "ListingInvalidName",
+      "msg": "Service listing name cannot be all zeros"
+    },
+    {
+      "code": 6255,
+      "name": "ListingInvalidSpec",
+      "msg": "Service listing spec hash/URI is invalid"
+    },
+    {
+      "code": 6256,
+      "name": "ListingPriceTooLow",
+      "msg": "Service listing price is below the minimum"
+    },
+    {
+      "code": 6257,
+      "name": "ListingCapabilitiesRequired",
+      "msg": "Service listing must declare at least one required capability"
+    },
+    {
+      "code": 6258,
+      "name": "ListingOperatorFeeTooHigh",
+      "msg": "Operator fee exceeds the maximum allowed"
+    },
+    {
+      "code": 6259,
+      "name": "ListingOperatorRequired",
+      "msg": "A non-zero operator fee requires an operator payee"
+    },
+    {
+      "code": 6260,
+      "name": "ListingNotActive",
+      "msg": "Service listing is not active"
+    },
+    {
+      "code": 6261,
+      "name": "ListingRetired",
+      "msg": "Service listing is retired and cannot be modified"
+    },
+    {
+      "code": 6262,
+      "name": "ListingVersionMismatch",
+      "msg": "Service listing version does not match the expected version"
+    },
+    {
+      "code": 6263,
+      "name": "ListingPriceMismatch",
+      "msg": "Service listing price does not match the expected price"
+    },
+    {
+      "code": 6264,
+      "name": "ListingCapacityReached",
+      "msg": "Service listing has reached its maximum concurrent open hires"
+    },
+    {
+      "code": 6265,
+      "name": "ListingInvalidStateTransition",
+      "msg": "Invalid service listing state transition"
+    },
+    {
+      "code": 6266,
+      "name": "TaskNotClosable",
+      "msg": "Task can only be closed once it is in a terminal state with no active workers"
     }
   ],
   "types": [
@@ -13986,6 +15530,71 @@
       }
     },
     {
+      "name": "HireRecord",
+      "docs": [
+        "Links a one-shot hire to its source `ServiceListing`.",
+        "",
+        "Created by `hire_from_listing` and closed by `close_task`. Its purpose is to",
+        "let `close_task` decrement the listing's `open_jobs` capacity counter WITHOUT a",
+        "`Task` layout change (no migration): the on-chain task<->listing link lives",
+        "here instead of on `Task`. It also snapshots the operator fee terms at hire",
+        "time so the Batch 2 settlement split can read them without touching `Task`.",
+        "PDA seeds: [\"hire\", task]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "The one-shot task minted by this hire."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "listing",
+            "docs": [
+              "Source service listing whose `open_jobs` is decremented when the task closes."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Operator payee snapshot for the Batch 2 fee split (`Pubkey::default()` = none)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator_fee_bps",
+            "docs": [
+              "Operator fee in basis points, snapshotted at hire time."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved for future hire metadata."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "LaunchControlsUpdated",
       "docs": [
         "Emitted when multisig launch controls are updated."
@@ -14008,6 +15617,205 @@
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ListingModeration",
+      "docs": [
+        "On-chain moderation attestation for a service listing's pinned job-spec hash.",
+        "",
+        "The task-bound `TaskModeration` PDA (`[\"task_moderation\", task, hash]`) cannot",
+        "exist before a task is minted, so it can't gate `hire_from_listing` at hire",
+        "time. This listing/spec-keyed attestation does: the moderation authority attests",
+        "the listing's `spec_hash` once, and the hire checks it. Recorded by",
+        "`record_listing_moderation`. PDA seeds: [\"listing_moderation\", service_listing, job_spec_hash]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "docs": [
+              "Service listing this decision applies to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "provider_agent",
+            "docs": [
+              "Provider agent of the listing at decision time."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "job_spec_hash",
+            "docs": [
+              "Job-spec hash approved/held/rejected."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "docs": [
+              "One of `task_moderation_status::*`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "risk_score",
+            "docs": [
+              "Normalized 0-100 risk score."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "category_mask",
+            "docs": [
+              "Bitmask of scanner categories."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "policy_hash",
+            "docs": [
+              "Hash of the moderation policy/threshold version."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "scanner_hash",
+            "docs": [
+              "Hash of the scanner/model version bundle."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "recorded_at",
+            "docs": [
+              "When the decision was recorded."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "expires_at",
+            "docs": [
+              "Optional expiry timestamp. Zero means no expiry."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "moderator",
+            "docs": [
+              "Signer that recorded the decision (the moderation authority)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved for future attestation metadata."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ListingModerationRecorded",
+      "docs": [
+        "Emitted when the moderation authority records a decision for a listing/spec hash."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "job_spec_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "risk_score",
+            "type": "u8"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "moderator",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ListingState",
+      "docs": [
+        "Lifecycle state of a service listing."
+      ],
+      "repr": {
+        "kind": "rust"
+      },
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Paused"
+          },
+          {
+            "name": "Retired"
           }
         ]
       }
@@ -15451,6 +17259,403 @@
       }
     },
     {
+      "name": "ServiceListing",
+      "docs": [
+        "A standing, embeddable service listing: a provider agent advertising a fixed-price",
+        "service that buyers (humans or other agents) can hire on demand. The listing is",
+        "never escrow-bearing or task-bearing itself — each hire mints an independent",
+        "one-shot `Task` (see `hire_from_listing`).",
+        "PDA seeds: [\"service_listing\", provider_agent_pda, listing_id]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "provider_agent",
+            "docs": [
+              "Provider's agent PDA (the maker / worker that fulfils hires)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "Provider's signing authority (owns the listing)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "listing_id",
+            "docs": [
+              "Unique listing identifier"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "docs": [
+              "Display name"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "docs": [
+              "Category (client-encoded)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "tags",
+            "docs": [
+              "Tags for discovery (client-encoded)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "spec_hash",
+            "docs": [
+              "Content-addressed job-spec hash (sha256 of the spec)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "spec_uri",
+            "docs": [
+              "Job-spec URI (e.g. agenc://job-spec/sha256/<hash>)"
+            ],
+            "type": "string"
+          },
+          {
+            "name": "price",
+            "docs": [
+              "Price in lamports (SOL) or token smallest units"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "price_mint",
+            "docs": [
+              "Optional SPL token mint for price denomination (None = SOL)"
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "required_capabilities",
+            "docs": [
+              "Capability bitmask a worker must satisfy"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "default_deadline_secs",
+            "docs": [
+              "Default task deadline in seconds from hire (0 = protocol default)"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Operator payee (the embedding site); `Pubkey::default()` = no operator.",
+              "Carried here in Batch 1; the on-chain 3-way settlement split lands in",
+              "Batch 2 with the `Task` layout change + migration."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator_fee_bps",
+            "docs": [
+              "Operator fee in basis points (applied at settlement once Batch 2 ships)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "state",
+            "docs": [
+              "Lifecycle state"
+            ],
+            "type": {
+              "defined": {
+                "name": "ListingState"
+              }
+            }
+          },
+          {
+            "name": "max_open_jobs",
+            "docs": [
+              "Max concurrently-open hires (0 = unlimited)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "open_jobs",
+            "docs": [
+              "Open-hire count: incremented by `hire_from_listing`, decremented only by",
+              "`close_task` (NOT at task termination via cancel/complete). It therefore",
+              "counts hires that have been created but not yet closed, which is",
+              "deliberately conservative: the count can lag high (blocking further hires)",
+              "but never lags low, so it can never over-admit past `max_open_jobs`. A",
+              "provider can always raise/zero `max_open_jobs` to relieve a lagging count.",
+              "(Batch 2's Task migration will let cancel/complete free the slot directly.)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "total_hires",
+            "docs": [
+              "Lifetime hire count"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_rating",
+            "docs": [
+              "Sum of reputation-weighted ratings"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "rating_count",
+            "docs": [
+              "Number of ratings received"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "version",
+            "docs": [
+              "Version, bumped on every update (compare-and-swap target for hire)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Creation timestamp"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "docs": [
+              "Last update timestamp"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved for future growth (SLA refs, escrow refs, etc.)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ServiceListingCreated",
+      "docs": [
+        "Emitted when a maker publishes a standing service listing"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "listing_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "price_mint",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "operator_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ServiceListingHired",
+      "docs": [
+        "Emitted when a buyer hires a provider from a standing service listing,",
+        "minting a one-shot task. Links the source listing to the new task."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "provider_agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "total_hires",
+            "type": "u64"
+          },
+          {
+            "name": "open_jobs",
+            "docs": [
+              "Concurrent open hires after this one (capacity counter)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ServiceListingStateChanged",
+      "docs": [
+        "Emitted when a service listing's lifecycle state changes (pause/reactivate/retire)"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_state",
+            "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ServiceListingUpdated",
+      "docs": [
+        "Emitted when a service listing's terms are updated"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "operator_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "version",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "SkillPurchased",
       "docs": [
         "Emitted when a skill is purchased"
@@ -16581,6 +18786,62 @@
           {
             "name": "max_workers",
             "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskClosed",
+      "docs": [
+        "Emitted when a terminal task's account rent is reclaimed via close_task."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "docs": [
+              "Terminal status at close time (`TaskStatus` repr: 3=Completed, 4=Cancelled)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "job_spec_closed",
+            "docs": [
+              "Whether a leftover job-spec pointer was closed in the same transaction."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "escrow_closed",
+            "docs": [
+              "Whether a still-alive (expire_dispute) escrow PDA was closed in the same tx."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "hire_record_closed",
+            "docs": [
+              "Whether a hire link was closed (and its listing's capacity slot freed)."
+            ],
+            "type": "bool"
           },
           {
             "name": "timestamp",
