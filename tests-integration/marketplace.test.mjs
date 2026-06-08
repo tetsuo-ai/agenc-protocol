@@ -128,6 +128,25 @@ function injectProtocolConfig(svm, admin) {
     });
 }
 
+/// Flip `protocol_paused` on the live ProtocolConfig in place. Decodes the
+/// existing account, mutates only the one flag, and re-encodes — so counters and
+/// every other field are preserved (unlike a full re-inject).
+async function setProtocolPaused(svm, paused) {
+  const [protocolPda] = pda([enc("protocol")]);
+  const acct = svm.getAccount(protocolPda);
+  if (!acct) throw new Error("ProtocolConfig not present — call injectProtocolConfig first");
+  const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+  cfg.protocol_paused = paused;
+  const data = await coder.accounts.encode("ProtocolConfig", cfg);
+  svm.setAccount(protocolPda, {
+    lamports: Number(acct.lamports),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+}
+
 /// Inject a ModerationConfig at ["moderation_config"]. enabled=false keeps Model-A.
 async function injectModerationConfig(svm, admin, modAuth, enabled) {
   const [pdaKey, bump] = pda([enc("moderation_config")]);
@@ -529,6 +548,35 @@ test("create_task_humanless: a wallet with no agent posts a task pinned to Creat
 
   const vc = decode(w.svm, "TaskValidationConfig", validation);
   assert.ok(vc.CreatorReview !== undefined || vc.mode?.creatorReview !== undefined || vc.mode?.CreatorReview !== undefined, `validation mode is CreatorReview (got ${JSON.stringify(vc.mode)})`);
+});
+
+test("exit allow-list: a paused protocol blocks new hires but still lets a hired task be cancelled", async () => {
+  const w = await freshWorld({ price: 1_500_000 });
+  const { ix, task, escrow } = await hireIx(w, {});
+  expectOk(send(w.svm, ix, [w.buyer]), "hire (before pause)");
+
+  // Pause the protocol AFTER the task is escrowed.
+  await setProtocolPaused(w.svm, true);
+
+  // Sanity: the pause is real — a NEW hire (entry path) is rejected. This proves
+  // the cancel-succeeds assertion below isn't passing vacuously.
+  const blocked = await hireIx(w, {}); // fresh task id
+  expectFail(send(w.svm, blocked.ix, [w.buyer]), "ProtocolPaused", "entry blocked while paused");
+
+  // Exit path: cancelling the escrowed task must still succeed while paused —
+  // money never locks (spec §7, exit allow-list). Without the exit variant this
+  // would fail with ProtocolPaused.
+  const cancelIx = await w.buyerProg.methods
+    .cancelTask()
+    .accounts({
+      task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
+      systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+    })
+    .instruction();
+  expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel under paused protocol");
+  assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task is Cancelled even while paused");
+  assert.ok(isClosed(w.svm, escrow), "escrow refunded/closed while paused");
 });
 
 test("negative: close_task rejects a non-terminal (Open) task", async () => {

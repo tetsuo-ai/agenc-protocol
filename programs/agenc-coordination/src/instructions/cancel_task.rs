@@ -8,7 +8,6 @@ use crate::instructions::bid_settlement_helpers::{
     AcceptedBidBookDisposition,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
-use crate::instructions::launch_controls::require_task_type_enabled;
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
@@ -16,7 +15,7 @@ use crate::instructions::token_helpers::{
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::TaskType;
 use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus};
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 #[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{Mint, Token, TokenAccount};
@@ -118,14 +117,16 @@ fn process_cancel_task_impl<'info>(
         accounts.authority.is_signer,
         CoordinationError::UnauthorizedTaskAction
     );
-    check_version_compatible(&accounts.protocol_config)?;
+    // Exit path: a paused protocol must still let an escrowed task be cancelled
+    // (money never locks, spec §7). Type-disable gates entry only, so it is NOT
+    // re-checked here.
+    check_version_compatible_for_exit(&accounts.protocol_config)?;
     require!(
         accounts.authority.is_signer,
         CoordinationError::UnauthorizedTaskAction
     );
 
     let task = &mut accounts.task;
-    require_task_type_enabled(&accounts.protocol_config, task.task_type)?;
     // SAFETY: `remaining_accounts` entries already carry `'info`; we only need
     // to rebind the slice reference itself so derived sub-slices can be reused
     // across the V2 settlement branches.

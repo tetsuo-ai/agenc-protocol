@@ -20,7 +20,6 @@ use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
 };
@@ -30,7 +29,7 @@ use crate::state::{
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::{BidMarketplaceConfig, TaskType};
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
 /// Small reward for calling expire_claim (0.000001 SOL)
@@ -129,14 +128,16 @@ pub struct ExpireClaim<'info> {
 /// Callers receive a small reward from the task escrow to incentivize
 /// timely cleanup of expired claims.
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Result<()> {
-    check_version_compatible(&ctx.accounts.protocol_config)?;
+    // Exit path: expiring a stale claim frees the slot and refunds the cleanup
+    // caller; it must work even while the protocol is paused (money never locks,
+    // spec §7). Type-disable gates entry only, so it is NOT re-checked here.
+    check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::InvalidInput
     );
 
     let task = &mut ctx.accounts.task;
-    require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     let worker = &mut ctx.accounts.worker;
     let escrow = &mut ctx.accounts.escrow;
     let claim = &ctx.accounts.claim;

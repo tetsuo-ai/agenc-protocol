@@ -22,7 +22,6 @@ use crate::instructions::dispute_helpers::{
     process_worker_claim_pair, validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
     validate_unchecked_token_mint,
@@ -31,7 +30,7 @@ use crate::state::{
     AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim, TaskEscrow,
     TaskStatus, TaskType,
 };
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -157,8 +156,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     let config = &ctx.accounts.protocol_config;
     let clock = Clock::get()?;
 
-    check_version_compatible(config)?;
-    require_task_type_enabled(config, task.task_type)?;
+    // Exit path: expiring a stale dispute releases escrowed funds to the
+    // default winner; it must work even while the protocol is paused (money
+    // never locks, spec §7). Type-disable gates entry only, so it is NOT
+    // re-checked here.
+    check_version_compatible_for_exit(config)?;
     require!(
         dispute.status == DisputeStatus::Active,
         CoordinationError::DisputeNotActive
