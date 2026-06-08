@@ -1016,6 +1016,31 @@ test("manual validation: accept still settles while the protocol is paused (exit
   assert.ok(isClosed(w.svm, r.escrow), "escrow closed while paused");
 });
 
+test("3-way split: max operator fee (20%) settles with the worker still above the 60% floor", async () => {
+  const operatorKp = Keypair.generate();
+  const w = await freshWorld({ moderationEnabled: true, price: 5_000_000, operator: operatorKp.publicKey, operatorFeeBps: 2000 });
+  const r = await runHireSettlement(w);
+  const operatorDelta = Number(w.svm.getBalance(operatorKp.publicKey)) - r.operatorBalBefore;
+  assert.equal(operatorDelta, Math.floor((r.reward * 2000) / 10000), "operator gets exactly 20% at the cap"); // 1_000_000
+  const workerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - r.workerBalBefore;
+  assert.ok(workerDelta >= Math.floor(r.reward * 0.6), `worker keeps >=60% at the cap (got ${workerDelta} of ${r.reward})`);
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed");
+});
+
+test("close_task children: a program-owned non-child remaining account is rejected", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 2_000_000 });
+  const r = await runHireSettlement(w); // Completed -> task closable; jobSpec + live hireRecord remain
+  // Pass the ServiceListing (program-owned, but NOT one of the three task-child types)
+  // as a remaining account: it must be rejected, not closed.
+  const closeIx = await w.buyerProg.methods
+    .closeTask()
+    .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .remainingAccounts([{ pubkey: w.listing, isSigner: false, isWritable: true }])
+    .instruction();
+  expectFail(send(w.svm, closeIx, [w.buyer]), "InvalidInput", "close_task rejects a non-child remaining account");
+  assert.ok(!isClosed(w.svm, r.task), "task NOT closed (tx reverted)");
+});
+
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
   const w = await freshWorld({});
   const human = Keypair.generate(); // NO AgentRegistration
