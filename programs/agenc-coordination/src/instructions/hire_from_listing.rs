@@ -3,13 +3,18 @@
 //!
 //! Additive: snapshots the listing's terms into a fresh `Task` + `TaskEscrow`
 //! exactly the way `create_task` would, so the entire existing task lifecycle
-//! (`record_task_moderation` -> `set_task_job_spec` -> `claim_task` -> `submit` ->
-//! `accept` / `cancel_task` / `close_task`) applies unchanged. We deliberately do
-//! NOT auto-bind the provider in Batch 1: the per-task moderation record is a PDA
-//! keyed by `task.key()`, which cannot exist before the task is minted, so taking
-//! a task live stays on the existing moderation-gated `set_task_job_spec` path.
-//! Provider auto-claim + listing-level moderation + the 3-way operator-fee split
-//! land in Batch 2 (they need a task<->listing link and a `Task` layout migration).
+//! (`set_task_job_spec` -> `claim_task` -> `submit` -> `accept` / `cancel_task` /
+//! `close_task`) applies unchanged.
+//!
+//! Moderation is gated at hire time (fail-closed): `moderation_config` is required,
+//! and when enabled the hire must present a publishable listing-level attestation
+//! (`ListingModeration`) for the listing's pinned `spec_hash` — the task-bound
+//! `TaskModeration` PDA can't exist before the task is minted, so a listing/spec-keyed
+//! attestation is used (spec §6). When moderation is disabled, the existing
+//! `set_task_job_spec` path still gates go-live (Model-A).
+//!
+//! Provider auto-claim + the 3-way operator-fee split land in Batch 2 (they need a
+//! `Task` layout migration).
 //!
 //! SOL-only in Batch 1 (token-priced listings are rejected), matching
 //! `create_task`'s default-build posture; token hires arrive with the Batch 2
@@ -24,8 +29,9 @@ use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
 };
 use crate::state::{
-    AgentRegistration, AuthorityRateLimit, HireRecord, ListingState, ProtocolConfig,
-    ServiceListing, Task, TaskEscrow, TaskType,
+    is_publishable_task_moderation_status, AgentRegistration, AuthorityRateLimit, HireRecord,
+    ListingModeration, ListingState, ModerationConfig, ProtocolConfig, ServiceListing, Task,
+    TaskEscrow, TaskType, TASK_MODERATION_RISK_SCORE_MAX,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -118,6 +124,50 @@ pub(crate) fn validate_listing_spec_hash(spec_hash: &[u8; 32]) -> Result<()> {
     Ok(())
 }
 
+/// Hire-time moderation gate (spec §6). When `ModerationConfig.enabled`, a hire may
+/// only mint a live task if the listing's pinned `spec_hash` carries a publishable
+/// attestation (CLEAN | HUMAN_APPROVED, unexpired) recorded by the moderation
+/// authority. Pure + revert-sensitive; mirrors
+/// `set_task_job_spec::validate_task_moderation_for_job_spec` but listing/spec-keyed
+/// (the task-bound `TaskModeration` PDA can't exist before the task is minted).
+pub(crate) fn validate_listing_moderation_for_hire(
+    moderation_config: &ModerationConfig,
+    listing_moderation: &ListingModeration,
+    listing_key: Pubkey,
+    listing_spec_hash: &[u8; 32],
+    now: i64,
+) -> Result<()> {
+    require!(
+        moderation_config.moderation_authority != Pubkey::default(),
+        CoordinationError::InvalidTaskModerationAuthority
+    );
+    require!(
+        listing_moderation.moderator == moderation_config.moderation_authority,
+        CoordinationError::UnauthorizedTaskModerator
+    );
+    require!(
+        listing_moderation.listing == listing_key,
+        CoordinationError::TaskModerationTaskMismatch
+    );
+    require!(
+        listing_moderation.job_spec_hash == *listing_spec_hash,
+        CoordinationError::TaskModerationHashMismatch
+    );
+    require!(
+        is_publishable_task_moderation_status(listing_moderation.status),
+        CoordinationError::TaskModerationRejected
+    );
+    require!(
+        listing_moderation.risk_score <= TASK_MODERATION_RISK_SCORE_MAX,
+        CoordinationError::InvalidTaskModerationRiskScore
+    );
+    require!(
+        listing_moderation.expires_at == 0 || listing_moderation.expires_at >= now,
+        CoordinationError::TaskModerationExpired
+    );
+    Ok(())
+}
+
 #[derive(Accounts)]
 #[instruction(task_id: [u8; 32])]
 pub struct HireFromListing<'info> {
@@ -165,6 +215,20 @@ pub struct HireFromListing<'info> {
         bump = protocol_config.bump
     )]
     pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
+    /// Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured
+    /// gate (account absent) makes the hire fail = marketplace halt (spec §6). When
+    /// `enabled`, a valid `listing_moderation` is required (checked in the handler).
+    #[account(seeds = [b"moderation_config"], bump = moderation_config.bump)]
+    pub moderation_config: Box<Account<'info, ModerationConfig>>,
+
+    /// Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`;
+    /// bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
+    #[account(
+        seeds = [b"listing_moderation", listing.key().as_ref(), listing.spec_hash.as_ref()],
+        bump = listing_moderation.bump
+    )]
+    pub listing_moderation: Option<Box<Account<'info, ListingModeration>>>,
 
     /// Buyer's agent registration for identity/authorization (mirrors create_task).
     #[account(
@@ -241,6 +305,25 @@ pub fn handler(
     )?;
     // Capacity: reject if the listing has no free slot (max_open_jobs == 0 = unlimited).
     validate_listing_capacity(listing.open_jobs, listing.max_open_jobs)?;
+
+    // Hire-time moderation gate (§6), fail-closed: moderation_config is a required
+    // account, so an unconfigured marketplace can't hire. When enabled, the hire
+    // must present a publishable listing-level attestation for the pinned spec_hash.
+    // When disabled, keep Model-A (the existing set_task_job_spec path gates go-live).
+    if ctx.accounts.moderation_config.enabled {
+        let lm = ctx
+            .accounts
+            .listing_moderation
+            .as_ref()
+            .ok_or(CoordinationError::TaskModerationRequired)?;
+        validate_listing_moderation_for_hire(
+            ctx.accounts.moderation_config.as_ref(),
+            lm.as_ref(),
+            listing_key,
+            &listing_spec_hash,
+            clock.unix_timestamp,
+        )?;
+    }
 
     // Resolve the absolute deadline from the listing's relative offset (or the
     // protocol default), then validate it like create_task does.
@@ -450,6 +533,85 @@ mod tests {
         let mut h = [0u8; 32];
         h[0] = 1;
         assert!(validate_listing_spec_hash(&h).is_ok());
+    }
+
+    fn mod_case(
+        status: u8,
+        expires_at: i64,
+    ) -> (ModerationConfig, ListingModeration, Pubkey, [u8; 32]) {
+        let auth = Pubkey::new_unique();
+        let listing = Pubkey::new_unique();
+        let mut hash = [0u8; 32];
+        hash[0] = 1;
+        (
+            ModerationConfig {
+                moderation_authority: auth,
+                enabled: true,
+                ..ModerationConfig::default()
+            },
+            ListingModeration {
+                listing,
+                job_spec_hash: hash,
+                status,
+                risk_score: 0,
+                expires_at,
+                moderator: auth,
+                ..ListingModeration::default()
+            },
+            listing,
+            hash,
+        )
+    }
+
+    #[test]
+    fn moderation_allows_clean_or_human_approved() {
+        for status in [0u8 /*CLEAN*/, 4u8 /*HUMAN_APPROVED*/] {
+            let (c, m, l, h) = mod_case(status, 0);
+            assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_ok());
+        }
+    }
+
+    // Revert-sensitive: each removes/violates exactly one require! in the gate.
+    #[test]
+    fn moderation_rejects_unpublishable_status() {
+        for status in [1u8, 2u8, 3u8, 5u8] {
+            let (c, m, l, h) = mod_case(status, 0);
+            assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_err());
+        }
+    }
+
+    #[test]
+    fn moderation_rejects_hash_mismatch() {
+        let (c, m, l, _h) = mod_case(0, 0);
+        let mut other = [0u8; 32];
+        other[0] = 9;
+        assert!(validate_listing_moderation_for_hire(&c, &m, l, &other, 100).is_err());
+    }
+
+    #[test]
+    fn moderation_rejects_listing_mismatch() {
+        let (c, m, _l, h) = mod_case(0, 0);
+        assert!(validate_listing_moderation_for_hire(&c, &m, Pubkey::new_unique(), &h, 100).is_err());
+    }
+
+    #[test]
+    fn moderation_rejects_expired() {
+        let (c, m, l, h) = mod_case(0, 99);
+        assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_err());
+        // unexpired (expires_at >= now) is fine
+        let (c2, m2, l2, h2) = mod_case(0, 100);
+        assert!(validate_listing_moderation_for_hire(&c2, &m2, l2, &h2, 100).is_ok());
+    }
+
+    #[test]
+    fn moderation_rejects_wrong_moderator_and_zero_authority() {
+        let (c, mut m, l, h) = mod_case(0, 0);
+        m.moderator = Pubkey::new_unique(); // not the moderation authority
+        assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_err());
+
+        let (mut c2, m2, l2, h2) = mod_case(0, 0);
+        c2.moderation_authority = Pubkey::default();
+        assert!(validate_listing_moderation_for_hire(&c2, &m2, l2, &h2, 100).is_err());
     }
 
     #[test]

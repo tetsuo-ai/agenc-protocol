@@ -128,17 +128,42 @@ function injectProtocolConfig(svm, admin) {
     });
 }
 
-/// Build a fully wired world ready to hire: protocol + provider/buyer agents + a listing.
-async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1 } = {}) {
+/// Inject a ModerationConfig at ["moderation_config"]. enabled=false keeps Model-A.
+async function injectModerationConfig(svm, admin, modAuth, enabled) {
+  const [pdaKey, bump] = pda([enc("moderation_config")]);
+  const cfg = {
+    authority: admin.publicKey,
+    moderation_authority: modAuth.publicKey,
+    enabled,
+    created_at: new BN(0),
+    updated_at: new BN(0),
+    bump,
+    _reserved: Array(6).fill(0),
+  };
+  const data = await coder.accounts.encode("ModerationConfig", cfg);
+  svm.setAccount(pdaKey, {
+    lamports: Number(svm.minimumBalanceForRentExemption(BigInt(data.length))),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+  return pdaKey;
+}
+
+/// Build a fully wired world ready to hire: protocol + moderation config + agents + listing.
+async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1, moderationEnabled = false } = {}) {
   const svm = new LiteSVM();
   svm.addProgramFromFile(PID, SO);
 
   const admin = Keypair.generate();
   const provider = Keypair.generate();
   const buyer = Keypair.generate();
-  for (const kp of [admin, provider, buyer]) svm.airdrop(kp.publicKey, BigInt(100e9));
+  const modAuth = Keypair.generate();
+  for (const kp of [admin, provider, buyer, modAuth]) svm.airdrop(kp.publicKey, BigInt(100e9));
 
   const protocolPda = await injectProtocolConfig(svm, admin);
+  const modCfg = await injectModerationConfig(svm, admin, modAuth, moderationEnabled);
 
   // Register provider + buyer agents (real instruction).
   const providerProg = makeProgram(provider);
@@ -202,11 +227,11 @@ async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1
     "create listing",
   );
 
-  return { svm, admin, provider, buyer, buyerProg, providerProg, protocolPda, providerAgent, buyerAgent, listing, listingId, price, specHash };
+  return { svm, admin, provider, buyer, modAuth, buyerProg, providerProg, protocolPda, modCfg, providerAgent, buyerAgent, listing, listingId, price, specHash };
 }
 
 /// Build (but don't send) a hire_from_listing instruction for `buyer`.
-async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false } = {}) {
+async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null } = {}) {
   const signer = asProvider ? w.provider : w.buyer;
   const agent = asProvider ? w.providerAgent : w.buyerAgent;
   const prog = asProvider ? w.providerProg : w.buyerProg;
@@ -219,6 +244,7 @@ async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = 
     .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1))
     .accounts({
       task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
+      moderationConfig: w.modCfg, listingModeration,
       creatorAgent: agent, authorityRateLimit, authority: signer.publicKey,
       creator: signer.publicKey, systemProgram: SystemProgram.programId,
     })
@@ -362,6 +388,48 @@ test("record_listing_moderation: authority records CLEAN; non-authority rejected
     "UnauthorizedTaskModerator",
     "non-authority record",
   );
+});
+
+test("hire moderation gate: enabled requires a publishable listing attestation", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const record = async (status, risk, expiresAt) => {
+    const modProg = makeProgram(w.modAuth);
+    return send(
+      w.svm,
+      await modProg.methods
+        .recordListingModeration(arr(w.specHash), status, risk, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(expiresAt))
+        .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+        .instruction(),
+      [w.modAuth],
+    );
+  };
+
+  // enabled + no attestation supplied → fail-closed
+  expectFail(send(w.svm, (await hireIx(w, {})).ix, [w.buyer]), "TaskModerationRequired", "hire with no attestation");
+
+  // record a CLEAN attestation → hire succeeds and occupies a slot
+  expectOk(await record(0, 0, 0), "record CLEAN");
+  expectOk(send(w.svm, (await hireIx(w, { listingModeration: listingMod })).ix, [w.buyer]), "hire with CLEAN attestation");
+  assert.equal(decode(w.svm, "ServiceListing", w.listing).open_jobs, 1);
+});
+
+test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const modProg = makeProgram(w.modAuth);
+  expectOk(
+    send(
+      w.svm,
+      await modProg.methods
+        .recordListingModeration(arr(w.specHash), 2 /* BLOCKED */, 80, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
+        .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+        .instruction(),
+      [w.modAuth],
+    ),
+    "record BLOCKED",
+  );
+  expectFail(send(w.svm, (await hireIx(w, { listingModeration: listingMod })).ix, [w.buyer]), "TaskModerationRejected", "hire with BLOCKED attestation");
 });
 
 test("negative: close_task rejects a non-terminal (Open) task", async () => {
