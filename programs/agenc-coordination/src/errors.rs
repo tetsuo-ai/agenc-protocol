@@ -838,4 +838,16 @@ pub enum CoordinationError {
 
     #[msg("Task can only be closed once it is in a terminal state with no active workers")]
     TaskNotClosable,
+
+    #[msg("Worker reward would fall below the protocol-mandated floor")]
+    WorkerRewardBelowFloor,
+
+    #[msg("Supplied hire record does not match this task")]
+    InvalidHireRecord,
+
+    #[msg("Operator payee account is required for this hire's operator fee")]
+    MissingOperatorAccount,
+
+    #[msg("Operator payee account does not match the hire record operator")]
+    InvalidOperatorAccount,
 }

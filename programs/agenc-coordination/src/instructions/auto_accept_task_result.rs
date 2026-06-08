@@ -269,6 +269,7 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         Some(ctx.accounts.task_submission.result_data),
         &clock,
         token_accounts,
+        None, // operator leg: manual-review settlement is not yet hire-aware (9b)
     )?;
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;

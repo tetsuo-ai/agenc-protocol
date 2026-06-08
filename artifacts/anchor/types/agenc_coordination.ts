@@ -2140,6 +2140,23 @@ export type AgencCoordination = {
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "HireRecord for this task (PDA [\"hire\", task]); carries the operator payee +",
+            "fee snapshot. When present with a non-zero operator fee, the operator leg is",
+            "paid at settlement (spec §4). Validated against the task in the handler."
+          ],
+          "optional": true
+        },
+        {
+          "name": "operator",
+          "docs": [
+            "Receives the operator fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": [
@@ -11577,6 +11594,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "operatorFeePaid",
+      "discriminator": [
+        206,
+        102,
+        195,
+        120,
+        182,
+        242,
+        156,
+        32
+      ]
+    },
+    {
       "name": "postCreated",
       "discriminator": [
         209,
@@ -13458,6 +13488,26 @@ export type AgencCoordination = {
       "code": 6266,
       "name": "taskNotClosable",
       "msg": "Task can only be closed once it is in a terminal state with no active workers"
+    },
+    {
+      "code": 6267,
+      "name": "workerRewardBelowFloor",
+      "msg": "Worker reward would fall below the protocol-mandated floor"
+    },
+    {
+      "code": 6268,
+      "name": "invalidHireRecord",
+      "msg": "Supplied hire record does not match this task"
+    },
+    {
+      "code": 6269,
+      "name": "missingOperatorAccount",
+      "msg": "Operator payee account is required for this hire's operator fee"
+    },
+    {
+      "code": 6270,
+      "name": "invalidOperatorAccount",
+      "msg": "Operator payee account does not match the hire record operator"
     }
   ],
   "types": [
@@ -16025,6 +16075,43 @@ export type AgencCoordination = {
               "Bump seed for PDA"
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "operatorFeePaid",
+      "docs": [
+        "Emitted when an operator (embedding-site) fee leg is paid out of a settlement",
+        "(spec §4 3-way split). Only emitted when the operator leg is non-zero."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "taskId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "operatorFeeBps",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }

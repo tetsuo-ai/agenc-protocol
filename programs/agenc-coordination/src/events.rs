@@ -463,6 +463,17 @@ pub struct RewardDistributed {
     pub timestamp: i64,
 }
 
+/// Emitted when an operator (embedding-site) fee leg is paid out of a settlement
+/// (spec §4 3-way split). Only emitted when the operator leg is non-zero.
+#[event]
+pub struct OperatorFeePaid {
+    pub task_id: [u8; 32],
+    pub operator: Pubkey,
+    pub amount: u64,
+    pub operator_fee_bps: u16,
+    pub timestamp: i64,
+}
+
 /// Emitted when a rate limit is hit
 #[event]
 pub struct RateLimitHit {

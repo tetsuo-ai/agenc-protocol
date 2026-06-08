@@ -7,12 +7,12 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
-    validate_completion_prereqs, validate_task_dependency,
+    validate_completion_prereqs, validate_task_dependency, OperatorLeg,
 };
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
-    AgentRegistration, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
+    AgentRegistration, HireRecord, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
 };
 use crate::utils::compute_budget::log_compute_units;
 use crate::utils::version::check_version_compatible_for_exit;
@@ -101,6 +101,17 @@ pub struct CompleteTask<'info> {
 
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
+
+    // === Optional 3-way-split accounts (only for tasks minted via hire_from_listing) ===
+    /// HireRecord for this task (PDA ["hire", task]); carries the operator payee +
+    /// fee snapshot. When present with a non-zero operator fee, the operator leg is
+    /// paid at settlement (spec §4). Validated against the task in the handler.
+    pub hire_record: Option<Account<'info, HireRecord>>,
+
+    /// CHECK: operator payee — validated in the handler to equal hire_record.operator.
+    /// Receives the operator fee leg in SOL.
+    #[account(mut)]
+    pub operator: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handler<'info>(
@@ -259,6 +270,35 @@ fn handle_complete_task<'info>(
 
     log_compute_units("complete_task_validated");
 
+    // §4 3-way split: if this task was minted by a hire, its HireRecord carries the
+    // operator payee + fee snapshot. Build the operator leg (None for non-hire
+    // tasks, leaving the 2-way settlement path unchanged).
+    let operator_leg = match accounts.hire_record.as_ref() {
+        Some(hr) => {
+            let (expected, _) =
+                Pubkey::find_program_address(&[b"hire", task_key.as_ref()], program_id);
+            require!(hr.key() == expected, CoordinationError::InvalidHireRecord);
+            require!(hr.task == task_key, CoordinationError::InvalidHireRecord);
+            if hr.operator_fee_bps > 0 && hr.operator != Pubkey::default() {
+                let op = accounts
+                    .operator
+                    .as_ref()
+                    .ok_or(CoordinationError::MissingOperatorAccount)?;
+                require!(
+                    op.key() == hr.operator,
+                    CoordinationError::InvalidOperatorAccount
+                );
+                Some(OperatorLeg {
+                    payee: op.to_account_info(),
+                    fee_bps: hr.operator_fee_bps,
+                })
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+
     // Execute reward transfer, state updates, event emissions, and conditional escrow closure
     execute_completion_rewards(
         task,
@@ -274,6 +314,7 @@ fn handle_complete_task<'info>(
         Some(claim_result_data),
         &clock,
         token_accounts,
+        operator_leg,
     )?;
 
     if let Some(settlement) = &bid_settlement {

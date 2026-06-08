@@ -2134,6 +2134,23 @@
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "hire_record",
+          "docs": [
+            "HireRecord for this task (PDA [\"hire\", task]); carries the operator payee +",
+            "fee snapshot. When present with a non-zero operator fee, the operator leg is",
+            "paid at settlement (spec §4). Validated against the task in the handler."
+          ],
+          "optional": true
+        },
+        {
+          "name": "operator",
+          "docs": [
+            "Receives the operator fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": [
@@ -11571,6 +11588,19 @@
       ]
     },
     {
+      "name": "OperatorFeePaid",
+      "discriminator": [
+        206,
+        102,
+        195,
+        120,
+        182,
+        242,
+        156,
+        32
+      ]
+    },
+    {
       "name": "PostCreated",
       "discriminator": [
         209,
@@ -13452,6 +13482,26 @@
       "code": 6266,
       "name": "TaskNotClosable",
       "msg": "Task can only be closed once it is in a terminal state with no active workers"
+    },
+    {
+      "code": 6267,
+      "name": "WorkerRewardBelowFloor",
+      "msg": "Worker reward would fall below the protocol-mandated floor"
+    },
+    {
+      "code": 6268,
+      "name": "InvalidHireRecord",
+      "msg": "Supplied hire record does not match this task"
+    },
+    {
+      "code": 6269,
+      "name": "MissingOperatorAccount",
+      "msg": "Operator payee account is required for this hire's operator fee"
+    },
+    {
+      "code": 6270,
+      "name": "InvalidOperatorAccount",
+      "msg": "Operator payee account does not match the hire record operator"
     }
   ],
   "types": [
@@ -16019,6 +16069,43 @@
               "Bump seed for PDA"
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OperatorFeePaid",
+      "docs": [
+        "Emitted when an operator (embedding-site) fee leg is paid out of a settlement",
+        "(spec §4 3-way split). Only emitted when the operator leg is non-zero."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "operator_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }

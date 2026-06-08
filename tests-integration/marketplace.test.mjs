@@ -171,7 +171,7 @@ async function injectModerationConfig(svm, admin, modAuth, enabled) {
 }
 
 /// Build a fully wired world ready to hire: protocol + moderation config + agents + listing.
-async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1, moderationEnabled = false } = {}) {
+async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1, moderationEnabled = false, operator = null, operatorFeeBps = 0 } = {}) {
   const svm = new LiteSVM();
   svm.addProgramFromFile(PID, SO);
 
@@ -180,6 +180,8 @@ async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1
   const buyer = Keypair.generate();
   const modAuth = Keypair.generate();
   for (const kp of [admin, provider, buyer, modAuth]) svm.airdrop(kp.publicKey, BigInt(100e9));
+  // Pre-fund the operator payee so it is rent-exempt before receiving its fee leg.
+  if (operator) svm.airdrop(operator, BigInt(1e9));
 
   const protocolPda = await injectProtocolConfig(svm, admin);
   const modCfg = await injectModerationConfig(svm, admin, modAuth, moderationEnabled);
@@ -236,8 +238,8 @@ async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1
           new BN(capabilities),
           new BN(3600), // default_deadline_secs
           maxOpenJobs,
-          null, // operator
-          0, // operator_fee_bps
+          operator, // operator payee (Pubkey or null)
+          operatorFeeBps,
         )
         .accounts({ listing, providerAgent, protocolConfig: protocolPda, authority: provider.publicKey, systemProgram: SystemProgram.programId })
         .instruction(),
@@ -246,7 +248,7 @@ async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1
     "create listing",
   );
 
-  return { svm, admin, provider, buyer, modAuth, buyerProg, providerProg, protocolPda, modCfg, providerAgent, buyerAgent, listing, listingId, price, specHash };
+  return { svm, admin, provider, buyer, modAuth, buyerProg, providerProg, protocolPda, modCfg, providerAgent, buyerAgent, listing, listingId, price, specHash, operator, operatorFeeBps };
 }
 
 /// Build (but don't send) a hire_from_listing instruction for `buyer`.
@@ -504,7 +506,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: null, operator: null })
     .instruction(), [w.provider]), "settle:complete");
 
   return { task, escrow, claim, jobSpec, taskMod, workerAuthority: w.provider.publicKey, workerBalBefore, treasuryBalBefore, reward };
@@ -522,6 +524,112 @@ test("FULL SETTLEMENT (Auto): create -> moderate -> publish -> claim -> complete
   assert.ok(workerAfter > r.workerBalBefore, "worker received the reward");
   assert.ok(treasuryAfter >= r.treasuryBalBefore, "treasury received the protocol fee");
   assert.ok(isClosed(w.svm, r.escrow), "escrow closed on completion");
+});
+
+/// Drive a HIRED task through full settlement so the HireRecord (operator payee +
+/// fee) exists at complete_task time — exercising the §4 3-way split. Mirrors
+/// runAutoSettlement but mints the task via hire_from_listing instead of create_task.
+/// Requires a moderation-enabled world. Returns balance snapshots + reward.
+async function runHireSettlement(w, { pauseBeforeComplete = false } = {}) {
+  const modProg = makeProgram(w.modAuth);
+
+  // 0) record a CLEAN ListingModeration so the hire passes the moderation gate.
+  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  expectOk(send(w.svm, await modProg.methods
+    .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]), "hire-settle:record-listing-mod");
+
+  // 1) buyer hires the provider's listing -> Open task + escrow + HireRecord.
+  const taskId = id32();
+  const { ix: hix, task, escrow, hireRecord } = await hireIx(w, { taskId, listingModeration: listingMod });
+  expectOk(send(w.svm, hix, [w.buyer]), "hire-settle:hire");
+
+  // 2) task moderation -> publish job spec -> worker claims.
+  const jobHash = id32();
+  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
+  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+
+  expectOk(send(w.svm, await modProg.methods
+    .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]), "hire-settle:task-mod");
+
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "hire-settle:publish");
+
+  expectOk(send(w.svm, await w.providerProg.methods
+    .claimTaskWithJobSpec()
+    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "hire-settle:claim");
+
+  if (pauseBeforeComplete) await setProtocolPaused(w.svm, true);
+
+  const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
+  const operatorBalBefore = w.operator ? Number(w.svm.getBalance(w.operator)) : 0;
+
+  // 3) worker completes — passes the HireRecord + operator payee so the 3-way
+  //    split fires. operator may be null when the listing has no operator fee.
+  expectOk(send(w.svm, await w.providerProg.methods
+    .completeTask(arr(id32()), null)
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator })
+    .instruction(), [w.provider]), "hire-settle:complete");
+
+  return { task, escrow, claim, hireRecord, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
+}
+
+test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
+  const operatorKp = Keypair.generate();
+  const w = await freshWorld({ moderationEnabled: true, price: 5_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
+  const r = await runHireSettlement(w);
+
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.Completed !== undefined, `task Completed (got ${JSON.stringify(t.status)})`);
+
+  // operator leg is exact: base(=reward, exclusive) * operatorFeeBps / 10000.
+  const operatorAfter = Number(w.svm.getBalance(operatorKp.publicKey));
+  const expectedOperatorFee = Math.floor((r.reward * 1000) / 10000); // 500_000
+  assert.equal(operatorAfter - r.operatorBalBefore, expectedOperatorFee, "operator received its exact fee leg");
+
+  // treasury (AgenC) received a non-zero protocol cut.
+  const treasuryAfter = Number(w.svm.getBalance(w.admin.publicKey));
+  const treasuryDelta = treasuryAfter - r.treasuryBalBefore;
+  assert.ok(treasuryDelta > 0, "treasury received the AgenC protocol fee");
+
+  // worker (provider authority, also fee payer) keeps >= 60% of the reward.
+  const workerAfter = Number(w.svm.getBalance(w.provider.publicKey));
+  const workerDelta = workerAfter - r.workerBalBefore; // worker_reward minus tx fee
+  assert.ok(workerDelta >= Math.floor(r.reward * 0.6), `worker keeps >=60% (got ${workerDelta} of ${r.reward})`);
+
+  // conservation: the three legs (+ worker's tx fee) drain exactly the reward.
+  assert.ok(expectedOperatorFee + treasuryDelta < r.reward, "operator + AgenC stay below the full reward");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed on completion");
+});
+
+test("3-way split: a listing with no operator fee settles 2-way (operator leg skipped)", async () => {
+  // operator=null, operatorFeeBps=0 -> HireRecord.operator=default, fee=0 -> no leg.
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const r = await runHireSettlement(w); // w.operator is null -> complete passes operator: null
+
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.Completed !== undefined, "task Completed via hire path with no operator leg");
+  const workerAfter = Number(w.svm.getBalance(w.provider.publicKey));
+  assert.ok(workerAfter > r.workerBalBefore, "worker paid on the 2-way fallback");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed");
+});
+
+test("3-way split: settlement still works while the protocol is paused (exit-safe + operator leg)", async () => {
+  const operatorKp = Keypair.generate();
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000, operator: operatorKp.publicKey, operatorFeeBps: 500 });
+  const r = await runHireSettlement(w, { pauseBeforeComplete: true });
+
+  const operatorAfter = Number(w.svm.getBalance(operatorKp.publicKey));
+  assert.equal(operatorAfter - r.operatorBalBefore, Math.floor((r.reward * 500) / 10000), "operator paid its leg even while paused");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed while paused");
 });
 
 test("exit allow-list (settlement): a worker still completes + is paid while the protocol is paused", async () => {

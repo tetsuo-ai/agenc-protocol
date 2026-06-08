@@ -3,9 +3,12 @@
 //! Used by both `complete_task` (public) and `complete_task_private` (ZK) instructions.
 
 use crate::errors::CoordinationError;
-use crate::events::{reputation_reason, ReputationChanged, RewardDistributed, TaskCompleted};
+use crate::events::{
+    reputation_reason, OperatorFeePaid, ReputationChanged, RewardDistributed, TaskCompleted,
+};
 use crate::instructions::constants::{
-    BASIS_POINTS_DIVISOR, MAX_REPUTATION, REPUTATION_PER_COMPLETION,
+    BASIS_POINTS_DIVISOR, MAX_OPERATOR_FEE_BPS, MAX_REPUTATION, REPUTATION_PER_COMPLETION,
+    WORKER_FLOOR_BPS,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
 #[cfg(feature = "spl-token-rewards")]
@@ -200,9 +203,17 @@ pub fn transfer_rewards<'info>(
     treasury: &AccountInfo<'info>,
     worker_reward: u64,
     protocol_fee: u64,
+    operator: Option<(&AccountInfo<'info>, u64)>,
 ) -> Result<()> {
     transfer_lamports(&escrow.to_account_info(), worker_account, worker_reward)?;
     transfer_lamports(&escrow.to_account_info(), treasury, protocol_fee)?;
+    // §4 3-way split: pay the operator (embedding-site) leg when present. The
+    // 2-way path passes `None`, so its behavior is unchanged.
+    if let Some((operator_account, operator_fee)) = operator {
+        if operator_fee > 0 {
+            transfer_lamports(&escrow.to_account_info(), operator_account, operator_fee)?;
+        }
+    }
     Ok(())
 }
 
@@ -417,6 +428,54 @@ pub fn calculate_fee_with_reputation(task_protocol_fee_bps: u16, worker_reputati
     task_protocol_fee_bps.saturating_sub(rep_discount).max(1)
 }
 
+/// The optional operator (embedding-site) leg of a 3-way settlement (spec §4).
+///
+/// Present only for tasks minted by `hire_from_listing`, which records the
+/// operator payee + fee snapshot in a `HireRecord`. `payee` receives the operator
+/// fee in lamports; `fee_bps` is the snapshotted operator fee in basis points.
+pub struct OperatorLeg<'info> {
+    pub payee: AccountInfo<'info>,
+    pub fee_bps: u16,
+}
+
+/// Compute the operator fee leg from a settlement `base` (= reward-per-worker, i.e.
+/// `worker_reward + protocol_fee` of the 2-way split) and enforce the spec §4
+/// economic invariants.
+///
+/// Invariants (defense in depth — the bps are already bounded at listing creation
+/// by `MAX_OPERATOR_FEE_BPS`, and protocol fees by `MAX_PROTOCOL_FEE_BPS`):
+///   * operator fee ≤ `MAX_OPERATOR_FEE_BPS`
+///   * after both the AgenC (protocol) and operator legs, the worker keeps
+///     ≥ `WORKER_FLOOR_BPS` of `base`
+pub fn calculate_operator_fee(
+    base: u64,
+    protocol_fee_bps: u16,
+    operator_fee_bps: u16,
+) -> Result<u64> {
+    require!(
+        operator_fee_bps <= MAX_OPERATOR_FEE_BPS,
+        CoordinationError::ListingOperatorFeeTooHigh
+    );
+    // Worker floor, checked in bps to avoid rounding ambiguity: the combined fee
+    // legs must leave the worker at least WORKER_FLOOR_BPS.
+    let combined_bps = (protocol_fee_bps as u64)
+        .checked_add(operator_fee_bps as u64)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let worker_bps = BASIS_POINTS_DIVISOR
+        .checked_sub(combined_bps)
+        .ok_or(CoordinationError::WorkerRewardBelowFloor)?;
+    require!(
+        worker_bps >= WORKER_FLOOR_BPS as u64,
+        CoordinationError::WorkerRewardBelowFloor
+    );
+    let operator_fee = base
+        .checked_mul(operator_fee_bps as u64)
+        .ok_or(CoordinationError::ArithmeticOverflow)?
+        .checked_div(BASIS_POINTS_DIVISOR)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    Ok(operator_fee)
+}
+
 /// Execute reward transfer, state updates, event emissions, and conditional escrow closure.
 ///
 /// Shared by both `complete_task` (public) and `complete_task_private` (ZK) handlers.
@@ -450,17 +509,44 @@ pub fn execute_completion_rewards<'a, 'info>(
     result_data_for_task: Option<[u8; RESULT_DATA_SIZE]>,
     clock: &Clock,
     token_accounts: Option<TokenPaymentAccounts<'a, 'info>>,
+    operator_leg: Option<OperatorLeg<'info>>,
 ) -> Result<()> {
     let settlement_amount = reward_amount_override.unwrap_or(task.reward_amount);
-    let (worker_reward, protocol_fee) = match reward_amount_override {
+    let (mut worker_reward, protocol_fee) = match reward_amount_override {
         Some(amount) => calculate_reward_split_for_amount(amount, protocol_fee_bps)?,
         None => calculate_reward_split(task, protocol_fee_bps)?,
+    };
+
+    // §4 3-way split: carve the operator (embedding-site) leg out of the worker's
+    // share. STRICTLY gated — when no operator leg is supplied (every existing and
+    // non-hire task), `operator_fee` is 0 and the 2-way behavior below is
+    // byte-for-byte unchanged. Operator legs are SOL-only (they originate from a
+    // HireRecord on a SOL hire), so a present leg forbids the token path.
+    let operator_fee = match operator_leg.as_ref() {
+        Some(leg) if leg.fee_bps > 0 && leg.payee.key() != Pubkey::default() => {
+            require!(
+                task.reward_mint.is_none() && token_accounts.is_none(),
+                CoordinationError::InvalidTokenMint
+            );
+            let base = worker_reward
+                .checked_add(protocol_fee)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
+            let fee = calculate_operator_fee(base, protocol_fee_bps, leg.fee_bps)?;
+            worker_reward = worker_reward
+                .checked_sub(fee)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
+            require!(worker_reward > 0, CoordinationError::RewardTooSmall);
+            fee
+        }
+        _ => 0,
     };
 
     // Checks: validate escrow balance for SOL path before any state mutations.
     if token_accounts.is_none() {
         let total = worker_reward
             .checked_add(protocol_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?
+            .checked_add(operator_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         require!(
             escrow.to_account_info().lamports() >= total,
@@ -472,6 +558,14 @@ pub fn execute_completion_rewards<'a, 'info>(
     // This follows the checks-effects-interactions pattern to prevent
     // stale state reads via Token-2022 transfer hooks or future CPI callbacks.
     update_claim_state(claim, escrow, worker_reward, protocol_fee)?;
+    // The operator leg is also withdrawn from escrow — track it in `distributed`
+    // so dispute remaining-funds accounting stays accurate.
+    if operator_fee > 0 {
+        escrow.distributed = escrow
+            .distributed
+            .checked_add(operator_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+    }
     let task_completed =
         update_task_state(task, clock.unix_timestamp, escrow, result_data_for_task)?;
     let (old_rep, new_rep) = update_worker_state(worker, worker_reward, clock.unix_timestamp)?;
@@ -507,6 +601,25 @@ pub fn execute_completion_rewards<'a, 'info>(
         timestamp: clock.unix_timestamp,
     });
 
+    // §4 3-way split: announce the operator leg and prepare it for transfer. Both
+    // are no-ops when `operator_fee == 0` (the 2-way path).
+    if operator_fee > 0 {
+        if let Some(leg) = operator_leg.as_ref() {
+            emit!(OperatorFeePaid {
+                task_id: task.task_id,
+                operator: leg.payee.key(),
+                amount: operator_fee,
+                operator_fee_bps: leg.fee_bps,
+                timestamp: clock.unix_timestamp,
+            });
+        }
+    }
+    let operator_xfer: Option<(&AccountInfo<'info>, u64)> = if operator_fee > 0 {
+        operator_leg.as_ref().map(|leg| (&leg.payee, operator_fee))
+    } else {
+        None
+    };
+
     // Interactions: external CPIs AFTER all state updates and events.
     #[cfg(feature = "spl-token-rewards")]
     {
@@ -520,6 +633,7 @@ pub fn execute_completion_rewards<'a, 'info>(
                 treasury_info,
                 worker_reward,
                 protocol_fee,
+                operator_xfer,
             )?;
         }
 
@@ -570,6 +684,7 @@ pub fn execute_completion_rewards<'a, 'info>(
             treasury_info,
             worker_reward,
             protocol_fee,
+            operator_xfer,
         )?;
         if task_completed {
             close_escrow_to_creator(escrow, creator_info)?;
@@ -590,6 +705,44 @@ fn close_escrow_to_creator<'info>(
 mod tests {
     use super::*;
     use crate::state::{DependencyType, TaskStatus};
+
+    // ---- §4 3-way operator-fee split ----
+
+    #[test]
+    fn test_operator_fee_basic_math() {
+        // base 1_000_000, protocol 100 bps (1%), operator 1000 bps (10%)
+        // operator leg = 1_000_000 * 1000 / 10000 = 100_000
+        let fee = calculate_operator_fee(1_000_000, 100, 1000).unwrap();
+        assert_eq!(fee, 100_000);
+    }
+
+    #[test]
+    fn test_operator_fee_zero_bps_is_zero() {
+        assert_eq!(calculate_operator_fee(1_000_000, 100, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_operator_fee_rejects_over_cap() {
+        // operator_fee_bps above MAX_OPERATOR_FEE_BPS must be rejected.
+        assert!(calculate_operator_fee(1_000_000, 100, MAX_OPERATOR_FEE_BPS + 1).is_err());
+        assert!(calculate_operator_fee(1_000_000, 100, MAX_OPERATOR_FEE_BPS).is_ok());
+    }
+
+    #[test]
+    fn test_operator_fee_enforces_worker_floor() {
+        // Combined fee legs must leave the worker >= WORKER_FLOOR_BPS (6000).
+        // protocol 2001 + operator 2000 = 4001 combined -> worker 5999 < 6000 -> err.
+        // (operator stays within its own cap so this isolates the floor check.)
+        assert!(calculate_operator_fee(1_000_000, 2001, MAX_OPERATOR_FEE_BPS).is_err());
+        // Boundary: 2000 + 2000 = 4000 combined -> worker exactly 6000 -> ok.
+        assert!(calculate_operator_fee(1_000_000, 2000, MAX_OPERATOR_FEE_BPS).is_ok());
+    }
+
+    #[test]
+    fn test_operator_fee_rounds_down() {
+        // 7 * 1000 / 10000 = 0.7 -> floors to 0 (worker keeps the dust).
+        assert_eq!(calculate_operator_fee(7, 100, 1000).unwrap(), 0);
+    }
 
     /// Create a test task with configurable parameters
     fn build_test_task_fixture(

@@ -10,6 +10,12 @@ pub const MAX_PROTOCOL_FEE_BPS: u16 = 1000;
 /// Carried on a ServiceListing in Batch 1; enforced at settlement in Batch 2.
 pub const MAX_OPERATOR_FEE_BPS: u16 = 2000;
 
+/// Minimum share of a settlement the worker must always keep (60% = 6000 bps),
+/// per spec §4. Enforced defensively at settlement whenever an operator leg is
+/// applied (the per-leg caps already guarantee ≥70%, but this makes the floor an
+/// explicit, tested invariant rather than an emergent one).
+pub const WORKER_FLOOR_BPS: u16 = 6000;
+
 /// Base for percentage calculations (100 = 100%)
 pub const PERCENT_BASE: u64 = 100;
 

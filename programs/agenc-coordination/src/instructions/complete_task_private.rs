@@ -763,6 +763,7 @@ fn finalize_private_completion<'info>(
         None,
         clock,
         token_accounts,
+        None, // operator leg: ZK completion is not a hire-from-listing path
     )
 }
 
