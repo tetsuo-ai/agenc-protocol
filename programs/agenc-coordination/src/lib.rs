@@ -973,6 +973,32 @@ pub mod agenc_coordination {
         )
     }
 
+    /// Create a task as a human buyer with no registered agent. Always pins
+    /// ValidationMode::CreatorReview so settlement routes through buyer review.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_task_humanless(
+        ctx: Context<CreateTaskHumanless>,
+        task_id: [u8; 32],
+        required_capabilities: u64,
+        description: [u8; 64],
+        reward_amount: u64,
+        deadline: i64,
+        min_reputation: u16,
+        review_window_secs: i64,
+    ) -> Result<()> {
+        instructions::create_task_humanless::handler(
+            ctx,
+            task_id,
+            required_capabilities,
+            description,
+            reward_amount,
+            deadline,
+            min_reputation,
+            review_window_secs,
+        )
+    }
+
     /// Reclaim a terminal task's account rent (and optional leftover job-spec
     /// pointer). Allowed only when the task is Completed or Cancelled.
     #[cfg(not(feature = "mainnet-canary"))]

@@ -432,6 +432,37 @@ test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
   expectFail(send(w.svm, (await hireIx(w, { listingModeration: listingMod })).ix, [w.buyer]), "TaskModerationRejected", "hire with BLOCKED attestation");
 });
 
+test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
+  const w = await freshWorld({});
+  const human = Keypair.generate(); // NO AgentRegistration
+  w.svm.airdrop(human.publicKey, BigInt(100e9));
+  const humanProg = makeProgram(human);
+
+  const taskId = id32();
+  const [task] = pda([enc("task"), human.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), human.publicKey.toBuffer()]);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0); // hash-shaped commitment (32 + zero tail)
+
+  const ix = await humanProg.methods
+    .createTaskHumanless(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), new BN(now + 3600), 0, new BN(3600))
+    .accounts({ task, escrow, taskValidationConfig: validation, protocolConfig: w.protocolPda, authorityRateLimit: rateLimit, creator: human.publicKey, systemProgram: SystemProgram.programId })
+    .instruction();
+  expectOk(send(w.svm, ix, [human]), "humanless create");
+
+  const t = decode(w.svm, "Task", task);
+  assert.equal(t.creator.toBase58(), human.publicKey.toBase58(), "human wallet is the creator");
+  assert.ok(t.status.Open !== undefined, "task starts Open");
+  assert.equal(t.reward_amount.toString(), "2000000");
+  assert.equal(decode(w.svm, "TaskEscrow", escrow).amount.toString(), "2000000", "escrow funded");
+
+  const vc = decode(w.svm, "TaskValidationConfig", validation);
+  assert.ok(vc.CreatorReview !== undefined || vc.mode?.creatorReview !== undefined || vc.mode?.CreatorReview !== undefined, `validation mode is CreatorReview (got ${JSON.stringify(vc.mode)})`);
+});
+
 test("negative: close_task rejects a non-terminal (Open) task", async () => {
   const w = await freshWorld({});
   const { ix, task, hireRecord } = await hireIx(w, {});
