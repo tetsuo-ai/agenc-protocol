@@ -432,6 +432,74 @@ test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
   expectFail(send(w.svm, (await hireIx(w, { listingModeration: listingMod })).ix, [w.buyer]), "TaskModerationRejected", "hire with BLOCKED attestation");
 });
 
+/// Drive a task through the Auto settlement path (worker completes + is paid via
+/// execute_completion_rewards — where bonds + the 3-way split live). Requires a
+/// moderation-enabled world (set_task_job_spec is moderation-gated). The freshWorld
+/// buyer (agent) is the creator; the provider agent is the worker. Returns handles.
+async function runAutoSettlement(w) {
+  const taskId = id32();
+  const jobHash = id32();
+  const reward = 5_000_000;
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
+  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const desc = Buffer.alloc(64);
+  desc.set(crypto.randomBytes(32), 0);
+  const modProg = makeProgram(w.modAuth);
+
+  // 1) create_task (buyer + buyerAgent), Auto mode (constraint_hash = None)
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null)
+    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "settle:create_task");
+
+  // 2) moderator records CLEAN for (task, jobHash)
+  expectOk(send(w.svm, await modProg.methods
+    .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.modAuth]), "settle:moderate");
+
+  // 3) creator publishes the job spec (moderation-gated)
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "settle:publish");
+
+  // 4) worker (provider agent) claims the published task
+  expectOk(send(w.svm, await w.providerProg.methods
+    .claimTaskWithJobSpec()
+    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "settle:claim");
+
+  // 5) worker completes -> payout via execute_completion_rewards
+  const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
+  expectOk(send(w.svm, await w.providerProg.methods
+    .completeTask(arr(id32()), null)
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .instruction(), [w.provider]), "settle:complete");
+
+  return { task, escrow, claim, jobSpec, taskMod, workerAuthority: w.provider.publicKey, workerBalBefore, treasuryBalBefore, reward };
+}
+
+test("FULL SETTLEMENT (Auto): create -> moderate -> publish -> claim -> complete pays the worker", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runAutoSettlement(w);
+
+  const t = decode(w.svm, "Task", r.task);
+  assert.ok(t.status.Completed !== undefined, `task should be Completed (got ${JSON.stringify(t.status)})`);
+
+  const workerAfter = Number(w.svm.getBalance(r.workerAuthority));
+  const treasuryAfter = Number(w.svm.getBalance(w.admin.publicKey));
+  assert.ok(workerAfter > r.workerBalBefore, "worker received the reward");
+  assert.ok(treasuryAfter >= r.treasuryBalBefore, "treasury received the protocol fee");
+  assert.ok(isClosed(w.svm, r.escrow), "escrow closed on completion");
+});
+
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
   const w = await freshWorld({});
   const human = Keypair.generate(); // NO AgentRegistration
