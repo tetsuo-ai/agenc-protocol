@@ -634,7 +634,25 @@ mod tests {
     }
 
     fn leak_data(data: Vec<u8>) -> &'static mut [u8] {
-        Box::leak(data.into_boxed_slice())
+        // Solana's `AccountInfo::realloc` (invoked by `Account::close`) writes the
+        // new length to the 8 bytes immediately BEFORE the data pointer — real
+        // runtime accounts carry that header. A plain `Box::leak`'d slice has
+        // nothing before it, so that write lands before the allocation and
+        // corrupts heap metadata (double free / corrupted size on a later free).
+        // Prepend an 8-byte length header and return the data region after it, so
+        // realloc's write to `(data_ptr - 8)` stays inside our owned allocation.
+        let len = data.len();
+        let mut buf = Vec::with_capacity(8 + len);
+        buf.extend_from_slice(&(len as u64).to_le_bytes());
+        buf.extend_from_slice(&data);
+        let raw: *mut [u8] = Box::into_raw(buf.into_boxed_slice());
+        // SAFETY: `raw` is a leaked (never-freed) allocation of `8 + len` bytes, so
+        // the returned 'static slice is sound and the 8-byte header before it is
+        // valid owned memory.
+        unsafe {
+            let data_ptr = (raw as *mut u8).add(8);
+            std::slice::from_raw_parts_mut(data_ptr, len)
+        }
     }
 
     fn build_unchecked_account(

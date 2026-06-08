@@ -6,6 +6,10 @@ pub const BASIS_POINTS_DIVISOR: u64 = 10000;
 /// Maximum protocol fee in basis points (10% = 1000 bps)
 pub const MAX_PROTOCOL_FEE_BPS: u16 = 1000;
 
+/// Maximum operator (embedding-site) fee in basis points (20% = 2000 bps).
+/// Carried on a ServiceListing in Batch 1; enforced at settlement in Batch 2.
+pub const MAX_OPERATOR_FEE_BPS: u16 = 2000;
+
 /// Base for percentage calculations (100 = 100%)
 pub const PERCENT_BASE: u64 = 100;
 

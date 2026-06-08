@@ -1548,6 +1548,133 @@ impl SkillRegistration {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // _reserved
 }
 
+/// Lifecycle state of a service listing.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+#[repr(u8)]
+pub enum ListingState {
+    /// Open for hires.
+    #[default]
+    Active = 0,
+    /// Temporarily not hireable; can be reactivated.
+    Paused = 1,
+    /// Permanently retired; terminal (cannot be reactivated or updated).
+    Retired = 2,
+}
+
+impl ListingState {
+    /// Parse a client-supplied state byte. Used by `set_service_listing_state`.
+    pub fn from_u8(value: u8) -> anchor_lang::Result<Self> {
+        match value {
+            0 => Ok(ListingState::Active),
+            1 => Ok(ListingState::Paused),
+            2 => Ok(ListingState::Retired),
+            _ => Err(crate::errors::CoordinationError::ListingInvalidStateTransition.into()),
+        }
+    }
+}
+
+/// A standing, embeddable service listing: a provider agent advertising a fixed-price
+/// service that buyers (humans or other agents) can hire on demand. The listing is
+/// never escrow-bearing or task-bearing itself — each hire mints an independent
+/// one-shot `Task` (see `hire_from_listing`).
+/// PDA seeds: ["service_listing", provider_agent_pda, listing_id]
+#[account]
+#[derive(InitSpace)]
+pub struct ServiceListing {
+    /// Provider's agent PDA (the maker / worker that fulfils hires)
+    pub provider_agent: Pubkey,
+    /// Provider's signing authority (owns the listing)
+    pub authority: Pubkey,
+    /// Unique listing identifier
+    pub listing_id: [u8; 32],
+    /// Display name
+    pub name: [u8; 32],
+    /// Category (client-encoded)
+    pub category: [u8; 32],
+    /// Tags for discovery (client-encoded)
+    pub tags: [u8; 64],
+    /// Content-addressed job-spec hash (sha256 of the spec)
+    pub spec_hash: [u8; 32],
+    /// Job-spec URI (e.g. agenc://job-spec/sha256/<hash>)
+    #[max_len(256)]
+    pub spec_uri: String,
+    /// Price in lamports (SOL) or token smallest units
+    pub price: u64,
+    /// Optional SPL token mint for price denomination (None = SOL)
+    pub price_mint: Option<Pubkey>,
+    /// Capability bitmask a worker must satisfy
+    pub required_capabilities: u64,
+    /// Default task deadline in seconds from hire (0 = protocol default)
+    pub default_deadline_secs: i64,
+    /// Operator payee (the embedding site); `Pubkey::default()` = no operator.
+    /// Carried here in Batch 1; the on-chain 3-way settlement split lands in
+    /// Batch 2 with the `Task` layout change + migration.
+    pub operator: Pubkey,
+    /// Operator fee in basis points (applied at settlement once Batch 2 ships)
+    pub operator_fee_bps: u16,
+    /// Lifecycle state
+    pub state: ListingState,
+    /// Max concurrently-open hires (0 = unlimited)
+    pub max_open_jobs: u16,
+    /// Open-hire count: incremented by `hire_from_listing`, decremented only by
+    /// `close_task` (NOT at task termination via cancel/complete). It therefore
+    /// counts hires that have been created but not yet closed, which is
+    /// deliberately conservative: the count can lag high (blocking further hires)
+    /// but never lags low, so it can never over-admit past `max_open_jobs`. A
+    /// provider can always raise/zero `max_open_jobs` to relieve a lagging count.
+    /// (Batch 2's Task migration will let cancel/complete free the slot directly.)
+    pub open_jobs: u16,
+    /// Lifetime hire count
+    pub total_hires: u64,
+    /// Sum of reputation-weighted ratings
+    pub total_rating: u64,
+    /// Number of ratings received
+    pub rating_count: u32,
+    /// Version, bumped on every update (compare-and-swap target for hire)
+    pub version: u64,
+    /// Creation timestamp
+    pub created_at: i64,
+    /// Last update timestamp
+    pub updated_at: i64,
+    /// Bump seed
+    pub bump: u8,
+    /// Reserved for future growth (SLA refs, escrow refs, etc.)
+    pub _reserved: [u8; 32],
+}
+
+impl ServiceListing {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // + 8 discriminator
+}
+
+/// Links a one-shot hire to its source `ServiceListing`.
+///
+/// Created by `hire_from_listing` and closed by `close_task`. Its purpose is to
+/// let `close_task` decrement the listing's `open_jobs` capacity counter WITHOUT a
+/// `Task` layout change (no migration): the on-chain task<->listing link lives
+/// here instead of on `Task`. It also snapshots the operator fee terms at hire
+/// time so the Batch 2 settlement split can read them without touching `Task`.
+/// PDA seeds: ["hire", task]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct HireRecord {
+    /// The one-shot task minted by this hire.
+    pub task: Pubkey,
+    /// Source service listing whose `open_jobs` is decremented when the task closes.
+    pub listing: Pubkey,
+    /// Operator payee snapshot for the Batch 2 fee split (`Pubkey::default()` = none).
+    pub operator: Pubkey,
+    /// Operator fee in basis points, snapshotted at hire time.
+    pub operator_fee_bps: u16,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future hire metadata.
+    pub _reserved: [u8; 32],
+}
+
+impl HireRecord {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
 /// Skill rating record (one per rater per skill)
 /// PDA seeds: ["skill_rating", skill_pda, rater_agent_pda]
 #[account]
@@ -1862,6 +1989,26 @@ mod tests {
     #[test]
     fn test_skill_rating_size() {
         test_size_constant!(SkillRating);
+    }
+
+    #[test]
+    fn test_service_listing_size() {
+        test_size_constant!(ServiceListing);
+    }
+
+    #[test]
+    fn test_hire_record_size() {
+        test_size_constant!(HireRecord);
+    }
+
+    #[test]
+    fn test_listing_state_from_u8() {
+        // ListingState has no Debug derive, so match with `matches!`.
+        assert!(matches!(ListingState::from_u8(0), Ok(ListingState::Active)));
+        assert!(matches!(ListingState::from_u8(1), Ok(ListingState::Paused)));
+        assert!(matches!(ListingState::from_u8(2), Ok(ListingState::Retired)));
+        assert!(ListingState::from_u8(3).is_err());
+        assert!(ListingState::from_u8(255).is_err());
     }
 
     #[test]

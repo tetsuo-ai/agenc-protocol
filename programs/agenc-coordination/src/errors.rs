@@ -795,4 +795,47 @@ pub enum CoordinationError {
 
     #[msg("Task claim requires a moderated job specification pointer")]
     TaskJobSpecRequired,
+
+    // Service listing errors (embeddable marketplace — Batch 1)
+    #[msg("Service listing ID cannot be all zeros")]
+    ListingInvalidId,
+
+    #[msg("Service listing name cannot be all zeros")]
+    ListingInvalidName,
+
+    #[msg("Service listing spec hash/URI is invalid")]
+    ListingInvalidSpec,
+
+    #[msg("Service listing price is below the minimum")]
+    ListingPriceTooLow,
+
+    #[msg("Service listing must declare at least one required capability")]
+    ListingCapabilitiesRequired,
+
+    #[msg("Operator fee exceeds the maximum allowed")]
+    ListingOperatorFeeTooHigh,
+
+    #[msg("A non-zero operator fee requires an operator payee")]
+    ListingOperatorRequired,
+
+    #[msg("Service listing is not active")]
+    ListingNotActive,
+
+    #[msg("Service listing is retired and cannot be modified")]
+    ListingRetired,
+
+    #[msg("Service listing version does not match the expected version")]
+    ListingVersionMismatch,
+
+    #[msg("Service listing price does not match the expected price")]
+    ListingPriceMismatch,
+
+    #[msg("Service listing has reached its maximum concurrent open hires")]
+    ListingCapacityReached,
+
+    #[msg("Invalid service listing state transition")]
+    ListingInvalidStateTransition,
+
+    #[msg("Task can only be closed once it is in a terminal state with no active workers")]
+    TaskNotClosable,
 }

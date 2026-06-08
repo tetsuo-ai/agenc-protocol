@@ -860,6 +860,100 @@ pub mod agenc_coordination {
         instructions::update_skill::handler(ctx, content_hash, price, tags, is_active)
     }
 
+    /// Publish a standing service listing (embeddable marketplace).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_service_listing(
+        ctx: Context<CreateServiceListing>,
+        listing_id: [u8; 32],
+        name: [u8; 32],
+        category: [u8; 32],
+        tags: [u8; 64],
+        spec_hash: [u8; 32],
+        spec_uri: String,
+        price: u64,
+        price_mint: Option<Pubkey>,
+        required_capabilities: u64,
+        default_deadline_secs: i64,
+        max_open_jobs: u16,
+        operator: Option<Pubkey>,
+        operator_fee_bps: u16,
+    ) -> Result<()> {
+        instructions::create_service_listing::handler(
+            ctx,
+            listing_id,
+            name,
+            category,
+            tags,
+            spec_hash,
+            spec_uri,
+            price,
+            price_mint,
+            required_capabilities,
+            default_deadline_secs,
+            max_open_jobs,
+            operator,
+            operator_fee_bps,
+        )
+    }
+
+    /// Update a service listing's terms (provider-only).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_service_listing(
+        ctx: Context<UpdateServiceListing>,
+        price: Option<u64>,
+        spec_hash: Option<[u8; 32]>,
+        spec_uri: Option<String>,
+        tags: Option<[u8; 64]>,
+        required_capabilities: Option<u64>,
+        default_deadline_secs: Option<i64>,
+        max_open_jobs: Option<u16>,
+        operator: Option<Pubkey>,
+        operator_fee_bps: Option<u16>,
+    ) -> Result<()> {
+        instructions::update_service_listing::handler(
+            ctx,
+            price,
+            spec_hash,
+            spec_uri,
+            tags,
+            required_capabilities,
+            default_deadline_secs,
+            max_open_jobs,
+            operator,
+            operator_fee_bps,
+        )
+    }
+
+    /// Pause / reactivate / retire a service listing (provider-only).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn set_service_listing_state(
+        ctx: Context<SetServiceListingState>,
+        new_state: u8,
+    ) -> Result<()> {
+        instructions::set_service_listing_state::handler(ctx, new_state)
+    }
+
+    /// Hire a provider from a standing service listing, minting a one-shot task
+    /// that snapshots the listing's terms and funds escrow from the buyer.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn hire_from_listing(
+        ctx: Context<HireFromListing>,
+        task_id: [u8; 32],
+        expected_price: u64,
+        expected_version: u64,
+    ) -> Result<()> {
+        instructions::hire_from_listing::handler(ctx, task_id, expected_price, expected_version)
+    }
+
+    /// Reclaim a terminal task's account rent (and optional leftover job-spec
+    /// pointer). Allowed only when the task is Completed or Cancelled.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn close_task(ctx: Context<CloseTask>) -> Result<()> {
+        instructions::close_task::handler(ctx)
+    }
+
     /// Rate a skill (1-5, reputation-weighted).
     /// One rating per agent per skill, enforced by PDA uniqueness.
     #[cfg(not(feature = "mainnet-canary"))]

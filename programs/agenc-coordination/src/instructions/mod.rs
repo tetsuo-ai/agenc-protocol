@@ -64,6 +64,16 @@ pub mod create_dependent_task;
 pub mod create_proposal;
 pub mod create_task;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod create_service_listing;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod update_service_listing;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod set_service_listing_state;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod hire_from_listing;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod close_task;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod delegate_reputation;
 pub mod deregister_agent;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -166,6 +176,18 @@ pub use create_dependent_task::*;
 #[allow(ambiguous_glob_reexports)]
 pub use create_proposal::*;
 pub use create_task::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use create_service_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use update_service_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use set_service_listing_state::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use hire_from_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use close_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use delegate_reputation::*;

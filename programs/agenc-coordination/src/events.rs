@@ -226,6 +226,22 @@ pub struct TaskCancelled {
     pub timestamp: i64,
 }
 
+/// Emitted when a terminal task's account rent is reclaimed via close_task.
+#[event]
+pub struct TaskClosed {
+    pub task_id: [u8; 32],
+    pub creator: Pubkey,
+    /// Terminal status at close time (`TaskStatus` repr: 3=Completed, 4=Cancelled).
+    pub status: u8,
+    /// Whether a leftover job-spec pointer was closed in the same transaction.
+    pub job_spec_closed: bool,
+    /// Whether a still-alive (expire_dispute) escrow PDA was closed in the same tx.
+    pub escrow_closed: bool,
+    /// Whether a hire link was closed (and its listing's capacity slot freed).
+    pub hire_record_closed: bool,
+    pub timestamp: i64,
+}
+
 /// Emitted when Marketplace V2 configuration is initialized.
 #[event]
 pub struct BidMarketplaceInitialized {
@@ -655,6 +671,55 @@ pub struct SkillUpdated {
     pub content_hash: [u8; 32],
     pub price: u64,
     pub version: u8,
+    pub timestamp: i64,
+}
+
+/// Emitted when a maker publishes a standing service listing
+#[event]
+pub struct ServiceListingCreated {
+    pub listing: Pubkey,
+    pub provider_agent: Pubkey,
+    pub authority: Pubkey,
+    pub listing_id: [u8; 32],
+    pub price: u64,
+    pub price_mint: Option<Pubkey>,
+    pub operator: Pubkey,
+    pub operator_fee_bps: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted when a service listing's terms are updated
+#[event]
+pub struct ServiceListingUpdated {
+    pub listing: Pubkey,
+    pub authority: Pubkey,
+    pub price: u64,
+    pub operator_fee_bps: u16,
+    pub version: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a service listing's lifecycle state changes (pause/reactivate/retire)
+#[event]
+pub struct ServiceListingStateChanged {
+    pub listing: Pubkey,
+    pub authority: Pubkey,
+    pub new_state: u8,
+    pub timestamp: i64,
+}
+
+/// Emitted when a buyer hires a provider from a standing service listing,
+/// minting a one-shot task. Links the source listing to the new task.
+#[event]
+pub struct ServiceListingHired {
+    pub listing: Pubkey,
+    pub task: Pubkey,
+    pub provider_agent: Pubkey,
+    pub buyer: Pubkey,
+    pub price: u64,
+    pub total_hires: u64,
+    /// Concurrent open hires after this one (capacity counter).
+    pub open_jobs: u16,
     pub timestamp: i64,
 }
 
