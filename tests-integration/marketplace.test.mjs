@@ -310,6 +310,60 @@ test("negative: self-hire, price mismatch, and version mismatch are rejected", a
   expectFail(send(w.svm, badVer.ix, [w.buyer]), "ListingVersionMismatch", "version mismatch");
 });
 
+test("record_listing_moderation: authority records CLEAN; non-authority rejected", async () => {
+  const w = await freshWorld({});
+  const modAuth = Keypair.generate();
+  w.svm.airdrop(modAuth.publicKey, BigInt(10e9));
+
+  // Inject an enabled ModerationConfig whose authority is modAuth.
+  const [modCfg, modBump] = pda([enc("moderation_config")]);
+  const cfg = {
+    authority: w.admin.publicKey,
+    moderation_authority: modAuth.publicKey,
+    enabled: true,
+    created_at: new BN(0),
+    updated_at: new BN(0),
+    bump: modBump,
+    _reserved: Array(6).fill(0),
+  };
+  const data = await coder.accounts.encode("ModerationConfig", cfg);
+  w.svm.setAccount(modCfg, {
+    lamports: Number(w.svm.minimumBalanceForRentExemption(BigInt(data.length))),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+
+  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const recordArgs = (prog, who) =>
+    prog.methods
+      .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
+      .accounts({ moderationConfig: modCfg, listing: w.listing, listingModeration: listingMod, moderator: who, systemProgram: SystemProgram.programId })
+      .instruction();
+
+  // Authority records a CLEAN attestation.
+  const modProg = makeProgram(modAuth);
+  expectOk(send(w.svm, await recordArgs(modProg, modAuth.publicKey), [modAuth]), "record listing moderation");
+
+  const lm = decode(w.svm, "ListingModeration", listingMod);
+  assert.equal(lm.listing.toBase58(), w.listing.toBase58());
+  assert.equal(lm.status, 0, "status CLEAN");
+  assert.equal(
+    Buffer.from(lm.job_spec_hash).toString("hex"),
+    Buffer.from(w.specHash).toString("hex"),
+    "job_spec_hash matches the listing's pinned spec",
+  );
+  assert.equal(lm.moderator.toBase58(), modAuth.publicKey.toBase58());
+
+  // A non-authority (the buyer) cannot record.
+  expectFail(
+    send(w.svm, await recordArgs(w.buyerProg, w.buyer.publicKey), [w.buyer]),
+    "UnauthorizedTaskModerator",
+    "non-authority record",
+  );
+});
+
 test("negative: close_task rejects a non-terminal (Open) task", async () => {
   const w = await freshWorld({});
   const { ix, task, hireRecord } = await hireIx(w, {});

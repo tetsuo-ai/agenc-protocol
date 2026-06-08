@@ -708,6 +708,19 @@ pub struct ServiceListingStateChanged {
     pub timestamp: i64,
 }
 
+/// Emitted when the moderation authority records a decision for a listing/spec hash.
+#[event]
+pub struct ListingModerationRecorded {
+    pub listing: Pubkey,
+    pub provider_agent: Pubkey,
+    pub job_spec_hash: [u8; HASH_SIZE],
+    pub status: u8,
+    pub risk_score: u8,
+    pub expires_at: i64,
+    pub moderator: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when a buyer hires a provider from a standing service listing,
 /// minting a one-shot task. Links the source listing to the new task.
 #[event]

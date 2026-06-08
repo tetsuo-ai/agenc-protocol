@@ -1675,6 +1675,48 @@ impl HireRecord {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 
+/// On-chain moderation attestation for a service listing's pinned job-spec hash.
+///
+/// The task-bound `TaskModeration` PDA (`["task_moderation", task, hash]`) cannot
+/// exist before a task is minted, so it can't gate `hire_from_listing` at hire
+/// time. This listing/spec-keyed attestation does: the moderation authority attests
+/// the listing's `spec_hash` once, and the hire checks it. Recorded by
+/// `record_listing_moderation`. PDA seeds: ["listing_moderation", service_listing, job_spec_hash]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct ListingModeration {
+    /// Service listing this decision applies to.
+    pub listing: Pubkey,
+    /// Provider agent of the listing at decision time.
+    pub provider_agent: Pubkey,
+    /// Job-spec hash approved/held/rejected.
+    pub job_spec_hash: [u8; HASH_SIZE],
+    /// One of `task_moderation_status::*`.
+    pub status: u8,
+    /// Normalized 0-100 risk score.
+    pub risk_score: u8,
+    /// Bitmask of scanner categories.
+    pub category_mask: u64,
+    /// Hash of the moderation policy/threshold version.
+    pub policy_hash: [u8; HASH_SIZE],
+    /// Hash of the scanner/model version bundle.
+    pub scanner_hash: [u8; HASH_SIZE],
+    /// When the decision was recorded.
+    pub recorded_at: i64,
+    /// Optional expiry timestamp. Zero means no expiry.
+    pub expires_at: i64,
+    /// Signer that recorded the decision (the moderation authority).
+    pub moderator: Pubkey,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future attestation metadata.
+    pub _reserved: [u8; 7],
+}
+
+impl ListingModeration {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
 /// Skill rating record (one per rater per skill)
 /// PDA seeds: ["skill_rating", skill_pda, rater_agent_pda]
 #[account]
@@ -1999,6 +2041,11 @@ mod tests {
     #[test]
     fn test_hire_record_size() {
         test_size_constant!(HireRecord);
+    }
+
+    #[test]
+    fn test_listing_moderation_size() {
+        test_size_constant!(ListingModeration);
     }
 
     #[test]

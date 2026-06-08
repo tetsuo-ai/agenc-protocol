@@ -947,6 +947,32 @@ pub mod agenc_coordination {
         instructions::hire_from_listing::handler(ctx, task_id, expected_price, expected_version)
     }
 
+    /// Record a moderation decision for a service listing's pinned job-spec hash,
+    /// so `hire_from_listing` can gate at hire time. Moderation-authority only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_listing_moderation(
+        ctx: Context<RecordListingModeration>,
+        job_spec_hash: [u8; 32],
+        status: u8,
+        risk_score: u8,
+        category_mask: u64,
+        policy_hash: [u8; 32],
+        scanner_hash: [u8; 32],
+        expires_at: i64,
+    ) -> Result<()> {
+        instructions::record_listing_moderation::handler(
+            ctx,
+            job_spec_hash,
+            status,
+            risk_score,
+            category_mask,
+            policy_hash,
+            scanner_hash,
+            expires_at,
+        )
+    }
+
     /// Reclaim a terminal task's account rent (and optional leftover job-spec
     /// pointer). Allowed only when the task is Completed or Cancelled.
     #[cfg(not(feature = "mainnet-canary"))]

@@ -72,6 +72,8 @@ pub mod set_service_listing_state;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod hire_from_listing;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod record_listing_moderation;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod close_task;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod delegate_reputation;
@@ -185,6 +187,9 @@ pub use set_service_listing_state::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use hire_from_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use record_listing_moderation::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use close_task::*;
