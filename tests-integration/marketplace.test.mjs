@@ -1181,6 +1181,60 @@ test("SPL-token settlement: complete pays worker + treasury in tokens (conservat
   assert.ok(isClosed(w.svm, r.escrow), "escrow PDA closed on completion");
 });
 
+test("dispute: resolve via arbiter quorum settles while the protocol is paused (exit-safe)", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
+
+  // worker opens a dispute
+  const taskId = decode(w.svm, "Task", r.task).task_id;
+  const disputeId = id32();
+  const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
+  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 0, "evidence")
+    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "resolve:initiate");
+
+  // 3 distinct arbiters (ARBITER capability = 1<<7) register + vote -> reach quorum.
+  // resolve_dispute needs the (vote, arbiter) pairs passed as remaining_accounts.
+  const arbiterRemaining = [];
+  for (let i = 0; i < 3; i++) {
+    const arb = Keypair.generate();
+    w.svm.airdrop(arb.publicKey, BigInt(10e9));
+    const arbProg = makeProgram(arb);
+    const arbId = id32();
+    const [arbAgent] = pda([enc("agent"), arbId]);
+    expectOk(send(w.svm, await arbProg.methods
+      .registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
+      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [arb]), `resolve:register-arb${i}`);
+    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
+    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
+    expectOk(send(w.svm, await arbProg.methods
+      .voteDispute(true)
+      .accounts({ dispute, task: r.task, workerClaim: null, defendantAgent: null, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [arb]), `resolve:vote${i}`);
+    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true });
+    arbiterRemaining.push({ pubkey: arbAgent, isSigner: false, isWritable: true });
+  }
+
+  // resolve while paused — exit-safe (money never locks).
+  // warp past the voting period (86400s) but before the dispute expiry (604800s),
+  // then resolve while paused, signed by the protocol authority (admin) — exit-safe.
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
+  w.svm.setClock(clk);
+  await setProtocolPaused(w.svm, true);
+  expectOk(send(w.svm, await makeProgram(w.admin).methods
+    .resolveDispute()
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .remainingAccounts(arbiterRemaining)
+    .instruction(), [w.admin]), "resolve_dispute while paused");
+
+  assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute resolved (no longer Active) while paused");
+  assert.ok(decode(w.svm, "Task", r.task).status.Disputed === undefined, "task left Disputed after resolve");
+});
+
 test("create_task_humanless: a wallet with no agent posts a task pinned to CreatorReview", async () => {
   const w = await freshWorld({});
   const human = Keypair.generate(); // NO AgentRegistration
