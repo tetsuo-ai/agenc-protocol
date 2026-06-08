@@ -25,7 +25,10 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskClosed;
-use crate::state::{HireRecord, ServiceListing, Task, TaskEscrow, TaskJobSpec, TaskStatus};
+use crate::state::{
+    HireRecord, ServiceListing, Task, TaskEscrow, TaskJobSpec, TaskModeration, TaskStatus,
+    TaskSubmission, TaskValidationConfig,
+};
 use anchor_lang::prelude::*;
 
 /// Pure guard: a task is closable only in a terminal state with no live workers.
@@ -101,7 +104,7 @@ pub struct CloseTask<'info> {
     pub authority: Signer<'info>,
 }
 
-pub fn handler(ctx: Context<CloseTask>) -> Result<()> {
+pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
     let clock = Clock::get()?;
     let task_key = ctx.accounts.task.key();
     let task = &ctx.accounts.task;
@@ -180,6 +183,56 @@ pub fn handler(ctx: Context<CloseTask>) -> Result<()> {
         data[..8].copy_from_slice(&[255u8; 8]);
     }
 
+    // Reclaim rent from any auxiliary child PDAs (task_moderation / task_validation /
+    // task_submission) passed via remaining_accounts. Each is bound to THIS task by
+    // its stored `task` field, so a caller cannot close an unrelated account; the
+    // task is already terminal, so these records are no longer needed.
+    for child in ctx.remaining_accounts.iter() {
+        close_task_child(child, &task_key, &authority_info)?;
+    }
+
+    Ok(())
+}
+
+/// Drain rent from a terminal task's auxiliary child PDA to the creator and
+/// tombstone it. Only program-owned accounts recognized as one of this task's
+/// child records (`TaskModeration` / `TaskValidationConfig` / `TaskSubmission`)
+/// AND whose stored `task` equals `task_key` are touched; anything else is
+/// rejected so a caller cannot close an unrelated or another task's account.
+fn close_task_child<'info>(
+    child: &AccountInfo<'info>,
+    task_key: &Pubkey,
+    authority_info: &AccountInfo<'info>,
+) -> Result<()> {
+    require!(
+        child.owner == &crate::ID,
+        CoordinationError::InvalidAccountOwner
+    );
+    // Identify the child by trying each known type's discriminator and read the
+    // task it is bound to. An unrecognized program-owned account is rejected.
+    let bound_task = {
+        let data = child.try_borrow_data()?;
+        if let Ok(m) = TaskModeration::try_deserialize(&mut &data[..]) {
+            m.task
+        } else if let Ok(v) = TaskValidationConfig::try_deserialize(&mut &data[..]) {
+            v.task
+        } else if let Ok(s) = TaskSubmission::try_deserialize(&mut &data[..]) {
+            s.task
+        } else {
+            return err!(CoordinationError::InvalidInput);
+        }
+    };
+    require!(bound_task == *task_key, CoordinationError::InvalidInput);
+
+    let lamports = child.lamports();
+    **child.try_borrow_mut_lamports()? = 0;
+    **authority_info.try_borrow_mut_lamports()? = authority_info
+        .lamports()
+        .checked_add(lamports)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let mut data = child.try_borrow_mut_data()?;
+    data.fill(0);
+    data[..8].copy_from_slice(&[255u8; 8]);
     Ok(())
 }
 

@@ -1002,7 +1002,7 @@ pub mod agenc_coordination {
     /// Reclaim a terminal task's account rent (and optional leftover job-spec
     /// pointer). Allowed only when the task is Completed or Cancelled.
     #[cfg(not(feature = "mainnet-canary"))]
-    pub fn close_task(ctx: Context<CloseTask>) -> Result<()> {
+    pub fn close_task<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
         instructions::close_task::handler(ctx)
     }
 

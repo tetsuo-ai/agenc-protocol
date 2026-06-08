@@ -560,11 +560,15 @@ async function runHireSettlement(w, { pauseBeforeComplete = false } = {}) {
   const modProg = makeProgram(w.modAuth);
 
   // 0) record a CLEAN ListingModeration so the hire passes the moderation gate.
+  // Idempotent: the listing/spec-keyed PDA is shared, so a second call in the same
+  // world reuses the existing attestation rather than re-initializing it.
   const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
-  expectOk(send(w.svm, await modProg.methods
-    .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.modAuth]), "hire-settle:record-listing-mod");
+  if (isClosed(w.svm, listingMod)) {
+    expectOk(send(w.svm, await modProg.methods
+      .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
+      .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [w.modAuth]), "hire-settle:record-listing-mod");
+  }
 
   // 1) buyer hires the provider's listing -> Open task + escrow + HireRecord.
   const taskId = id32();
@@ -605,7 +609,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false } = {}) {
     .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator })
     .instruction(), [w.provider]), "hire-settle:complete");
 
-  return { task, escrow, claim, hireRecord, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
+  return { task, escrow, claim, hireRecord, taskMod, jobSpec, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
 }
 
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
@@ -815,6 +819,43 @@ test("exit allow-list: a paused protocol blocks new hires but still lets a hired
   expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel under paused protocol");
   assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task is Cancelled even while paused");
   assert.ok(isClosed(w.svm, escrow), "escrow refunded/closed while paused");
+});
+
+test("close_task children: reclaims rent from a task_moderation child via remaining_accounts", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 2_000_000 });
+  const r = await runHireSettlement(w); // Completed; leaves task, job spec, task_moderation, live hire_record
+  assert.ok(!isClosed(w.svm, r.taskMod), "task_moderation present before close");
+  assert.ok(!isClosed(w.svm, r.jobSpec), "task_job_spec present before close");
+
+  const closeIx = await w.buyerProg.methods
+    .closeTask()
+    .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .remainingAccounts([{ pubkey: r.taskMod, isSigner: false, isWritable: true }])
+    .instruction();
+  expectOk(send(w.svm, closeIx, [w.buyer]), "close_task with moderation child");
+
+  assert.ok(isClosed(w.svm, r.task), "task closed");
+  assert.ok(isClosed(w.svm, r.jobSpec), "task_job_spec rent reclaimed");
+  assert.ok(isClosed(w.svm, r.taskMod), "task_moderation rent reclaimed");
+  assert.equal(decode(w.svm, "ServiceListing", w.listing).open_jobs, 0, "listing capacity freed");
+});
+
+test("close_task children: rejects a child PDA bound to a different task (anti-griefing)", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 2_000_000 });
+  const a = await runHireSettlement(w); // task A + its task_moderation
+  const b = await runHireSettlement(w); // task B + its task_moderation (same world)
+
+  // Try to close task A while passing task B's moderation as a remaining account.
+  const closeIx = await w.buyerProg.methods
+    .closeTask()
+    .accounts({ task: a.task, taskJobSpec: a.jobSpec, escrow: null, hireRecord: a.hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .remainingAccounts([{ pubkey: b.taskMod, isSigner: false, isWritable: true }])
+    .instruction();
+  expectFail(send(w.svm, closeIx, [w.buyer]), "InvalidInput", "close_task rejects another task's moderation child");
+
+  // The whole tx reverted: task A is untouched and task B's moderation survives.
+  assert.ok(!isClosed(w.svm, a.task), "task A NOT closed (tx reverted)");
+  assert.ok(!isClosed(w.svm, b.taskMod), "task B moderation untouched");
 });
 
 test("negative: close_task rejects a non-terminal (Open) task", async () => {
