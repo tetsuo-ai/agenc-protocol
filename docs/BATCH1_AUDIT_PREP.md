@@ -9,7 +9,7 @@ plan in `docs/MARKETPLACE_EMBED_UPGRADE_SPEC.md`.
   **layout** change is a real migration. **Batch 1 makes no layout change** (all new
   data lives in new PDAs); it is gated `#[cfg(not(feature = "mainnet-canary"))]` where new.
 - **Status:** local commits only on branch `fix/bid-self-deal-guard`; nothing pushed.
-- **Tests:** 225 Rust unit (`cargo test --lib`) + 34 litesvm integration
+- **Tests:** 225 Rust unit (`cargo test --lib`) + 35 litesvm integration
   (`cd tests-integration && node --test`). clippy `-D warnings` + `mainnet-canary`
   clippy clean; `anchor build` + `npm run artifacts:check` clean.
 - **NOT in Batch 1 (gated by §11.5 human go/no-go + audit #2 + the 149-task migration):**
@@ -74,7 +74,7 @@ now-required `hire_record`; operator auto-resolved from the on-chain `HireRecord
 
 ---
 
-## 3. Test coverage map (34 litesvm + 225 unit)
+## 3. Test coverage map (35 litesvm + 225 unit)
 
 **Covered at runtime (litesvm):**
 - Hire lifecycle: mint/escrow/HireRecord/capacity; hire→cancel→close; capacity cap;
@@ -92,9 +92,10 @@ now-required `hire_record`; operator auto-resolved from the on-chain `HireRecord
   hires blocked.
 - **SPL-token Auto settlement:** worker + treasury paid in tokens (conservation:
   worker + treasury == reward); token escrow ATA + escrow PDA closed.
-- **Disputes:** initiate; `expire_dispute` (permissionless last-resort) and
-  `resolve_dispute` (3-arbiter quorum, voting period elapsed) both settle the escrow
-  and clear the dispute **while the protocol is paused**.
+- **Disputes (all paths, exit-safe while paused):** initiate; `expire_dispute`
+  (permissionless last-resort); `resolve_dispute` (3-arbiter quorum, voting period
+  elapsed); and `apply_dispute_slash` (creator-Refund dispute, staked arbiters approve
+  → the losing worker's stake is slashed). Each settles/finalizes **while paused**.
 - `accept_bid` moderation gate (with/without job spec). (#18-19)
 - Manual validation (CreatorReview): submit→accept pays; reject doesn't settle;
   accept while paused. (#22-24)
@@ -112,9 +113,14 @@ now-required `hire_record`; operator auto-resolved from the on-chain `HireRecord
 
 | Gap | Risk | Why it's still open | Notes |
 |-----|------|---------------------|-------|
-| **`apply_dispute_slash`** (finalize a deferred TOKEN slash) | Low | Needs the combination: staked arbiters (non-zero vote weight) + a token task + a worker-loses resolution that defers a token slash. | Exit-safety is unit-verified via `check_version_compatible_for_exit`; the surrounding dispute paths (initiate / expire / resolve) and token settlement are now covered at runtime. A pre-audit note flagged the collaborative-token residual calc (`completion_helpers.rs`) - pre-existing, not Batch 1, worth a reviewer's eye. |
-| **`complete_task_private` (ZK)** | Low | Needs a remote prover; not litesvm-testable. | Exit-variant verified by unit test; same shared `execute_completion_rewards` exercised by Auto tests. |
+| **`complete_task_private` (ZK)** | Low | Needs a remote prover; not litesvm-testable. | Exit-variant verified by unit test; same shared `execute_completion_rewards` exercised by the Auto + token tests. |
 | **Collaborative multi-worker 3-way** | Low (unreachable) | Hire mints single-worker Exclusive tasks; the operator leg never applies to Collaborative. | Per-worker math is unit-tested. |
+| **Token slash *reserve* leg** | Low | `apply_dispute_slash`'s SOL stake-slash path is tested (§3); the optional token-reserve settlement leg (token task + deferred token reserve) is not separately exercised. | Same instruction + guards; only the optional token accounts differ. A pre-audit note flagged the collaborative-token residual calc (`completion_helpers.rs`) - pre-existing, not Batch 1, worth a reviewer's eye. |
+
+Resolved since the first draft (now have runtime tests, see §3): SPL-token settlement;
+`resolve_dispute` (vote quorum); `apply_dispute_slash` (stake slash). What remains is
+either un-litesvm-testable (ZK prover), structurally unreachable (collaborative operator
+split), or a minor optional leg (token slash reserve).
 
 Structurally-unreachable negatives (documented, not tested): wrong-task `hire_record`
 (blocked by anchor seeds); worker-floor violation (caps keep worker ≥ 70%);
@@ -151,8 +157,10 @@ review; each fix passed a 3-lens → 2-verifier adversarial review with 0 findin
 ## 7. Pre-deploy checklist
 
 - [ ] Audit this Batch-1 surface (§1 commits).
-- [ ] Review the one remaining edge (`apply_dispute_slash`, §4) or accept the risk in
-      writing — token settlement and the dispute initiate/expire/resolve paths are now tested.
+- [ ] Note the remaining un-testable/unreachable items (§4: ZK prover, collaborative
+      operator split, token slash-reserve leg). All primary money paths — settlement
+      (SOL + token), the full 3-way split, and every dispute path
+      (initiate/expire/resolve/slash) — are runtime-tested, including while paused.
 - [ ] Land the SDK update (`agenc-sdk` branch `fix/hire-record-required-accounts`) so
       clients pass the now-required `hire_record`.
 - [ ] Regenerate + verify artifacts (`npm run artifacts:refresh && npm run artifacts:check`).
