@@ -934,6 +934,17 @@ pub struct Task {
     /// None = SOL rewards (default, backward compatible).
     /// Some(mint) = SPL token rewards using the specified mint.
     pub reward_mint: Option<Pubkey>,
+    // === Batch 2 layout additions (APPEND-ONLY — never reorder/insert above) ===
+    /// Operator (embedding-site) payee for the §4 3-way split. `Pubkey::default()`
+    /// means no operator leg (non-operator task, or a pre-Batch-2 task not yet
+    /// backfilled — settlement falls back to the HireRecord in that case).
+    pub operator: Pubkey,
+    /// Operator fee in basis points, snapshotted from the listing at hire time.
+    /// 0 = no operator leg. Capped at MAX_OPERATOR_FEE_BPS by listing creation.
+    pub operator_fee_bps: u16,
+    /// Reserved padding so future field adds become value-only migrates rather
+    /// than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
+    pub _reserved: [u8; 16],
 }
 
 impl Default for Task {
@@ -962,6 +973,9 @@ impl Default for Task {
             dependency_type: DependencyType::default(),
             min_reputation: 0,
             reward_mint: None,
+            operator: Pubkey::default(),
+            operator_fee_bps: 0,
+            _reserved: [0u8; 16],
         }
     }
 }
@@ -970,7 +984,23 @@ impl Task {
     /// Prefer using `8 + Task::INIT_SPACE` (from #[derive(InitSpace)]).
     /// This manual constant is kept for backwards compatibility.
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // reward_mint (Option<Pubkey>: 1 byte discriminator + 32 bytes pubkey)
+
+    /// On-chain byte size of the pre-Batch-2 `Task` (8-byte discriminator + 374
+    /// INIT_SPACE). The 149 live mainnet tasks are at this size; `migrate_task`
+    /// reallocs them up to `SIZE`. Do NOT change — it is the migration precondition.
+    pub const OLD_TASK_SIZE: usize = 382;
+
+    /// Reserved padding must stay zeroed; non-zero implies corruption or an
+    /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 16]
+    }
 }
+
+/// Compile-time pin: a layout drift (field add/reorder changing INIT_SPACE)
+/// fails the build instead of silently bricking the 149-task migration.
+const _: () = assert!(Task::SIZE == 432);
+const _: () = assert!(Task::OLD_TASK_SIZE + 50 == Task::SIZE);
 
 /// Worker's claim on a task
 /// PDA seeds: ["claim", task, worker_agent]
@@ -2162,5 +2192,38 @@ mod tests {
         let mut config = ZkConfig::default();
         config._reserved[0] = 0xFF;
         assert!(!config.validate_reserved_fields());
+    }
+
+    // === Batch 2 Task layout (migration safety) ===
+
+    #[test]
+    fn test_task_size_pins() {
+        // Runtime guard mirroring the compile-time const_assert. If a field add
+        // changes the layout, the 149-task realloc (OLD_TASK_SIZE -> SIZE) breaks;
+        // this fails loudly rather than silently bricking live accounts.
+        assert_eq!(Task::OLD_TASK_SIZE, 382, "OLD_TASK_SIZE is the migration precondition; do not change");
+        assert_eq!(Task::SIZE, 432, "Task grew by operator(32)+fee(2)+reserved(16)=50");
+        assert_eq!(Task::SIZE - Task::OLD_TASK_SIZE, 50, "realloc delta must be exactly +50 bytes");
+    }
+
+    #[test]
+    fn test_task_reserved_fields_default_to_zero() {
+        let task = Task::default();
+        assert_eq!(task._reserved, [0u8; 16]);
+        assert_eq!(task.operator, Pubkey::default());
+        assert_eq!(task.operator_fee_bps, 0);
+    }
+
+    #[test]
+    fn test_task_validate_reserved_fields_ok() {
+        let task = Task::default();
+        assert!(task.validate_reserved_fields());
+    }
+
+    #[test]
+    fn test_task_validate_reserved_fields_corrupted() {
+        let mut task = Task::default();
+        task._reserved[0] = 0xFF;
+        assert!(!task.validate_reserved_fields());
     }
 }

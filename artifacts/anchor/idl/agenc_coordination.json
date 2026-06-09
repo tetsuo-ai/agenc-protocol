@@ -18624,6 +18624,36 @@
             "type": {
               "option": "pubkey"
             }
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Operator (embedding-site) payee for the §4 3-way split. `Pubkey::default()`",
+              "means no operator leg (non-operator task, or a pre-Batch-2 task not yet",
+              "backfilled — settlement falls back to the HireRecord in that case)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operator_fee_bps",
+            "docs": [
+              "Operator fee in basis points, snapshotted from the listing at hire time.",
+              "0 = no operator leg. Capped at MAX_OPERATOR_FEE_BPS by listing creation."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved padding so future field adds become value-only migrates rather",
+              "than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
           }
         ]
       }

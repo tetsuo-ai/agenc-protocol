@@ -775,6 +775,9 @@ mod tests {
             dependency_type: DependencyType::default(),
             min_reputation: 0,
             reward_mint: None,
+            operator: Pubkey::default(),
+            operator_fee_bps: 0,
+            _reserved: [0u8; 16],
         }
     }
 
