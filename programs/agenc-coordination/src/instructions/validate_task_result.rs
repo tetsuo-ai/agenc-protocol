@@ -418,7 +418,10 @@ pub fn handler<'info>(
             Some(ctx.accounts.task_submission.result_data),
             &clock,
             token_accounts,
-            None, // operator leg: manual-review settlement is not yet hire-aware (9b)
+            None, // operator leg: unreachable for hired tasks — configure_task_validation
+                  // rejects any live-HireRecord task (HiredTaskValidationUnsupported), so an
+                  // operator-bearing task can never reach Quorum/ExternalAttestation. The
+                  // hire-aware settlement paths are complete_task (Auto) and accept/auto_accept (CreatorReview).
         )?;
 
         ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
