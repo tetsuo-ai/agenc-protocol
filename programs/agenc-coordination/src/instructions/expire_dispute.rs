@@ -153,13 +153,19 @@ pub struct ExpireDispute<'info> {
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
 
-    // === Batch 3 completion bonds (optional; refunded on no-fault expiry) ===
+    // === Batch 3 completion bonds (REQUIRED; both refunded on no-fault expiry) ===
+    // Required, not optional: expire_dispute is PERMISSIONLESS and always Cancels the
+    // task, so a posted bond is recoverable only here (reclaim_completion_bond needs a
+    // Completed task). If the caller could omit a bond it would be stranded forever on
+    // the Cancelled task. The caller passes the seeds-derived PDA even for an un-bonded
+    // task; settle_completion_bond validates the canonical derivation and no-ops when no
+    // live bond was posted (mirrors resolve_dispute / resolve_reject_frozen hardening).
     /// CHECK: creator completion bond PDA; refunded on expiry. Validated by helper.
     #[account(mut)]
-    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
+    pub creator_completion_bond: UncheckedAccount<'info>,
     /// CHECK: worker completion bond PDA; refunded on expiry.
     #[account(mut)]
-    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+    pub worker_completion_bond: UncheckedAccount<'info>,
 }
 
 /// Expires a dispute after voting period ends.
@@ -577,27 +583,52 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     let worker_wallet_info = worker_wallet.to_account_info();
     claim.close(worker_wallet_info.clone())?;
 
-    // Batch 3 §8: a no-fault expiry refunds BOTH completion bonds. No-op if un-bonded.
+    // Batch 3 §8: a no-fault expiry refunds BOTH completion bonds. The bond accounts are
+    // REQUIRED (see struct) so this permissionless exit cannot strand a posted bond on
+    // the now-Cancelled task. Both are pinned to their canonical PDA: settle_completion_bond
+    // no-ops on any non-program-owned account, so without this pin a caller could pass a
+    // junk account to skip a refund and strand the real bond. An un-bonded task still
+    // passes (correct address, no account → settle no-ops).
     {
         let creator_info = ctx.accounts.creator.to_account_info();
-        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &creator_info,
-                &task_key,
-                CompletionBond::ROLE_CREATOR,
-                BondDisposition::Refund,
-            )?;
-        }
-        if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &worker_wallet_info,
-                &task_key,
-                CompletionBond::ROLE_WORKER,
-                BondDisposition::Refund,
-            )?;
-        }
+        let (expected_creator_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                ctx.accounts.creator.key().as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.creator_completion_bond.key() == expected_creator_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+        let (expected_worker_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                worker_wallet_info.key().as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.worker_completion_bond.key() == expected_worker_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+        settle_completion_bond(
+            &ctx.accounts.creator_completion_bond.to_account_info(),
+            &creator_info,
+            &task_key,
+            CompletionBond::ROLE_CREATOR,
+            BondDisposition::Refund,
+        )?;
+        settle_completion_bond(
+            &ctx.accounts.worker_completion_bond.to_account_info(),
+            &worker_wallet_info,
+            &task_key,
+            CompletionBond::ROLE_WORKER,
+            BondDisposition::Refund,
+        )?;
     }
 
     emit!(DisputeExpired {

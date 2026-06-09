@@ -2,9 +2,12 @@
 //!
 //! A single source of truth so every exit path (accept / complete / auto-accept /
 //! expire_claim no-show / cancel / dispute resolve / dispute expire) disposes a bond
-//! the same way and none diverges. SOL-only v1. Bonds are passed as remaining_accounts
-//! and are OPTIONAL: a missing / non-bond / already-settled account is a safe no-op, so
-//! a task that never posted bonds settles exactly as before.
+//! the same way and none diverges. SOL-only v1. A missing / non-bond / already-settled
+//! account is a safe no-op, so a task that never posted bonds settles exactly as before.
+//! Exit paths that can FORFEIT a bond (dispute resolve, reject-frozen) take the bond
+//! accounts as REQUIRED so a caller cannot omit a forfeit-due (or, on a terminal exit,
+//! a refund-due) bond and strand or invert it; callers pass the seeds-derived PDA even
+//! for un-bonded tasks and rely on the no-op below.
 
 use crate::errors::CoordinationError;
 use crate::events::{BondForfeited, BondRefunded};

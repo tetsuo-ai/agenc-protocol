@@ -154,18 +154,22 @@ pub struct ResolveDispute<'info> {
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
 
-    // === Batch 3 completion bonds (optional) ===
+    // === Batch 3 completion bonds (REQUIRED — see below) ===
+    // Required, not optional: a resolver must not be able to omit a forfeit-due bond
+    // (which `reclaim_completion_bond` could then refund to the loser on a Completed
+    // task, inverting the forfeit). The caller passes the seeds-derived PDA even for an
+    // un-bonded task; settle_completion_bond validates the canonical derivation and
+    // no-ops when no bond was posted (audit hardening, mirrors resolve_reject_frozen).
     /// CHECK: creator completion bond PDA; refunded if the creator prevails, else
-    /// forfeited to the treasury. Validated by settle_completion_bond.
+    /// forfeited to the treasury. Fully validated by settle_completion_bond.
     #[account(mut)]
-    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: worker completion bond PDA; refunded if the worker prevails, else
-    /// forfeited to the treasury.
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA; refunded if the worker prevails, else forfeited.
     #[account(mut)]
-    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+    pub worker_completion_bond: UncheckedAccount<'info>,
     /// CHECK: treasury, recipient of a forfeited bond; validated == protocol_config.treasury.
     #[account(mut)]
-    pub bond_treasury: Option<UncheckedAccount<'info>>,
+    pub bond_treasury: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) -> Result<()> {
@@ -830,6 +834,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
     // Batch 3 §8: completion bond disposition follows the dispute outcome — the loser
     // forfeits their bond to the treasury, the winner is refunded. A Split or a
     // rejected dispute (no fault established) refunds both. No-op for un-bonded tasks.
+    //
+    // The bond accounts are REQUIRED (not optional): a resolver must not be able to
+    // omit a forfeit-due bond, which `reclaim_completion_bond` could then refund to
+    // the loser on the now-Completed task — inverting the forfeit. The caller passes
+    // the seeds-derived PDA even for an un-bonded task; settle_completion_bond
+    // validates the canonical derivation and no-ops when no live bond was posted
+    // (mirrors resolve_reject_frozen).
     {
         let bond_resolution = dispute.resolution_type;
         // (creator_forfeit, worker_forfeit)
@@ -843,67 +854,101 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
             (false, false) // rejected: no fault, refund both
         };
 
-        // Validate + bind the treasury once (only needed when a forfeit occurs).
-        let treasury_info = match ctx.accounts.bond_treasury.as_ref() {
-            Some(t) => {
-                require!(
-                    t.key() == ctx.accounts.protocol_config.treasury,
-                    CoordinationError::InvalidInput
-                );
-                Some(t.to_account_info())
-            }
-            None => None,
-        };
+        // Validate + bind the treasury (forfeit recipient).
+        require!(
+            ctx.accounts.bond_treasury.key() == ctx.accounts.protocol_config.treasury,
+            CoordinationError::InvalidInput
+        );
+        let treasury_info = ctx.accounts.bond_treasury.to_account_info();
 
+        // Pin both bond accounts to their canonical PDA. settle_completion_bond no-ops on
+        // any non-program-owned account, so without this a resolver could pass a junk
+        // (system-owned) account to SKIP a forfeit-due settle, leaving the real bond at
+        // its canonical PDA for reclaim_completion_bond to refund on the now-Completed
+        // task — inverting the forfeit. Required + canonical-pinned closes that. An
+        // un-bonded task still passes (correct address, no account → settle no-ops).
+        let worker_wallet_key = ctx
+            .accounts
+            .worker_wallet
+            .as_ref()
+            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
+            .key();
+        let (expected_creator_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                ctx.accounts.creator.key().as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.creator_completion_bond.key() == expected_creator_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+        let (expected_worker_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                worker_wallet_key.as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.worker_completion_bond.key() == expected_worker_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+
+        // Creator bond: forfeit to treasury if the creator lost, else refund.
         let creator_info = ctx.accounts.creator.to_account_info();
-        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
-            if creator_forfeit {
-                let recipient = treasury_info
-                    .as_ref()
-                    .ok_or(CoordinationError::MissingCompletionBondAccount)?;
-                settle_completion_bond(
-                    &bond.to_account_info(),
-                    &creator_info,
-                    &task_key,
-                    CompletionBond::ROLE_CREATOR,
-                    BondDisposition::Forfeit { recipient },
-                )?;
-            } else {
-                settle_completion_bond(
-                    &bond.to_account_info(),
-                    &creator_info,
-                    &task_key,
-                    CompletionBond::ROLE_CREATOR,
-                    BondDisposition::Refund,
-                )?;
-            }
+        let creator_bond_info = ctx.accounts.creator_completion_bond.to_account_info();
+        if creator_forfeit {
+            settle_completion_bond(
+                &creator_bond_info,
+                &creator_info,
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Forfeit {
+                    recipient: &treasury_info,
+                },
+            )?;
+        } else {
+            settle_completion_bond(
+                &creator_bond_info,
+                &creator_info,
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
         }
 
-        if let (Some(bond), Some(worker_wallet)) = (
-            ctx.accounts.worker_completion_bond.as_ref(),
-            ctx.accounts.worker_wallet.as_ref(),
-        ) {
-            let worker_info = worker_wallet.to_account_info();
-            if worker_forfeit {
-                let recipient = treasury_info
-                    .as_ref()
-                    .ok_or(CoordinationError::MissingCompletionBondAccount)?;
-                settle_completion_bond(
-                    &bond.to_account_info(),
-                    &worker_info,
-                    &task_key,
-                    CompletionBond::ROLE_WORKER,
-                    BondDisposition::Forfeit { recipient },
-                )?;
-            } else {
-                settle_completion_bond(
-                    &bond.to_account_info(),
-                    &worker_info,
-                    &task_key,
-                    CompletionBond::ROLE_WORKER,
-                    BondDisposition::Refund,
-                )?;
-            }
+        // Worker bond: forfeit to treasury if the worker lost, else refund. The
+        // poster is the worker's signing wallet (validated == worker.authority by
+        // validate_worker_accounts above, which also guarantees worker_wallet is Some).
+        let worker_info = ctx
+            .accounts
+            .worker_wallet
+            .as_ref()
+            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
+            .to_account_info();
+        let worker_bond_info = ctx.accounts.worker_completion_bond.to_account_info();
+        if worker_forfeit {
+            settle_completion_bond(
+                &worker_bond_info,
+                &worker_info,
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Forfeit {
+                    recipient: &treasury_info,
+                },
+            )?;
+        } else {
+            settle_completion_bond(
+                &worker_bond_info,
+                &worker_info,
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
         }
     }
 

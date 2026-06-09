@@ -5313,13 +5313,11 @@
         },
         {
           "name": "creator_completion_bond",
-          "writable": true,
-          "optional": true
+          "writable": true
         },
         {
           "name": "worker_completion_bond",
-          "writable": true,
-          "optional": true
+          "writable": true
         }
       ],
       "args": []
@@ -8871,23 +8869,17 @@
         {
           "name": "creator_completion_bond",
           "docs": [
-            "forfeited to the treasury. Validated by settle_completion_bond."
+            "forfeited to the treasury. Fully validated by settle_completion_bond."
           ],
-          "writable": true,
-          "optional": true
+          "writable": true
         },
         {
           "name": "worker_completion_bond",
-          "docs": [
-            "forfeited to the treasury."
-          ],
-          "writable": true,
-          "optional": true
+          "writable": true
         },
         {
           "name": "bond_treasury",
-          "writable": true,
-          "optional": true
+          "writable": true
         }
       ],
       "args": []

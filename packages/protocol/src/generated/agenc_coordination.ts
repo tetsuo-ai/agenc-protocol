@@ -5319,13 +5319,11 @@ export type AgencCoordination = {
         },
         {
           "name": "creatorCompletionBond",
-          "writable": true,
-          "optional": true
+          "writable": true
         },
         {
           "name": "workerCompletionBond",
-          "writable": true,
-          "optional": true
+          "writable": true
         }
       ],
       "args": []
@@ -8877,23 +8875,17 @@ export type AgencCoordination = {
         {
           "name": "creatorCompletionBond",
           "docs": [
-            "forfeited to the treasury. Validated by settle_completion_bond."
+            "forfeited to the treasury. Fully validated by settle_completion_bond."
           ],
-          "writable": true,
-          "optional": true
+          "writable": true
         },
         {
           "name": "workerCompletionBond",
-          "docs": [
-            "forfeited to the treasury."
-          ],
-          "writable": true,
-          "optional": true
+          "writable": true
         },
         {
           "name": "bondTreasury",
-          "writable": true,
-          "optional": true
+          "writable": true
         }
       ],
       "args": []
