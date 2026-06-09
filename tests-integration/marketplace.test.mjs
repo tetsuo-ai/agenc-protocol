@@ -976,6 +976,28 @@ test("completion bond: a clean completion refunds BOTH bonds to their posters", 
     "creator received their refunded bond");
 });
 
+test("completion bond: rejected on a ZK-private task (audit — would strand on complete_task_private)", async () => {
+  // A private task (real constraint_hash) settles via complete_task_private, which
+  // does NOT settle bonds, so a bond there would be permanently stranded. post must
+  // reject it. Revert-sensitive: drop the constraint_hash guard and this posts OK.
+  const w = await freshWorld({});
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
+  const constraintHash = crypto.randomBytes(32); // real ZK constraint -> private task
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, arr(constraintHash), 0, null)
+    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "create private task");
+  const bond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+  expectFail(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
+    .accounts({ task, completionBond: bond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]),
+    "BondUnsupportedTaskType", "bond rejected on a ZK-private task");
+});
+
 test("completion bond: cancel refunds the creator bond on an Open task", async () => {
   const w = await freshWorld({ price: 2_000_000 });
   const { ix, task, escrow } = await hireIx(w, {});

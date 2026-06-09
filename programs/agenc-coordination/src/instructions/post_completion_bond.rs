@@ -9,7 +9,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::BondPosted;
-use crate::state::{CompletionBond, Task, TaskStatus, TaskType};
+use crate::state::{CompletionBond, Task, TaskStatus, TaskType, HASH_SIZE, MANUAL_VALIDATION_SENTINEL};
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
@@ -83,6 +83,17 @@ pub fn handler(ctx: Context<PostCompletionBond>, role: u8) -> Result<()> {
     // SOL-only v1.
     require!(
         task.reward_mint.is_none(),
+        CoordinationError::BondUnsupportedTaskType
+    );
+
+    // Bonds are only supported on tasks whose SUCCESS path settles them: Auto
+    // (constraint_hash == 0 -> complete_task) and manual-review (sentinel -> accept /
+    // auto_accept). A ZK-private task (a real constraint_hash) settles via
+    // complete_task_private, which does NOT settle bonds, so posting one there would
+    // permanently strand it on completion. Reject bonds on private tasks (audit fix).
+    require!(
+        task.constraint_hash == [0u8; HASH_SIZE]
+            || task.constraint_hash == MANUAL_VALIDATION_SENTINEL,
         CoordinationError::BondUnsupportedTaskType
     );
 
