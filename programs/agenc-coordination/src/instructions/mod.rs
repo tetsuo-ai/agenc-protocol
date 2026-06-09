@@ -24,6 +24,8 @@ pub mod bid_settlement_helpers;
 pub mod completion_helpers;
 pub mod constants;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod bond_helpers;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod dispute_helpers;
 pub mod lamport_transfer;
 pub mod launch_controls;

@@ -899,6 +899,48 @@ test("completion bond: creator + worker each post a 25% bond into distinct PDAs 
   expectFail(await post(stranger, 0), "BondPartyMismatch", "non-creator cannot post the creator bond");
 });
 
+test("completion bond: a no-show worker forfeits their bond to the creator on expire_claim", async () => {
+  // The load-bearing case: the claim closes to the worker (auto-refunding claim rent),
+  // but the bond lives in its own PDA, so a no-show worker does NOT get the bond back —
+  // it is forfeited to the creator. Revert-sensitive: drop the forfeit and the creator
+  // delta below goes to 0.
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress
+
+  // worker posts a 25% completion bond (1,000,000).
+  const [workerBond] = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .postCompletionBond(1)
+    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "worker posts bond");
+  assert.equal(Number(decode(w.svm, "CompletionBond", workerBond).amount), 1_000_000, "bond is 25% of reward");
+
+  // warp well past claim expiry + grace so a third party can expire it.
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 700_000n;
+  w.svm.setClock(clk);
+
+  // a neutral caller expires the claim (so the creator's delta is purely the forfeit).
+  const cleaner = Keypair.generate();
+  w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
+  const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+
+  expectOk(send(w.svm, await makeProgram(cleaner).methods
+    .expireClaim()
+    .accounts({
+      authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      taskSubmission: null, rentRecipient: w.provider.publicKey,
+      workerCompletionBond: workerBond, bondCreator: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction(), [cleaner]), "expire_claim with no-show bond forfeit");
+
+  assert.ok(isClosed(w.svm, workerBond), "worker bond PDA closed after forfeit");
+  const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
+  assert.equal(buyerDelta, 1_000_000, `creator received the forfeited bond principal (got ${buyerDelta})`);
+});
+
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 5_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });

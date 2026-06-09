@@ -5000,6 +5000,20 @@ export type AgencCoordination = {
           "writable": true
         },
         {
+          "name": "workerCompletionBond",
+          "docs": [
+            "(InProgress expiry) its principal is forfeited to the creator. Fully validated",
+            "in the handler by settle_completion_bond (owner, PDA, task, role, party)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "bondCreator",
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
         }
