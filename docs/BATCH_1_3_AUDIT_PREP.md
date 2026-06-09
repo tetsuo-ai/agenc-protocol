@@ -286,9 +286,27 @@ signer auth/multisig, optional-account resolution). **2 LOW findings — both fi
   second layer. **Fixed** in `Cargo.toml` (verified honored: full rebuild, no "profiles ignored"
   warning).
 
+## Instruction coverage audit + closure (`wwbj8t0s0` matrix → `wjci30gsx` build)
+
+A per-instruction coverage matrix (every one of the 77 IDL instructions: implemented?
++ tested by what?) found the program **100% implemented** (zero stubs) but only 37/77
+meaningfully tested — 40 instructions had no automated test, including critical
+settlement paths (`validate_task_result`, `auto_accept_task_result`, `create_dependent_task`,
+`apply_initiator_slash`). That gap is now **closed**: 94 new litesvm tests across 8
+subsystem files (admin-config, reputation, skills, governance, bid-extra, agent-social,
+task-extra, listing-mod-dispute), each with a real-effect positive assertion and a
+guard negative; authored by an orchestrated workflow, each file self-verified green and
+independently reviewed for meaningfulness (revert-sensitivity probed).
+
+Coverage now: **72/77 instructions exercised directly in litesvm.** The remaining 5 are
+covered otherwise or are structurally not litesvm-testable: `complete_task_private` (needs
+a ZK prover), `execute_proposal` / `migrate_protocol` / `update_launch_controls` (Rust unit
+tests), and `initialize_protocol` (runs in every harness setup; its real initializer needs
+the upgradeable ProgramData account litesvm does not model — hence the inject helper).
+
 ## Test counts (final)
 
-- **232 Rust unit** (`cargo test --lib`) + **55 litesvm integration** (`cd tests-integration && node --test`).
+- **232 Rust unit** (`cargo test --lib`) + **149 litesvm integration** (`cd tests-integration && node --test`) — was 55; +94 closing the coverage gap.
 - clippy `--lib -D warnings` + `--features mainnet-canary` clean; `anchor build` +
   `npm run artifacts:check` clean at every commit.
 
