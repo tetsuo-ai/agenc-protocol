@@ -9,12 +9,14 @@ plan in `docs/MARKETPLACE_EMBED_UPGRADE_SPEC.md`.
   **layout** change is a real migration. **Batch 1 makes no layout change** (all new
   data lives in new PDAs); it is gated `#[cfg(not(feature = "mainnet-canary"))]` where new.
 - **Status:** local commits only on branch `fix/bid-self-deal-guard`; nothing pushed.
-- **Tests:** 225 Rust unit (`cargo test --lib`) + 35 litesvm integration
+- **Tests:** 225 Rust unit (`cargo test --lib`) + 36 litesvm integration
   (`cd tests-integration && node --test`). clippy `-D warnings` + `mainnet-canary`
   clippy clean; `anchor build` + `npm run artifacts:check` clean.
 - **NOT in Batch 1 (gated by §11.5 human go/no-go + audit #2 + the 149-task migration):**
   symmetric 25/25 bonds, revision split (`request_changes`), RejectFrozen, operator
-  fields on `Task`, dispute-path operator split. Do not review these as present.
+  fields on `Task`. Do not review these as present. (The operator leg on the dispute
+  payout paths IS in Batch 1 — see audit fix #3 below; it is additive, no layout change,
+  carved from the worker's gross via the existing `HireRecord` PDA.)
 
 ---
 
@@ -35,6 +37,7 @@ plan in `docs/MARKETPLACE_EMBED_UPGRADE_SPEC.md`.
 | `6e915d7` | **audit fix #1:** `complete_task` requires `hire_record` (operator-fee bypass) | §4 |
 | `a93eec7` | **audit fix #2:** reject manual-validation reconfig of a hired task | §4 |
 | `378075d`,`6753645`,`d17749a`,`0a8a9cc` | test hardening (manual-validation, moderation edges, negatives, dispute) | — |
+| _(this commit)_ | **audit fix #3:** carve the operator leg on the dispute payout paths (`resolve_dispute` Complete/Split, `expire_dispute` worker-payment) so a dispute can't bypass the §4 split | §4 |
 
 SDK follow-up (separate repo `agenc-sdk`, branch `fix/hire-record-required-accounts`,
 commit `941084b`, local only): `completeTask` + `configureTaskValidation` pass the
@@ -56,7 +59,13 @@ now-required `hire_record`; operator auto-resolved from the on-chain `HireRecord
   `["hire", task]` account; a live (program-owned) `HireRecord` forces the operator leg
   (`MissingOperatorAccount` / `InvalidOperatorAccount`). `configure_task_validation`
   rejects a live-hire task (`HiredTaskValidationUnsupported`) so it can't be re-routed
-  to the (not-yet-hire-aware) manual path.
+  to the (not-yet-hire-aware) manual path. **The dispute payout paths** (`resolve_dispute`
+  Complete/Split, `expire_dispute` worker-payment branches) also require the `["hire", task]`
+  account and carve the operator leg from the worker's gross via the shared
+  `pay_dispute_operator_fee` helper — so settling a hired task through a dispute cannot
+  dodge the §4 split. Hires are SOL-only, so this is a lamport-only carve; the operator
+  payee is validated against `hire.operator`, and a non-hired task (empty system-owned PDA)
+  takes no operator leg.
 - **Moderation, entry-only (§6).** `hire_from_listing`, `accept_bid` (via a required
   moderated `TaskJobSpec`), and `set_task_job_spec` gate on a publishable attestation
   (CLEAN | HUMAN_APPROVED), risk ≤ 100, not expired, correct authority; `enabled=false`
@@ -74,7 +83,7 @@ now-required `hire_record`; operator auto-resolved from the on-chain `HireRecord
 
 ---
 
-## 3. Test coverage map (35 litesvm + 225 unit)
+## 3. Test coverage map (36 litesvm + 225 unit)
 
 **Covered at runtime (litesvm):**
 - Hire lifecycle: mint/escrow/HireRecord/capacity; hire→cancel→close; capacity cap;
@@ -88,6 +97,10 @@ now-required `hire_record`; operator auto-resolved from the on-chain `HireRecord
   fee (20%) with worker ≥ 60%; settles while paused. (#14-16, #25)
 - **Operator-fee protection:** can't complete a hired task without paying the operator
   (omit/forge → reject); can't re-route a hired task to manual validation. (#13, #20)
+- **Operator-fee protection (dispute path):** a hired task resolved via `resolve_dispute`
+  **Complete** pays the operator its exact cut and the worker the remainder (revert-sensitive:
+  disabling the carve drops the operator to 0). The three pre-existing dispute tests
+  (resolve-quorum, expire, apply_dispute_slash) thread the now-required `hire_record`.
 - Exit-safety while paused: complete, cancel, and the dispute paths all settle; new
   hires blocked.
 - **SPL-token Auto settlement:** worker + treasury paid in tokens (conservation:
@@ -135,9 +148,16 @@ operator+token co-occurrence (operator legs are SOL-only hires).
    live-detected; operator must be paid. Regression test #13.
 2. **Operator fee dropped via manual re-route** (fix `a93eec7`): a hired task could be
    moved to manual validation (not hire-aware → operator unpaid). Now rejected. Test #20.
+3. **Operator fee bypassed via dispute settlement** (this commit): a hired task settled
+   through `resolve_dispute` (Complete/Split) or `expire_dispute` paid the worker without
+   carving the operator leg — only `complete_task` enforced it. Now all dispute payout
+   paths require the `["hire", task]` account and carve the operator via the shared
+   `pay_dispute_operator_fee` helper. Regression test added (operator paid on dispute
+   Complete, revert-sensitive). Additive — no `Task`/`ProtocolConfig` layout change.
 
-Both were surfaced by a 5-dimension / 7-confirmed pre-audit and verified by independent
-review; each fix passed a 3-lens → 2-verifier adversarial review with 0 findings.
+Findings #1–2 were surfaced by a 5-dimension / 7-confirmed pre-audit and verified by
+independent review. Finding #3 was surfaced by a follow-up security-audit workflow; the
+fix then passed a fresh 5-lens → independent-verifier adversarial audit with **0 findings**.
 
 ---
 

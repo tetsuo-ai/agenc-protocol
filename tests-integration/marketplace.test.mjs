@@ -1110,7 +1110,7 @@ test("dispute: initiate -> expire settles the escrow while the protocol is pause
 
   expectOk(send(w.svm, await w.providerProg.methods
     .expireDispute()
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, authority: w.provider.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, rewardMint: null, tokenProgram: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, authority: w.provider.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, rewardMint: null, tokenProgram: null })
     .instruction(), [w.provider]), "expire_dispute while paused");
 
   // exit-safe: the escrow is settled (closed) and the dispute is no longer Active,
@@ -1247,12 +1247,84 @@ test("dispute: resolve via arbiter quorum settles while the protocol is paused (
   await setProtocolPaused(w.svm, true);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute()
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
     .remainingAccounts(arbiterRemaining)
     .instruction(), [w.admin]), "resolve_dispute while paused");
 
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute resolved (no longer Active) while paused");
   assert.ok(decode(w.svm, "Task", r.task).status.Disputed === undefined, "task left Disputed after resolve");
+});
+
+test("operator-fee protection: resolve_dispute Complete pays the operator its cut (dispute can't bypass the §4 split)", async () => {
+  // Audit regression: resolve_dispute / expire_dispute paid the worker directly,
+  // bypassing the operator leg that complete_task enforces. A hired task settled via
+  // a Complete dispute must still carve the operator fee. Revert-sensitive: drop the
+  // operator carve in resolve_dispute and the two equalities below go red.
+  const operatorKp = Keypair.generate();
+  const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
+  await setMinArbiterStake(w.svm, 1_000_000); // arbiter votes must carry weight to reach approval
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress, live hire w/ 10% operator fee
+
+  // worker opens a Complete dispute (resolution_type 1 = Complete -> worker is paid).
+  const taskId = decode(w.svm, "Task", r.task).task_id;
+  const disputeId = id32();
+  const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
+  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 1, "evidence")
+    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "op-resolve:initiate Complete");
+
+  // 3 arbiters approve (vote for) -> quorum -> Complete executes.
+  const arbiterRemaining = [];
+  for (let i = 0; i < 3; i++) {
+    const arb = Keypair.generate();
+    w.svm.airdrop(arb.publicKey, BigInt(10e9));
+    const arbProg = makeProgram(arb);
+    const arbId = id32();
+    const [arbAgent] = pda([enc("agent"), arbId]);
+    expectOk(send(w.svm, await arbProg.methods
+      .registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
+      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [arb]), `op-resolve:register-arb${i}`);
+    await injectAgentStake(w.svm, arbAgent, 1_000_000); // vote weight
+    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
+    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
+    expectOk(send(w.svm, await arbProg.methods
+      .voteDispute(true)
+      .accounts({ dispute, task: r.task, workerClaim: null, defendantAgent: null, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [arb]), `op-resolve:vote${i}`);
+    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true });
+    arbiterRemaining.push({ pubkey: arbAgent, isSigner: false, isWritable: true });
+  }
+
+  // warp past the voting period and resolve as the protocol authority.
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
+  w.svm.setClock(clk);
+
+  const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  const operatorBalBefore = Number(w.svm.getBalance(operatorKp.publicKey));
+  // resolve_dispute also closes the worker_claim and refunds its rent to the worker
+  // wallet, so the worker delta = worker_net + claim rent. Capture the rent for an exact check.
+  const claimRentBefore = Number(w.svm.getBalance(r.claim));
+
+  expectOk(send(w.svm, await makeProgram(w.admin).methods
+    .resolveDispute()
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: operatorKp.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .remainingAccounts(arbiterRemaining)
+    .instruction(), [w.admin]), "op-resolve:resolve Complete");
+
+  assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed via dispute");
+
+  // §4 split: operator fee = reward * 1000bps = 10%; worker gets the rest. Neither
+  // the worker wallet nor the operator signed this tx, so the deltas are exact.
+  const expectedOpFee = Math.floor(r.reward / 10);          // 3_000_000 * 1000 / 10000
+  const expectedWorkerNet = r.reward - expectedOpFee;       // 2_700_000
+  const operatorDelta = Number(w.svm.getBalance(operatorKp.publicKey)) - operatorBalBefore;
+  const workerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - workerBalBefore;
+  assert.equal(operatorDelta, expectedOpFee, `operator paid its cut on dispute Complete (got ${operatorDelta})`);
+  assert.equal(workerDelta, expectedWorkerNet + claimRentBefore, `worker paid reward minus operator fee plus claim rent (got ${workerDelta})`);
 });
 
 test("dispute: apply_dispute_slash slashes the losing worker while the protocol is paused (exit-safe)", async () => {
@@ -1300,7 +1372,7 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
   w.svm.setClock(clk);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute()
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
     .remainingAccounts(arbiterRemaining)
     .instruction(), [w.admin]), "slash:resolve");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "dispute Resolved (worker lost)");

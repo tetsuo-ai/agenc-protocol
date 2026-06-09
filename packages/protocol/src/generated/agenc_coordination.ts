@@ -5175,6 +5175,39 @@ export type AgencCoordination = {
           "optional": true
         },
         {
+          "name": "hireRecord",
+          "docs": [
+            "Hire link PDA ([\"hire\", task]) — ALWAYS required so a hired task's operator fee",
+            "cannot be bypassed when an expired dispute pays the worker. Live (program-owned)",
+            "forces the operator leg; non-hired tasks pass the empty system-owned PDA."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputeOperator",
+          "docs": [
+            "live hire carries a non-zero operator fee and the worker is paid. Receives SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "tokenEscrowAta",
           "docs": [
             "Token escrow ATA holding reward tokens (optional)"
@@ -7850,6 +7883,41 @@ export type AgencCoordination = {
         },
         {
           "name": "workerWallet",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "Hire link PDA ([\"hire\", task]) — ALWAYS required so a hired task's operator fee",
+            "cannot be bypassed by settling through dispute resolution. A live (program-owned)",
+            "record forces the operator leg; for a non-hired task the caller passes the empty,",
+            "system-owned PDA. CHECK: live-vs-absent decided by `owner` in the handler; a live",
+            "record is deserialized + validated there."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputeOperator",
+          "docs": [
+            "a live hire carries a non-zero operator fee. Receives the operator leg (SOL)."
+          ],
           "writable": true,
           "optional": true
         },

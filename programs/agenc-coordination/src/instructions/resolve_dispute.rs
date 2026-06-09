@@ -8,8 +8,8 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::completion_helpers::update_protocol_stats;
 use crate::instructions::constants::{MIN_VOTERS_FOR_RESOLUTION, PERCENT_BASE};
 use crate::instructions::dispute_helpers::{
-    check_duplicate_arbiters, check_duplicate_workers, process_arbiter_vote_pair,
-    process_worker_claim_pair, validate_remaining_accounts_structure,
+    check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
+    process_arbiter_vote_pair, process_worker_claim_pair, validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::slash_helpers::calculate_slash_amount;
@@ -108,6 +108,22 @@ pub struct ResolveDispute<'info> {
     /// CHECK: Worker's wallet for receiving payment
     #[account(mut)]
     pub worker_wallet: Option<UncheckedAccount<'info>>,
+
+    /// Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
+    /// cannot be bypassed by settling through dispute resolution. A live (program-owned)
+    /// record forces the operator leg; for a non-hired task the caller passes the empty,
+    /// system-owned PDA. CHECK: live-vs-absent decided by `owner` in the handler; a live
+    /// record is deserialized + validated there.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+
+    /// CHECK: operator payee — validated against hire_record.operator; required only when
+    /// a live hire carries a non-zero operator fee. Receives the operator leg (SOL).
+    #[account(mut)]
+    pub dispute_operator: Option<UncheckedAccount<'info>>,
 
     pub system_program: Program<'info, System>,
 
@@ -443,10 +459,22 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
                         token_program,
                     )?;
                 } else {
+                    // §4 3-way split: pay the operator leg first if this is a hired task,
+                    // so dispute resolution can't bypass the operator fee. No-op otherwise.
+                    let op_fee = pay_dispute_operator_fee(
+                        &ctx.accounts.hire_record.to_account_info(),
+                        ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
+                        &escrow.to_account_info(),
+                        remaining_funds,
+                        &task_key,
+                    )?;
+                    let worker_net = remaining_funds
+                        .checked_sub(op_fee)
+                        .ok_or(CoordinationError::ArithmeticOverflow)?;
                     transfer_lamports(
                         &escrow.to_account_info(),
                         &worker_wallet.to_account_info(),
-                        remaining_funds,
+                        worker_net,
                     )?;
                 }
                 task.status = TaskStatus::Completed;
@@ -546,10 +574,28 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
                             )?;
                         }
                     } else {
-                        debit_lamports(&escrow.to_account_info(), remaining_funds)?;
+                        // §4 3-way split: carve the operator leg from the worker's half so
+                        // a Split resolution can't bypass the operator fee (no-op if not hired).
+                        let op_fee = pay_dispute_operator_fee(
+                            &ctx.accounts.hire_record.to_account_info(),
+                            ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
+                            &escrow.to_account_info(),
+                            worker_share,
+                            &task_key,
+                        )?;
+                        let worker_net = worker_share
+                            .checked_sub(op_fee)
+                            .ok_or(CoordinationError::ArithmeticOverflow)?;
+                        // The operator leg was already debited from escrow by the helper.
+                        debit_lamports(
+                            &escrow.to_account_info(),
+                            remaining_funds
+                                .checked_sub(op_fee)
+                                .ok_or(CoordinationError::ArithmeticOverflow)?,
+                        )?;
                         let creator_info = ctx.accounts.creator.to_account_info();
                         credit_lamports(&creator_info, creator_share)?;
-                        credit_lamports(&worker_wallet.to_account_info(), worker_share)?;
+                        credit_lamports(&worker_wallet.to_account_info(), worker_net)?;
                     }
                 }
                 task.status = TaskStatus::Cancelled;
