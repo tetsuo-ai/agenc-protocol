@@ -7,6 +7,7 @@ use crate::instructions::bid_settlement_helpers::{
 };
 use crate::instructions::completion_helpers::update_protocol_stats;
 use crate::instructions::constants::{MIN_VOTERS_FOR_RESOLUTION, PERCENT_BASE};
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
     check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
     process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
@@ -19,8 +20,8 @@ use crate::instructions::token_helpers::{
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim,
-    TaskEscrow, TaskStatus, TaskType,
+    AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task,
+    TaskClaim, TaskEscrow, TaskStatus, TaskType,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -152,6 +153,19 @@ pub struct ResolveDispute<'info> {
 
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
+
+    // === Batch 3 completion bonds (optional) ===
+    /// CHECK: creator completion bond PDA; refunded if the creator prevails, else
+    /// forfeited to the treasury. Validated by settle_completion_bond.
+    #[account(mut)]
+    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: worker completion bond PDA; refunded if the worker prevails, else
+    /// forfeited to the treasury.
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: treasury, recipient of a forfeited bond; validated == protocol_config.treasury.
+    #[account(mut)]
+    pub bond_treasury: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) -> Result<()> {
@@ -811,6 +825,86 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
             .as_ref()
             .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
         claim.close(worker_wallet.to_account_info())?;
+    }
+
+    // Batch 3 §8: completion bond disposition follows the dispute outcome — the loser
+    // forfeits their bond to the treasury, the winner is refunded. A Split or a
+    // rejected dispute (no fault established) refunds both. No-op for un-bonded tasks.
+    {
+        let bond_resolution = dispute.resolution_type;
+        // (creator_forfeit, worker_forfeit)
+        let (creator_forfeit, worker_forfeit) = if approved {
+            match bond_resolution {
+                ResolutionType::Complete => (true, false), // worker wins
+                ResolutionType::Refund => (false, true),   // worker loses
+                ResolutionType::Split => (false, false),
+            }
+        } else {
+            (false, false) // rejected: no fault, refund both
+        };
+
+        // Validate + bind the treasury once (only needed when a forfeit occurs).
+        let treasury_info = match ctx.accounts.bond_treasury.as_ref() {
+            Some(t) => {
+                require!(
+                    t.key() == ctx.accounts.protocol_config.treasury,
+                    CoordinationError::InvalidInput
+                );
+                Some(t.to_account_info())
+            }
+            None => None,
+        };
+
+        let creator_info = ctx.accounts.creator.to_account_info();
+        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
+            if creator_forfeit {
+                let recipient = treasury_info
+                    .as_ref()
+                    .ok_or(CoordinationError::MissingCompletionBondAccount)?;
+                settle_completion_bond(
+                    &bond.to_account_info(),
+                    &creator_info,
+                    &task_key,
+                    CompletionBond::ROLE_CREATOR,
+                    BondDisposition::Forfeit { recipient },
+                )?;
+            } else {
+                settle_completion_bond(
+                    &bond.to_account_info(),
+                    &creator_info,
+                    &task_key,
+                    CompletionBond::ROLE_CREATOR,
+                    BondDisposition::Refund,
+                )?;
+            }
+        }
+
+        if let (Some(bond), Some(worker_wallet)) = (
+            ctx.accounts.worker_completion_bond.as_ref(),
+            ctx.accounts.worker_wallet.as_ref(),
+        ) {
+            let worker_info = worker_wallet.to_account_info();
+            if worker_forfeit {
+                let recipient = treasury_info
+                    .as_ref()
+                    .ok_or(CoordinationError::MissingCompletionBondAccount)?;
+                settle_completion_bond(
+                    &bond.to_account_info(),
+                    &worker_info,
+                    &task_key,
+                    CompletionBond::ROLE_WORKER,
+                    BondDisposition::Forfeit { recipient },
+                )?;
+            } else {
+                settle_completion_bond(
+                    &bond.to_account_info(),
+                    &worker_info,
+                    &task_key,
+                    CompletionBond::ROLE_WORKER,
+                    BondDisposition::Refund,
+                )?;
+            }
+        }
     }
 
     emit!(DisputeResolved {

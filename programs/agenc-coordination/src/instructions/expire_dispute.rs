@@ -27,9 +27,10 @@ use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
     validate_unchecked_token_mint,
 };
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::state::{
-    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim, TaskEscrow,
-    TaskStatus, TaskType,
+    AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim,
+    TaskEscrow, TaskStatus, TaskType,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -151,6 +152,14 @@ pub struct ExpireDispute<'info> {
 
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
+
+    // === Batch 3 completion bonds (optional; refunded on no-fault expiry) ===
+    /// CHECK: creator completion bond PDA; refunded on expiry. Validated by helper.
+    #[account(mut)]
+    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: worker completion bond PDA; refunded on expiry.
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
 }
 
 /// Expires a dispute after voting period ends.
@@ -565,7 +574,31 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         .worker_wallet
         .as_ref()
         .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
-    claim.close(worker_wallet.to_account_info())?;
+    let worker_wallet_info = worker_wallet.to_account_info();
+    claim.close(worker_wallet_info.clone())?;
+
+    // Batch 3 §8: a no-fault expiry refunds BOTH completion bonds. No-op if un-bonded.
+    {
+        let creator_info = ctx.accounts.creator.to_account_info();
+        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &creator_info,
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
+        }
+        if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &worker_wallet_info,
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
+        }
+    }
 
     emit!(DisputeExpired {
         dispute_id: dispute.dispute_id,

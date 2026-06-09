@@ -5310,6 +5310,16 @@
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "creator_completion_bond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worker_completion_bond",
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -8208,6 +8218,27 @@
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "creator_completion_bond",
+          "docs": [
+            "forfeited to the treasury. Validated by settle_completion_bond."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worker_completion_bond",
+          "docs": [
+            "forfeited to the treasury."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "bond_treasury",
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []

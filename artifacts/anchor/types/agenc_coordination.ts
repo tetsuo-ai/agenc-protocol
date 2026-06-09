@@ -5316,6 +5316,16 @@ export type AgencCoordination = {
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "creatorCompletionBond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -8214,6 +8224,27 @@ export type AgencCoordination = {
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "creatorCompletionBond",
+          "docs": [
+            "forfeited to the treasury. Validated by settle_completion_bond."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "docs": [
+            "forfeited to the treasury."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "bondTreasury",
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
