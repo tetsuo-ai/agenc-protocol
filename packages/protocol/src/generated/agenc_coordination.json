@@ -462,6 +462,19 @@
           "writable": true
         },
         {
+          "name": "creator_completion_bond",
+          "docs": [
+            "Validated by settle_completion_bond (owner/PDA/task/role/party)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worker_completion_bond",
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "token_escrow_ata",
           "writable": true,
           "optional": true
@@ -1015,6 +1028,16 @@
         {
           "name": "worker_authority",
           "writable": true
+        },
+        {
+          "name": "creator_completion_bond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worker_completion_bond",
+          "writable": true,
+          "optional": true
         },
         {
           "name": "authority",

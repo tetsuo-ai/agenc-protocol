@@ -51,9 +51,13 @@ pub fn handler(ctx: Context<PostCompletionBond>, role: u8) -> Result<()> {
         CoordinationError::BondUnsupportedTaskType
     );
 
-    // Bonds are posted before settlement (creator while Open, worker once InProgress).
+    // Bonds may be posted any time before terminal settlement: creator while Open,
+    // worker once InProgress, either side while a submission awaits review
+    // (PendingValidation). Not during a dispute, freeze, or terminal state.
     require!(
-        task.status == TaskStatus::Open || task.status == TaskStatus::InProgress,
+        task.status == TaskStatus::Open
+            || task.status == TaskStatus::InProgress
+            || task.status == TaskStatus::PendingValidation,
         CoordinationError::InvalidStatusTransition
     );
 

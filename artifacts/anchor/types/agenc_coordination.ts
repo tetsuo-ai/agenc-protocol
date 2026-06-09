@@ -468,6 +468,19 @@ export type AgencCoordination = {
           "writable": true
         },
         {
+          "name": "creatorCompletionBond",
+          "docs": [
+            "Validated by settle_completion_bond (owner/PDA/task/role/party)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "tokenEscrowAta",
           "writable": true,
           "optional": true
@@ -1021,6 +1034,16 @@ export type AgencCoordination = {
         {
           "name": "workerAuthority",
           "writable": true
+        },
+        {
+          "name": "creatorCompletionBond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "writable": true,
+          "optional": true
         },
         {
           "name": "authority",

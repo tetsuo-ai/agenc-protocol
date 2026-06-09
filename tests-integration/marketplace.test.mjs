@@ -1188,7 +1188,7 @@ test("configure_task_validation: a non-hired task can still be pinned to manual 
 /// Drive a manual-validation (V2) task through settlement: create+configure (CreatorReview)
 /// -> moderate -> publish -> claim -> submit_task_result -> accept|reject_task_result.
 /// Requires a moderation-enabled world. Returns handles + the worker balance snapshot.
-async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle = false } = {}) {
+async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle = false, postBonds = false } = {}) {
   const modProg = makeProgram(w.modAuth);
   const m = await setupManualTask(w, { mode: 1 }); // CreatorReview, non-hired
   const { task, escrow, validation, reward } = m;
@@ -1220,6 +1220,17 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
     .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "manual:submit");
 
+  // Optional: post creator + worker completion bonds so accept can exercise the refund.
+  let creatorBond = null, workerBond = null;
+  if (postBonds) {
+    creatorBond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+    workerBond = pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
+    expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
+      .accounts({ task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "manual:creator-bond");
+    expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
+      .accounts({ task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "manual:worker-bond");
+  }
+
   if (pauseBeforeSettle) await setProtocolPaused(w.svm, true);
 
   // worker_authority (provider) is NOT the signer of accept/reject (creator signs),
@@ -1228,7 +1239,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   if (decision === "accept") {
     expectOk(send(w.svm, await w.buyerProg.methods
       .acceptTaskResult()
-      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]), "manual:accept");
   } else if (decision === "reject") {
     expectOk(send(w.svm, await w.buyerProg.methods
@@ -1236,7 +1247,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
       .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey })
       .instruction(), [w.buyer]), "manual:reject");
   }
-  return { task, escrow, claim, validation, submission, jobSpec, workerBalBefore, reward };
+  return { task, escrow, claim, validation, submission, jobSpec, workerBalBefore, reward, creatorBond, workerBond };
 }
 
 test("manual validation (CreatorReview): submit -> accept pays the worker", async () => {
@@ -1246,6 +1257,14 @@ test("manual validation (CreatorReview): submit -> accept pays the worker", asyn
   assert.ok(t.status.Completed !== undefined, `task Completed after accept (got ${JSON.stringify(t.status)})`);
   assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > r.workerBalBefore, "worker paid on accept");
   assert.ok(isClosed(w.svm, r.escrow), "escrow closed on accept");
+});
+
+test("completion bond: accept_task_result refunds BOTH bonds", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await runManualSettlement(w, { decision: "accept", postBonds: true });
+  assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed after accept");
+  assert.ok(isClosed(w.svm, r.creatorBond), "creator bond refunded + closed on accept");
+  assert.ok(isClosed(w.svm, r.workerBond), "worker bond refunded + closed on accept");
 });
 
 test("manual validation (CreatorReview): reject does NOT pay the worker or settle", async () => {

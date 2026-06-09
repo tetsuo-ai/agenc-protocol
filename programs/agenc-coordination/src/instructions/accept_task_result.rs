@@ -21,6 +21,10 @@ use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
     TaskSubmission, TaskValidationConfig, ValidationMode,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 #[cfg(feature = "spl-token-rewards")]
@@ -102,6 +106,17 @@ pub struct AcceptTaskResult<'info> {
         constraint = worker_authority.key() == worker.authority @ CoordinationError::UnauthorizedAgent
     )]
     pub worker_authority: UncheckedAccount<'info>,
+
+    // === Batch 3 completion bonds (optional; refunded on accept) ===
+    /// CHECK: creator completion bond PDA; refunded to the creator on accept.
+    /// Validated by settle_completion_bond (owner/PDA/task/role/party).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut)]
+    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: worker completion bond PDA; refunded to the worker on accept.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
 
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
     #[cfg(feature = "spl-token-rewards")]
@@ -318,6 +333,30 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     ctx.accounts
         .claim
         .close(ctx.accounts.worker_authority.to_account_info())?;
+
+    // Batch 3 §8: an accepted result means nobody lost — refund BOTH bonds.
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        let task_key = ctx.accounts.task.key();
+        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &ctx.accounts.creator.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
+        }
+        if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &ctx.accounts.worker_authority.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
+        }
+    }
 
     Ok(())
 }
