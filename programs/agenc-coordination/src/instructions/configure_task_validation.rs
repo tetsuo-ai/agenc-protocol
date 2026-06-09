@@ -137,6 +137,12 @@ pub fn handler(
     let attestor_config = &mut ctx.accounts.task_attestor_config;
     attestor_config.task = task_key;
     attestor_config.creator = task.creator;
+    // Defense-in-depth self-attestation guard: a provided attestor must not be the task
+    // creator. The worker.authority check cannot happen here (no worker is bound pre-claim);
+    // it is enforced at settlement in validate_task_result's ExternalAttestation branch.
+    if let Some(att) = attestor {
+        require!(att != task.creator, CoordinationError::InvalidAttestor);
+    }
     attestor_config.attestor = attestor.unwrap_or_default();
     if attestor_config.created_at == 0 {
         attestor_config.created_at = clock.unix_timestamp;
