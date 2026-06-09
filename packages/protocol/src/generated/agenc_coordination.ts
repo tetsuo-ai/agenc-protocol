@@ -9090,18 +9090,79 @@ export type AgencCoordination = {
         },
         {
           "name": "creatorCompletionBond",
+          "docs": [
+            "cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond",
+            "was posted (the empty PDA). Forfeits go to `treasury` (== protocol_config.treasury)."
+          ],
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         },
         {
           "name": "workerCompletionBond",
           "writable": true,
-          "optional": true
-        },
-        {
-          "name": "bondTreasury",
-          "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "workerAuthority"
+              }
+            ]
+          }
         },
         {
           "name": "systemProgram",

@@ -22,20 +22,6 @@ use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
-/// Validated treasury account info for a bond forfeit, or None.
-fn bond_treasury_info<'info>(
-    bond_treasury: &Option<UncheckedAccount<'info>>,
-    expected: &Pubkey,
-) -> Result<Option<AccountInfo<'info>>> {
-    match bond_treasury.as_ref() {
-        Some(t) => {
-            require!(t.key() == *expected, CoordinationError::InvalidInput);
-            Ok(Some(t.to_account_info()))
-        }
-        None => Ok(None),
-    }
-}
-
 // =============================== resolve_reject_frozen ===============================
 
 #[derive(Accounts)]
@@ -109,15 +95,22 @@ pub struct ResolveRejectFrozen<'info> {
     /// Multisig review authority; `remaining_accounts` carries the co-signers.
     pub authority: Signer<'info>,
 
-    /// CHECK: optional creator completion bond PDA; disposed per outcome.
-    #[account(mut)]
-    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: optional worker completion bond PDA; disposed per outcome.
-    #[account(mut)]
-    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: forfeit recipient for a forfeited bond; validated == protocol_config.treasury.
-    #[account(mut)]
-    pub bond_treasury: Option<UncheckedAccount<'info>>,
+    /// CHECK: creator completion bond PDA — REQUIRED + seeds-fixed so the multisig
+    /// cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond
+    /// was posted (the empty PDA). Forfeits go to `treasury` (== protocol_config.treasury).
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), creator.key().as_ref()],
+        bump
+    )]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA — REQUIRED + seeds-fixed (same rationale).
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), worker_authority.key().as_ref()],
+        bump
+    )]
+    pub worker_completion_bond: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -149,8 +142,8 @@ pub fn resolve_handler(
     let task_key = ctx.accounts.task.key();
     let creator_info = ctx.accounts.creator.to_account_info();
     let worker_auth_info = ctx.accounts.worker_authority.to_account_info();
-    let treasury_for_bond =
-        bond_treasury_info(&ctx.accounts.bond_treasury, &ctx.accounts.protocol_config.treasury)?;
+    // Forfeits go to the protocol treasury (already validated == protocol_config.treasury).
+    let treasury_info = ctx.accounts.treasury.to_account_info();
 
     if approve_completion {
         // Worker vindicated: pay the worker (SOL 2-way, no operator leg on a manual task).
@@ -184,27 +177,25 @@ pub fn resolve_handler(
         ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
         ctx.accounts.task_submission.accepted_at = clock.unix_timestamp;
 
-        if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &worker_auth_info,
-                &task_key,
-                CompletionBond::ROLE_WORKER,
-                BondDisposition::Refund,
-            )?;
-        }
-        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
-            let recipient = treasury_for_bond
-                .as_ref()
-                .ok_or(CoordinationError::MissingCompletionBondAccount)?;
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &creator_info,
-                &task_key,
-                CompletionBond::ROLE_CREATOR,
-                BondDisposition::Forfeit { recipient },
-            )?;
-        }
+        // Worker vindicated: refund the worker bond, forfeit the creator bond to
+        // treasury. Bonds are required+seeds-fixed, so the multisig cannot omit them
+        // to dodge the forfeit; settle no-ops when no bond was posted.
+        settle_completion_bond(
+            &ctx.accounts.worker_completion_bond.to_account_info(),
+            &worker_auth_info,
+            &task_key,
+            CompletionBond::ROLE_WORKER,
+            BondDisposition::Refund,
+        )?;
+        settle_completion_bond(
+            &ctx.accounts.creator_completion_bond.to_account_info(),
+            &creator_info,
+            &task_key,
+            CompletionBond::ROLE_CREATOR,
+            BondDisposition::Forfeit {
+                recipient: &treasury_info,
+            },
+        )?;
 
         emit!(RejectFrozenResolved {
             task: task_key,
@@ -215,27 +206,23 @@ pub fn resolve_handler(
         // Rejection upheld: refund the creator the full escrow; the worker forfeits.
         ctx.accounts.task.status = TaskStatus::Cancelled;
 
-        if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
-            let recipient = treasury_for_bond
-                .as_ref()
-                .ok_or(CoordinationError::MissingCompletionBondAccount)?;
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &worker_auth_info,
-                &task_key,
-                CompletionBond::ROLE_WORKER,
-                BondDisposition::Forfeit { recipient },
-            )?;
-        }
-        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &creator_info,
-                &task_key,
-                CompletionBond::ROLE_CREATOR,
-                BondDisposition::Refund,
-            )?;
-        }
+        // Rejection upheld: forfeit the worker bond to treasury, refund the creator bond.
+        settle_completion_bond(
+            &ctx.accounts.worker_completion_bond.to_account_info(),
+            &worker_auth_info,
+            &task_key,
+            CompletionBond::ROLE_WORKER,
+            BondDisposition::Forfeit {
+                recipient: &treasury_info,
+            },
+        )?;
+        settle_completion_bond(
+            &ctx.accounts.creator_completion_bond.to_account_info(),
+            &creator_info,
+            &task_key,
+            CompletionBond::ROLE_CREATOR,
+            BondDisposition::Refund,
+        )?;
 
         // Close the escrow to the creator — refunds the full reward + rent.
         ctx.accounts.escrow.is_closed = true;
