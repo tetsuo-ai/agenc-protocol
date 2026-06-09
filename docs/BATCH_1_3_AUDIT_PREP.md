@@ -236,6 +236,7 @@ fix then passed a fresh 5-lens → independent-verifier adversarial audit with *
 | `w51bg7quf` | full bond lifecycle | 3 confirmed (HIGH/MEDIUM/LOW) — **all fixed** (`be698f1`,`efbe7dd`) |
 | `w494fwy0p` | RejectFrozen lifecycle | 3 confirmed — MEDIUM + 1 LOW **fixed** (`a638ee1`); 1 LOW fixed in new code + twin (`89cc77d`) |
 | dispute-bond follow-up | `resolve_dispute` / `expire_dispute` bond disposition | 1 LOW + 1 same-class twin — **both fixed** (`bf1222f`); 0 open |
+| `wltxprh2y` | **docs-grounded** Solana/Anchor correctness (8 dims, each read the official docs first) | 6 dims clean; 2 LOW — **both fixed** (`8e00f67`); 0 open |
 
 ## Final hardening — dispute completion bonds (commit `bf1222f`, RESOLVED)
 
@@ -264,9 +265,30 @@ The last open finding and its twin are now **fixed** (no open findings remain):
   resolve succeeded and skipped the forfeit), green with the pin restored. The 4 dispute
   litesvm call sites now pass the seeds-derived bond PDAs.
 
+## Solana/Anchor docs-grounded correctness audit (`wltxprh2y`, commit `8e00f67`)
+
+8 dimensions, each agent first read the **current official Solana/Anchor docs** for its
+topic (verified against Anchor 0.32.1) then audited the code; every finding was adversarially
+verified against docs + code. **6 dimensions clean** (account resize/rent on the migration,
+close/revival tombstone, PDA + bump canonicalization, owner/type-cosplay on UncheckedAccounts,
+signer auth/multisig, optional-account resolution). **2 LOW findings — both fixed:**
+
+- **`execute_proposal` TreasurySpend rent floor (program-owned treasury).** The direct
+  lamport debit only checked `balance >= amount`; a partial spend landing in `(0, rent_min)`
+  is a disallowed RentExempt→RentPaying transition the runtime rejects (`InsufficientFundsForRent`),
+  so a governance-approved spend was silently unexecutable. **Fixed:** require post-balance
+  `== 0` (runtime-permitted full-drain close) **or** `>= rent_floor`, clear
+  `TreasuryInsufficientBalance` error; logic in a pure `treasury_spend_preserves_rent()` with a
+  **revert-sensitive unit test** (red when the full-drain arm is dropped).
+- **Release `overflow-checks` disabled.** No `[profile.release] overflow-checks = true`, so the
+  Rust default (false) applied to the deployed SBF program — any non-checked integer op would
+  silently wrap. All money paths already use checked arithmetic; this adds the doc-recommended
+  second layer. **Fixed** in `Cargo.toml` (verified honored: full rebuild, no "profiles ignored"
+  warning).
+
 ## Test counts (final)
 
-- **231 Rust unit** (`cargo test --lib`) + **55 litesvm integration** (`cd tests-integration && node --test`).
+- **232 Rust unit** (`cargo test --lib`) + **55 litesvm integration** (`cd tests-integration && node --test`).
 - clippy `--lib -D warnings` + `--features mainnet-canary` clean; `anchor build` +
   `npm run artifacts:check` clean at every commit.
 
