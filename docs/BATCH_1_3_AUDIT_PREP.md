@@ -220,6 +220,7 @@ fix then passed a fresh 5-lens → independent-verifier adversarial audit with *
 | `efbe7dd` | audit: permissionless `reclaim_completion_bond` for bonds stranded by an omitted exit account |
 | `a6a5f6f`..`9235fad` | `RejectFrozen`: status+transitions, sticky-freeze sync, `request_changes`/`reject_and_freeze`, `resolve_reject_frozen`(multisig)/`expire_reject_frozen`(timeout) exits, dispute mutual-exclusion, gate negatives |
 | `a638ee1`,`89cc77d` | final-audit fixes: freeze is Exclusive-only (no Collaborative escrow stranding); accurate expire payout event; required seeds-fixed bonds in `resolve_reject_frozen` |
+| `bf1222f` | final hardening: required + canonical-pinned completion bonds in `resolve_dispute`/`expire_dispute` (closes the optional-bond omission + its permissionless-stranding twin) |
 
 - All Batch-3 code is `#[cfg(not(feature = "mainnet-canary"))]` (the conservative
   mainnet-canary build does not expose bonds / RejectFrozen, so a canary task can never
@@ -233,31 +234,54 @@ fix then passed a fresh 5-lens → independent-verifier adversarial audit with *
 | pre-audit + dispute fix | Batch 1 + operator-fee dispute bypass | findings fixed; re-audit 0 |
 | `wy4dkre1z` | Batch 2 (layout + readers + migration) | **0 confirmed** |
 | `w51bg7quf` | full bond lifecycle | 3 confirmed (HIGH/MEDIUM/LOW) — **all fixed** (`be698f1`,`efbe7dd`) |
-| `w494fwy0p` | RejectFrozen lifecycle | 3 confirmed — MEDIUM + 1 LOW **fixed** (`a638ee1`); 1 LOW fixed in new code + twin documented (`89cc77d`) |
+| `w494fwy0p` | RejectFrozen lifecycle | 3 confirmed — MEDIUM + 1 LOW **fixed** (`a638ee1`); 1 LOW fixed in new code + twin (`89cc77d`) |
+| dispute-bond follow-up | `resolve_dispute` / `expire_dispute` bond disposition | 1 LOW + 1 same-class twin — **both fixed** (`bf1222f`); 0 open |
 
-## Known residual (for the external audit / follow-up hardening)
+## Final hardening — dispute completion bonds (commit `bf1222f`, RESOLVED)
 
-- **`resolve_dispute` optional-bond omission (LOW, trusted-resolver).** Same shape as the
-  `resolve_reject_frozen` issue fixed in `89cc77d`: on the Complete branch (worker wins)
-  the creator bond is forfeited to treasury, but the bond account is `Option`, so a
-  resolver that omits it lets the creator later `reclaim_completion_bond` it (treasury
-  revenue leak). Trigger requires the trusted dispute resolver to omit the account; the
-  SDK passes it. Fix path: make `resolve_dispute`'s creator bond required+seeds-fixed
-  (anchor `accountsPartial` auto-derives it) + a required `bond_treasury`, mirroring
-  `resolve_reject_frozen`. Not user-exploitable; deferred with this note.
+The last open finding and its twin are now **fixed** (no open findings remain):
+
+- **`resolve_dispute` optional-bond omission (was LOW, trusted-resolver).** On the
+  Complete branch (worker wins) the creator bond is forfeited to treasury, but the bond
+  accounts were `Option`, so a resolver could omit the forfeit-due bond; the creator
+  could then `reclaim_completion_bond` it on the now-Completed task (forfeit inverted →
+  treasury revenue leak). **Fixed:** the bond accounts (creator/worker bond + `bond_treasury`)
+  are now **required**, and each is **pinned to its canonical PDA in-handler**.
+- **`expire_dispute` optional-bond stranding (same class).** `expire_dispute` is
+  **permissionless** and always Cancels the task, and a posted bond is recoverable only
+  here (`reclaim_completion_bond` needs `Completed`). With `Option` bonds, any caller could
+  omit a bond and **strand it forever** on the Cancelled task. **Fixed:** both bonds are now
+  required + canonical-pinned (both always refunded; no treasury needed — there is no
+  forfeit branch).
+- **Why "required" alone was not enough.** `settle_completion_bond` no-ops on any
+  non-program-owned account, so a required-but-seedless `UncheckedAccount` could still be
+  defeated by passing a junk (system-owned) account to skip the settle. `worker_wallet` is
+  `Option` on these paths (anchor `seeds` can't cleanly reference it), so the canonical-PDA
+  pin is a handler `require!` rather than an anchor `seeds=` constraint — equivalent guarantee.
+  Un-bonded tasks still pass (canonical address, no account → settle no-ops).
+- **Regression test (revert-sensitive):** `resolve_dispute rejects a non-canonical (junk)
+  forfeit-due bond account` — proven red with the creator pin neutralized (the junk-account
+  resolve succeeded and skipped the forfeit), green with the pin restored. The 4 dispute
+  litesvm call sites now pass the seeds-derived bond PDAs.
 
 ## Test counts (final)
 
-- **231 Rust unit** (`cargo test --lib`) + **54 litesvm integration** (`cd tests-integration && node --test`).
+- **231 Rust unit** (`cargo test --lib`) + **55 litesvm integration** (`cd tests-integration && node --test`).
 - clippy `--lib -D warnings` + `--features mainnet-canary` clean; `anchor build` +
   `npm run artifacts:check` clean at every commit.
 
 ## Gates STILL required before any mainnet deploy (unchanged)
 
 1. **§11.5 human go/no-go** (demand thesis + SDK slice + success signal) — owns Batch 2/3.
-2. **Professional external audit** of the full Batch 1–3 surface (+ the `resolve_dispute`
-   residual above).
+2. **Professional external audit** of the full Batch 1–3 surface. All findings from the
+   internal adversarial audits are fixed (0 open); this is independent confirmation, not
+   a fix-list.
 3. **The 149-task migration choreography** (binary-first → migrate → version-bump),
    irreversible — multisig/upgrade-authority gated.
-4. SDK update so clients pass the new required accounts (`hire_record` already; the
-   completion-bond accounts on settlement paths).
+4. **SDK update** so clients pass the new required accounts. `hire_record` is wired
+   (`agenc-sdk` `941084b`). **Still TODO on `agenc-sdk` (branch `fix/hire-record-required-accounts`):**
+   `resolveDispute`/`expireDispute` must sync the new IDL and pass the now-required
+   completion-bond accounts — `creatorCompletionBond` = PDA`["completion_bond", task, creator]`,
+   `workerCompletionBond` = PDA`["completion_bond", task, workerAuthority]`, and (resolve only)
+   `bondTreasury` = `protocolConfig.treasury`. The SDK currently has **no** completion-bond
+   support at all, so these calls will fail against the hardened program until wired.
