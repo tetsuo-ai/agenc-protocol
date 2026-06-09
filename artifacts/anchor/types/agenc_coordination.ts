@@ -7176,6 +7176,105 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "reclaimCompletionBond",
+      "docs": [
+        "Permissionlessly refund a still-live completion bond to its poster once the",
+        "task is Completed — recovers a bond stranded by a terminal exit that omitted",
+        "the optional bond account (audit fix). `role`: 0 = creator, 1 = worker."
+      ],
+      "discriminator": [
+        199,
+        123,
+        80,
+        81,
+        92,
+        254,
+        10,
+        192
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "completionBond",
+          "docs": [
+            "validated by settle_completion_bond in the handler."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "party"
+              }
+            ]
+          }
+        },
+        {
+          "name": "party",
+          "writable": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "recordListingModeration",
       "docs": [
         "Record a moderation decision for a service listing's pinned job-spec hash,",

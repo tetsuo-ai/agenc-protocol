@@ -1020,6 +1020,14 @@ pub mod agenc_coordination {
         instructions::post_completion_bond::handler(ctx, role)
     }
 
+    /// Permissionlessly refund a still-live completion bond to its poster once the
+    /// task is Completed — recovers a bond stranded by a terminal exit that omitted
+    /// the optional bond account (audit fix). `role`: 0 = creator, 1 = worker.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn reclaim_completion_bond(ctx: Context<ReclaimCompletionBond>, role: u8) -> Result<()> {
+        instructions::reclaim_completion_bond::handler(ctx, role)
+    }
+
     /// Rate a skill (1-5, reputation-weighted).
     /// One rating per agent per skill, enforced by PDA uniqueness.
     #[cfg(not(feature = "mainnet-canary"))]

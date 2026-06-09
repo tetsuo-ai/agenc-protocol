@@ -998,6 +998,33 @@ test("completion bond: rejected on a ZK-private task (audit — would strand on 
     "BondUnsupportedTaskType", "bond rejected on a ZK-private task");
 });
 
+test("completion bond: reclaim_completion_bond recovers a bond stranded by an omitted account on a Completed task", async () => {
+  // Audit MEDIUM: a terminal exit can omit the optional bond account and strand it.
+  // reclaim_completion_bond lets the poster recover it once the task is Completed.
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
+  expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
+    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "worker bond");
+
+  // complete the task but OMIT the worker bond account -> it is stranded.
+  expectOk(send(w.svm, await w.providerProg.methods.completeTask(arr(id32()), null)
+    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator: null, creatorCompletionBond: null, workerCompletionBond: null })
+    .instruction(), [w.provider]), "complete (omitting worker bond)");
+  assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
+  assert.ok(!isClosed(w.svm, workerBond), "worker bond stranded (still open) after the omitted-account completion");
+
+  // reclaim recovers it to the poster.
+  const providerBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  const bondLamports = Number(w.svm.getBalance(workerBond));
+  expectOk(send(w.svm, await makeProgram(w.provider).methods.reclaimCompletionBond(1)
+    .accounts({ task: r.task, completionBond: workerBond, party: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "reclaim worker bond");
+  assert.ok(isClosed(w.svm, workerBond), "worker bond reclaimed + closed");
+  // provider is the fee-payer here, so delta = bond (rent+principal) minus tx fee.
+  const providerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - providerBefore;
+  assert.ok(providerDelta > bondLamports - 50_000, `poster recovered the bond (delta ${providerDelta}, bond ${bondLamports})`);
+});
+
 test("completion bond: cancel refunds the creator bond on an Open task", async () => {
   const w = await freshWorld({ price: 2_000_000 });
   const { ix, task, escrow } = await hireIx(w, {});
