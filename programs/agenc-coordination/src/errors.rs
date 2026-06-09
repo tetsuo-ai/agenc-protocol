@@ -887,4 +887,6 @@ pub enum CoordinationError {
     UnauthorizedReviewDecision,
     #[msg("A frozen (rejected) task cannot be disputed")]
     TaskFrozenCannotDispute,
+    #[msg("RejectFrozen review is single-worker (Exclusive) only")]
+    RejectFrozenSingleWorkerOnly,
 }

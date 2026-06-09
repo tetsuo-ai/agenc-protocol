@@ -1198,7 +1198,7 @@ test("accept_bid moderation gate: rejected when no job spec was published (§6 e
 /// Create a plain (non-hired) Auto task and pin it to manual validation (default
 /// CreatorReview = 1). Passes the empty ["hire", task] PDA (non-hired), so the
 /// hired-task guard lets it through. Returns handles for the manual settlement flow.
-async function setupManualTask(w, { mode = 1, reviewWindow = 3600, reward = 2_000_000, capabilities = 1 } = {}) {
+async function setupManualTask(w, { mode = 1, reviewWindow = 3600, reward = 2_000_000, capabilities = 1, taskType = 0, maxWorkers = 1 } = {}) {
   const taskId = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
@@ -1210,7 +1210,7 @@ async function setupManualTask(w, { mode = 1, reviewWindow = 3600, reward = 2_00
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), taskType, null, 0, null)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "manual:create_task");
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -1353,9 +1353,9 @@ test("manual validation: accept still settles while the protocol is paused (exit
 
 /// Manual (CreatorReview) task driven through moderate -> publish -> claim -> submit,
 /// stopping with a pending submission ready for accept / request_changes / reject.
-async function setupSubmittedManual(w) {
+async function setupSubmittedManual(w, opts = {}) {
   const modProg = makeProgram(w.modAuth);
-  const m = await setupManualTask(w, { mode: 1 });
+  const m = await setupManualTask(w, { mode: 1, ...opts });
   const { task, escrow, validation, reward } = m;
   const jobHash = id32();
   const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
@@ -1402,6 +1402,17 @@ test("reject_and_freeze: terminal reject freezes the task and retains the claim 
   assert.ok(!isClosed(w.svm, r.claim), "claim retained for the frozen exit");
   assert.ok(!isClosed(w.svm, r.escrow), "escrow retained (no payout on freeze)");
   assert.equal(Number(w.svm.getBalance(w.provider.publicKey)), workerBefore, "no worker payout on freeze");
+});
+
+test("reject_and_freeze: rejected on a Collaborative task (audit — would strand the multi-worker escrow)", async () => {
+  // A Collaborative task escrows the full reward but the frozen exits pay one worker's
+  // reward/required_completions share, stranding the rest. Freezing is Exclusive-only.
+  // Revert-sensitive: drop the guard and this freezes (and would strand).
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await setupSubmittedManual(w, { taskType: 1, maxWorkers: 2 }); // Collaborative
+  expectFail(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 7)))
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]),
+    "RejectFrozenSingleWorkerOnly", "freeze refused on a Collaborative task");
 });
 
 /// Drive a manual task all the way to RejectFrozen (optionally with both bonds posted).

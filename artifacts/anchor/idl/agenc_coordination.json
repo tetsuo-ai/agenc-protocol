@@ -14989,6 +14989,11 @@
       "code": 6285,
       "name": "TaskFrozenCannotDispute",
       "msg": "A frozen (rejected) task cannot be disputed"
+    },
+    {
+      "code": 6286,
+      "name": "RejectFrozenSingleWorkerOnly",
+      "msg": "RejectFrozen review is single-worker (Exclusive) only"
     }
   ],
   "types": [

@@ -13,7 +13,7 @@ use crate::instructions::task_validation_helpers::{
     ensure_validation_config, ensure_validation_mode, is_manual_validation_task,
 };
 use crate::state::{
-    ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
+    ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission, TaskType,
     TaskValidationConfig, ValidationMode, HASH_SIZE,
 };
 use crate::utils::version::check_version_compatible_for_exit;
@@ -69,6 +69,14 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
     require!(
         ctx.accounts.task.status == TaskStatus::PendingValidation,
         CoordinationError::TaskNotPendingValidation
+    );
+    // Single-worker only: a Collaborative task escrows the FULL reward but the frozen
+    // exits pay one worker's reward/required_completions share, which would strand the
+    // remainder forever. Freezing is Exclusive-only (matches the bond v1 guard); a
+    // Collaborative creator rejects via reject_task_result (reopen) instead. (audit fix)
+    require!(
+        ctx.accounts.task.task_type == TaskType::Exclusive,
+        CoordinationError::RejectFrozenSingleWorkerOnly
     );
     require!(
         is_manual_validation_task(&ctx.accounts.task),

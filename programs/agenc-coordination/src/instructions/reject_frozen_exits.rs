@@ -372,8 +372,6 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
     ctx.accounts.claim.is_validated = true;
     ctx.accounts.claim.completed_at = clock.unix_timestamp;
 
-    let worker_payout = ctx.accounts.escrow.amount;
-
     execute_completion_rewards(
         &mut ctx.accounts.task,
         &mut ctx.accounts.claim,
@@ -393,6 +391,9 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
     ctx.accounts.task_submission.accepted_at = clock.unix_timestamp;
+    // Report the ACTUAL lamports paid to the worker (reward minus protocol fee), not
+    // the gross escrow — execute_completion_rewards records it on the claim.
+    let worker_payout = ctx.accounts.claim.reward_paid;
 
     // No fault on a timeout: refund BOTH bonds to their posters.
     if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {

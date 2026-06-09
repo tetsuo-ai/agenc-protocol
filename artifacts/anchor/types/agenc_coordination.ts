@@ -14995,6 +14995,11 @@ export type AgencCoordination = {
       "code": 6285,
       "name": "taskFrozenCannotDispute",
       "msg": "A frozen (rejected) task cannot be disputed"
+    },
+    {
+      "code": 6286,
+      "name": "rejectFrozenSingleWorkerOnly",
+      "msg": "RejectFrozen review is single-worker (Exclusive) only"
     }
   ],
   "types": [
