@@ -2215,6 +2215,19 @@ export type AgencCoordination = {
           ],
           "writable": true,
           "optional": true
+        },
+        {
+          "name": "creatorCompletionBond",
+          "docs": [
+            "Validated in the handler by settle_completion_bond (owner/PDA/task/role/party)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "writable": true,
+          "optional": true
         }
       ],
       "args": [

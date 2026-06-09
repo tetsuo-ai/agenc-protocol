@@ -676,7 +676,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: autoHire, operator: null })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: autoHire, operator: null, creatorCompletionBond: null, workerCompletionBond: null })
     .instruction(), [w.provider]), "settle:complete");
 
   return { task, escrow, claim, jobSpec, taskMod, workerAuthority: w.provider.publicKey, workerBalBefore, treasuryBalBefore, reward };
@@ -753,7 +753,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
   //    split fires. operator may be null when the listing has no operator fee.
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator, creatorCompletionBond: null, workerCompletionBond: null })
     .instruction(), [w.provider]), "hire-settle:complete");
 
   return { task, escrow, claim, hireRecord, taskMod, jobSpec, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
@@ -771,6 +771,7 @@ test("operator-fee protection: a hired task cannot be completed without paying t
     protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey,
     systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null,
     treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator,
+    creatorCompletionBond: null, workerCompletionBond: null,
   });
 
   // (a) omit the operator account on a hired task with a fee -> MissingOperatorAccount
@@ -939,6 +940,39 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
   assert.ok(isClosed(w.svm, workerBond), "worker bond PDA closed after forfeit");
   const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
   assert.equal(buyerDelta, 1_000_000, `creator received the forfeited bond principal (got ${buyerDelta})`);
+});
+
+test("completion bond: a clean completion refunds BOTH bonds to their posters", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress
+
+  const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+  const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
+  expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
+    .accounts({ task: r.task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
+  expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
+    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "worker bond");
+
+  const creatorBondLamports = Number(w.svm.getBalance(creatorBond));
+  const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+
+  expectOk(send(w.svm, await w.providerProg.methods
+    .completeTask(arr(id32()), null)
+    .accounts({
+      task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent,
+      protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey,
+      systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null,
+      treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator: null,
+      creatorCompletionBond: creatorBond, workerCompletionBond: workerBond,
+    })
+    .instruction(), [w.provider]), "complete with bond refunds");
+
+  assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
+  assert.ok(isClosed(w.svm, creatorBond), "creator bond refunded + closed");
+  assert.ok(isClosed(w.svm, workerBond), "worker bond refunded + closed");
+  // buyer (not a signer here) gets back the full creator bond (rent + principal), plus escrow rent.
+  assert.ok(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore >= creatorBondLamports,
+    "creator received their refunded bond");
 });
 
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
@@ -1349,7 +1383,7 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: escrowAta, workerTokenAccount: workerAta, treasuryTokenAccount: treasuryAta, rewardMint: mint.publicKey, tokenProgram: TOKEN_PROGRAM_ID, hireRecord, operator: null })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: escrowAta, workerTokenAccount: workerAta, treasuryTokenAccount: treasuryAta, rewardMint: mint.publicKey, tokenProgram: TOKEN_PROGRAM_ID, hireRecord, operator: null, creatorCompletionBond: null, workerCompletionBond: null })
     .instruction(), [w.provider]), "token:complete");
 
   return { task, escrow, mint: mint.publicKey, buyerAta, treasuryAta, workerAta, escrowAta, reward };

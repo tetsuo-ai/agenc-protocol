@@ -16,6 +16,10 @@ use crate::state::{
 };
 use crate::utils::compute_budget::log_compute_units;
 use crate::utils::version::check_version_compatible_for_exit;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -122,6 +126,15 @@ pub struct CompleteTask<'info> {
     /// operator fee leg in SOL.
     #[account(mut)]
     pub operator: Option<UncheckedAccount<'info>>,
+
+    // === Batch 3 completion bonds (optional) ===
+    /// CHECK: creator completion bond PDA; refunded to the creator on success.
+    /// Validated in the handler by settle_completion_bond (owner/PDA/task/role/party).
+    #[account(mut)]
+    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: worker completion bond PDA; refunded to the worker on success.
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handler<'info>(
@@ -347,6 +360,31 @@ fn handle_complete_task<'info>(
     }
 
     claim.close(accounts.authority.to_account_info())?;
+
+    // Batch 3 §8: a clean completion means nobody lost — refund BOTH completion
+    // bonds to their posters. No-op for un-bonded tasks (accounts omitted / empty).
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        let task_key = accounts.task.key();
+        if let Some(bond) = accounts.creator_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &accounts.creator.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
+        }
+        if let Some(bond) = accounts.worker_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &accounts.authority.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
+        }
+    }
 
     log_compute_units("complete_task_done");
 

@@ -13,9 +13,7 @@ use anchor_lang::prelude::*;
 
 /// What to do with a bond at settlement.
 pub(crate) enum BondDisposition<'a, 'info> {
-    /// Return the full balance (rent + principal) to the poster. (Constructed by the
-    /// accept/complete/cancel/dispute refund paths wired in the rest of Chunk 4b.)
-    #[allow(dead_code)]
+    /// Return the full balance (rent + principal) to the poster.
     Refund,
     /// Move the principal to `recipient`, return the rent to the poster.
     Forfeit {
