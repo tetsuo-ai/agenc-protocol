@@ -1420,6 +1420,23 @@ async function setupFrozen(w, { postBonds = false } = {}) {
   return { ...r, creatorBond, workerBond };
 }
 
+test("dispute mutual-exclusion: a RejectFrozen task cannot be disputed", async () => {
+  // The durable-submission path in initiate_dispute bypasses can_transition_to(Disputed),
+  // so the freeze is guarded explicitly. Revert-sensitive: drop the guard and this
+  // initiate_dispute no longer fails with TaskFrozenCannotDispute.
+  const w = await freshWorld({ moderationEnabled: true });
+  const f = await setupFrozen(w);
+  const taskId = decode(w.svm, "Task", f.task).task_id;
+  const disputeId = id32();
+  const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
+  expectFail(send(w.svm, await w.providerProg.methods
+    .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 0, "evidence")
+    .accounts({ dispute, task: f.task, agent: w.providerAgent, authorityRateLimit: rateLimit, protocolConfig: w.protocolPda, initiatorClaim: f.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]),
+    "TaskFrozenCannotDispute", "a frozen task is refused a dispute");
+});
+
 test("resolve_reject_frozen (approve): pays the worker, refunds worker bond, forfeits creator bond (2-of-2 multisig)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const owner2 = Keypair.generate(); w.svm.airdrop(owner2.publicKey, BigInt(10e9));

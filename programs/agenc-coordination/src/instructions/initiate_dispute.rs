@@ -108,6 +108,15 @@ pub fn handler<'info>(
         })
         .transpose()?;
 
+    // A frozen (terminally-rejected) task cannot be disputed, and a disputed task
+    // cannot be frozen. The durable-submission path below SKIPS the
+    // can_transition_to(Disputed) check, so guard the freeze EXPLICITLY here rather
+    // than relying on the status transition (Batch 3 §8 dispute mutual-exclusion).
+    require!(
+        task.status != TaskStatus::RejectFrozen,
+        CoordinationError::TaskFrozenCannotDispute
+    );
+
     check_version_compatible(config)?;
     require_task_type_enabled(config, task.task_type)?;
 
