@@ -7867,6 +7867,177 @@
       ]
     },
     {
+      "name": "reject_and_freeze",
+      "docs": [
+        "Terminally reject a submission and freeze the task for review (Batch 3 §8).",
+        "Settles only via resolve_reject_frozen / expire_reject_frozen."
+      ],
+      "discriminator": [
+        114,
+        109,
+        131,
+        41,
+        79,
+        109,
+        135,
+        18
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "Task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "Task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "TaskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_validation_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_submission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "rejection_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "reject_task_result",
       "docs": [
         "Reject a creator-reviewed submission and return the task to active work."
@@ -8056,6 +8227,179 @@
       "args": [
         {
           "name": "rejection_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "request_changes",
+      "docs": [
+        "Request free, non-terminal revisions on a submitted result (Batch 3 §8). Keeps",
+        "the claim open for an in-place resubmit; bounded by MAX_REVISION_ROUNDS."
+      ],
+      "discriminator": [
+        136,
+        84,
+        241,
+        1,
+        189,
+        89,
+        226,
+        187
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "Task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "Task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "TaskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_validation_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task_submission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "changes_hash",
           "type": {
             "array": [
               "u8",
@@ -12311,6 +12655,32 @@
       ]
     },
     {
+      "name": "RejectFrozenExpired",
+      "discriminator": [
+        154,
+        22,
+        194,
+        125,
+        2,
+        194,
+        188,
+        107
+      ]
+    },
+    {
+      "name": "RejectFrozenResolved",
+      "discriminator": [
+        175,
+        185,
+        212,
+        250,
+        143,
+        125,
+        229,
+        162
+      ]
+    },
+    {
       "name": "ReputationChanged",
       "discriminator": [
         190,
@@ -12532,6 +12902,19 @@
       ]
     },
     {
+      "name": "TaskChangesRequested",
+      "discriminator": [
+        58,
+        245,
+        186,
+        154,
+        25,
+        0,
+        137,
+        48
+      ]
+    },
+    {
       "name": "TaskClaimed",
       "discriminator": [
         208,
@@ -12633,6 +13016,19 @@
         163,
         73,
         218
+      ]
+    },
+    {
+      "name": "TaskRejectFrozen",
+      "discriminator": [
+        67,
+        18,
+        32,
+        203,
+        147,
+        38,
+        42,
+        59
       ]
     },
     {
@@ -17844,6 +18240,52 @@
       }
     },
     {
+      "name": "RejectFrozenExpired",
+      "docs": [
+        "Emitted when a frozen task's review window expires and it defaults to the worker."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker_payout",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RejectFrozenResolved",
+      "docs": [
+        "Emitted when a frozen task's review is resolved (Completed or Cancelled)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "outcome",
+            "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "ReputationChanged",
       "docs": [
         "Emitted when an agent's reputation changes"
@@ -19624,6 +20066,37 @@
       }
     },
     {
+      "name": "TaskChangesRequested",
+      "docs": [
+        "Emitted when a creator requests free, non-terminal revisions (Batch 3 §8)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "TaskClaim",
       "docs": [
         "Worker's claim on a task",
@@ -20325,6 +20798,46 @@
           {
             "name": "moderator",
             "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskRejectFrozen",
+      "docs": [
+        "Emitted when a submission is terminally rejected and frozen for review."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "rejection_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "review_deadline_at",
+            "type": "i64"
           },
           {
             "name": "timestamp",

@@ -84,6 +84,10 @@ pub mod post_completion_bond;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod reclaim_completion_bond;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod request_changes;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reject_and_freeze;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod delegate_reputation;
 pub mod deregister_agent;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -208,6 +212,10 @@ pub use close_task::*;
 pub use post_completion_bond::*;
 #[cfg(not(feature = "mainnet-canary"))]
 pub use reclaim_completion_bond::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use request_changes::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use reject_and_freeze::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use delegate_reputation::*;

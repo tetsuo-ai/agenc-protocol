@@ -536,6 +536,43 @@ pub struct BondForfeited {
     pub timestamp: i64,
 }
 
+/// Emitted when a creator requests free, non-terminal revisions (Batch 3 §8).
+#[event]
+pub struct TaskChangesRequested {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker: Pubkey,
+    pub round: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted when a submission is terminally rejected and frozen for review.
+#[event]
+pub struct TaskRejectFrozen {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker: Pubkey,
+    pub rejection_hash: [u8; 32],
+    pub review_deadline_at: i64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a frozen task's review is resolved (Completed or Cancelled).
+#[event]
+pub struct RejectFrozenResolved {
+    pub task: Pubkey,
+    pub outcome: u8, // 1 = Completed (pay worker), 0 = Cancelled (refund creator)
+    pub timestamp: i64,
+}
+
+/// Emitted when a frozen task's review window expires and it defaults to the worker.
+#[event]
+pub struct RejectFrozenExpired {
+    pub task: Pubkey,
+    pub worker_payout: u64,
+    pub timestamp: i64,
+}
+
 /// Emitted when protocol version is updated
 #[event]
 pub struct ProtocolVersionUpdated {

@@ -1351,6 +1351,59 @@ test("manual validation: accept still settles while the protocol is paused (exit
   assert.ok(isClosed(w.svm, r.escrow), "escrow closed while paused");
 });
 
+/// Manual (CreatorReview) task driven through moderate -> publish -> claim -> submit,
+/// stopping with a pending submission ready for accept / request_changes / reject.
+async function setupSubmittedManual(w) {
+  const modProg = makeProgram(w.modAuth);
+  const m = await setupManualTask(w, { mode: 1 });
+  const { task, escrow, validation, reward } = m;
+  const jobHash = id32();
+  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
+  expectOk(send(w.svm, await modProg.methods.recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.modAuth]), "rc:mod");
+  expectOk(send(w.svm, await w.buyerProg.methods.setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/rc")
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "rc:publish");
+  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods.claimTaskWithJobSpec()
+    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "rc:claim");
+  const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
+  const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
+  const submit = async () => send(w.svm, await w.providerProg.methods.submitTaskResult(arr(id32()), arr(desc))
+    .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]);
+  expectOk(await submit(), "rc:submit");
+  return { task, escrow, validation, submission, jobSpec, claim, reward, submit };
+}
+
+test("request_changes: non-terminal revision keeps the claim, worker resubmits in place -> accept pays", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await setupSubmittedManual(w);
+  expectOk(send(w.svm, await w.buyerProg.methods.requestChanges(arr(Buffer.alloc(32, 9)))
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]), "request_changes");
+  assert.ok(decode(w.svm, "Task", r.task).status.InProgress !== undefined, "task back to InProgress after request_changes");
+  assert.ok(!isClosed(w.svm, r.claim), "claim retained (worker resubmits in place)");
+
+  w.svm.expireBlockhash();
+  expectOk(await r.submit(), "resubmit after changes");
+  assert.ok(decode(w.svm, "Task", r.task).status.PendingValidation !== undefined, "resubmit -> PendingValidation");
+
+  expectOk(send(w.svm, await w.buyerProg.methods.acceptTaskResult()
+    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, taskValidationConfig: r.validation, taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "accept after revision");
+  assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed after revision + accept");
+});
+
+test("reject_and_freeze: terminal reject freezes the task and retains the claim (no payout)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await setupSubmittedManual(w);
+  const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  expectOk(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 7)))
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]), "reject_and_freeze");
+  assert.ok(decode(w.svm, "Task", r.task).status.RejectFrozen !== undefined, "task RejectFrozen");
+  assert.ok(!isClosed(w.svm, r.claim), "claim retained for the frozen exit");
+  assert.ok(!isClosed(w.svm, r.escrow), "escrow retained (no payout on freeze)");
+  assert.equal(Number(w.svm.getBalance(w.provider.publicKey)), workerBefore, "no worker payout on freeze");
+});
+
 test("3-way split: max operator fee (20%) settles with the worker still above the 60% floor", async () => {
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 5_000_000, operator: operatorKp.publicKey, operatorFeeBps: 2000 });

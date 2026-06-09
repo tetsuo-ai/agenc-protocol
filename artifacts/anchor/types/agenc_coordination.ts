@@ -7873,6 +7873,177 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "rejectAndFreeze",
+      "docs": [
+        "Terminally reject a submission and freeze the task for review (Batch 3 §8).",
+        "Settles only via resolve_reject_frozen / expire_reject_frozen."
+      ],
+      "discriminator": [
+        114,
+        109,
+        131,
+        41,
+        79,
+        109,
+        135,
+        18
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "taskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "rejectionHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "rejectTaskResult",
       "docs": [
         "Reject a creator-reviewed submission and return the task to active work."
@@ -8062,6 +8233,179 @@ export type AgencCoordination = {
       "args": [
         {
           "name": "rejectionHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "requestChanges",
+      "docs": [
+        "Request free, non-terminal revisions on a submitted result (Batch 3 §8). Keeps",
+        "the claim open for an in-place resubmit; bounded by MAX_REVISION_ROUNDS."
+      ],
+      "discriminator": [
+        136,
+        84,
+        241,
+        1,
+        189,
+        89,
+        226,
+        187
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "taskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "changesHash",
           "type": {
             "array": [
               "u8",
@@ -12317,6 +12661,32 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "rejectFrozenExpired",
+      "discriminator": [
+        154,
+        22,
+        194,
+        125,
+        2,
+        194,
+        188,
+        107
+      ]
+    },
+    {
+      "name": "rejectFrozenResolved",
+      "discriminator": [
+        175,
+        185,
+        212,
+        250,
+        143,
+        125,
+        229,
+        162
+      ]
+    },
+    {
       "name": "reputationChanged",
       "discriminator": [
         190,
@@ -12538,6 +12908,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "taskChangesRequested",
+      "discriminator": [
+        58,
+        245,
+        186,
+        154,
+        25,
+        0,
+        137,
+        48
+      ]
+    },
+    {
       "name": "taskClaimed",
       "discriminator": [
         208,
@@ -12639,6 +13022,19 @@ export type AgencCoordination = {
         163,
         73,
         218
+      ]
+    },
+    {
+      "name": "taskRejectFrozen",
+      "discriminator": [
+        67,
+        18,
+        32,
+        203,
+        147,
+        38,
+        42,
+        59
       ]
     },
     {
@@ -17850,6 +18246,52 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "rejectFrozenExpired",
+      "docs": [
+        "Emitted when a frozen task's review window expires and it defaults to the worker."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerPayout",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rejectFrozenResolved",
+      "docs": [
+        "Emitted when a frozen task's review is resolved (Completed or Cancelled)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "outcome",
+            "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "reputationChanged",
       "docs": [
         "Emitted when an agent's reputation changes"
@@ -19630,6 +20072,37 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "taskChangesRequested",
+      "docs": [
+        "Emitted when a creator requests free, non-terminal revisions (Batch 3 §8)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "taskClaim",
       "docs": [
         "Worker's claim on a task",
@@ -20331,6 +20804,46 @@ export type AgencCoordination = {
           {
             "name": "moderator",
             "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskRejectFrozen",
+      "docs": [
+        "Emitted when a submission is terminally rejected and frozen for review."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "rejectionHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "reviewDeadlineAt",
+            "type": "i64"
           },
           {
             "name": "timestamp",

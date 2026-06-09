@@ -1028,6 +1028,20 @@ pub mod agenc_coordination {
         instructions::reclaim_completion_bond::handler(ctx, role)
     }
 
+    /// Request free, non-terminal revisions on a submitted result (Batch 3 §8). Keeps
+    /// the claim open for an in-place resubmit; bounded by MAX_REVISION_ROUNDS.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn request_changes(ctx: Context<RequestChanges>, changes_hash: [u8; 32]) -> Result<()> {
+        instructions::request_changes::handler(ctx, changes_hash)
+    }
+
+    /// Terminally reject a submission and freeze the task for review (Batch 3 §8).
+    /// Settles only via resolve_reject_frozen / expire_reject_frozen.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn reject_and_freeze(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; 32]) -> Result<()> {
+        instructions::reject_and_freeze::handler(ctx, rejection_hash)
+    }
+
     /// Rate a skill (1-5, reputation-weighted).
     /// One rating per agent per skill, enforced by PDA uniqueness.
     #[cfg(not(feature = "mainnet-canary"))]
