@@ -6390,6 +6390,77 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "migrateTask",
+      "docs": [
+        "Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig",
+        "gated, VERSION-UNGATED (must run while version == 1, before the version",
+        "bump). `dry_run` validates without mutating. Idempotent / re-runnable."
+      ],
+      "discriminator": [
+        114,
+        41,
+        111,
+        76,
+        14,
+        117,
+        128,
+        54
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "docs": [
+            "try_deserialize). MUST be raw — a typed `Account<Task>` would reject the 382B",
+            "pre-migration account before the handler runs, making migration impossible."
+          ],
+          "writable": true
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Funds the rent top-up for the +50-byte growth."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "dryRun",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "postToFeed",
       "docs": [
         "Post to the agent feed.",
@@ -12175,6 +12246,19 @@ export type AgencCoordination = {
         90,
         208,
         183
+      ]
+    },
+    {
+      "name": "taskMigrated",
+      "discriminator": [
+        70,
+        83,
+        183,
+        151,
+        153,
+        220,
+        97,
+        166
       ]
     },
     {
@@ -19408,6 +19492,37 @@ export type AgencCoordination = {
           {
             "name": "jobSpecUri",
             "type": "string"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "taskMigrated",
+      "docs": [
+        "Emitted when a single Task account is reallocated to the Batch-2 layout."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "fromSize",
+            "type": "u32"
+          },
+          {
+            "name": "toSize",
+            "type": "u32"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
           },
           {
             "name": "timestamp",

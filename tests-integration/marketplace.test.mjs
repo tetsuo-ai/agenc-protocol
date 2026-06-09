@@ -192,6 +192,22 @@ async function injectAgentStake(svm, agentPda, stake) {
   svm.setAccount(agentPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
 }
 
+/// Configure the on-chain multisig in place (owners + threshold) so multisig-gated
+/// instructions (migrate_task, migrate_protocol) can be exercised. Owners must sign
+/// the tx AND be passed as remaining_accounts.
+async function setMultisig(svm, owners, threshold) {
+  const [protocolPda] = pda([enc("protocol")]);
+  const acct = svm.getAccount(protocolPda);
+  const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+  const slots = Array(5).fill(PublicKey.default);
+  owners.forEach((o, i) => { slots[i] = o; });
+  cfg.multisig_owners = slots;
+  cfg.multisig_owners_len = owners.length;
+  cfg.multisig_threshold = threshold;
+  const data = await coder.accounts.encode("ProtocolConfig", cfg);
+  svm.setAccount(protocolPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
 /// Inject a ModerationConfig at ["moderation_config"]. enabled=false keeps Model-A.
 async function injectModerationConfig(svm, admin, modAuth, enabled) {
   const [pdaKey, bump] = pda([enc("moderation_config")]);
@@ -785,6 +801,65 @@ test("operator-fee guard: a listing whose operator is the hiring creator is reje
   const w = await freshWorld({ price: 2_000_000, operator: "__buyer__", operatorFeeBps: 1000 });
   const { ix } = await hireIx(w, {});
   expectFail(send(w.svm, ix, [w.buyer]), "OperatorIsCreator", "hire rejected when operator == creator");
+});
+
+test("migrate_task: reallocs a legacy 382B Task to 432B (multisig-gated, dry-run-safe, idempotent, rent topped up)", async () => {
+  const w = await freshWorld({ price: 2_000_000 });
+  // A new hire inits the Task at the Batch-2 size (432B).
+  const { ix, task } = await hireIx(w, {});
+  expectOk(send(w.svm, ix, [w.buyer]), "hire");
+  const full = w.svm.getAccount(task);
+  assert.equal(full.data.length, 432, "new tasks are created at the Batch-2 size");
+
+  // Simulate a pre-Batch-2 legacy account: drop the trailing 50 zero bytes
+  // (operator/fee/_reserved — all zero for a non-operator task) back to 382B, and
+  // fund it at only the 382-byte rent so the migration must top up the rent.
+  const legacy = Buffer.from(full.data).subarray(0, 382);
+  const rent382 = Number(w.svm.minimumBalanceForRentExemption(382n));
+  const rent432 = Number(w.svm.minimumBalanceForRentExemption(432n));
+  w.svm.setAccount(task, { lamports: rent382, data: legacy, owner: PID, executable: false, rentEpoch: 0 });
+
+  // 2-of-2 multisig gate.
+  const owner2 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  const signerMetas = [
+    { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner2.publicKey, isSigner: true, isWritable: false },
+  ];
+  const buildMigrate = async (dryRun) =>
+    makeProgram(w.admin).methods
+      .migrateTask(dryRun)
+      .accounts({ protocolConfig: w.protocolPda, task, payer: w.admin.publicKey, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
+      .remainingAccounts(signerMetas)
+      .instruction();
+
+  // a single signer cannot pass the 2-of-2 gate.
+  expectFail(send(w.svm, await makeProgram(w.admin).methods
+    .migrateTask(false)
+    .accounts({ protocolConfig: w.protocolPda, task, payer: w.admin.publicKey, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
+    .remainingAccounts([{ pubkey: w.admin.publicKey, isSigner: true, isWritable: false }])
+    .instruction(), [w.admin]), "MultisigNotEnoughSigners", "single signer rejected");
+
+  // dry-run validates but does NOT mutate.
+  expectOk(send(w.svm, await buildMigrate(true), [w.admin, owner2]), "migrate dry-run");
+  assert.equal(w.svm.getAccount(task).data.length, 382, "dry-run left the account at the legacy size");
+
+  // real migration: 382 -> 432, rent topped up, decodes with a zero-filled operator tail.
+  expectOk(send(w.svm, await buildMigrate(false), [w.admin, owner2]), "migrate real");
+  const migrated = w.svm.getAccount(task);
+  assert.equal(migrated.data.length, 432, "task reallocated to the Batch-2 size");
+  assert.ok(Number(migrated.lamports) >= rent432, `rent topped up to >= ${rent432} (got ${migrated.lamports})`);
+  const t = decode(w.svm, "Task", task);
+  assert.equal(t.operator.toBase58(), PublicKey.default.toBase58(), "operator zero-filled by migration");
+  assert.equal(t.operator_fee_bps, 0, "operator_fee_bps zero-filled by migration");
+  assert.equal(t.status.Open !== undefined, true, "pre-migration status preserved (Open)");
+
+  // idempotent: a second run on the now-432B account is a no-op Ok. Expire the
+  // blockhash first so this isn't a byte-identical (deduped) repeat of the real run.
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await buildMigrate(false), [w.admin, owner2]), "migrate idempotent re-run");
+  assert.equal(w.svm.getAccount(task).data.length, 432, "still 432 after idempotent re-run");
 });
 
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {

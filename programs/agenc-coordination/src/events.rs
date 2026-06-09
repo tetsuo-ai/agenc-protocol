@@ -495,6 +495,16 @@ pub struct MigrationCompleted {
     pub timestamp: i64,
 }
 
+/// Emitted when a single Task account is reallocated to the Batch-2 layout.
+#[event]
+pub struct TaskMigrated {
+    pub task: Pubkey,
+    pub from_size: u32,
+    pub to_size: u32,
+    pub authority: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when protocol version is updated
 #[event]
 pub struct ProtocolVersionUpdated {

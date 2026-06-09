@@ -736,6 +736,13 @@ pub mod agenc_coordination {
         instructions::migrate::handler(ctx, target_version)
     }
 
+    /// Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig
+    /// gated, VERSION-UNGATED (must run while version == 1, before the version
+    /// bump). `dry_run` validates without mutating. Idempotent / re-runnable.
+    pub fn migrate_task(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
+        instructions::migrate::migrate_task_handler(ctx, dry_run)
+    }
+
     /// Update minimum supported protocol version (multisig gated).
     /// Used to deprecate old versions after migration grace period.
     ///
@@ -1368,6 +1375,12 @@ pub mod agenc_coordination {
             CoordinationError::MultisigNotEnoughSigners
         );
         instructions::migrate::handler(ctx, target_version)
+    }
+
+    /// Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig
+    /// gated, version-ungated, idempotent. `dry_run` validates without mutating.
+    pub fn migrate_task(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
+        instructions::migrate::migrate_task_handler(ctx, dry_run)
     }
 
     /// Update minimum supported protocol version.
