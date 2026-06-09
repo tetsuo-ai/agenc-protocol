@@ -187,3 +187,77 @@ fix then passed a fresh 5-lens → independent-verifier adversarial audit with *
 - [ ] Confirm live `disabled_task_type_mask == 0`, `protocol_paused == false`, and a
       `ModerationConfig` exists + `enabled` (else marketplace halts).
 - [ ] CU / account-count profile for the SPL 3-way path (LUT / versioned-tx) — Batch 2.
+
+---
+
+# Batch 2 & 3 — added by the autonomous build (2026-06-08)
+
+> Local only — branch `fix/bid-self-deal-guard`, nothing pushed/deployed. Batch 2 is a
+> Task LAYOUT change + a 149-task migration: it is **§11.5-gated** and requires audit #2
+> + the migration choreography before any mainnet deploy.
+
+## Batch 2 — operator economics on `Task` + migration
+
+| Commit | Area |
+|--------|------|
+| `133a4c5` | `Task` append-only +`operator`/`operator_fee_bps`/`_reserved[16]` (382→432B); `OLD_TASK_SIZE`=382, `const_assert(SIZE==432)`, `validate_reserved_fields` |
+| `4880eb4` | operator stamped onto `Task` at hire; settlement readers Task-first w/ HireRecord fallback; brick-safe parent-task prefix read; `operator!=creator` guard |
+| `da3e858` | `migrate_task(dry_run)` — multisig-gated, version-ungated, raw account, realloc+zero-fill, rent top-up, idempotent |
+
+- **No `ProtocolConfig` layout change** (deliberately deferred — it's loaded as a typed
+  account by every instruction, so growing it would deadlock the deploy/migration).
+- Deploy/migration order is **binary-first → migrate all 149 → version-bump last**
+  (reverse bricks via the version gate). `migrate_task` is version-ungated for this.
+
+## Batch 3 — completion bonds + revisions + RejectFrozen
+
+| Commit | Area |
+|--------|------|
+| `a4016ff` | `CompletionBond` PDA + `post_completion_bond` (25%, Exclusive+SOL v1, init dup-prevent) |
+| `d822ed7` | `settle_completion_bond` helper + `expire_claim` no-show forfeit (worker→creator) |
+| `6ad4d7c`,`a06386d`,`4f14e03`,`2f39d53` | bond refund/forfeit wired into complete / accept / auto-accept / cancel / resolve_dispute / expire_dispute |
+| `be698f1` | audit: `post_completion_bond` rejects ZK-private tasks (would strand on complete_task_private) |
+| `efbe7dd` | audit: permissionless `reclaim_completion_bond` for bonds stranded by an omitted exit account |
+| `a6a5f6f`..`9235fad` | `RejectFrozen`: status+transitions, sticky-freeze sync, `request_changes`/`reject_and_freeze`, `resolve_reject_frozen`(multisig)/`expire_reject_frozen`(timeout) exits, dispute mutual-exclusion, gate negatives |
+| `a638ee1`,`89cc77d` | final-audit fixes: freeze is Exclusive-only (no Collaborative escrow stranding); accurate expire payout event; required seeds-fixed bonds in `resolve_reject_frozen` |
+
+- All Batch-3 code is `#[cfg(not(feature = "mainnet-canary"))]` (the conservative
+  mainnet-canary build does not expose bonds / RejectFrozen, so a canary task can never
+  reach a state without an exit).
+- Bonds are **single-worker (Exclusive) SOL-only v1**; operator-leg + SPL bonds deferred.
+
+## Adversarial audits run (all multi-lens → independent verifiers)
+
+| Audit | Surface | Result |
+|-------|---------|--------|
+| pre-audit + dispute fix | Batch 1 + operator-fee dispute bypass | findings fixed; re-audit 0 |
+| `wy4dkre1z` | Batch 2 (layout + readers + migration) | **0 confirmed** |
+| `w51bg7quf` | full bond lifecycle | 3 confirmed (HIGH/MEDIUM/LOW) — **all fixed** (`be698f1`,`efbe7dd`) |
+| `w494fwy0p` | RejectFrozen lifecycle | 3 confirmed — MEDIUM + 1 LOW **fixed** (`a638ee1`); 1 LOW fixed in new code + twin documented (`89cc77d`) |
+
+## Known residual (for the external audit / follow-up hardening)
+
+- **`resolve_dispute` optional-bond omission (LOW, trusted-resolver).** Same shape as the
+  `resolve_reject_frozen` issue fixed in `89cc77d`: on the Complete branch (worker wins)
+  the creator bond is forfeited to treasury, but the bond account is `Option`, so a
+  resolver that omits it lets the creator later `reclaim_completion_bond` it (treasury
+  revenue leak). Trigger requires the trusted dispute resolver to omit the account; the
+  SDK passes it. Fix path: make `resolve_dispute`'s creator bond required+seeds-fixed
+  (anchor `accountsPartial` auto-derives it) + a required `bond_treasury`, mirroring
+  `resolve_reject_frozen`. Not user-exploitable; deferred with this note.
+
+## Test counts (final)
+
+- **231 Rust unit** (`cargo test --lib`) + **54 litesvm integration** (`cd tests-integration && node --test`).
+- clippy `--lib -D warnings` + `--features mainnet-canary` clean; `anchor build` +
+  `npm run artifacts:check` clean at every commit.
+
+## Gates STILL required before any mainnet deploy (unchanged)
+
+1. **§11.5 human go/no-go** (demand thesis + SDK slice + success signal) — owns Batch 2/3.
+2. **Professional external audit** of the full Batch 1–3 surface (+ the `resolve_dispute`
+   residual above).
+3. **The 149-task migration choreography** (binary-first → migrate → version-bump),
+   irreversible — multisig/upgrade-authority gated.
+4. SDK update so clients pass the new required accounts (`hire_record` already; the
+   completion-bond accounts on settlement paths).
