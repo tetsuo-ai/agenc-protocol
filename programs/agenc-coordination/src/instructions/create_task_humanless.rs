@@ -23,7 +23,7 @@ use crate::instructions::task_init_helpers::{
 use crate::instructions::task_validation_helpers::validate_review_window_for_mode;
 use crate::state::{
     AuthorityRateLimit, ProtocolConfig, Task, TaskEscrow, TaskType, TaskValidationConfig,
-    ValidationMode,
+    ValidationMode, MANUAL_VALIDATION_SENTINEL,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -148,6 +148,10 @@ pub fn handler(
         min_reputation,
         None, // reward_mint: SOL only
     )?;
+    // Mark the task as manual-validation so submit/accept route through CreatorReview
+    // (without this, is_manual_validation_task is false and submit_task_result rejects
+    // with TaskValidationConfigRequired — the task could be created but never settled).
+    task.constraint_hash = MANUAL_VALIDATION_SENTINEL;
     let task_key = task.key();
 
     let escrow = ctx.accounts.escrow.as_mut();

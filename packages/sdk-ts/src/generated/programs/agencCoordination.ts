@@ -43,6 +43,7 @@ import {
   getCompletionBondCodec,
   getCoordinationStateCodec,
   getDisputeCodec,
+  getDisputeResolverCodec,
   getDisputeVoteCodec,
   getFeedPostCodec,
   getFeedVoteCodec,
@@ -90,6 +91,8 @@ import {
   type CoordinationStateArgs,
   type Dispute,
   type DisputeArgs,
+  type DisputeResolver,
+  type DisputeResolverArgs,
   type DisputeVote,
   type DisputeVoteArgs,
   type FeedPost,
@@ -154,6 +157,7 @@ import {
   getAcceptTaskResultInstructionAsync,
   getApplyDisputeSlashInstructionAsync,
   getApplyInitiatorSlashInstructionAsync,
+  getAssignDisputeResolverInstructionAsync,
   getAutoAcceptTaskResultInstructionAsync,
   getCancelBidInstructionAsync,
   getCancelDisputeInstructionAsync,
@@ -179,6 +183,7 @@ import {
   getExpireClaimInstructionAsync,
   getExpireDisputeInstructionAsync,
   getExpireRejectFrozenInstructionAsync,
+  getHireFromListingHumanlessInstructionAsync,
   getHireFromListingInstructionAsync,
   getInitializeBidBookInstructionAsync,
   getInitializeBidMarketplaceInstructionAsync,
@@ -203,6 +208,7 @@ import {
   getResolveDisputeInstructionAsync,
   getResolveRejectFrozenInstructionAsync,
   getRevokeDelegationInstruction,
+  getRevokeDisputeResolverInstructionAsync,
   getSetServiceListingStateInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
   getStakeReputationInstructionAsync,
@@ -231,6 +237,7 @@ import {
   parseAcceptTaskResultInstruction,
   parseApplyDisputeSlashInstruction,
   parseApplyInitiatorSlashInstruction,
+  parseAssignDisputeResolverInstruction,
   parseAutoAcceptTaskResultInstruction,
   parseCancelBidInstruction,
   parseCancelDisputeInstruction,
@@ -256,6 +263,7 @@ import {
   parseExpireClaimInstruction,
   parseExpireDisputeInstruction,
   parseExpireRejectFrozenInstruction,
+  parseHireFromListingHumanlessInstruction,
   parseHireFromListingInstruction,
   parseInitializeBidBookInstruction,
   parseInitializeBidMarketplaceInstruction,
@@ -280,6 +288,7 @@ import {
   parseResolveDisputeInstruction,
   parseResolveRejectFrozenInstruction,
   parseRevokeDelegationInstruction,
+  parseRevokeDisputeResolverInstruction,
   parseSetServiceListingStateInstruction,
   parseSetTaskJobSpecInstruction,
   parseStakeReputationInstruction,
@@ -308,6 +317,7 @@ import {
   type AcceptTaskResultAsyncInput,
   type ApplyDisputeSlashAsyncInput,
   type ApplyInitiatorSlashAsyncInput,
+  type AssignDisputeResolverAsyncInput,
   type AutoAcceptTaskResultAsyncInput,
   type CancelBidAsyncInput,
   type CancelDisputeAsyncInput,
@@ -334,6 +344,7 @@ import {
   type ExpireDisputeAsyncInput,
   type ExpireRejectFrozenAsyncInput,
   type HireFromListingAsyncInput,
+  type HireFromListingHumanlessAsyncInput,
   type InitializeBidBookAsyncInput,
   type InitializeBidMarketplaceAsyncInput,
   type InitializeGovernanceAsyncInput,
@@ -346,6 +357,7 @@ import {
   type ParsedAcceptTaskResultInstruction,
   type ParsedApplyDisputeSlashInstruction,
   type ParsedApplyInitiatorSlashInstruction,
+  type ParsedAssignDisputeResolverInstruction,
   type ParsedAutoAcceptTaskResultInstruction,
   type ParsedCancelBidInstruction,
   type ParsedCancelDisputeInstruction,
@@ -371,6 +383,7 @@ import {
   type ParsedExpireClaimInstruction,
   type ParsedExpireDisputeInstruction,
   type ParsedExpireRejectFrozenInstruction,
+  type ParsedHireFromListingHumanlessInstruction,
   type ParsedHireFromListingInstruction,
   type ParsedInitializeBidBookInstruction,
   type ParsedInitializeBidMarketplaceInstruction,
@@ -395,6 +408,7 @@ import {
   type ParsedResolveDisputeInstruction,
   type ParsedResolveRejectFrozenInstruction,
   type ParsedRevokeDelegationInstruction,
+  type ParsedRevokeDisputeResolverInstruction,
   type ParsedSetServiceListingStateInstruction,
   type ParsedSetTaskJobSpecInstruction,
   type ParsedStakeReputationInstruction,
@@ -434,6 +448,7 @@ import {
   type ResolveDisputeAsyncInput,
   type ResolveRejectFrozenAsyncInput,
   type RevokeDelegationInput,
+  type RevokeDisputeResolverAsyncInput,
   type SetServiceListingStateAsyncInput,
   type SetTaskJobSpecAsyncInput,
   type StakeReputationAsyncInput,
@@ -474,6 +489,7 @@ import {
   findCreatorCompletionBondPda,
   findDelegationPda,
   findDisputePda,
+  findDisputeResolverPda,
   findEscrowPda,
   findGovernanceConfigPda,
   findHireRecordPda,
@@ -518,6 +534,7 @@ export enum AgencCoordinationAccount {
   CompletionBond,
   CoordinationState,
   Dispute,
+  DisputeResolver,
   DisputeVote,
   FeedPost,
   FeedVote,
@@ -651,6 +668,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.Dispute;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([68, 124, 148, 26, 177, 224, 247, 53]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.DisputeResolver;
   }
   if (
     containsBytes(
@@ -982,6 +1010,7 @@ export enum AgencCoordinationInstruction {
   AcceptTaskResult,
   ApplyDisputeSlash,
   ApplyInitiatorSlash,
+  AssignDisputeResolver,
   AutoAcceptTaskResult,
   CancelBid,
   CancelDispute,
@@ -1008,6 +1037,7 @@ export enum AgencCoordinationInstruction {
   ExpireDispute,
   ExpireRejectFrozen,
   HireFromListing,
+  HireFromListingHumanless,
   InitializeBidBook,
   InitializeBidMarketplace,
   InitializeGovernance,
@@ -1031,6 +1061,7 @@ export enum AgencCoordinationInstruction {
   ResolveDispute,
   ResolveRejectFrozen,
   RevokeDelegation,
+  RevokeDisputeResolver,
   SetServiceListingState,
   SetTaskJobSpec,
   StakeReputation,
@@ -1104,6 +1135,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.ApplyInitiatorSlash;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([64, 252, 49, 0, 45, 0, 58, 14]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.AssignDisputeResolver;
   }
   if (
     containsBytes(
@@ -1395,6 +1437,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([90, 142, 39, 225, 150, 161, 217, 49]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.HireFromListingHumanless;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([13, 138, 190, 172, 182, 53, 234, 251]),
       ),
       0,
@@ -1643,6 +1696,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.RevokeDelegation;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([155, 111, 4, 156, 192, 155, 89, 134]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.RevokeDisputeResolver;
   }
   if (
     containsBytes(
@@ -1930,6 +1994,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.ApplyInitiatorSlash;
     } & ParsedApplyInitiatorSlashInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.AssignDisputeResolver;
+    } & ParsedAssignDisputeResolverInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.AutoAcceptTaskResult;
     } & ParsedAutoAcceptTaskResultInstruction<TProgram>)
   | ({
@@ -2008,6 +2075,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.HireFromListing;
     } & ParsedHireFromListingInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.HireFromListingHumanless;
+    } & ParsedHireFromListingHumanlessInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.InitializeBidBook;
     } & ParsedInitializeBidBookInstruction<TProgram>)
   | ({
@@ -2076,6 +2146,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.RevokeDelegation;
     } & ParsedRevokeDelegationInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.RevokeDisputeResolver;
+    } & ParsedRevokeDisputeResolverInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.SetServiceListingState;
     } & ParsedSetServiceListingStateInstruction<TProgram>)
@@ -2180,6 +2253,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ApplyInitiatorSlash,
         ...parseApplyInitiatorSlashInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.AssignDisputeResolver: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.AssignDisputeResolver,
+        ...parseAssignDisputeResolverInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.AutoAcceptTaskResult: {
@@ -2364,6 +2444,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseHireFromListingInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.HireFromListingHumanless: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.HireFromListingHumanless,
+        ...parseHireFromListingHumanlessInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.InitializeBidBook: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2523,6 +2610,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.RevokeDelegation,
         ...parseRevokeDelegationInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.RevokeDisputeResolver: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.RevokeDisputeResolver,
+        ...parseRevokeDisputeResolverInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.SetServiceListingState: {
@@ -2730,6 +2824,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<CoordinationStateArgs, CoordinationState>;
   dispute: ReturnType<typeof getDisputeCodec> &
     SelfFetchFunctions<DisputeArgs, Dispute>;
+  disputeResolver: ReturnType<typeof getDisputeResolverCodec> &
+    SelfFetchFunctions<DisputeResolverArgs, DisputeResolver>;
   disputeVote: ReturnType<typeof getDisputeVoteCodec> &
     SelfFetchFunctions<DisputeVoteArgs, DisputeVote>;
   feedPost: ReturnType<typeof getFeedPostCodec> &
@@ -2805,6 +2901,10 @@ export type AgencCoordinationPluginInstructions = {
   applyInitiatorSlash: (
     input: ApplyInitiatorSlashAsyncInput,
   ) => ReturnType<typeof getApplyInitiatorSlashInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  assignDisputeResolver: (
+    input: AssignDisputeResolverAsyncInput,
+  ) => ReturnType<typeof getAssignDisputeResolverInstructionAsync> &
     SelfPlanAndSendFunctions;
   autoAcceptTaskResult: (
     input: AutoAcceptTaskResultAsyncInput,
@@ -2910,6 +3010,10 @@ export type AgencCoordinationPluginInstructions = {
     input: HireFromListingAsyncInput,
   ) => ReturnType<typeof getHireFromListingInstructionAsync> &
     SelfPlanAndSendFunctions;
+  hireFromListingHumanless: (
+    input: HireFromListingHumanlessAsyncInput,
+  ) => ReturnType<typeof getHireFromListingHumanlessInstructionAsync> &
+    SelfPlanAndSendFunctions;
   initializeBidBook: (
     input: InitializeBidBookAsyncInput,
   ) => ReturnType<typeof getInitializeBidBookInstructionAsync> &
@@ -3001,6 +3105,10 @@ export type AgencCoordinationPluginInstructions = {
   revokeDelegation: (
     input: RevokeDelegationInput,
   ) => ReturnType<typeof getRevokeDelegationInstruction> &
+    SelfPlanAndSendFunctions;
+  revokeDisputeResolver: (
+    input: RevokeDisputeResolverAsyncInput,
+  ) => ReturnType<typeof getRevokeDisputeResolverInstructionAsync> &
     SelfPlanAndSendFunctions;
   setServiceListingState: (
     input: SetServiceListingStateAsyncInput,
@@ -3110,6 +3218,7 @@ export type AgencCoordinationPluginPdas = {
   escrow: typeof findEscrowPda;
   taskValidationConfig: typeof findTaskValidationConfigPda;
   taskSubmission: typeof findTaskSubmissionPda;
+  disputeResolver: typeof findDisputeResolverPda;
   hireRecord: typeof findHireRecordPda;
   zkConfig: typeof findZkConfigPda;
   moderationConfig: typeof findModerationConfigPda;
@@ -3191,6 +3300,10 @@ export function agencCoordinationProgram() {
             getCoordinationStateCodec(),
           ),
           dispute: addSelfFetchFunctions(client, getDisputeCodec()),
+          disputeResolver: addSelfFetchFunctions(
+            client,
+            getDisputeResolverCodec(),
+          ),
           disputeVote: addSelfFetchFunctions(client, getDisputeVoteCodec()),
           feedPost: addSelfFetchFunctions(client, getFeedPostCodec()),
           feedVote: addSelfFetchFunctions(client, getFeedVoteCodec()),
@@ -3289,6 +3402,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getApplyInitiatorSlashInstructionAsync(input),
+            ),
+          assignDisputeResolver: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getAssignDisputeResolverInstructionAsync(input),
             ),
           autoAcceptTaskResult: (input) =>
             addSelfPlanAndSendFunctions(
@@ -3420,6 +3538,11 @@ export function agencCoordinationProgram() {
               client,
               getHireFromListingInstructionAsync(input),
             ),
+          hireFromListingHumanless: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getHireFromListingHumanlessInstructionAsync(input),
+            ),
           initializeBidBook: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -3537,6 +3660,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getRevokeDelegationInstruction(input),
+            ),
+          revokeDisputeResolver: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getRevokeDisputeResolverInstructionAsync(input),
             ),
           setServiceListingState: (input) =>
             addSelfPlanAndSendFunctions(
@@ -3670,6 +3798,7 @@ export function agencCoordinationProgram() {
           escrow: findEscrowPda,
           taskValidationConfig: findTaskValidationConfigPda,
           taskSubmission: findTaskSubmissionPda,
+          disputeResolver: findDisputeResolverPda,
           hireRecord: findHireRecordPda,
           zkConfig: findZkConfigPda,
           moderationConfig: findModerationConfigPda,

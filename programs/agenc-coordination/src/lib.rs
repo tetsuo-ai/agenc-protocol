@@ -563,15 +563,32 @@ pub mod agenc_coordination {
 
     /// Execute the resolved dispute outcome.
     /// Requires sufficient votes to meet threshold.
+    /// Assign a wallet to the dispute-resolver roster (authority-only). The assigned
+    /// wallet may then call `resolve_dispute` directly — no vote tally, no quorum.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn assign_dispute_resolver(
+        ctx: Context<AssignDisputeResolver>,
+        resolver: Pubkey,
+    ) -> Result<()> {
+        instructions::assign_dispute_resolver::handler(ctx, resolver)
+    }
+
+    /// Remove a wallet from the dispute-resolver roster (authority-only), closing its
+    /// assignment PDA.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn revoke_dispute_resolver(ctx: Context<RevokeDisputeResolver>) -> Result<()> {
+        instructions::revoke_dispute_resolver::handler(ctx)
+    }
+
+    /// Resolve a dispute. The signer must be the protocol authority OR an assigned
+    /// dispute resolver. `approve` upholds the initiator's requested resolution_type;
+    /// `!approve` refunds the creator. No vote tally or quorum is consulted.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn resolve_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>,
+        approve: bool,
     ) -> Result<()> {
-        require!(
-            ctx.accounts.authority.is_signer,
-            CoordinationError::UnauthorizedResolver
-        );
-        instructions::resolve_dispute::handler(ctx)
+        instructions::resolve_dispute::handler(ctx, approve)
     }
 
     /// Apply slashing to a worker after losing a dispute.
@@ -952,6 +969,27 @@ pub mod agenc_coordination {
         expected_version: u64,
     ) -> Result<()> {
         instructions::hire_from_listing::handler(ctx, task_id, expected_price, expected_version)
+    }
+
+    /// Hire a provider from a standing service listing as a human buyer with NO
+    /// registered agent (single-agent storefront). Funds SOL escrow, carries the
+    /// listing's operator-fee leg (the embedding site's cut), and pins
+    /// ValidationMode::CreatorReview so the human reviews the work before payout.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn hire_from_listing_humanless(
+        ctx: Context<HireFromListingHumanless>,
+        task_id: [u8; 32],
+        expected_price: u64,
+        expected_version: u64,
+        review_window_secs: i64,
+    ) -> Result<()> {
+        instructions::hire_from_listing_humanless::handler(
+            ctx,
+            task_id,
+            expected_price,
+            expected_version,
+            review_window_secs,
+        )
     }
 
     /// Record a moderation decision for a service listing's pinned job-spec hash,

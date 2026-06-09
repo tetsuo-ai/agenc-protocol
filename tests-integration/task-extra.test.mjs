@@ -224,6 +224,7 @@ async function autoAcceptIx(w, r, signerKp) {
       task: r.task, claim: r.claim, escrow: r.escrow, taskValidationConfig: r.validation,
       taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda,
       treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey,
+      operator: null, hireRecord: null,
       creatorCompletionBond: null, workerCompletionBond: null, authority: signerKp.publicKey,
       tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null,
       rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId,

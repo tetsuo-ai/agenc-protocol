@@ -1755,6 +1755,36 @@ impl CompletionBond {
     }
 }
 
+/// Roster entry authorizing a specific wallet to resolve disputes (the assignable
+/// arbiter model). The protocol authority manages the roster via
+/// `assign_dispute_resolver` / `revoke_dispute_resolver`. The mere existence of this
+/// PDA authorizes its `resolver` to call `resolve_dispute`; closing it (revoke) removes
+/// the authorization. A single assigned resolver decides a dispute directly — there is
+/// NO vote tally or quorum on this path (that is the whole point of the model).
+/// PDA seeds: ["dispute_resolver", resolver]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct DisputeResolver {
+    /// The wallet authorized to resolve disputes.
+    pub resolver: Pubkey,
+    /// The protocol authority that assigned this resolver (audit trail).
+    pub assigned_by: Pubkey,
+    /// Unix timestamp the assignment was created.
+    pub assigned_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future metadata. MUST stay zeroed.
+    pub _reserved: [u8; 32],
+}
+
+impl DisputeResolver {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 32]
+    }
+}
+
 /// On-chain moderation attestation for a service listing's pinned job-spec hash.
 ///
 /// The task-bound `TaskModeration` PDA (`["task_moderation", task, hash]`) cannot

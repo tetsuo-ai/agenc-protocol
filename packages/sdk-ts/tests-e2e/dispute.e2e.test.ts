@@ -297,6 +297,7 @@ describe("e2e: dispute -> resolve settles the task on the real program", () => {
       dispute,
       task,
       authority: admin,
+      approve: true,
       creator: buyer.address,
       workerClaim,
       worker: providerAgent,

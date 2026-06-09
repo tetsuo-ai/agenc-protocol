@@ -15,6 +15,7 @@ const expected = [
   "expire_claim",
   "initialize_protocol",
   "migrate_protocol",
+  "migrate_task",
   "record_task_moderation",
   "register_agent",
   "reject_task_result",

@@ -5,6 +5,7 @@ import {
   getUpdateServiceListingInstructionDataDecoder,
   getSetServiceListingStateInstructionDataDecoder,
   getHireFromListingInstructionDataDecoder,
+  getHireFromListingHumanlessInstructionDataDecoder,
   findListingPda,
   findListingModerationPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -14,6 +15,7 @@ import {
   updateServiceListing,
   setServiceListingState,
   hireFromListing,
+  hireFromListingHumanless,
   ListingState,
 } from "../src/facade/listings.js";
 
@@ -210,5 +212,62 @@ describe("hireFromListing (facade)", () => {
     });
     // listingModeration sits at index 6 (between moderationConfig and creatorAgent).
     expect(ix.accounts[6].address).toBe(expectedModeration);
+  });
+});
+
+describe("hireFromListingHumanless (facade)", () => {
+  const listing = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
+  // The human visitor wallet — NO registered agent.
+  const creator = createNoopSigner(
+    address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+  );
+
+  it("auto-derives the multi-PDA flow with correct order and round-trips its data", async () => {
+    const taskId = new Uint8Array(32).fill(5);
+    const ix = await hireFromListingHumanless({
+      listing,
+      creator,
+      taskId,
+      expectedPrice: 1000n,
+      expectedVersion: 1n,
+      reviewWindowSecs: 3600n,
+    });
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // 11 accounts in declared order (no creatorAgent — the buyer is a plain
+    // wallet); only listing/creator are caller-supplied, the rest are derived.
+    expect(ix.accounts.length).toBe(11);
+    const accts = ix.accounts.map((a) => a.address);
+    expect(accts[4]).toBe(listing);
+    expect(accts[9]).toBe(creator.address);
+    expect(accts[10]).toBe(SYSTEM_PROGRAM);
+
+    const decoded =
+      getHireFromListingHumanlessInstructionDataDecoder().decode(ix.data);
+    expect(decoded.expectedPrice).toBe(1000n);
+    expect(decoded.expectedVersion).toBe(1n);
+    expect(decoded.reviewWindowSecs).toBe(3600n);
+    expect(Array.from(decoded.taskId)).toEqual(Array.from(taskId));
+  });
+
+  it("derives listingModeration from listingSpecHash when given", async () => {
+    const taskId = new Uint8Array(32).fill(6);
+    const specHash = new Uint8Array(32).fill(9);
+    const ix = await hireFromListingHumanless({
+      listing,
+      creator,
+      taskId,
+      expectedPrice: 2000n,
+      expectedVersion: 2n,
+      reviewWindowSecs: 3600n,
+      listingSpecHash: specHash,
+    });
+
+    const [expectedModeration] = await findListingModerationPda({
+      listing,
+      jobSpecHash: specHash,
+    });
+    // listingModeration sits at index 7 (between moderationConfig and authorityRateLimit).
+    expect(ix.accounts[7].address).toBe(expectedModeration);
   });
 });

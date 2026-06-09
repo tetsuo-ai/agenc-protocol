@@ -468,6 +468,22 @@ export type AgencCoordination = {
           "writable": true
         },
         {
+          "name": "hireRecord",
+          "docs": [
+            "operator-fee terms; for current hires the terms are read from the Task itself."
+          ],
+          "optional": true
+        },
+        {
+          "name": "operator",
+          "docs": [
+            "when the task carries a non-zero operator fee (a listing hire); receives the",
+            "operator fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "creatorCompletionBond",
           "docs": [
             "Validated by settle_completion_bond (owner/PDA/task/role/party)."
@@ -824,6 +840,101 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "assignDisputeResolver",
+      "docs": [
+        "Execute the resolved dispute outcome.",
+        "Requires sufficient votes to meet threshold.",
+        "Assign a wallet to the dispute-resolver roster (authority-only). The assigned",
+        "wallet may then call `resolve_dispute` directly — no vote tally, no quorum."
+      ],
+      "discriminator": [
+        64,
+        252,
+        49,
+        0,
+        45,
+        0,
+        58,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputeResolver",
+          "docs": [
+            "Roster entry for `resolver`. `init` ⇒ assigning an already-assigned wallet fails."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  114,
+                  101,
+                  115,
+                  111,
+                  108,
+                  118,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "resolver"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Must be the protocol authority (the roster is authority-managed)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "resolver",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "autoAcceptTaskResult",
       "docs": [
         "Permissionlessly auto-accept a creator-reviewed submission after timeout."
@@ -1034,6 +1145,21 @@ export type AgencCoordination = {
         {
           "name": "workerAuthority",
           "writable": true
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "operator-fee terms (current hires read them from the Task itself)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "operator",
+          "docs": [
+            "when the task carries a non-zero operator fee; receives the operator leg (SOL)."
+          ],
+          "writable": true,
+          "optional": true
         },
         {
           "name": "creatorCompletionBond",
@@ -5875,6 +6001,348 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "hireFromListingHumanless",
+      "docs": [
+        "Hire a provider from a standing service listing as a human buyer with NO",
+        "registered agent (single-agent storefront). Funds SOL escrow, carries the",
+        "listing's operator-fee leg (the embedding site's cut), and pins",
+        "ValidationMode::CreatorReview so the human reviews the work before payout."
+      ],
+      "discriminator": [
+        90,
+        142,
+        39,
+        225,
+        150,
+        161,
+        217,
+        49
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "arg",
+                "path": "taskId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "Links this hire to its source listing (capacity decrement via close_task) and",
+            "snapshots the operator-fee terms for the settlement split."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "docs": [
+            "Forced CreatorReview validation config — initialized here so a humanless hire",
+            "can never settle on the auto-pay path; the human buyer always reviews first."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "docs": [
+            "Standing listing being hired from. Mutable to record the hire."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "serviceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "serviceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationConfig",
+          "docs": [
+            "Global moderation gate. REQUIRED so a hire is fail-closed (spec §6)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "listingModeration",
+          "docs": [
+            "Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.spec_hash",
+                "account": "serviceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authorityRateLimit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "The human buyer's wallet — owns and pays for the hired task. No AgentRegistration."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "taskId",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedPrice",
+          "type": "u64"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "u64"
+        },
+        {
+          "name": "reviewWindowSecs",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "initializeBidBook",
       "docs": [
         "Initialize a bid book for a Marketplace V2 task."
@@ -8622,8 +9090,9 @@ export type AgencCoordination = {
     {
       "name": "resolveDispute",
       "docs": [
-        "Execute the resolved dispute outcome.",
-        "Requires sufficient votes to meet threshold."
+        "Resolve a dispute. The signer must be the protocol authority OR an assigned",
+        "dispute resolver. `approve` upholds the initiator's requested resolution_type;",
+        "`!approve` refunds the creator. No vote tally or quorum is consulted."
       ],
       "discriminator": [
         231,
@@ -8734,7 +9203,24 @@ export type AgencCoordination = {
         },
         {
           "name": "authority",
+          "docs": [
+            "The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver",
+            "roster. The OR is enforced in the handler against `resolver_assignment` below — a",
+            "plain account constraint cannot express \"this key OR that account exists\"."
+          ],
           "signer": true
+        },
+        {
+          "name": "resolverAssignment",
+          "docs": [
+            "Optional roster entry proving `authority` is an assigned dispute resolver. A plain",
+            "optional account (NOT seeds-derived) so the client can pass `None` when resolving as",
+            "the protocol authority; when present it must be a program-owned `DisputeResolver`",
+            "whose `resolver` equals the signer (enforced in the handler). Only the authority-",
+            "gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,",
+            "so the canonical [\"dispute_resolver\", signer] PDA is enforced transitively."
+          ],
+          "optional": true
         },
         {
           "name": "creator",
@@ -8888,7 +9374,12 @@ export type AgencCoordination = {
           "writable": true
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "approve",
+          "type": "bool"
+        }
+      ]
     },
     {
       "name": "resolveRejectFrozen",
@@ -9239,6 +9730,92 @@ export type AgencCoordination = {
               }
             ]
           }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "revokeDisputeResolver",
+      "docs": [
+        "Remove a wallet from the dispute-resolver roster (authority-only), closing its",
+        "assignment PDA."
+      ],
+      "discriminator": [
+        155,
+        111,
+        4,
+        156,
+        192,
+        155,
+        89,
+        134
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputeResolver",
+          "docs": [
+            "Roster entry to remove. Seeded by its own stored `resolver`, so the canonical PDA",
+            "is enforced; `close = authority` returns the rent to the protocol authority."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101,
+                  95,
+                  114,
+                  101,
+                  115,
+                  111,
+                  108,
+                  118,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute_resolver.resolver",
+                "account": "disputeResolver"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Must be the protocol authority (the roster is authority-managed)."
+          ],
+          "writable": true,
+          "signer": true
         }
       ],
       "args": []
@@ -12199,6 +12776,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "disputeResolver",
+      "discriminator": [
+        68,
+        124,
+        148,
+        26,
+        177,
+        224,
+        247,
+        53
+      ]
+    },
+    {
       "name": "disputeVote",
       "discriminator": [
         166,
@@ -12900,6 +13490,32 @@ export type AgencCoordination = {
         128,
         236,
         187
+      ]
+    },
+    {
+      "name": "disputeResolverAssigned",
+      "discriminator": [
+        51,
+        132,
+        198,
+        221,
+        116,
+        105,
+        154,
+        12
+      ]
+    },
+    {
+      "name": "disputeResolverRevoked",
+      "discriminator": [
+        200,
+        244,
+        224,
+        246,
+        19,
+        222,
+        1,
+        100
       ]
     },
     {
@@ -14146,911 +14762,916 @@ export type AgencCoordination = {
     },
     {
       "code": 6105,
+      "name": "invalidDisputeResolver",
+      "msg": "Invalid dispute resolver: pubkey must be non-zero"
+    },
+    {
+      "code": 6106,
       "name": "activeDisputeVotes",
       "msg": "Agent has active dispute votes pending resolution"
     },
     {
-      "code": 6106,
+      "code": 6107,
       "name": "recentVoteActivity",
       "msg": "Agent must wait 24 hours after voting before deregistering"
     },
     {
-      "code": 6107,
+      "code": 6108,
       "name": "authorityAlreadyVoted",
       "msg": "Authority has already voted on this dispute"
     },
     {
-      "code": 6108,
+      "code": 6109,
       "name": "insufficientEvidence",
       "msg": "Insufficient dispute evidence provided"
     },
     {
-      "code": 6109,
+      "code": 6110,
       "name": "evidenceTooLong",
       "msg": "Dispute evidence exceeds maximum allowed length"
     },
     {
-      "code": 6110,
+      "code": 6111,
       "name": "disputeNotExpired",
       "msg": "Dispute has not expired"
     },
     {
-      "code": 6111,
+      "code": 6112,
       "name": "slashAlreadyApplied",
       "msg": "Dispute slashing already applied"
     },
     {
-      "code": 6112,
+      "code": 6113,
       "name": "slashWindowExpired",
       "msg": "Slash window expired: must apply slashing within 7 days of resolution"
     },
     {
-      "code": 6113,
+      "code": 6114,
       "name": "disputeNotResolved",
       "msg": "Dispute has not been resolved"
     },
     {
-      "code": 6114,
+      "code": 6115,
       "name": "notTaskParticipant",
       "msg": "Only task creator or workers can initiate disputes"
     },
     {
-      "code": 6115,
+      "code": 6116,
       "name": "invalidEvidenceHash",
       "msg": "Invalid evidence hash: cannot be all zeros"
     },
     {
-      "code": 6116,
+      "code": 6117,
       "name": "arbiterIsDisputeParticipant",
       "msg": "Arbiter cannot vote on disputes they are a participant in"
     },
     {
-      "code": 6117,
+      "code": 6118,
       "name": "insufficientQuorum",
       "msg": "Insufficient quorum: minimum number of voters not reached"
     },
     {
-      "code": 6118,
+      "code": 6119,
       "name": "activeDisputesExist",
       "msg": "Agent has active disputes as defendant and cannot deregister"
     },
     {
-      "code": 6119,
+      "code": 6120,
       "name": "tooManyDisputeVoters",
       "msg": "Dispute has reached maximum voter capacity"
     },
     {
-      "code": 6120,
+      "code": 6121,
       "name": "workerAgentRequired",
       "msg": "Worker agent account required when creator initiates dispute"
     },
     {
-      "code": 6121,
+      "code": 6122,
       "name": "workerClaimRequired",
       "msg": "Worker claim account required when creator initiates dispute"
     },
     {
-      "code": 6122,
+      "code": 6123,
       "name": "workerNotInDispute",
       "msg": "Worker was not involved in this dispute"
     },
     {
-      "code": 6123,
+      "code": 6124,
       "name": "initiatorCannotResolve",
       "msg": "Dispute initiator cannot resolve their own dispute"
     },
     {
-      "code": 6124,
+      "code": 6125,
       "name": "versionMismatch",
       "msg": "State version mismatch (concurrent modification)"
     },
     {
-      "code": 6125,
+      "code": 6126,
       "name": "stateKeyExists",
       "msg": "State key already exists"
     },
     {
-      "code": 6126,
+      "code": 6127,
       "name": "stateNotFound",
       "msg": "State not found"
     },
     {
-      "code": 6127,
+      "code": 6128,
       "name": "invalidStateValue",
       "msg": "Invalid state value: state_value cannot be all zeros"
     },
     {
-      "code": 6128,
+      "code": 6129,
       "name": "stateOwnershipViolation",
       "msg": "State ownership violation: only the creator agent can update this state"
     },
     {
-      "code": 6129,
+      "code": 6130,
       "name": "invalidStateKey",
       "msg": "Invalid state key: state_key cannot be all zeros"
     },
     {
-      "code": 6130,
+      "code": 6131,
       "name": "protocolAlreadyInitialized",
       "msg": "Protocol is already initialized"
     },
     {
-      "code": 6131,
+      "code": 6132,
       "name": "protocolNotInitialized",
       "msg": "Protocol is not initialized"
     },
     {
-      "code": 6132,
+      "code": 6133,
       "name": "invalidProtocolFee",
       "msg": "Invalid protocol fee (must be <= 1000 bps)"
     },
     {
-      "code": 6133,
+      "code": 6134,
       "name": "invalidTreasury",
       "msg": "Invalid treasury: treasury account cannot be default pubkey"
     },
     {
-      "code": 6134,
+      "code": 6135,
       "name": "invalidDisputeThreshold",
       "msg": "Invalid dispute threshold: must be 1-100 (percentage of votes required)"
     },
     {
-      "code": 6135,
+      "code": 6136,
       "name": "insufficientStake",
       "msg": "Insufficient stake for arbiter registration"
     },
     {
-      "code": 6136,
+      "code": 6137,
       "name": "multisigInvalidThreshold",
       "msg": "Invalid multisig threshold"
     },
     {
-      "code": 6137,
+      "code": 6138,
       "name": "multisigInvalidSigners",
       "msg": "Invalid multisig signer configuration"
     },
     {
-      "code": 6138,
+      "code": 6139,
       "name": "multisigNotEnoughSigners",
       "msg": "Not enough multisig signers"
     },
     {
-      "code": 6139,
+      "code": 6140,
       "name": "multisigDuplicateSigner",
       "msg": "Duplicate multisig signer provided"
     },
     {
-      "code": 6140,
+      "code": 6141,
       "name": "multisigDefaultSigner",
       "msg": "Multisig signer cannot be default pubkey"
     },
     {
-      "code": 6141,
+      "code": 6142,
       "name": "multisigSignerNotSystemOwned",
       "msg": "Multisig signer account not owned by System Program"
     },
     {
-      "code": 6142,
+      "code": 6143,
       "name": "invalidInput",
       "msg": "Invalid input parameter"
     },
     {
-      "code": 6143,
+      "code": 6144,
       "name": "arithmeticOverflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6144,
+      "code": 6145,
       "name": "voteOverflow",
       "msg": "Vote count overflow"
     },
     {
-      "code": 6145,
+      "code": 6146,
       "name": "insufficientFunds",
       "msg": "Insufficient funds"
     },
     {
-      "code": 6146,
+      "code": 6147,
       "name": "rewardTooSmall",
       "msg": "Reward too small: worker must receive at least 1 lamport"
     },
     {
-      "code": 6147,
+      "code": 6148,
       "name": "corruptedData",
       "msg": "Account data is corrupted"
     },
     {
-      "code": 6148,
+      "code": 6149,
       "name": "stringTooLong",
       "msg": "String too long"
     },
     {
-      "code": 6149,
+      "code": 6150,
       "name": "invalidAccountOwner",
       "msg": "Account owner validation failed: account not owned by this program"
     },
     {
-      "code": 6150,
+      "code": 6151,
       "name": "rateLimitExceeded",
       "msg": "Rate limit exceeded: maximum actions per 24h window reached"
     },
     {
-      "code": 6151,
+      "code": 6152,
       "name": "cooldownNotElapsed",
       "msg": "Cooldown period has not elapsed since last action"
     },
     {
-      "code": 6152,
+      "code": 6153,
       "name": "updateTooFrequent",
       "msg": "Agent update too frequent: must wait cooldown period"
     },
     {
-      "code": 6153,
+      "code": 6154,
       "name": "invalidCooldown",
       "msg": "Cooldown value cannot be negative"
     },
     {
-      "code": 6154,
+      "code": 6155,
       "name": "cooldownTooLarge",
       "msg": "Cooldown value exceeds maximum (24 hours)"
     },
     {
-      "code": 6155,
+      "code": 6156,
       "name": "rateLimitTooHigh",
       "msg": "Rate limit value exceeds maximum allowed (1000)"
     },
     {
-      "code": 6156,
+      "code": 6157,
       "name": "cooldownTooLong",
       "msg": "Cooldown value exceeds maximum allowed (1 week)"
     },
     {
-      "code": 6157,
+      "code": 6158,
       "name": "insufficientStakeForDispute",
       "msg": "Insufficient stake to initiate dispute"
     },
     {
-      "code": 6158,
+      "code": 6159,
       "name": "insufficientStakeForCreatorDispute",
       "msg": "Creator-initiated disputes require 2x the minimum stake"
     },
     {
-      "code": 6159,
+      "code": 6160,
       "name": "versionMismatchProtocol",
       "msg": "Protocol version mismatch: account version incompatible with current program"
     },
     {
-      "code": 6160,
+      "code": 6161,
       "name": "accountVersionTooOld",
       "msg": "Account version too old: migration required"
     },
     {
-      "code": 6161,
+      "code": 6162,
       "name": "accountVersionTooNew",
       "msg": "Account version too new: program upgrade required"
     },
     {
-      "code": 6162,
+      "code": 6163,
       "name": "invalidMigrationSource",
       "msg": "Migration not allowed: invalid source version"
     },
     {
-      "code": 6163,
+      "code": 6164,
       "name": "invalidMigrationTarget",
       "msg": "Migration not allowed: invalid target version"
     },
     {
-      "code": 6164,
+      "code": 6165,
       "name": "unauthorizedUpgrade",
       "msg": "Only upgrade authority can perform this action"
     },
     {
-      "code": 6165,
+      "code": 6166,
       "name": "unauthorizedProtocolAuthority",
       "msg": "Only protocol authority can perform this action"
     },
     {
-      "code": 6166,
+      "code": 6167,
       "name": "invalidMinVersion",
       "msg": "Minimum version cannot exceed current protocol version"
     },
     {
-      "code": 6167,
+      "code": 6168,
       "name": "protocolConfigRequired",
       "msg": "Protocol config account required: suspending an agent requires the protocol config PDA in remaining_accounts"
     },
     {
-      "code": 6168,
+      "code": 6169,
       "name": "parentTaskCancelled",
       "msg": "Parent task has been cancelled"
     },
     {
-      "code": 6169,
+      "code": 6170,
       "name": "parentTaskDisputed",
       "msg": "Parent task is in disputed state"
     },
     {
-      "code": 6170,
+      "code": 6171,
       "name": "invalidDependencyType",
       "msg": "Invalid dependency type"
     },
     {
-      "code": 6171,
+      "code": 6172,
       "name": "parentTaskNotCompleted",
       "msg": "Parent task must be completed before completing a proof-dependent task"
     },
     {
-      "code": 6172,
+      "code": 6173,
       "name": "parentTaskAccountRequired",
       "msg": "Parent task account required for proof-dependent task completion"
     },
     {
-      "code": 6173,
+      "code": 6174,
       "name": "unauthorizedCreator",
       "msg": "Parent task does not belong to the same creator"
     },
     {
-      "code": 6174,
+      "code": 6175,
       "name": "nullifierAlreadySpent",
       "msg": "Nullifier has already been spent - proof/knowledge reuse detected"
     },
     {
-      "code": 6175,
+      "code": 6176,
       "name": "invalidNullifier",
       "msg": "Invalid nullifier: nullifier value cannot be all zeros"
     },
     {
-      "code": 6176,
+      "code": 6177,
       "name": "incompleteWorkerAccounts",
       "msg": "All worker accounts must be provided when cancelling a task with active claims"
     },
     {
-      "code": 6177,
+      "code": 6178,
       "name": "workerAccountsRequired",
       "msg": "Worker accounts required when task has active workers"
     },
     {
-      "code": 6178,
+      "code": 6179,
       "name": "duplicateArbiter",
       "msg": "Duplicate arbiter provided in remaining_accounts"
     },
     {
-      "code": 6179,
+      "code": 6180,
       "name": "insufficientEscrowBalance",
       "msg": "Escrow has insufficient balance for reward transfer"
     },
     {
-      "code": 6180,
+      "code": 6181,
       "name": "invalidStatusTransition",
       "msg": "Invalid task status transition"
     },
     {
-      "code": 6181,
+      "code": 6182,
       "name": "stakeTooLow",
       "msg": "Stake value is below minimum required (0.001 SOL)"
     },
     {
-      "code": 6182,
+      "code": 6183,
       "name": "invalidMinStake",
       "msg": "min_stake_for_dispute must be greater than zero"
     },
     {
-      "code": 6183,
+      "code": 6184,
       "name": "invalidSlashAmount",
       "msg": "Slash amount must be greater than zero"
     },
     {
-      "code": 6184,
+      "code": 6185,
       "name": "bondAmountTooLow",
       "msg": "Bond amount too low"
     },
     {
-      "code": 6185,
+      "code": 6186,
       "name": "bondAlreadyExists",
       "msg": "Bond already exists"
     },
     {
-      "code": 6186,
+      "code": 6187,
       "name": "bondNotFound",
       "msg": "Bond not found"
     },
     {
-      "code": 6187,
+      "code": 6188,
       "name": "bondNotMatured",
       "msg": "Bond not yet matured"
     },
     {
-      "code": 6188,
+      "code": 6189,
       "name": "insufficientReputation",
       "msg": "Agent reputation below task minimum requirement"
     },
     {
-      "code": 6189,
+      "code": 6190,
       "name": "invalidMinReputation",
       "msg": "Invalid minimum reputation: must be <= 10000"
     },
     {
-      "code": 6190,
+      "code": 6191,
       "name": "developmentKeyNotAllowed",
       "msg": "Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use."
     },
     {
-      "code": 6191,
+      "code": 6192,
       "name": "selfTaskNotAllowed",
       "msg": "Cannot claim own task: worker authority matches task creator"
     },
     {
-      "code": 6192,
+      "code": 6193,
       "name": "missingTokenAccounts",
       "msg": "Token accounts not provided for token-denominated task"
     },
     {
-      "code": 6193,
+      "code": 6194,
       "name": "invalidTokenEscrow",
       "msg": "Token escrow ATA does not match expected derivation"
     },
     {
-      "code": 6194,
+      "code": 6195,
       "name": "invalidTokenMint",
       "msg": "Provided mint does not match task's reward_mint"
     },
     {
-      "code": 6195,
+      "code": 6196,
       "name": "tokenTransferFailed",
       "msg": "SPL token transfer CPI failed"
     },
     {
-      "code": 6196,
+      "code": 6197,
       "name": "proposalNotActive",
       "msg": "Proposal is not active"
     },
     {
-      "code": 6197,
+      "code": 6198,
       "name": "proposalVotingNotEnded",
       "msg": "Voting period has not ended"
     },
     {
-      "code": 6198,
+      "code": 6199,
       "name": "proposalVotingEnded",
       "msg": "Voting period has ended"
     },
     {
-      "code": 6199,
+      "code": 6200,
       "name": "proposalAlreadyExecuted",
       "msg": "Proposal has already been executed"
     },
     {
-      "code": 6200,
+      "code": 6201,
       "name": "proposalInsufficientQuorum",
       "msg": "Insufficient quorum for proposal execution"
     },
     {
-      "code": 6201,
+      "code": 6202,
       "name": "proposalNotApproved",
       "msg": "Proposal did not achieve majority"
     },
     {
-      "code": 6202,
+      "code": 6203,
       "name": "proposalUnauthorizedCancel",
       "msg": "Only the proposer can cancel this proposal"
     },
     {
-      "code": 6203,
+      "code": 6204,
       "name": "proposalInsufficientStake",
       "msg": "Insufficient stake to create a proposal"
     },
     {
-      "code": 6204,
+      "code": 6205,
       "name": "invalidProposalPayload",
       "msg": "Invalid proposal payload"
     },
     {
-      "code": 6205,
+      "code": 6206,
       "name": "invalidProposalType",
       "msg": "Invalid proposal type"
     },
     {
-      "code": 6206,
+      "code": 6207,
       "name": "treasuryInsufficientBalance",
       "msg": "Treasury spend amount exceeds available balance"
     },
     {
-      "code": 6207,
+      "code": 6208,
       "name": "timelockNotElapsed",
       "msg": "Execution timelock has not elapsed"
     },
     {
-      "code": 6208,
+      "code": 6209,
       "name": "invalidGovernanceParam",
       "msg": "Invalid governance configuration parameter"
     },
     {
-      "code": 6209,
+      "code": 6210,
       "name": "treasuryNotProgramOwned",
       "msg": "Treasury must be a program-owned PDA"
     },
     {
-      "code": 6210,
+      "code": 6211,
       "name": "treasuryNotSpendable",
       "msg": "Treasury must be program-owned, or a signer system account for governance spends"
     },
     {
-      "code": 6211,
+      "code": 6212,
       "name": "skillInvalidId",
       "msg": "Skill ID cannot be all zeros"
     },
     {
-      "code": 6212,
+      "code": 6213,
       "name": "skillInvalidName",
       "msg": "Skill name cannot be all zeros"
     },
     {
-      "code": 6213,
+      "code": 6214,
       "name": "skillInvalidContentHash",
       "msg": "Skill content hash cannot be all zeros"
     },
     {
-      "code": 6214,
+      "code": 6215,
       "name": "skillNotActive",
       "msg": "Skill is not active"
     },
     {
-      "code": 6215,
+      "code": 6216,
       "name": "skillInvalidRating",
       "msg": "Rating must be between 1 and 5"
     },
     {
-      "code": 6216,
+      "code": 6217,
       "name": "skillSelfRating",
       "msg": "Cannot rate own skill"
     },
     {
-      "code": 6217,
+      "code": 6218,
       "name": "skillUnauthorizedUpdate",
       "msg": "Only the skill author can update this skill"
     },
     {
-      "code": 6218,
+      "code": 6219,
       "name": "skillSelfPurchase",
       "msg": "Cannot purchase own skill"
     },
     {
-      "code": 6219,
+      "code": 6220,
       "name": "feedInvalidContentHash",
       "msg": "Feed content hash cannot be all zeros"
     },
     {
-      "code": 6220,
+      "code": 6221,
       "name": "feedInvalidTopic",
       "msg": "Feed topic cannot be all zeros"
     },
     {
-      "code": 6221,
+      "code": 6222,
       "name": "feedPostNotFound",
       "msg": "Feed post not found"
     },
     {
-      "code": 6222,
+      "code": 6223,
       "name": "feedSelfUpvote",
       "msg": "Cannot upvote own post"
     },
     {
-      "code": 6223,
+      "code": 6224,
       "name": "reputationStakeAmountTooLow",
       "msg": "Reputation stake amount must be greater than zero"
     },
     {
-      "code": 6224,
+      "code": 6225,
       "name": "reputationStakeLocked",
       "msg": "Reputation stake is locked: withdrawal before cooldown"
     },
     {
-      "code": 6225,
+      "code": 6226,
       "name": "reputationStakeInsufficientBalance",
       "msg": "Reputation stake has insufficient balance for withdrawal"
     },
     {
-      "code": 6226,
+      "code": 6227,
       "name": "reputationDelegationAmountInvalid",
       "msg": "Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT"
     },
     {
-      "code": 6227,
+      "code": 6228,
       "name": "reputationCannotDelegateSelf",
       "msg": "Cannot delegate reputation to self"
     },
     {
-      "code": 6228,
+      "code": 6229,
       "name": "reputationDelegationExpired",
       "msg": "Reputation delegation has expired"
     },
     {
-      "code": 6229,
+      "code": 6230,
       "name": "reputationAgentNotActive",
       "msg": "Agent must be Active to participate in reputation economy"
     },
     {
-      "code": 6230,
+      "code": 6231,
       "name": "reputationDisputesPending",
       "msg": "Agent has pending disputes as defendant: cannot withdraw stake"
     },
     {
-      "code": 6231,
+      "code": 6232,
       "name": "privateTaskRequiresZkProof",
       "msg": "Private tasks (non-zero constraint_hash) must use complete_task_private"
     },
     {
-      "code": 6232,
+      "code": 6233,
       "name": "invalidTokenAccountOwner",
       "msg": "Token account owner does not match expected authority"
     },
     {
-      "code": 6233,
+      "code": 6234,
       "name": "insufficientSeedEntropy",
       "msg": "Binding or nullifier seed has insufficient byte diversity (min 8 distinct bytes required)"
     },
     {
-      "code": 6234,
+      "code": 6235,
       "name": "skillPriceBelowMinimum",
       "msg": "Skill price below minimum required"
     },
     {
-      "code": 6235,
+      "code": 6236,
       "name": "skillPriceChanged",
       "msg": "Skill price changed since transaction was prepared"
     },
     {
-      "code": 6236,
+      "code": 6237,
       "name": "delegationCooldownNotElapsed",
       "msg": "Delegation must be active for minimum duration before revocation"
     },
     {
-      "code": 6237,
+      "code": 6238,
       "name": "rateLimitBelowMinimum",
       "msg": "Rate limit value below protocol minimum"
     },
     {
-      "code": 6238,
+      "code": 6239,
       "name": "invalidTaskJobSpecHash",
       "msg": "Invalid task job specification hash"
     },
     {
-      "code": 6239,
+      "code": 6240,
       "name": "invalidTaskJobSpecUri",
       "msg": "Invalid task job specification URI"
     },
     {
-      "code": 6240,
+      "code": 6241,
       "name": "taskJobSpecTaskMismatch",
       "msg": "Task job specification account does not belong to this task"
     },
     {
-      "code": 6241,
+      "code": 6242,
       "name": "protocolPaused",
       "msg": "Protocol is paused by multisig launch controls"
     },
     {
-      "code": 6242,
+      "code": 6243,
       "name": "taskTypeDisabled",
       "msg": "Task type is disabled by multisig launch controls"
     },
     {
-      "code": 6243,
+      "code": 6244,
       "name": "taskModerationRequired",
       "msg": "Task moderation is not configured or enabled"
     },
     {
-      "code": 6244,
+      "code": 6245,
       "name": "invalidTaskModerationAuthority",
       "msg": "Invalid task moderation authority"
     },
     {
-      "code": 6245,
+      "code": 6246,
       "name": "unauthorizedTaskModerator",
       "msg": "Only the configured moderation authority can record moderation decisions"
     },
     {
-      "code": 6246,
+      "code": 6247,
       "name": "invalidTaskModerationStatus",
       "msg": "Invalid task moderation status"
     },
     {
-      "code": 6247,
+      "code": 6248,
       "name": "invalidTaskModerationRiskScore",
       "msg": "Invalid task moderation risk score"
     },
     {
-      "code": 6248,
+      "code": 6249,
       "name": "taskModerationTaskMismatch",
       "msg": "Task moderation account does not belong to this task"
     },
     {
-      "code": 6249,
+      "code": 6250,
       "name": "taskModerationHashMismatch",
       "msg": "Task moderation account does not match this job specification hash"
     },
     {
-      "code": 6250,
+      "code": 6251,
       "name": "taskModerationExpired",
       "msg": "Task moderation decision is expired"
     },
     {
-      "code": 6251,
+      "code": 6252,
       "name": "taskModerationRejected",
       "msg": "Task moderation decision does not allow publishing this job specification"
     },
     {
-      "code": 6252,
+      "code": 6253,
       "name": "taskJobSpecRequired",
       "msg": "Task claim requires a moderated job specification pointer"
     },
     {
-      "code": 6253,
+      "code": 6254,
       "name": "listingInvalidId",
       "msg": "Service listing ID cannot be all zeros"
     },
     {
-      "code": 6254,
+      "code": 6255,
       "name": "listingInvalidName",
       "msg": "Service listing name cannot be all zeros"
     },
     {
-      "code": 6255,
+      "code": 6256,
       "name": "listingInvalidSpec",
       "msg": "Service listing spec hash/URI is invalid"
     },
     {
-      "code": 6256,
+      "code": 6257,
       "name": "listingPriceTooLow",
       "msg": "Service listing price is below the minimum"
     },
     {
-      "code": 6257,
+      "code": 6258,
       "name": "listingCapabilitiesRequired",
       "msg": "Service listing must declare at least one required capability"
     },
     {
-      "code": 6258,
+      "code": 6259,
       "name": "listingOperatorFeeTooHigh",
       "msg": "Operator fee exceeds the maximum allowed"
     },
     {
-      "code": 6259,
+      "code": 6260,
       "name": "listingOperatorRequired",
       "msg": "A non-zero operator fee requires an operator payee"
     },
     {
-      "code": 6260,
+      "code": 6261,
       "name": "listingNotActive",
       "msg": "Service listing is not active"
     },
     {
-      "code": 6261,
+      "code": 6262,
       "name": "listingRetired",
       "msg": "Service listing is retired and cannot be modified"
     },
     {
-      "code": 6262,
+      "code": 6263,
       "name": "listingVersionMismatch",
       "msg": "Service listing version does not match the expected version"
     },
     {
-      "code": 6263,
+      "code": 6264,
       "name": "listingPriceMismatch",
       "msg": "Service listing price does not match the expected price"
     },
     {
-      "code": 6264,
+      "code": 6265,
       "name": "listingCapacityReached",
       "msg": "Service listing has reached its maximum concurrent open hires"
     },
     {
-      "code": 6265,
+      "code": 6266,
       "name": "listingInvalidStateTransition",
       "msg": "Invalid service listing state transition"
     },
     {
-      "code": 6266,
+      "code": 6267,
       "name": "taskNotClosable",
       "msg": "Task can only be closed once it is in a terminal state with no active workers"
     },
     {
-      "code": 6267,
+      "code": 6268,
       "name": "workerRewardBelowFloor",
       "msg": "Worker reward would fall below the protocol-mandated floor"
     },
     {
-      "code": 6268,
+      "code": 6269,
       "name": "invalidHireRecord",
       "msg": "Supplied hire record does not match this task"
     },
     {
-      "code": 6269,
+      "code": 6270,
       "name": "missingOperatorAccount",
       "msg": "Operator payee account is required for this hire's operator fee"
     },
     {
-      "code": 6270,
+      "code": 6271,
       "name": "invalidOperatorAccount",
       "msg": "Operator payee account does not match the hire record operator"
     },
     {
-      "code": 6271,
+      "code": 6272,
       "name": "hiredTaskValidationUnsupported",
       "msg": "A hired task cannot be reconfigured for manual validation; it settles on the hire completion path"
     },
     {
-      "code": 6272,
+      "code": 6273,
       "name": "operatorIsCreator",
       "msg": "Operator payee cannot be the task creator (operator self-deal)"
     },
     {
-      "code": 6273,
+      "code": 6274,
       "name": "taskNotMigratable",
       "msg": "Task account is not a migratable size (expected the pre-Batch-2 layout)"
     },
     {
-      "code": 6274,
+      "code": 6275,
       "name": "taskDiscriminatorMismatch",
       "msg": "Task account discriminator does not match the Task type"
     },
     {
-      "code": 6275,
+      "code": 6276,
       "name": "bondTaskMismatch",
       "msg": "Completion bond does not belong to this task"
     },
     {
-      "code": 6276,
+      "code": 6277,
       "name": "bondPartyMismatch",
       "msg": "Completion bond party does not match the expected wallet"
     },
     {
-      "code": 6277,
+      "code": 6278,
       "name": "bondRoleMismatch",
       "msg": "Completion bond has the wrong role for this disposition"
     },
     {
-      "code": 6278,
+      "code": 6279,
       "name": "bondAlreadyPosted",
       "msg": "A completion bond has already been posted for this party and task"
     },
     {
-      "code": 6279,
+      "code": 6280,
       "name": "missingCompletionBondAccount",
       "msg": "A required completion bond account was not provided"
     },
     {
-      "code": 6280,
+      "code": 6281,
       "name": "bondUnsupportedTaskType",
       "msg": "Completion bonds are single-worker (Exclusive) only in v1"
     },
     {
-      "code": 6281,
+      "code": 6282,
       "name": "maxRevisionRoundsExceeded",
       "msg": "Maximum revision rounds exceeded; escalate to reject"
     },
     {
-      "code": 6282,
+      "code": 6283,
       "name": "taskNotRejectFrozen",
       "msg": "Task is not in the RejectFrozen state"
     },
     {
-      "code": 6283,
+      "code": 6284,
       "name": "rejectFrozenTimeoutNotElapsed",
       "msg": "RejectFrozen review timeout has not elapsed"
     },
     {
-      "code": 6284,
+      "code": 6285,
       "name": "unauthorizedReviewDecision",
       "msg": "Caller is not authorized to make this review decision"
     },
     {
-      "code": 6285,
+      "code": 6286,
       "name": "taskFrozenCannotDispute",
       "msg": "A frozen (rejected) task cannot be disputed"
     },
     {
-      "code": 6286,
+      "code": 6287,
       "name": "rejectFrozenSingleWorkerOnly",
       "msg": "RejectFrozen review is single-worker (Exclusive) only"
     }
@@ -16812,6 +17433,109 @@ export type AgencCoordination = {
           {
             "name": "votesAgainst",
             "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputeResolver",
+      "docs": [
+        "Roster entry authorizing a specific wallet to resolve disputes (the assignable",
+        "arbiter model). The protocol authority manages the roster via",
+        "`assign_dispute_resolver` / `revoke_dispute_resolver`. The mere existence of this",
+        "PDA authorizes its `resolver` to call `resolve_dispute`; closing it (revoke) removes",
+        "the authorization. A single assigned resolver decides a dispute directly — there is",
+        "NO vote tally or quorum on this path (that is the whole point of the model).",
+        "PDA seeds: [\"dispute_resolver\", resolver]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "resolver",
+            "docs": [
+              "The wallet authorized to resolve disputes."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "assignedBy",
+            "docs": [
+              "The protocol authority that assigned this resolver (audit trail)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "assignedAt",
+            "docs": [
+              "Unix timestamp the assignment was created."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future metadata. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputeResolverAssigned",
+      "docs": [
+        "Emitted when the protocol authority assigns a wallet to the dispute-resolver roster."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "resolver",
+            "type": "pubkey"
+          },
+          {
+            "name": "assignedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputeResolverRevoked",
+      "docs": [
+        "Emitted when the protocol authority revokes a wallet from the dispute-resolver roster."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "resolver",
+            "type": "pubkey"
+          },
+          {
+            "name": "revokedBy",
+            "type": "pubkey"
           },
           {
             "name": "timestamp",

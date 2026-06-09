@@ -392,6 +392,22 @@ pub struct DisputeResolved {
     pub timestamp: i64,
 }
 
+/// Emitted when the protocol authority assigns a wallet to the dispute-resolver roster.
+#[event]
+pub struct DisputeResolverAssigned {
+    pub resolver: Pubkey,
+    pub assigned_by: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when the protocol authority revokes a wallet from the dispute-resolver roster.
+#[event]
+pub struct DisputeResolverRevoked {
+    pub resolver: Pubkey,
+    pub revoked_by: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when a dispute expires without resolution
 /// Updated in fix #418 to include fair distribution details
 #[event]

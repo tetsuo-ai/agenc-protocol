@@ -11,12 +11,14 @@ import {
   getUpdateServiceListingInstructionAsync,
   getSetServiceListingStateInstructionAsync,
   getHireFromListingInstructionAsync,
+  getHireFromListingHumanlessInstructionAsync,
   findListingPda,
   findListingModerationPda,
   type CreateServiceListingAsyncInput,
   type UpdateServiceListingAsyncInput,
   type SetServiceListingStateAsyncInput,
   type HireFromListingAsyncInput,
+  type HireFromListingHumanlessAsyncInput,
 } from "../generated/index.js";
 
 export { findListingPda, findListingModerationPda };
@@ -101,4 +103,48 @@ export async function hireFromListing(input: HireFromListingInput) {
     return getHireFromListingInstructionAsync({ ...rest, listingModeration });
   }
   return getHireFromListingInstructionAsync(rest);
+}
+
+/**
+ * Friendly input for {@link hireFromListingHumanless}. Mirrors the generated
+ * async input but lets the caller pass `listingSpecHash` so the facade derives
+ * the listing-moderation attestation PDA (bound to the listing's pinned spec
+ * hash) instead of requiring the caller to compute it.
+ */
+export type HireFromListingHumanlessInput =
+  HireFromListingHumanlessAsyncInput & {
+    /**
+     * The listing's pinned `spec_hash` (32 bytes). When provided and
+     * `listingModeration` is not, the facade derives `listingModeration` from
+     * (listing, specHash) so the fail-closed moderation gate resolves. Omit when
+     * the moderation gate is disabled, or pass `listingModeration` explicitly.
+     */
+    listingSpecHash?: HireFromListingHumanlessAsyncInput["taskId"];
+  };
+
+/**
+ * Build a hire_from_listing_humanless instruction — the human-visitor storefront
+ * entry point. Identical to {@link hireFromListing} except the buyer is a plain
+ * wallet with NO registered agent (no `creatorAgent` account), and the task is
+ * always pinned to CreatorReview so the human reviews before funds release. The
+ * async builder auto-derives task, escrow, hireRecord, taskValidationConfig,
+ * protocolConfig, moderationConfig, authorityRateLimit, and systemProgram; the
+ * caller supplies `listing` and the `creator` wallet. `listingModeration` is
+ * derived from `listingSpecHash` when given and not passed explicitly.
+ */
+export async function hireFromListingHumanless(
+  input: HireFromListingHumanlessInput,
+) {
+  const { listingSpecHash, ...rest } = input;
+  if (rest.listingModeration === undefined && listingSpecHash !== undefined) {
+    const [listingModeration] = await findListingModerationPda({
+      listing: rest.listing,
+      jobSpecHash: listingSpecHash,
+    });
+    return getHireFromListingHumanlessInstructionAsync({
+      ...rest,
+      listingModeration,
+    });
+  }
+  return getHireFromListingHumanlessInstructionAsync(rest);
 }

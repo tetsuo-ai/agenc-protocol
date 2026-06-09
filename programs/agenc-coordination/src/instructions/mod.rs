@@ -74,6 +74,8 @@ pub mod set_service_listing_state;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod hire_from_listing;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod hire_from_listing_humanless;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod record_listing_moderation;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_task_humanless;
@@ -116,6 +118,10 @@ pub mod register_agent;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod register_skill;
 pub mod reject_task_result;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod assign_dispute_resolver;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod revoke_dispute_resolver;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod resolve_dispute;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -203,6 +209,9 @@ pub use set_service_listing_state::*;
 pub use hire_from_listing::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use hire_from_listing_humanless::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use record_listing_moderation::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
@@ -263,6 +272,12 @@ pub use register_agent::*;
 pub use register_skill::*;
 #[allow(ambiguous_glob_reexports)]
 pub use reject_task_result::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use assign_dispute_resolver::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use revoke_dispute_resolver::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use resolve_dispute::*;

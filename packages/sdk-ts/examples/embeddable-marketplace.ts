@@ -236,13 +236,17 @@ export async function main() {
   });
   const [dispute] = await facade.findDisputePda({ disputeId });
 
-  // Resolve the dispute. The facade derives BOTH completion-bond PDAs (seeded
-  // by [task, creator] and [task, worker-authority]) so the bond forfeit cannot
-  // be bypassed; the bond treasury that receives forfeited bonds is explicit.
+  // Resolve the dispute. `approve` is the resolver's decision (the protocol
+  // authority, or an assigned dispute resolver, signs as `authority`): `true`
+  // upholds the initiator's requested resolution_type, `false` refunds the creator.
+  // The facade derives BOTH completion-bond PDAs (seeded by [task, creator] and
+  // [task, worker-authority]) so the bond forfeit cannot be bypassed; the bond
+  // treasury that receives forfeited bonds is explicit.
   const resolveDisputeIx = await facade.resolveDispute({
     dispute,
     task,
     authority: buyerAuthority,
+    approve: true,
     creator: buyerAuthority.address,
     worker: workerAgent,
     workerWallet: workerAuthority.address,
