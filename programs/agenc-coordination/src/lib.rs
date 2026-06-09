@@ -1042,6 +1042,24 @@ pub mod agenc_coordination {
         instructions::reject_and_freeze::handler(ctx, rejection_hash)
     }
 
+    /// Multisig review decision on a frozen task (Batch 3 §8): pay the worker
+    /// (approve_completion=true) or refund the creator (false), disposing both bonds.
+    /// Exit path — settles even while paused (money never locks).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn resolve_reject_frozen(
+        ctx: Context<ResolveRejectFrozen>,
+        approve_completion: bool,
+    ) -> Result<()> {
+        instructions::reject_frozen_exits::resolve_handler(ctx, approve_completion)
+    }
+
+    /// Permissionless timeout exit for a frozen task (Batch 3 §8): after the review
+    /// window lapses, default to the worker (pay + refund both bonds). Exit path.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn expire_reject_frozen(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
+        instructions::reject_frozen_exits::expire_handler(ctx)
+    }
+
     /// Rate a skill (1-5, reputation-weighted).
     /// One rating per agent per skill, enforced by PDA uniqueness.
     #[cfg(not(feature = "mainnet-canary"))]

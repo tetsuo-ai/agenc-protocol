@@ -1404,6 +1404,80 @@ test("reject_and_freeze: terminal reject freezes the task and retains the claim 
   assert.equal(Number(w.svm.getBalance(w.provider.publicKey)), workerBefore, "no worker payout on freeze");
 });
 
+/// Drive a manual task all the way to RejectFrozen (optionally with both bonds posted).
+async function setupFrozen(w, { postBonds = false } = {}) {
+  const r = await setupSubmittedManual(w);
+  let creatorBond = null, workerBond = null;
+  if (postBonds) {
+    creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+    workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
+    expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0).accounts({ task: r.task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "frozen:creator-bond");
+    expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1).accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "frozen:worker-bond");
+  }
+  expectOk(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 7)))
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]), "frozen:freeze");
+  assert.ok(decode(w.svm, "Task", r.task).status.RejectFrozen !== undefined, "task is RejectFrozen");
+  return { ...r, creatorBond, workerBond };
+}
+
+test("resolve_reject_frozen (approve): pays the worker, refunds worker bond, forfeits creator bond (2-of-2 multisig)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const owner2 = Keypair.generate(); w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  const f = await setupFrozen(w, { postBonds: true });
+  const signerMetas = [{ pubkey: w.admin.publicKey, isSigner: true, isWritable: false }, { pubkey: owner2.publicKey, isSigner: true, isWritable: false }];
+  const accts = { task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, bondTreasury: w.admin.publicKey, systemProgram: SystemProgram.programId };
+
+  // a single signer cannot pass the 2-of-2 gate.
+  expectFail(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(true).accounts(accts).remainingAccounts([signerMetas[0]]).instruction(), [w.admin]), "MultisigNotEnoughSigners", "single signer rejected");
+
+  const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(true).accounts(accts).remainingAccounts(signerMetas).instruction(), [w.admin, owner2]), "resolve approve");
+  assert.ok(decode(w.svm, "Task", f.task).status.Completed !== undefined, "task Completed (worker vindicated)");
+  assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > workerBefore, "worker paid");
+  assert.ok(isClosed(w.svm, f.workerBond), "worker bond refunded + closed");
+  assert.ok(isClosed(w.svm, f.creatorBond), "creator bond forfeited + closed");
+  assert.ok(isClosed(w.svm, f.escrow), "escrow settled");
+});
+
+test("resolve_reject_frozen (reject): refunds the creator, forfeits worker bond, refunds creator bond (multisig)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const owner2 = Keypair.generate(); w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  const f = await setupFrozen(w, { postBonds: true });
+  const signerMetas = [{ pubkey: w.admin.publicKey, isSigner: true, isWritable: false }, { pubkey: owner2.publicKey, isSigner: true, isWritable: false }];
+  const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+  expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(false)
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, bondTreasury: w.admin.publicKey, systemProgram: SystemProgram.programId })
+    .remainingAccounts(signerMetas).instruction(), [w.admin, owner2]), "resolve reject");
+  assert.ok(decode(w.svm, "Task", f.task).status.Cancelled !== undefined, "task Cancelled (rejection upheld)");
+  assert.ok(isClosed(w.svm, f.escrow), "escrow refunded + closed");
+  assert.ok(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore >= f.reward, "creator refunded the reward");
+  assert.ok(isClosed(w.svm, f.workerBond), "worker bond forfeited + closed");
+  assert.ok(isClosed(w.svm, f.creatorBond), "creator bond refunded + closed");
+});
+
+test("expire_reject_frozen: after the review window defaults to the worker + refunds both bonds (permissionless, exit-safe)", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const f = await setupFrozen(w, { postBonds: true });
+  const cleaner = Keypair.generate(); w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
+  const expireIx = async () => makeProgram(cleaner).methods.expireRejectFrozen()
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, authority: cleaner.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId }).instruction();
+
+  // before the review window lapses -> rejected.
+  expectFail(send(w.svm, await expireIx(), [cleaner]), "RejectFrozenTimeoutNotElapsed", "expire too early");
+
+  // warp past the review window (3600s) + pause to prove exit-safety.
+  const clk = w.svm.getClock(); clk.unixTimestamp = clk.unixTimestamp + 4000n; w.svm.setClock(clk);
+  await setProtocolPaused(w.svm, true);
+  const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await expireIx(), [cleaner]), "expire after window while paused");
+  assert.ok(decode(w.svm, "Task", f.task).status.Completed !== undefined, "task defaults to worker (Completed)");
+  assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > workerBefore, "worker paid on timeout");
+  assert.ok(isClosed(w.svm, f.workerBond) && isClosed(w.svm, f.creatorBond), "both bonds refunded on no-fault timeout");
+});
+
 test("3-way split: max operator fee (20%) settles with the worker still above the 60% floor", async () => {
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 5_000_000, operator: operatorKp.publicKey, operatorFeeBps: 2000 });

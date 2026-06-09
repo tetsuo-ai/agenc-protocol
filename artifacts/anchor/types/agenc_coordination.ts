@@ -5331,6 +5331,212 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "expireRejectFrozen",
+      "docs": [
+        "Permissionless timeout exit for a frozen task (Batch 3 §8): after the review",
+        "window lapses, default to the worker (pay + refund both bonds). Exit path."
+      ],
+      "discriminator": [
+        132,
+        215,
+        120,
+        100,
+        145,
+        198,
+        32,
+        12
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "taskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "writable": true
+        },
+        {
+          "name": "workerAuthority",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Permissionless caller."
+          ],
+          "signer": true
+        },
+        {
+          "name": "creatorCompletionBond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "hireFromListing",
       "docs": [
         "Hire a provider from a standing service listing, minting a one-shot task",
@@ -8691,6 +8897,223 @@ export type AgencCoordination = {
         }
       ],
       "args": []
+    },
+    {
+      "name": "resolveRejectFrozen",
+      "docs": [
+        "Multisig review decision on a frozen task (Batch 3 §8): pay the worker",
+        "(approve_completion=true) or refund the creator (false), disposing both bonds.",
+        "Exit path — settles even while paused (money never locks)."
+      ],
+      "discriminator": [
+        247,
+        17,
+        223,
+        213,
+        12,
+        193,
+        235,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "taskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "writable": true
+        },
+        {
+          "name": "workerAuthority",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Multisig review authority; `remaining_accounts` carries the co-signers."
+          ],
+          "signer": true
+        },
+        {
+          "name": "creatorCompletionBond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "bondTreasury",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "approveCompletion",
+          "type": "bool"
+        }
+      ]
     },
     {
       "name": "revokeDelegation",

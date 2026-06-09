@@ -8,11 +8,11 @@
   "artifacts": {
     "idl": {
       "path": "artifacts/anchor/idl/agenc_coordination.json",
-      "sha256": "03d7f8a773aa8e7af99a17b026c2fb77d8c059df1cd379fa6e99c3f9fef143db"
+      "sha256": "d44a3b05503114d37f7c137b109667621f10666bf1a781669ed7c0949ab463ca"
     },
     "types": {
       "path": "artifacts/anchor/types/agenc_coordination.ts",
-      "sha256": "13f1269961ee256e159537e9d8af82e67e59513afd60d806fd128641e1a8f059"
+      "sha256": "e641caa423620b0536760921108f6417f2864446c82914be6ba684c166f9afd4"
     },
     "verifierRouterIdl": {
       "path": "scripts/idl/verifier_router.json"
