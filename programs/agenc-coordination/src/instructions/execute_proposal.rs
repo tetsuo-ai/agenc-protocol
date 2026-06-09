@@ -169,6 +169,15 @@ fn execute_fee_change(proposal: &Proposal, config: &mut ProtocolConfig) -> Resul
     Ok(())
 }
 
+/// A program-owned treasury spend must leave the account either fully drained (the
+/// runtime-permitted RentExempt -> Uninitialized close) or still rent-exempt. Landing in
+/// the `(0, rent_floor)` window is a disallowed RentExempt -> RentPaying transition that
+/// the runtime rejects with `InsufficientFundsForRent`. Pulled out as a pure fn for
+/// revert-sensitive unit testing of the boundary. (Solana accounts doc — RentState rules.)
+fn treasury_spend_preserves_rent(post_balance: u64, rent_floor: u64) -> bool {
+    post_balance == 0 || post_balance >= rent_floor
+}
+
 fn execute_treasury_spend<'info>(
     proposal: &Proposal,
     config: &ProtocolConfig,
@@ -211,7 +220,22 @@ fn execute_treasury_spend<'info>(
     );
 
     if treasury.owner == &crate::ID {
-        // Program-owned treasury: mutate lamports directly.
+        // Program-owned treasury: mutate lamports directly. The runtime rejects any tx
+        // that leaves a data-bearing account below its rent-exempt minimum (RentExempt ->
+        // RentPaying is a disallowed transition: InsufficientFundsForRent). So a partial
+        // spend landing the balance in the (0, rent_min) window would fail at the runtime
+        // with a cryptic error. Guard it here with a clear error, and explicitly allow a
+        // full drain-to-zero (the runtime-permitted close transition) so the funds always
+        // stay fully recoverable. (Solana accounts doc — RentState transition rules.)
+        let post_balance = treasury
+            .lamports()
+            .checked_sub(amount)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        let rent_floor = Rent::get()?.minimum_balance(treasury.data_len());
+        require!(
+            treasury_spend_preserves_rent(post_balance, rent_floor),
+            CoordinationError::TreasuryInsufficientBalance
+        );
         transfer_lamports(
             &treasury.to_account_info(),
             &recipient.to_account_info(),
@@ -298,4 +322,28 @@ fn execute_rate_limit_change(proposal: &Proposal, config: &mut ProtocolConfig) -
     config.max_disputes_per_24h = max_disputes_per_24h;
     config.min_stake_for_dispute = min_stake_for_dispute;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::treasury_spend_preserves_rent;
+
+    // Revert-sensitive guard for the program-owned TreasurySpend rent floor. Drop the
+    // `post_balance == 0` arm and the full-drain case goes red; weaken `>=` to `>` and the
+    // exact-floor case goes red; remove the floor entirely and the rent-tail cases go red.
+    #[test]
+    fn treasury_spend_rent_floor_boundary() {
+        let floor: u64 = 890_880; // ~rent-exempt minimum for a 0-data account (non-zero!)
+
+        // Allowed: a full drain to zero is the runtime-permitted close transition.
+        assert!(treasury_spend_preserves_rent(0, floor));
+        // Allowed: staying at or above the rent-exempt minimum.
+        assert!(treasury_spend_preserves_rent(floor, floor));
+        assert!(treasury_spend_preserves_rent(floor + 1, floor));
+
+        // Rejected: any non-zero balance below the rent-exempt minimum (the RentPaying
+        // limbo the runtime would reject with InsufficientFundsForRent).
+        assert!(!treasury_spend_preserves_rent(1, floor));
+        assert!(!treasury_spend_preserves_rent(floor - 1, floor));
+    }
 }
