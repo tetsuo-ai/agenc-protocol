@@ -863,4 +863,28 @@ pub enum CoordinationError {
 
     #[msg("Task account discriminator does not match the Task type")]
     TaskDiscriminatorMismatch,
+
+    // === Batch 3: bonds, revisions, reject-frozen ===
+    #[msg("Completion bond does not belong to this task")]
+    BondTaskMismatch,
+    #[msg("Completion bond party does not match the expected wallet")]
+    BondPartyMismatch,
+    #[msg("Completion bond has the wrong role for this disposition")]
+    BondRoleMismatch,
+    #[msg("A completion bond has already been posted for this party and task")]
+    BondAlreadyPosted,
+    #[msg("A required completion bond account was not provided")]
+    MissingCompletionBondAccount,
+    #[msg("Completion bonds are single-worker (Exclusive) only in v1")]
+    BondUnsupportedTaskType,
+    #[msg("Maximum revision rounds exceeded; escalate to reject")]
+    MaxRevisionRoundsExceeded,
+    #[msg("Task is not in the RejectFrozen state")]
+    TaskNotRejectFrozen,
+    #[msg("RejectFrozen review timeout has not elapsed")]
+    RejectFrozenTimeoutNotElapsed,
+    #[msg("Caller is not authorized to make this review decision")]
+    UnauthorizedReviewDecision,
+    #[msg("A frozen (rejected) task cannot be disputed")]
+    TaskFrozenCannotDispute,
 }

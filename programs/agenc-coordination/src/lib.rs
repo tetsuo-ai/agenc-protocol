@@ -1013,6 +1013,13 @@ pub mod agenc_coordination {
         instructions::close_task::handler(ctx)
     }
 
+    /// Post a symmetric 25% completion bond (Batch 3 §8). `role`: 0 = creator,
+    /// 1 = worker. SOL-only v1; single-worker (Exclusive) tasks only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn post_completion_bond(ctx: Context<PostCompletionBond>, role: u8) -> Result<()> {
+        instructions::post_completion_bond::handler(ctx, role)
+    }
+
     /// Rate a skill (1-5, reputation-weighted).
     /// One rating per agent per skill, enforced by PDA uniqueness.
     #[cfg(not(feature = "mainnet-canary"))]

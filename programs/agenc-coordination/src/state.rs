@@ -1705,6 +1705,48 @@ impl HireRecord {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 
+/// Symmetric 25/25 completion bond (spec §8). Both the creator and the worker post
+/// a bond equal to 25% of the reward into their own PDA; the loser of a dispute
+/// forfeits theirs, the winner is refunded, and a no-show worker's bond is forfeited
+/// to the creator on `expire_claim`. Kept in a DEDICATED PDA (never on `TaskClaim`,
+/// which closes to the worker on exit and would auto-refund a no-show).
+/// SOL-only in v1. PDA seeds: ["completion_bond", task, party] where `party` is the
+/// SIGNING WALLET (creator wallet / worker authority), so the two sides get distinct
+/// PDAs and one-bond-per-wallet-per-task is automatic.
+#[account]
+#[derive(Default, InitSpace)]
+pub struct CompletionBond {
+    /// Task this bond backs.
+    pub task: Pubkey,
+    /// Posting wallet (creator wallet for the creator bond, worker authority for the
+    /// worker bond). Also the seed component and the rent/refund recipient.
+    pub party: Pubkey,
+    /// 0 = creator bond, 1 = worker bond (see `ROLE_CREATOR` / `ROLE_WORKER`).
+    pub role: u8,
+    /// Bonded principal in lamports (held as excess lamports on this PDA).
+    pub amount: u64,
+    /// Bond denomination. `None` = SOL (v1); SPL deferred behind a feature flag.
+    pub bond_mint: Option<Pubkey>,
+    /// Post timestamp.
+    pub posted_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future bond metadata. MUST stay zeroed.
+    pub _reserved: [u8; 16],
+}
+
+impl CompletionBond {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+    pub const ROLE_CREATOR: u8 = 0;
+    pub const ROLE_WORKER: u8 = 1;
+    /// Bond rate: 25% of the reward (basis points), per the symmetric 25/25 design.
+    pub const BOND_BPS: u64 = 2500;
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 16]
+    }
+}
+
 /// On-chain moderation attestation for a service listing's pinned job-spec hash.
 ///
 /// The task-bound `TaskModeration` PDA (`["task_moderation", task, hash]`) cannot

@@ -505,6 +505,37 @@ pub struct TaskMigrated {
     pub timestamp: i64,
 }
 
+/// Emitted when a completion bond is posted (Batch 3 §8).
+#[event]
+pub struct BondPosted {
+    pub task: Pubkey,
+    pub party: Pubkey,
+    pub role: u8,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a completion bond is refunded to its poster.
+#[event]
+pub struct BondRefunded {
+    pub task: Pubkey,
+    pub party: Pubkey,
+    pub role: u8,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a completion bond's principal is forfeited (to the creator or treasury).
+#[event]
+pub struct BondForfeited {
+    pub task: Pubkey,
+    pub party: Pubkey,
+    pub role: u8,
+    pub amount: u64,
+    pub recipient: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when protocol version is updated
 #[event]
 pub struct ProtocolVersionUpdated {

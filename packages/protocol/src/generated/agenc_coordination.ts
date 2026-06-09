@@ -6461,6 +6461,107 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "postCompletionBond",
+      "docs": [
+        "Post a symmetric 25% completion bond (Batch 3 §8). `role`: 0 = creator,",
+        "1 = worker. SOL-only v1; single-worker (Exclusive) tasks only."
+      ],
+      "discriminator": [
+        119,
+        207,
+        253,
+        151,
+        32,
+        175,
+        35,
+        66
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "completionBond",
+          "docs": [
+            "The bond PDA, keyed by the SIGNING wallet so the two sides get distinct PDAs",
+            "and `init` makes one-bond-per-wallet-per-task automatic (a second post fails)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "postToFeed",
       "docs": [
         "Post to the agent feed.",
@@ -11038,6 +11139,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "completionBond",
+      "discriminator": [
+        77,
+        209,
+        12,
+        19,
+        44,
+        65,
+        93,
+        238
+      ]
+    },
+    {
       "name": "coordinationState",
       "discriminator": [
         11,
@@ -11625,6 +11739,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "bondForfeited",
+      "discriminator": [
+        141,
+        46,
+        102,
+        234,
+        31,
+        16,
+        129,
+        169
+      ]
+    },
+    {
       "name": "bondLocked",
       "discriminator": [
         89,
@@ -11635,6 +11762,32 @@ export type AgencCoordination = {
         105,
         232,
         59
+      ]
+    },
+    {
+      "name": "bondPosted",
+      "discriminator": [
+        39,
+        196,
+        2,
+        142,
+        202,
+        74,
+        107,
+        205
+      ]
+    },
+    {
+      "name": "bondRefunded",
+      "discriminator": [
+        52,
+        32,
+        75,
+        36,
+        37,
+        139,
+        123,
+        17
       ]
     },
     {
@@ -13767,6 +13920,61 @@ export type AgencCoordination = {
       "code": 6274,
       "name": "taskDiscriminatorMismatch",
       "msg": "Task account discriminator does not match the Task type"
+    },
+    {
+      "code": 6275,
+      "name": "bondTaskMismatch",
+      "msg": "Completion bond does not belong to this task"
+    },
+    {
+      "code": 6276,
+      "name": "bondPartyMismatch",
+      "msg": "Completion bond party does not match the expected wallet"
+    },
+    {
+      "code": 6277,
+      "name": "bondRoleMismatch",
+      "msg": "Completion bond has the wrong role for this disposition"
+    },
+    {
+      "code": 6278,
+      "name": "bondAlreadyPosted",
+      "msg": "A completion bond has already been posted for this party and task"
+    },
+    {
+      "code": 6279,
+      "name": "missingCompletionBondAccount",
+      "msg": "A required completion bond account was not provided"
+    },
+    {
+      "code": 6280,
+      "name": "bondUnsupportedTaskType",
+      "msg": "Completion bonds are single-worker (Exclusive) only in v1"
+    },
+    {
+      "code": 6281,
+      "name": "maxRevisionRoundsExceeded",
+      "msg": "Maximum revision rounds exceeded; escalate to reject"
+    },
+    {
+      "code": 6282,
+      "name": "taskNotRejectFrozen",
+      "msg": "Task is not in the RejectFrozen state"
+    },
+    {
+      "code": 6283,
+      "name": "rejectFrozenTimeoutNotElapsed",
+      "msg": "RejectFrozen review timeout has not elapsed"
+    },
+    {
+      "code": 6284,
+      "name": "unauthorizedReviewDecision",
+      "msg": "Caller is not authorized to make this review decision"
+    },
+    {
+      "code": 6285,
+      "name": "taskFrozenCannotDispute",
+      "msg": "A frozen (rejected) task cannot be disputed"
     }
   ],
   "types": [
@@ -14764,6 +14972,41 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "bondForfeited",
+      "docs": [
+        "Emitted when a completion bond's principal is forfeited (to the creator or treasury)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "party",
+            "type": "pubkey"
+          },
+          {
+            "name": "role",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "bondLocked",
       "docs": [
         "Emitted when bond is locked for a commitment"
@@ -14778,6 +15021,68 @@ export type AgencCoordination = {
           {
             "name": "commitment",
             "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bondPosted",
+      "docs": [
+        "Emitted when a completion bond is posted (Batch 3 §8)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "party",
+            "type": "pubkey"
+          },
+          {
+            "name": "role",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bondRefunded",
+      "docs": [
+        "Emitted when a completion bond is refunded to its poster."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "party",
+            "type": "pubkey"
+          },
+          {
+            "name": "role",
+            "type": "u8"
           },
           {
             "name": "amount",
@@ -14844,6 +15149,88 @@ export type AgencCoordination = {
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "completionBond",
+      "docs": [
+        "Symmetric 25/25 completion bond (spec §8). Both the creator and the worker post",
+        "a bond equal to 25% of the reward into their own PDA; the loser of a dispute",
+        "forfeits theirs, the winner is refunded, and a no-show worker's bond is forfeited",
+        "to the creator on `expire_claim`. Kept in a DEDICATED PDA (never on `TaskClaim`,",
+        "which closes to the worker on exit and would auto-refund a no-show).",
+        "SOL-only in v1. PDA seeds: [\"completion_bond\", task, party] where `party` is the",
+        "SIGNING WALLET (creator wallet / worker authority), so the two sides get distinct",
+        "PDAs and one-bond-per-wallet-per-task is automatic."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "Task this bond backs."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "party",
+            "docs": [
+              "Posting wallet (creator wallet for the creator bond, worker authority for the",
+              "worker bond). Also the seed component and the rent/refund recipient."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "role",
+            "docs": [
+              "0 = creator bond, 1 = worker bond (see `ROLE_CREATOR` / `ROLE_WORKER`)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Bonded principal in lamports (held as excess lamports on this PDA)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bondMint",
+            "docs": [
+              "Bond denomination. `None` = SOL (v1); SPL deferred behind a feature flag."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "postedAt",
+            "docs": [
+              "Post timestamp."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future bond metadata. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
           }
         ]
       }

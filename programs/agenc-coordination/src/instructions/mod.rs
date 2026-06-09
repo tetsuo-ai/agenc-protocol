@@ -78,6 +78,8 @@ pub mod create_task_humanless;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod close_task;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod post_completion_bond;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod delegate_reputation;
 pub mod deregister_agent;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -198,6 +200,8 @@ pub use create_task_humanless::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use close_task::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use post_completion_bond::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use delegate_reputation::*;

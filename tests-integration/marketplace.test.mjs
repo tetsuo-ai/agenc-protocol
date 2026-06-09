@@ -862,6 +862,43 @@ test("migrate_task: reallocs a legacy 382B Task to 432B (multisig-gated, dry-run
   assert.equal(w.svm.getAccount(task).data.length, 432, "still 432 after idempotent re-run");
 });
 
+test("completion bond: creator + worker each post a 25% bond into distinct PDAs (dup + self-deal rejected)", async () => {
+  const w = await freshWorld({ price: 2_000_000 });
+  const { ix, task } = await hireIx(w, {});
+  expectOk(send(w.svm, ix, [w.buyer]), "hire"); // Open Exclusive task, creator == buyer
+
+  const bondPda = (party) => pda([enc("completion_bond"), task.toBuffer(), party.toBuffer()])[0];
+  const post = async (signer, role) =>
+    send(w.svm, await makeProgram(signer).methods
+      .postCompletionBond(role)
+      .accounts({ task, completionBond: bondPda(signer.publicKey), authority: signer.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [signer]);
+
+  // creator bond (role 0) posted by the buyer (== task.creator)
+  expectOk(await post(w.buyer, 0), "creator posts 25% bond");
+  const cb = decode(w.svm, "CompletionBond", bondPda(w.buyer.publicKey));
+  assert.equal(cb.role, 0, "creator bond role");
+  assert.equal(cb.party.toBase58(), w.buyer.publicKey.toBase58(), "creator bond party == buyer");
+  assert.equal(Number(cb.amount), 500_000, "bond is 25% of the 2,000,000 reward");
+  assert.equal(cb.bond_mint, null, "SOL bond (no mint) in v1");
+
+  // worker bond (role 1) posted by the provider (a non-creator wallet)
+  expectOk(await post(w.provider, 1), "worker posts 25% bond");
+  assert.equal(decode(w.svm, "CompletionBond", bondPda(w.provider.publicKey)).role, 1, "worker bond role");
+
+  // dup: posting again on the same (task, party) PDA fails at init (account already
+  // exists — a tx-level create_account error, so assert failure without a log match).
+  assert.ok(
+    (await post(w.buyer, 0)) instanceof FailedTransactionMetadata,
+    "duplicate creator bond rejected by init",
+  );
+
+  // self-deal: a non-creator posting the CREATOR role is rejected.
+  const stranger = Keypair.generate();
+  w.svm.airdrop(stranger.publicKey, BigInt(10e9));
+  expectFail(await post(stranger, 0), "BondPartyMismatch", "non-creator cannot post the creator bond");
+});
+
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 5_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
