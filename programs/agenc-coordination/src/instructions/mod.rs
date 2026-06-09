@@ -119,6 +119,10 @@ pub mod register_agent;
 pub mod register_skill;
 pub mod reject_task_result;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod assign_dispute_resolver;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod revoke_dispute_resolver;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod resolve_dispute;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod revoke_delegation;
@@ -268,6 +272,12 @@ pub use register_agent::*;
 pub use register_skill::*;
 #[allow(ambiguous_glob_reexports)]
 pub use reject_task_result::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use assign_dispute_resolver::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use revoke_dispute_resolver::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use resolve_dispute::*;

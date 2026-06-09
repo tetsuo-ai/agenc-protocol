@@ -224,370 +224,372 @@ export const AGENC_COORDINATION_ERROR__INSUFFICIENT_VOTES = 0x17d6; // 6102
 export const AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED = 0x17d7; // 6103
 /** UnauthorizedResolver: Only protocol authority or dispute initiator can resolve disputes */
 export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER = 0x17d8; // 6104
+/** InvalidDisputeResolver: Invalid dispute resolver: pubkey must be non-zero */
+export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER = 0x17d9; // 6105
 /** ActiveDisputeVotes: Agent has active dispute votes pending resolution */
-export const AGENC_COORDINATION_ERROR__ACTIVE_DISPUTE_VOTES = 0x17d9; // 6105
+export const AGENC_COORDINATION_ERROR__ACTIVE_DISPUTE_VOTES = 0x17da; // 6106
 /** RecentVoteActivity: Agent must wait 24 hours after voting before deregistering */
-export const AGENC_COORDINATION_ERROR__RECENT_VOTE_ACTIVITY = 0x17da; // 6106
+export const AGENC_COORDINATION_ERROR__RECENT_VOTE_ACTIVITY = 0x17db; // 6107
 /** AuthorityAlreadyVoted: Authority has already voted on this dispute */
-export const AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED = 0x17db; // 6107
+export const AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED = 0x17dc; // 6108
 /** InsufficientEvidence: Insufficient dispute evidence provided */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_EVIDENCE = 0x17dc; // 6108
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_EVIDENCE = 0x17dd; // 6109
 /** EvidenceTooLong: Dispute evidence exceeds maximum allowed length */
-export const AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG = 0x17dd; // 6109
+export const AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG = 0x17de; // 6110
 /** DisputeNotExpired: Dispute has not expired */
-export const AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED = 0x17de; // 6110
+export const AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED = 0x17df; // 6111
 /** SlashAlreadyApplied: Dispute slashing already applied */
-export const AGENC_COORDINATION_ERROR__SLASH_ALREADY_APPLIED = 0x17df; // 6111
+export const AGENC_COORDINATION_ERROR__SLASH_ALREADY_APPLIED = 0x17e0; // 6112
 /** SlashWindowExpired: Slash window expired: must apply slashing within 7 days of resolution */
-export const AGENC_COORDINATION_ERROR__SLASH_WINDOW_EXPIRED = 0x17e0; // 6112
+export const AGENC_COORDINATION_ERROR__SLASH_WINDOW_EXPIRED = 0x17e1; // 6113
 /** DisputeNotResolved: Dispute has not been resolved */
-export const AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED = 0x17e1; // 6113
+export const AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED = 0x17e2; // 6114
 /** NotTaskParticipant: Only task creator or workers can initiate disputes */
-export const AGENC_COORDINATION_ERROR__NOT_TASK_PARTICIPANT = 0x17e2; // 6114
+export const AGENC_COORDINATION_ERROR__NOT_TASK_PARTICIPANT = 0x17e3; // 6115
 /** InvalidEvidenceHash: Invalid evidence hash: cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH = 0x17e3; // 6115
+export const AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH = 0x17e4; // 6116
 /** ArbiterIsDisputeParticipant: Arbiter cannot vote on disputes they are a participant in */
-export const AGENC_COORDINATION_ERROR__ARBITER_IS_DISPUTE_PARTICIPANT = 0x17e4; // 6116
+export const AGENC_COORDINATION_ERROR__ARBITER_IS_DISPUTE_PARTICIPANT = 0x17e5; // 6117
 /** InsufficientQuorum: Insufficient quorum: minimum number of voters not reached */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_QUORUM = 0x17e5; // 6117
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_QUORUM = 0x17e6; // 6118
 /** ActiveDisputesExist: Agent has active disputes as defendant and cannot deregister */
-export const AGENC_COORDINATION_ERROR__ACTIVE_DISPUTES_EXIST = 0x17e6; // 6118
+export const AGENC_COORDINATION_ERROR__ACTIVE_DISPUTES_EXIST = 0x17e7; // 6119
 /** TooManyDisputeVoters: Dispute has reached maximum voter capacity */
-export const AGENC_COORDINATION_ERROR__TOO_MANY_DISPUTE_VOTERS = 0x17e7; // 6119
+export const AGENC_COORDINATION_ERROR__TOO_MANY_DISPUTE_VOTERS = 0x17e8; // 6120
 /** WorkerAgentRequired: Worker agent account required when creator initiates dispute */
-export const AGENC_COORDINATION_ERROR__WORKER_AGENT_REQUIRED = 0x17e8; // 6120
+export const AGENC_COORDINATION_ERROR__WORKER_AGENT_REQUIRED = 0x17e9; // 6121
 /** WorkerClaimRequired: Worker claim account required when creator initiates dispute */
-export const AGENC_COORDINATION_ERROR__WORKER_CLAIM_REQUIRED = 0x17e9; // 6121
+export const AGENC_COORDINATION_ERROR__WORKER_CLAIM_REQUIRED = 0x17ea; // 6122
 /** WorkerNotInDispute: Worker was not involved in this dispute */
-export const AGENC_COORDINATION_ERROR__WORKER_NOT_IN_DISPUTE = 0x17ea; // 6122
+export const AGENC_COORDINATION_ERROR__WORKER_NOT_IN_DISPUTE = 0x17eb; // 6123
 /** InitiatorCannotResolve: Dispute initiator cannot resolve their own dispute */
-export const AGENC_COORDINATION_ERROR__INITIATOR_CANNOT_RESOLVE = 0x17eb; // 6123
+export const AGENC_COORDINATION_ERROR__INITIATOR_CANNOT_RESOLVE = 0x17ec; // 6124
 /** VersionMismatch: State version mismatch (concurrent modification) */
-export const AGENC_COORDINATION_ERROR__VERSION_MISMATCH = 0x17ec; // 6124
+export const AGENC_COORDINATION_ERROR__VERSION_MISMATCH = 0x17ed; // 6125
 /** StateKeyExists: State key already exists */
-export const AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS = 0x17ed; // 6125
+export const AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS = 0x17ee; // 6126
 /** StateNotFound: State not found */
-export const AGENC_COORDINATION_ERROR__STATE_NOT_FOUND = 0x17ee; // 6126
+export const AGENC_COORDINATION_ERROR__STATE_NOT_FOUND = 0x17ef; // 6127
 /** InvalidStateValue: Invalid state value: state_value cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE = 0x17ef; // 6127
+export const AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE = 0x17f0; // 6128
 /** StateOwnershipViolation: State ownership violation: only the creator agent can update this state */
-export const AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION = 0x17f0; // 6128
+export const AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION = 0x17f1; // 6129
 /** InvalidStateKey: Invalid state key: state_key cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__INVALID_STATE_KEY = 0x17f1; // 6129
+export const AGENC_COORDINATION_ERROR__INVALID_STATE_KEY = 0x17f2; // 6130
 /** ProtocolAlreadyInitialized: Protocol is already initialized */
-export const AGENC_COORDINATION_ERROR__PROTOCOL_ALREADY_INITIALIZED = 0x17f2; // 6130
+export const AGENC_COORDINATION_ERROR__PROTOCOL_ALREADY_INITIALIZED = 0x17f3; // 6131
 /** ProtocolNotInitialized: Protocol is not initialized */
-export const AGENC_COORDINATION_ERROR__PROTOCOL_NOT_INITIALIZED = 0x17f3; // 6131
+export const AGENC_COORDINATION_ERROR__PROTOCOL_NOT_INITIALIZED = 0x17f4; // 6132
 /** InvalidProtocolFee: Invalid protocol fee (must be <= 1000 bps) */
-export const AGENC_COORDINATION_ERROR__INVALID_PROTOCOL_FEE = 0x17f4; // 6132
+export const AGENC_COORDINATION_ERROR__INVALID_PROTOCOL_FEE = 0x17f5; // 6133
 /** InvalidTreasury: Invalid treasury: treasury account cannot be default pubkey */
-export const AGENC_COORDINATION_ERROR__INVALID_TREASURY = 0x17f5; // 6133
+export const AGENC_COORDINATION_ERROR__INVALID_TREASURY = 0x17f6; // 6134
 /** InvalidDisputeThreshold: Invalid dispute threshold: must be 1-100 (percentage of votes required) */
-export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD = 0x17f6; // 6134
+export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD = 0x17f7; // 6135
 /** InsufficientStake: Insufficient stake for arbiter registration */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE = 0x17f7; // 6135
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE = 0x17f8; // 6136
 /** MultisigInvalidThreshold: Invalid multisig threshold */
-export const AGENC_COORDINATION_ERROR__MULTISIG_INVALID_THRESHOLD = 0x17f8; // 6136
+export const AGENC_COORDINATION_ERROR__MULTISIG_INVALID_THRESHOLD = 0x17f9; // 6137
 /** MultisigInvalidSigners: Invalid multisig signer configuration */
-export const AGENC_COORDINATION_ERROR__MULTISIG_INVALID_SIGNERS = 0x17f9; // 6137
+export const AGENC_COORDINATION_ERROR__MULTISIG_INVALID_SIGNERS = 0x17fa; // 6138
 /** MultisigNotEnoughSigners: Not enough multisig signers */
-export const AGENC_COORDINATION_ERROR__MULTISIG_NOT_ENOUGH_SIGNERS = 0x17fa; // 6138
+export const AGENC_COORDINATION_ERROR__MULTISIG_NOT_ENOUGH_SIGNERS = 0x17fb; // 6139
 /** MultisigDuplicateSigner: Duplicate multisig signer provided */
-export const AGENC_COORDINATION_ERROR__MULTISIG_DUPLICATE_SIGNER = 0x17fb; // 6139
+export const AGENC_COORDINATION_ERROR__MULTISIG_DUPLICATE_SIGNER = 0x17fc; // 6140
 /** MultisigDefaultSigner: Multisig signer cannot be default pubkey */
-export const AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER = 0x17fc; // 6140
+export const AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER = 0x17fd; // 6141
 /** MultisigSignerNotSystemOwned: Multisig signer account not owned by System Program */
-export const AGENC_COORDINATION_ERROR__MULTISIG_SIGNER_NOT_SYSTEM_OWNED = 0x17fd; // 6141
+export const AGENC_COORDINATION_ERROR__MULTISIG_SIGNER_NOT_SYSTEM_OWNED = 0x17fe; // 6142
 /** InvalidInput: Invalid input parameter */
-export const AGENC_COORDINATION_ERROR__INVALID_INPUT = 0x17fe; // 6142
+export const AGENC_COORDINATION_ERROR__INVALID_INPUT = 0x17ff; // 6143
 /** ArithmeticOverflow: Arithmetic overflow */
-export const AGENC_COORDINATION_ERROR__ARITHMETIC_OVERFLOW = 0x17ff; // 6143
+export const AGENC_COORDINATION_ERROR__ARITHMETIC_OVERFLOW = 0x1800; // 6144
 /** VoteOverflow: Vote count overflow */
-export const AGENC_COORDINATION_ERROR__VOTE_OVERFLOW = 0x1800; // 6144
+export const AGENC_COORDINATION_ERROR__VOTE_OVERFLOW = 0x1801; // 6145
 /** InsufficientFunds: Insufficient funds */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_FUNDS = 0x1801; // 6145
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_FUNDS = 0x1802; // 6146
 /** RewardTooSmall: Reward too small: worker must receive at least 1 lamport */
-export const AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL = 0x1802; // 6146
+export const AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL = 0x1803; // 6147
 /** CorruptedData: Account data is corrupted */
-export const AGENC_COORDINATION_ERROR__CORRUPTED_DATA = 0x1803; // 6147
+export const AGENC_COORDINATION_ERROR__CORRUPTED_DATA = 0x1804; // 6148
 /** StringTooLong: String too long */
-export const AGENC_COORDINATION_ERROR__STRING_TOO_LONG = 0x1804; // 6148
+export const AGENC_COORDINATION_ERROR__STRING_TOO_LONG = 0x1805; // 6149
 /** InvalidAccountOwner: Account owner validation failed: account not owned by this program */
-export const AGENC_COORDINATION_ERROR__INVALID_ACCOUNT_OWNER = 0x1805; // 6149
+export const AGENC_COORDINATION_ERROR__INVALID_ACCOUNT_OWNER = 0x1806; // 6150
 /** RateLimitExceeded: Rate limit exceeded: maximum actions per 24h window reached */
-export const AGENC_COORDINATION_ERROR__RATE_LIMIT_EXCEEDED = 0x1806; // 6150
+export const AGENC_COORDINATION_ERROR__RATE_LIMIT_EXCEEDED = 0x1807; // 6151
 /** CooldownNotElapsed: Cooldown period has not elapsed since last action */
-export const AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED = 0x1807; // 6151
+export const AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED = 0x1808; // 6152
 /** UpdateTooFrequent: Agent update too frequent: must wait cooldown period */
-export const AGENC_COORDINATION_ERROR__UPDATE_TOO_FREQUENT = 0x1808; // 6152
+export const AGENC_COORDINATION_ERROR__UPDATE_TOO_FREQUENT = 0x1809; // 6153
 /** InvalidCooldown: Cooldown value cannot be negative */
-export const AGENC_COORDINATION_ERROR__INVALID_COOLDOWN = 0x1809; // 6153
+export const AGENC_COORDINATION_ERROR__INVALID_COOLDOWN = 0x180a; // 6154
 /** CooldownTooLarge: Cooldown value exceeds maximum (24 hours) */
-export const AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE = 0x180a; // 6154
+export const AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE = 0x180b; // 6155
 /** RateLimitTooHigh: Rate limit value exceeds maximum allowed (1000) */
-export const AGENC_COORDINATION_ERROR__RATE_LIMIT_TOO_HIGH = 0x180b; // 6155
+export const AGENC_COORDINATION_ERROR__RATE_LIMIT_TOO_HIGH = 0x180c; // 6156
 /** CooldownTooLong: Cooldown value exceeds maximum allowed (1 week) */
-export const AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG = 0x180c; // 6156
+export const AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG = 0x180d; // 6157
 /** InsufficientStakeForDispute: Insufficient stake to initiate dispute */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE_FOR_DISPUTE = 0x180d; // 6157
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE_FOR_DISPUTE = 0x180e; // 6158
 /** InsufficientStakeForCreatorDispute: Creator-initiated disputes require 2x the minimum stake */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE_FOR_CREATOR_DISPUTE = 0x180e; // 6158
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE_FOR_CREATOR_DISPUTE = 0x180f; // 6159
 /** VersionMismatchProtocol: Protocol version mismatch: account version incompatible with current program */
-export const AGENC_COORDINATION_ERROR__VERSION_MISMATCH_PROTOCOL = 0x180f; // 6159
+export const AGENC_COORDINATION_ERROR__VERSION_MISMATCH_PROTOCOL = 0x1810; // 6160
 /** AccountVersionTooOld: Account version too old: migration required */
-export const AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_OLD = 0x1810; // 6160
+export const AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_OLD = 0x1811; // 6161
 /** AccountVersionTooNew: Account version too new: program upgrade required */
-export const AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW = 0x1811; // 6161
+export const AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW = 0x1812; // 6162
 /** InvalidMigrationSource: Migration not allowed: invalid source version */
-export const AGENC_COORDINATION_ERROR__INVALID_MIGRATION_SOURCE = 0x1812; // 6162
+export const AGENC_COORDINATION_ERROR__INVALID_MIGRATION_SOURCE = 0x1813; // 6163
 /** InvalidMigrationTarget: Migration not allowed: invalid target version */
-export const AGENC_COORDINATION_ERROR__INVALID_MIGRATION_TARGET = 0x1813; // 6163
+export const AGENC_COORDINATION_ERROR__INVALID_MIGRATION_TARGET = 0x1814; // 6164
 /** UnauthorizedUpgrade: Only upgrade authority can perform this action */
-export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_UPGRADE = 0x1814; // 6164
+export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_UPGRADE = 0x1815; // 6165
 /** UnauthorizedProtocolAuthority: Only protocol authority can perform this action */
-export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY = 0x1815; // 6165
+export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY = 0x1816; // 6166
 /** InvalidMinVersion: Minimum version cannot exceed current protocol version */
-export const AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION = 0x1816; // 6166
+export const AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION = 0x1817; // 6167
 /** ProtocolConfigRequired: Protocol config account required: suspending an agent requires the protocol config PDA in remaining_accounts */
-export const AGENC_COORDINATION_ERROR__PROTOCOL_CONFIG_REQUIRED = 0x1817; // 6167
+export const AGENC_COORDINATION_ERROR__PROTOCOL_CONFIG_REQUIRED = 0x1818; // 6168
 /** ParentTaskCancelled: Parent task has been cancelled */
-export const AGENC_COORDINATION_ERROR__PARENT_TASK_CANCELLED = 0x1818; // 6168
+export const AGENC_COORDINATION_ERROR__PARENT_TASK_CANCELLED = 0x1819; // 6169
 /** ParentTaskDisputed: Parent task is in disputed state */
-export const AGENC_COORDINATION_ERROR__PARENT_TASK_DISPUTED = 0x1819; // 6169
+export const AGENC_COORDINATION_ERROR__PARENT_TASK_DISPUTED = 0x181a; // 6170
 /** InvalidDependencyType: Invalid dependency type */
-export const AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE = 0x181a; // 6170
+export const AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE = 0x181b; // 6171
 /** ParentTaskNotCompleted: Parent task must be completed before completing a proof-dependent task */
-export const AGENC_COORDINATION_ERROR__PARENT_TASK_NOT_COMPLETED = 0x181b; // 6171
+export const AGENC_COORDINATION_ERROR__PARENT_TASK_NOT_COMPLETED = 0x181c; // 6172
 /** ParentTaskAccountRequired: Parent task account required for proof-dependent task completion */
-export const AGENC_COORDINATION_ERROR__PARENT_TASK_ACCOUNT_REQUIRED = 0x181c; // 6172
+export const AGENC_COORDINATION_ERROR__PARENT_TASK_ACCOUNT_REQUIRED = 0x181d; // 6173
 /** UnauthorizedCreator: Parent task does not belong to the same creator */
-export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_CREATOR = 0x181d; // 6173
+export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_CREATOR = 0x181e; // 6174
 /** NullifierAlreadySpent: Nullifier has already been spent - proof/knowledge reuse detected */
-export const AGENC_COORDINATION_ERROR__NULLIFIER_ALREADY_SPENT = 0x181e; // 6174
+export const AGENC_COORDINATION_ERROR__NULLIFIER_ALREADY_SPENT = 0x181f; // 6175
 /** InvalidNullifier: Invalid nullifier: nullifier value cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__INVALID_NULLIFIER = 0x181f; // 6175
+export const AGENC_COORDINATION_ERROR__INVALID_NULLIFIER = 0x1820; // 6176
 /** IncompleteWorkerAccounts: All worker accounts must be provided when cancelling a task with active claims */
-export const AGENC_COORDINATION_ERROR__INCOMPLETE_WORKER_ACCOUNTS = 0x1820; // 6176
+export const AGENC_COORDINATION_ERROR__INCOMPLETE_WORKER_ACCOUNTS = 0x1821; // 6177
 /** WorkerAccountsRequired: Worker accounts required when task has active workers */
-export const AGENC_COORDINATION_ERROR__WORKER_ACCOUNTS_REQUIRED = 0x1821; // 6177
+export const AGENC_COORDINATION_ERROR__WORKER_ACCOUNTS_REQUIRED = 0x1822; // 6178
 /** DuplicateArbiter: Duplicate arbiter provided in remaining_accounts */
-export const AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER = 0x1822; // 6178
+export const AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER = 0x1823; // 6179
 /** InsufficientEscrowBalance: Escrow has insufficient balance for reward transfer */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_ESCROW_BALANCE = 0x1823; // 6179
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_ESCROW_BALANCE = 0x1824; // 6180
 /** InvalidStatusTransition: Invalid task status transition */
-export const AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION = 0x1824; // 6180
+export const AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION = 0x1825; // 6181
 /** StakeTooLow: Stake value is below minimum required (0.001 SOL) */
-export const AGENC_COORDINATION_ERROR__STAKE_TOO_LOW = 0x1825; // 6181
+export const AGENC_COORDINATION_ERROR__STAKE_TOO_LOW = 0x1826; // 6182
 /** InvalidMinStake: min_stake_for_dispute must be greater than zero */
-export const AGENC_COORDINATION_ERROR__INVALID_MIN_STAKE = 0x1826; // 6182
+export const AGENC_COORDINATION_ERROR__INVALID_MIN_STAKE = 0x1827; // 6183
 /** InvalidSlashAmount: Slash amount must be greater than zero */
-export const AGENC_COORDINATION_ERROR__INVALID_SLASH_AMOUNT = 0x1827; // 6183
+export const AGENC_COORDINATION_ERROR__INVALID_SLASH_AMOUNT = 0x1828; // 6184
 /** BondAmountTooLow: Bond amount too low */
-export const AGENC_COORDINATION_ERROR__BOND_AMOUNT_TOO_LOW = 0x1828; // 6184
+export const AGENC_COORDINATION_ERROR__BOND_AMOUNT_TOO_LOW = 0x1829; // 6185
 /** BondAlreadyExists: Bond already exists */
-export const AGENC_COORDINATION_ERROR__BOND_ALREADY_EXISTS = 0x1829; // 6185
+export const AGENC_COORDINATION_ERROR__BOND_ALREADY_EXISTS = 0x182a; // 6186
 /** BondNotFound: Bond not found */
-export const AGENC_COORDINATION_ERROR__BOND_NOT_FOUND = 0x182a; // 6186
+export const AGENC_COORDINATION_ERROR__BOND_NOT_FOUND = 0x182b; // 6187
 /** BondNotMatured: Bond not yet matured */
-export const AGENC_COORDINATION_ERROR__BOND_NOT_MATURED = 0x182b; // 6187
+export const AGENC_COORDINATION_ERROR__BOND_NOT_MATURED = 0x182c; // 6188
 /** InsufficientReputation: Agent reputation below task minimum requirement */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_REPUTATION = 0x182c; // 6188
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_REPUTATION = 0x182d; // 6189
 /** InvalidMinReputation: Invalid minimum reputation: must be <= 10000 */
-export const AGENC_COORDINATION_ERROR__INVALID_MIN_REPUTATION = 0x182d; // 6189
+export const AGENC_COORDINATION_ERROR__INVALID_MIN_REPUTATION = 0x182e; // 6190
 /** DevelopmentKeyNotAllowed: Development verifying key detected (gamma == delta). ZK proofs are forgeable. Run MPC ceremony before use. */
-export const AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED = 0x182e; // 6190
+export const AGENC_COORDINATION_ERROR__DEVELOPMENT_KEY_NOT_ALLOWED = 0x182f; // 6191
 /** SelfTaskNotAllowed: Cannot claim own task: worker authority matches task creator */
-export const AGENC_COORDINATION_ERROR__SELF_TASK_NOT_ALLOWED = 0x182f; // 6191
+export const AGENC_COORDINATION_ERROR__SELF_TASK_NOT_ALLOWED = 0x1830; // 6192
 /** MissingTokenAccounts: Token accounts not provided for token-denominated task */
-export const AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS = 0x1830; // 6192
+export const AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS = 0x1831; // 6193
 /** InvalidTokenEscrow: Token escrow ATA does not match expected derivation */
-export const AGENC_COORDINATION_ERROR__INVALID_TOKEN_ESCROW = 0x1831; // 6193
+export const AGENC_COORDINATION_ERROR__INVALID_TOKEN_ESCROW = 0x1832; // 6194
 /** InvalidTokenMint: Provided mint does not match task's reward_mint */
-export const AGENC_COORDINATION_ERROR__INVALID_TOKEN_MINT = 0x1832; // 6194
+export const AGENC_COORDINATION_ERROR__INVALID_TOKEN_MINT = 0x1833; // 6195
 /** TokenTransferFailed: SPL token transfer CPI failed */
-export const AGENC_COORDINATION_ERROR__TOKEN_TRANSFER_FAILED = 0x1833; // 6195
+export const AGENC_COORDINATION_ERROR__TOKEN_TRANSFER_FAILED = 0x1834; // 6196
 /** ProposalNotActive: Proposal is not active */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_NOT_ACTIVE = 0x1834; // 6196
+export const AGENC_COORDINATION_ERROR__PROPOSAL_NOT_ACTIVE = 0x1835; // 6197
 /** ProposalVotingNotEnded: Voting period has not ended */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_VOTING_NOT_ENDED = 0x1835; // 6197
+export const AGENC_COORDINATION_ERROR__PROPOSAL_VOTING_NOT_ENDED = 0x1836; // 6198
 /** ProposalVotingEnded: Voting period has ended */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_VOTING_ENDED = 0x1836; // 6198
+export const AGENC_COORDINATION_ERROR__PROPOSAL_VOTING_ENDED = 0x1837; // 6199
 /** ProposalAlreadyExecuted: Proposal has already been executed */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_ALREADY_EXECUTED = 0x1837; // 6199
+export const AGENC_COORDINATION_ERROR__PROPOSAL_ALREADY_EXECUTED = 0x1838; // 6200
 /** ProposalInsufficientQuorum: Insufficient quorum for proposal execution */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_INSUFFICIENT_QUORUM = 0x1838; // 6200
+export const AGENC_COORDINATION_ERROR__PROPOSAL_INSUFFICIENT_QUORUM = 0x1839; // 6201
 /** ProposalNotApproved: Proposal did not achieve majority */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_NOT_APPROVED = 0x1839; // 6201
+export const AGENC_COORDINATION_ERROR__PROPOSAL_NOT_APPROVED = 0x183a; // 6202
 /** ProposalUnauthorizedCancel: Only the proposer can cancel this proposal */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_UNAUTHORIZED_CANCEL = 0x183a; // 6202
+export const AGENC_COORDINATION_ERROR__PROPOSAL_UNAUTHORIZED_CANCEL = 0x183b; // 6203
 /** ProposalInsufficientStake: Insufficient stake to create a proposal */
-export const AGENC_COORDINATION_ERROR__PROPOSAL_INSUFFICIENT_STAKE = 0x183b; // 6203
+export const AGENC_COORDINATION_ERROR__PROPOSAL_INSUFFICIENT_STAKE = 0x183c; // 6204
 /** InvalidProposalPayload: Invalid proposal payload */
-export const AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_PAYLOAD = 0x183c; // 6204
+export const AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_PAYLOAD = 0x183d; // 6205
 /** InvalidProposalType: Invalid proposal type */
-export const AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_TYPE = 0x183d; // 6205
+export const AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_TYPE = 0x183e; // 6206
 /** TreasuryInsufficientBalance: Treasury spend amount exceeds available balance */
-export const AGENC_COORDINATION_ERROR__TREASURY_INSUFFICIENT_BALANCE = 0x183e; // 6206
+export const AGENC_COORDINATION_ERROR__TREASURY_INSUFFICIENT_BALANCE = 0x183f; // 6207
 /** TimelockNotElapsed: Execution timelock has not elapsed */
-export const AGENC_COORDINATION_ERROR__TIMELOCK_NOT_ELAPSED = 0x183f; // 6207
+export const AGENC_COORDINATION_ERROR__TIMELOCK_NOT_ELAPSED = 0x1840; // 6208
 /** InvalidGovernanceParam: Invalid governance configuration parameter */
-export const AGENC_COORDINATION_ERROR__INVALID_GOVERNANCE_PARAM = 0x1840; // 6208
+export const AGENC_COORDINATION_ERROR__INVALID_GOVERNANCE_PARAM = 0x1841; // 6209
 /** TreasuryNotProgramOwned: Treasury must be a program-owned PDA */
-export const AGENC_COORDINATION_ERROR__TREASURY_NOT_PROGRAM_OWNED = 0x1841; // 6209
+export const AGENC_COORDINATION_ERROR__TREASURY_NOT_PROGRAM_OWNED = 0x1842; // 6210
 /** TreasuryNotSpendable: Treasury must be program-owned, or a signer system account for governance spends */
-export const AGENC_COORDINATION_ERROR__TREASURY_NOT_SPENDABLE = 0x1842; // 6210
+export const AGENC_COORDINATION_ERROR__TREASURY_NOT_SPENDABLE = 0x1843; // 6211
 /** SkillInvalidId: Skill ID cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__SKILL_INVALID_ID = 0x1843; // 6211
+export const AGENC_COORDINATION_ERROR__SKILL_INVALID_ID = 0x1844; // 6212
 /** SkillInvalidName: Skill name cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__SKILL_INVALID_NAME = 0x1844; // 6212
+export const AGENC_COORDINATION_ERROR__SKILL_INVALID_NAME = 0x1845; // 6213
 /** SkillInvalidContentHash: Skill content hash cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__SKILL_INVALID_CONTENT_HASH = 0x1845; // 6213
+export const AGENC_COORDINATION_ERROR__SKILL_INVALID_CONTENT_HASH = 0x1846; // 6214
 /** SkillNotActive: Skill is not active */
-export const AGENC_COORDINATION_ERROR__SKILL_NOT_ACTIVE = 0x1846; // 6214
+export const AGENC_COORDINATION_ERROR__SKILL_NOT_ACTIVE = 0x1847; // 6215
 /** SkillInvalidRating: Rating must be between 1 and 5 */
-export const AGENC_COORDINATION_ERROR__SKILL_INVALID_RATING = 0x1847; // 6215
+export const AGENC_COORDINATION_ERROR__SKILL_INVALID_RATING = 0x1848; // 6216
 /** SkillSelfRating: Cannot rate own skill */
-export const AGENC_COORDINATION_ERROR__SKILL_SELF_RATING = 0x1848; // 6216
+export const AGENC_COORDINATION_ERROR__SKILL_SELF_RATING = 0x1849; // 6217
 /** SkillUnauthorizedUpdate: Only the skill author can update this skill */
-export const AGENC_COORDINATION_ERROR__SKILL_UNAUTHORIZED_UPDATE = 0x1849; // 6217
+export const AGENC_COORDINATION_ERROR__SKILL_UNAUTHORIZED_UPDATE = 0x184a; // 6218
 /** SkillSelfPurchase: Cannot purchase own skill */
-export const AGENC_COORDINATION_ERROR__SKILL_SELF_PURCHASE = 0x184a; // 6218
+export const AGENC_COORDINATION_ERROR__SKILL_SELF_PURCHASE = 0x184b; // 6219
 /** FeedInvalidContentHash: Feed content hash cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH = 0x184b; // 6219
+export const AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH = 0x184c; // 6220
 /** FeedInvalidTopic: Feed topic cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__FEED_INVALID_TOPIC = 0x184c; // 6220
+export const AGENC_COORDINATION_ERROR__FEED_INVALID_TOPIC = 0x184d; // 6221
 /** FeedPostNotFound: Feed post not found */
-export const AGENC_COORDINATION_ERROR__FEED_POST_NOT_FOUND = 0x184d; // 6221
+export const AGENC_COORDINATION_ERROR__FEED_POST_NOT_FOUND = 0x184e; // 6222
 /** FeedSelfUpvote: Cannot upvote own post */
-export const AGENC_COORDINATION_ERROR__FEED_SELF_UPVOTE = 0x184e; // 6222
+export const AGENC_COORDINATION_ERROR__FEED_SELF_UPVOTE = 0x184f; // 6223
 /** ReputationStakeAmountTooLow: Reputation stake amount must be greater than zero */
-export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW = 0x184f; // 6223
+export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW = 0x1850; // 6224
 /** ReputationStakeLocked: Reputation stake is locked: withdrawal before cooldown */
-export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_LOCKED = 0x1850; // 6224
+export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_LOCKED = 0x1851; // 6225
 /** ReputationStakeInsufficientBalance: Reputation stake has insufficient balance for withdrawal */
-export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE = 0x1851; // 6225
+export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE = 0x1852; // 6226
 /** ReputationDelegationAmountInvalid: Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT */
-export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID = 0x1852; // 6226
+export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID = 0x1853; // 6227
 /** ReputationCannotDelegateSelf: Cannot delegate reputation to self */
-export const AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF = 0x1853; // 6227
+export const AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF = 0x1854; // 6228
 /** ReputationDelegationExpired: Reputation delegation has expired */
-export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED = 0x1854; // 6228
+export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED = 0x1855; // 6229
 /** ReputationAgentNotActive: Agent must be Active to participate in reputation economy */
-export const AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE = 0x1855; // 6229
+export const AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE = 0x1856; // 6230
 /** ReputationDisputesPending: Agent has pending disputes as defendant: cannot withdraw stake */
-export const AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING = 0x1856; // 6230
+export const AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING = 0x1857; // 6231
 /** PrivateTaskRequiresZkProof: Private tasks (non-zero constraint_hash) must use complete_task_private */
-export const AGENC_COORDINATION_ERROR__PRIVATE_TASK_REQUIRES_ZK_PROOF = 0x1857; // 6231
+export const AGENC_COORDINATION_ERROR__PRIVATE_TASK_REQUIRES_ZK_PROOF = 0x1858; // 6232
 /** InvalidTokenAccountOwner: Token account owner does not match expected authority */
-export const AGENC_COORDINATION_ERROR__INVALID_TOKEN_ACCOUNT_OWNER = 0x1858; // 6232
+export const AGENC_COORDINATION_ERROR__INVALID_TOKEN_ACCOUNT_OWNER = 0x1859; // 6233
 /** InsufficientSeedEntropy: Binding or nullifier seed has insufficient byte diversity (min 8 distinct bytes required) */
-export const AGENC_COORDINATION_ERROR__INSUFFICIENT_SEED_ENTROPY = 0x1859; // 6233
+export const AGENC_COORDINATION_ERROR__INSUFFICIENT_SEED_ENTROPY = 0x185a; // 6234
 /** SkillPriceBelowMinimum: Skill price below minimum required */
-export const AGENC_COORDINATION_ERROR__SKILL_PRICE_BELOW_MINIMUM = 0x185a; // 6234
+export const AGENC_COORDINATION_ERROR__SKILL_PRICE_BELOW_MINIMUM = 0x185b; // 6235
 /** SkillPriceChanged: Skill price changed since transaction was prepared */
-export const AGENC_COORDINATION_ERROR__SKILL_PRICE_CHANGED = 0x185b; // 6235
+export const AGENC_COORDINATION_ERROR__SKILL_PRICE_CHANGED = 0x185c; // 6236
 /** DelegationCooldownNotElapsed: Delegation must be active for minimum duration before revocation */
-export const AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED = 0x185c; // 6236
+export const AGENC_COORDINATION_ERROR__DELEGATION_COOLDOWN_NOT_ELAPSED = 0x185d; // 6237
 /** RateLimitBelowMinimum: Rate limit value below protocol minimum */
-export const AGENC_COORDINATION_ERROR__RATE_LIMIT_BELOW_MINIMUM = 0x185d; // 6237
+export const AGENC_COORDINATION_ERROR__RATE_LIMIT_BELOW_MINIMUM = 0x185e; // 6238
 /** InvalidTaskJobSpecHash: Invalid task job specification hash */
-export const AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH = 0x185e; // 6238
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH = 0x185f; // 6239
 /** InvalidTaskJobSpecUri: Invalid task job specification URI */
-export const AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_URI = 0x185f; // 6239
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_URI = 0x1860; // 6240
 /** TaskJobSpecTaskMismatch: Task job specification account does not belong to this task */
-export const AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_TASK_MISMATCH = 0x1860; // 6240
+export const AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_TASK_MISMATCH = 0x1861; // 6241
 /** ProtocolPaused: Protocol is paused by multisig launch controls */
-export const AGENC_COORDINATION_ERROR__PROTOCOL_PAUSED = 0x1861; // 6241
+export const AGENC_COORDINATION_ERROR__PROTOCOL_PAUSED = 0x1862; // 6242
 /** TaskTypeDisabled: Task type is disabled by multisig launch controls */
-export const AGENC_COORDINATION_ERROR__TASK_TYPE_DISABLED = 0x1862; // 6242
+export const AGENC_COORDINATION_ERROR__TASK_TYPE_DISABLED = 0x1863; // 6243
 /** TaskModerationRequired: Task moderation is not configured or enabled */
-export const AGENC_COORDINATION_ERROR__TASK_MODERATION_REQUIRED = 0x1863; // 6243
+export const AGENC_COORDINATION_ERROR__TASK_MODERATION_REQUIRED = 0x1864; // 6244
 /** InvalidTaskModerationAuthority: Invalid task moderation authority */
-export const AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_AUTHORITY = 0x1864; // 6244
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_AUTHORITY = 0x1865; // 6245
 /** UnauthorizedTaskModerator: Only the configured moderation authority can record moderation decisions */
-export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_TASK_MODERATOR = 0x1865; // 6245
+export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_TASK_MODERATOR = 0x1866; // 6246
 /** InvalidTaskModerationStatus: Invalid task moderation status */
-export const AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_STATUS = 0x1866; // 6246
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_STATUS = 0x1867; // 6247
 /** InvalidTaskModerationRiskScore: Invalid task moderation risk score */
-export const AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_RISK_SCORE = 0x1867; // 6247
+export const AGENC_COORDINATION_ERROR__INVALID_TASK_MODERATION_RISK_SCORE = 0x1868; // 6248
 /** TaskModerationTaskMismatch: Task moderation account does not belong to this task */
-export const AGENC_COORDINATION_ERROR__TASK_MODERATION_TASK_MISMATCH = 0x1868; // 6248
+export const AGENC_COORDINATION_ERROR__TASK_MODERATION_TASK_MISMATCH = 0x1869; // 6249
 /** TaskModerationHashMismatch: Task moderation account does not match this job specification hash */
-export const AGENC_COORDINATION_ERROR__TASK_MODERATION_HASH_MISMATCH = 0x1869; // 6249
+export const AGENC_COORDINATION_ERROR__TASK_MODERATION_HASH_MISMATCH = 0x186a; // 6250
 /** TaskModerationExpired: Task moderation decision is expired */
-export const AGENC_COORDINATION_ERROR__TASK_MODERATION_EXPIRED = 0x186a; // 6250
+export const AGENC_COORDINATION_ERROR__TASK_MODERATION_EXPIRED = 0x186b; // 6251
 /** TaskModerationRejected: Task moderation decision does not allow publishing this job specification */
-export const AGENC_COORDINATION_ERROR__TASK_MODERATION_REJECTED = 0x186b; // 6251
+export const AGENC_COORDINATION_ERROR__TASK_MODERATION_REJECTED = 0x186c; // 6252
 /** TaskJobSpecRequired: Task claim requires a moderated job specification pointer */
-export const AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED = 0x186c; // 6252
+export const AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED = 0x186d; // 6253
 /** ListingInvalidId: Service listing ID cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__LISTING_INVALID_ID = 0x186d; // 6253
+export const AGENC_COORDINATION_ERROR__LISTING_INVALID_ID = 0x186e; // 6254
 /** ListingInvalidName: Service listing name cannot be all zeros */
-export const AGENC_COORDINATION_ERROR__LISTING_INVALID_NAME = 0x186e; // 6254
+export const AGENC_COORDINATION_ERROR__LISTING_INVALID_NAME = 0x186f; // 6255
 /** ListingInvalidSpec: Service listing spec hash/URI is invalid */
-export const AGENC_COORDINATION_ERROR__LISTING_INVALID_SPEC = 0x186f; // 6255
+export const AGENC_COORDINATION_ERROR__LISTING_INVALID_SPEC = 0x1870; // 6256
 /** ListingPriceTooLow: Service listing price is below the minimum */
-export const AGENC_COORDINATION_ERROR__LISTING_PRICE_TOO_LOW = 0x1870; // 6256
+export const AGENC_COORDINATION_ERROR__LISTING_PRICE_TOO_LOW = 0x1871; // 6257
 /** ListingCapabilitiesRequired: Service listing must declare at least one required capability */
-export const AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED = 0x1871; // 6257
+export const AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED = 0x1872; // 6258
 /** ListingOperatorFeeTooHigh: Operator fee exceeds the maximum allowed */
-export const AGENC_COORDINATION_ERROR__LISTING_OPERATOR_FEE_TOO_HIGH = 0x1872; // 6258
+export const AGENC_COORDINATION_ERROR__LISTING_OPERATOR_FEE_TOO_HIGH = 0x1873; // 6259
 /** ListingOperatorRequired: A non-zero operator fee requires an operator payee */
-export const AGENC_COORDINATION_ERROR__LISTING_OPERATOR_REQUIRED = 0x1873; // 6259
+export const AGENC_COORDINATION_ERROR__LISTING_OPERATOR_REQUIRED = 0x1874; // 6260
 /** ListingNotActive: Service listing is not active */
-export const AGENC_COORDINATION_ERROR__LISTING_NOT_ACTIVE = 0x1874; // 6260
+export const AGENC_COORDINATION_ERROR__LISTING_NOT_ACTIVE = 0x1875; // 6261
 /** ListingRetired: Service listing is retired and cannot be modified */
-export const AGENC_COORDINATION_ERROR__LISTING_RETIRED = 0x1875; // 6261
+export const AGENC_COORDINATION_ERROR__LISTING_RETIRED = 0x1876; // 6262
 /** ListingVersionMismatch: Service listing version does not match the expected version */
-export const AGENC_COORDINATION_ERROR__LISTING_VERSION_MISMATCH = 0x1876; // 6262
+export const AGENC_COORDINATION_ERROR__LISTING_VERSION_MISMATCH = 0x1877; // 6263
 /** ListingPriceMismatch: Service listing price does not match the expected price */
-export const AGENC_COORDINATION_ERROR__LISTING_PRICE_MISMATCH = 0x1877; // 6263
+export const AGENC_COORDINATION_ERROR__LISTING_PRICE_MISMATCH = 0x1878; // 6264
 /** ListingCapacityReached: Service listing has reached its maximum concurrent open hires */
-export const AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED = 0x1878; // 6264
+export const AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED = 0x1879; // 6265
 /** ListingInvalidStateTransition: Invalid service listing state transition */
-export const AGENC_COORDINATION_ERROR__LISTING_INVALID_STATE_TRANSITION = 0x1879; // 6265
+export const AGENC_COORDINATION_ERROR__LISTING_INVALID_STATE_TRANSITION = 0x187a; // 6266
 /** TaskNotClosable: Task can only be closed once it is in a terminal state with no active workers */
-export const AGENC_COORDINATION_ERROR__TASK_NOT_CLOSABLE = 0x187a; // 6266
+export const AGENC_COORDINATION_ERROR__TASK_NOT_CLOSABLE = 0x187b; // 6267
 /** WorkerRewardBelowFloor: Worker reward would fall below the protocol-mandated floor */
-export const AGENC_COORDINATION_ERROR__WORKER_REWARD_BELOW_FLOOR = 0x187b; // 6267
+export const AGENC_COORDINATION_ERROR__WORKER_REWARD_BELOW_FLOOR = 0x187c; // 6268
 /** InvalidHireRecord: Supplied hire record does not match this task */
-export const AGENC_COORDINATION_ERROR__INVALID_HIRE_RECORD = 0x187c; // 6268
+export const AGENC_COORDINATION_ERROR__INVALID_HIRE_RECORD = 0x187d; // 6269
 /** MissingOperatorAccount: Operator payee account is required for this hire's operator fee */
-export const AGENC_COORDINATION_ERROR__MISSING_OPERATOR_ACCOUNT = 0x187d; // 6269
+export const AGENC_COORDINATION_ERROR__MISSING_OPERATOR_ACCOUNT = 0x187e; // 6270
 /** InvalidOperatorAccount: Operator payee account does not match the hire record operator */
-export const AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT = 0x187e; // 6270
+export const AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT = 0x187f; // 6271
 /** HiredTaskValidationUnsupported: A hired task cannot be reconfigured for manual validation; it settles on the hire completion path */
-export const AGENC_COORDINATION_ERROR__HIRED_TASK_VALIDATION_UNSUPPORTED = 0x187f; // 6271
+export const AGENC_COORDINATION_ERROR__HIRED_TASK_VALIDATION_UNSUPPORTED = 0x1880; // 6272
 /** OperatorIsCreator: Operator payee cannot be the task creator (operator self-deal) */
-export const AGENC_COORDINATION_ERROR__OPERATOR_IS_CREATOR = 0x1880; // 6272
+export const AGENC_COORDINATION_ERROR__OPERATOR_IS_CREATOR = 0x1881; // 6273
 /** TaskNotMigratable: Task account is not a migratable size (expected the pre-Batch-2 layout) */
-export const AGENC_COORDINATION_ERROR__TASK_NOT_MIGRATABLE = 0x1881; // 6273
+export const AGENC_COORDINATION_ERROR__TASK_NOT_MIGRATABLE = 0x1882; // 6274
 /** TaskDiscriminatorMismatch: Task account discriminator does not match the Task type */
-export const AGENC_COORDINATION_ERROR__TASK_DISCRIMINATOR_MISMATCH = 0x1882; // 6274
+export const AGENC_COORDINATION_ERROR__TASK_DISCRIMINATOR_MISMATCH = 0x1883; // 6275
 /** BondTaskMismatch: Completion bond does not belong to this task */
-export const AGENC_COORDINATION_ERROR__BOND_TASK_MISMATCH = 0x1883; // 6275
+export const AGENC_COORDINATION_ERROR__BOND_TASK_MISMATCH = 0x1884; // 6276
 /** BondPartyMismatch: Completion bond party does not match the expected wallet */
-export const AGENC_COORDINATION_ERROR__BOND_PARTY_MISMATCH = 0x1884; // 6276
+export const AGENC_COORDINATION_ERROR__BOND_PARTY_MISMATCH = 0x1885; // 6277
 /** BondRoleMismatch: Completion bond has the wrong role for this disposition */
-export const AGENC_COORDINATION_ERROR__BOND_ROLE_MISMATCH = 0x1885; // 6277
+export const AGENC_COORDINATION_ERROR__BOND_ROLE_MISMATCH = 0x1886; // 6278
 /** BondAlreadyPosted: A completion bond has already been posted for this party and task */
-export const AGENC_COORDINATION_ERROR__BOND_ALREADY_POSTED = 0x1886; // 6278
+export const AGENC_COORDINATION_ERROR__BOND_ALREADY_POSTED = 0x1887; // 6279
 /** MissingCompletionBondAccount: A required completion bond account was not provided */
-export const AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT = 0x1887; // 6279
+export const AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT = 0x1888; // 6280
 /** BondUnsupportedTaskType: Completion bonds are single-worker (Exclusive) only in v1 */
-export const AGENC_COORDINATION_ERROR__BOND_UNSUPPORTED_TASK_TYPE = 0x1888; // 6280
+export const AGENC_COORDINATION_ERROR__BOND_UNSUPPORTED_TASK_TYPE = 0x1889; // 6281
 /** MaxRevisionRoundsExceeded: Maximum revision rounds exceeded; escalate to reject */
-export const AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED = 0x1889; // 6281
+export const AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED = 0x188a; // 6282
 /** TaskNotRejectFrozen: Task is not in the RejectFrozen state */
-export const AGENC_COORDINATION_ERROR__TASK_NOT_REJECT_FROZEN = 0x188a; // 6282
+export const AGENC_COORDINATION_ERROR__TASK_NOT_REJECT_FROZEN = 0x188b; // 6283
 /** RejectFrozenTimeoutNotElapsed: RejectFrozen review timeout has not elapsed */
-export const AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED = 0x188b; // 6283
+export const AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED = 0x188c; // 6284
 /** UnauthorizedReviewDecision: Caller is not authorized to make this review decision */
-export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_REVIEW_DECISION = 0x188c; // 6284
+export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_REVIEW_DECISION = 0x188d; // 6285
 /** TaskFrozenCannotDispute: A frozen (rejected) task cannot be disputed */
-export const AGENC_COORDINATION_ERROR__TASK_FROZEN_CANNOT_DISPUTE = 0x188d; // 6285
+export const AGENC_COORDINATION_ERROR__TASK_FROZEN_CANNOT_DISPUTE = 0x188e; // 6286
 /** RejectFrozenSingleWorkerOnly: RejectFrozen review is single-worker (Exclusive) only */
-export const AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY = 0x188e; // 6286
+export const AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY = 0x188f; // 6287
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -676,6 +678,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_DEADLINE
   | typeof AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE
   | typeof AGENC_COORDINATION_ERROR__INVALID_DESCRIPTION
+  | typeof AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER
   | typeof AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD
   | typeof AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH
   | typeof AGENC_COORDINATION_ERROR__INVALID_EXPIRATION
@@ -969,6 +972,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_DEADLINE]: `Invalid deadline: deadline must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_DEPENDENCY_TYPE]: `Invalid dependency type`,
     [AGENC_COORDINATION_ERROR__INVALID_DESCRIPTION]: `Invalid description: cannot be empty`,
+    [AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER]: `Invalid dispute resolver: pubkey must be non-zero`,
     [AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD]: `Invalid dispute threshold: must be 1-100 (percentage of votes required)`,
     [AGENC_COORDINATION_ERROR__INVALID_EVIDENCE_HASH]: `Invalid evidence hash: cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_EXPIRATION]: `Invalid expiration: expires_at cannot be zero`,

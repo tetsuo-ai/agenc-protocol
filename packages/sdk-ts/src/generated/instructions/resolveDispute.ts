@@ -10,6 +10,8 @@ import {
   combineCodec,
   fixDecoderSize,
   fixEncoderSize,
+  getBooleanDecoder,
+  getBooleanEncoder,
   getBytesDecoder,
   getBytesEncoder,
   getStructDecoder,
@@ -61,6 +63,7 @@ export type ResolveDisputeInstruction<
   TAccountEscrow extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
+  TAccountResolverAssignment extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountWorkerClaim extends string | AccountMeta<string> = string,
   TAccountWorker extends string | AccountMeta<string> = string,
@@ -100,6 +103,9 @@ export type ResolveDisputeInstruction<
         ? ReadonlySignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
+      TAccountResolverAssignment extends string
+        ? ReadonlyAccount<TAccountResolverAssignment>
+        : TAccountResolverAssignment,
       TAccountCreator extends string
         ? WritableAccount<TAccountCreator>
         : TAccountCreator,
@@ -154,13 +160,17 @@ export type ResolveDisputeInstruction<
 
 export type ResolveDisputeInstructionData = {
   discriminator: ReadonlyUint8Array;
+  approve: boolean;
 };
 
-export type ResolveDisputeInstructionDataArgs = {};
+export type ResolveDisputeInstructionDataArgs = { approve: boolean };
 
 export function getResolveDisputeInstructionDataEncoder(): FixedSizeEncoder<ResolveDisputeInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["approve", getBooleanEncoder()],
+    ]),
     (value) => ({ ...value, discriminator: RESOLVE_DISPUTE_DISCRIMINATOR }),
   );
 }
@@ -168,6 +178,7 @@ export function getResolveDisputeInstructionDataEncoder(): FixedSizeEncoder<Reso
 export function getResolveDisputeInstructionDataDecoder(): FixedSizeDecoder<ResolveDisputeInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
+    ["approve", getBooleanDecoder()],
   ]);
 }
 
@@ -187,6 +198,7 @@ export type ResolveDisputeAsyncInput<
   TAccountEscrow extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountAuthority extends string = string,
+  TAccountResolverAssignment extends string = string,
   TAccountCreator extends string = string,
   TAccountWorkerClaim extends string = string,
   TAccountWorker extends string = string,
@@ -208,7 +220,21 @@ export type ResolveDisputeAsyncInput<
   task: Address<TAccountTask>;
   escrow?: Address<TAccountEscrow>;
   protocolConfig?: Address<TAccountProtocolConfig>;
+  /**
+   * The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
+   * roster. The OR is enforced in the handler against `resolver_assignment` below — a
+   * plain account constraint cannot express "this key OR that account exists".
+   */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Optional roster entry proving `authority` is an assigned dispute resolver. A plain
+   * optional account (NOT seeds-derived) so the client can pass `None` when resolving as
+   * the protocol authority; when present it must be a program-owned `DisputeResolver`
+   * whose `resolver` equals the signer (enforced in the handler). Only the authority-
+   * gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
+   * so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+   */
+  resolverAssignment?: Address<TAccountResolverAssignment>;
   creator: Address<TAccountCreator>;
   /**
    * Worker's claim proving they worked on task (fix #59)
@@ -246,6 +272,7 @@ export type ResolveDisputeAsyncInput<
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   bondTreasury: Address<TAccountBondTreasury>;
+  approve: ResolveDisputeInstructionDataArgs["approve"];
 };
 
 export async function getResolveDisputeInstructionAsync<
@@ -254,6 +281,7 @@ export async function getResolveDisputeInstructionAsync<
   TAccountEscrow extends string,
   TAccountProtocolConfig extends string,
   TAccountAuthority extends string,
+  TAccountResolverAssignment extends string,
   TAccountCreator extends string,
   TAccountWorkerClaim extends string,
   TAccountWorker extends string,
@@ -278,6 +306,7 @@ export async function getResolveDisputeInstructionAsync<
     TAccountEscrow,
     TAccountProtocolConfig,
     TAccountAuthority,
+    TAccountResolverAssignment,
     TAccountCreator,
     TAccountWorkerClaim,
     TAccountWorker,
@@ -304,6 +333,7 @@ export async function getResolveDisputeInstructionAsync<
     TAccountEscrow,
     TAccountProtocolConfig,
     TAccountAuthority,
+    TAccountResolverAssignment,
     TAccountCreator,
     TAccountWorkerClaim,
     TAccountWorker,
@@ -333,6 +363,10 @@ export async function getResolveDisputeInstructionAsync<
     escrow: { value: input.escrow ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
+    resolverAssignment: {
+      value: input.resolverAssignment ?? null,
+      isWritable: false,
+    },
     creator: { value: input.creator ?? null, isWritable: true },
     workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     worker: { value: input.worker ?? null, isWritable: true },
@@ -369,6 +403,9 @@ export async function getResolveDisputeInstructionAsync<
     keyof typeof originalAccounts,
     ResolvedInstructionAccount
   >;
+
+  // Original args.
+  const args = { ...input };
 
   // Resolve default values.
   if (!accounts.escrow.value) {
@@ -407,6 +444,7 @@ export async function getResolveDisputeInstructionAsync<
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("resolverAssignment", accounts.resolverAssignment),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("workerClaim", accounts.workerClaim),
       getAccountMeta("worker", accounts.worker),
@@ -424,7 +462,9 @@ export async function getResolveDisputeInstructionAsync<
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondTreasury", accounts.bondTreasury),
     ],
-    data: getResolveDisputeInstructionDataEncoder().encode({}),
+    data: getResolveDisputeInstructionDataEncoder().encode(
+      args as ResolveDisputeInstructionDataArgs,
+    ),
     programAddress,
   } as ResolveDisputeInstruction<
     TProgramAddress,
@@ -433,6 +473,7 @@ export async function getResolveDisputeInstructionAsync<
     TAccountEscrow,
     TAccountProtocolConfig,
     TAccountAuthority,
+    TAccountResolverAssignment,
     TAccountCreator,
     TAccountWorkerClaim,
     TAccountWorker,
@@ -458,6 +499,7 @@ export type ResolveDisputeInput<
   TAccountEscrow extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountAuthority extends string = string,
+  TAccountResolverAssignment extends string = string,
   TAccountCreator extends string = string,
   TAccountWorkerClaim extends string = string,
   TAccountWorker extends string = string,
@@ -479,7 +521,21 @@ export type ResolveDisputeInput<
   task: Address<TAccountTask>;
   escrow: Address<TAccountEscrow>;
   protocolConfig: Address<TAccountProtocolConfig>;
+  /**
+   * The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
+   * roster. The OR is enforced in the handler against `resolver_assignment` below — a
+   * plain account constraint cannot express "this key OR that account exists".
+   */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Optional roster entry proving `authority` is an assigned dispute resolver. A plain
+   * optional account (NOT seeds-derived) so the client can pass `None` when resolving as
+   * the protocol authority; when present it must be a program-owned `DisputeResolver`
+   * whose `resolver` equals the signer (enforced in the handler). Only the authority-
+   * gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
+   * so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+   */
+  resolverAssignment?: Address<TAccountResolverAssignment>;
   creator: Address<TAccountCreator>;
   /**
    * Worker's claim proving they worked on task (fix #59)
@@ -517,6 +573,7 @@ export type ResolveDisputeInput<
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   bondTreasury: Address<TAccountBondTreasury>;
+  approve: ResolveDisputeInstructionDataArgs["approve"];
 };
 
 export function getResolveDisputeInstruction<
@@ -525,6 +582,7 @@ export function getResolveDisputeInstruction<
   TAccountEscrow extends string,
   TAccountProtocolConfig extends string,
   TAccountAuthority extends string,
+  TAccountResolverAssignment extends string,
   TAccountCreator extends string,
   TAccountWorkerClaim extends string,
   TAccountWorker extends string,
@@ -549,6 +607,7 @@ export function getResolveDisputeInstruction<
     TAccountEscrow,
     TAccountProtocolConfig,
     TAccountAuthority,
+    TAccountResolverAssignment,
     TAccountCreator,
     TAccountWorkerClaim,
     TAccountWorker,
@@ -574,6 +633,7 @@ export function getResolveDisputeInstruction<
   TAccountEscrow,
   TAccountProtocolConfig,
   TAccountAuthority,
+  TAccountResolverAssignment,
   TAccountCreator,
   TAccountWorkerClaim,
   TAccountWorker,
@@ -602,6 +662,10 @@ export function getResolveDisputeInstruction<
     escrow: { value: input.escrow ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
+    resolverAssignment: {
+      value: input.resolverAssignment ?? null,
+      isWritable: false,
+    },
     creator: { value: input.creator ?? null, isWritable: true },
     workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     worker: { value: input.worker ?? null, isWritable: true },
@@ -639,6 +703,9 @@ export function getResolveDisputeInstruction<
     ResolvedInstructionAccount
   >;
 
+  // Original args.
+  const args = { ...input };
+
   // Resolve default values.
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
@@ -657,6 +724,7 @@ export function getResolveDisputeInstruction<
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("resolverAssignment", accounts.resolverAssignment),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("workerClaim", accounts.workerClaim),
       getAccountMeta("worker", accounts.worker),
@@ -674,7 +742,9 @@ export function getResolveDisputeInstruction<
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondTreasury", accounts.bondTreasury),
     ],
-    data: getResolveDisputeInstructionDataEncoder().encode({}),
+    data: getResolveDisputeInstructionDataEncoder().encode(
+      args as ResolveDisputeInstructionDataArgs,
+    ),
     programAddress,
   } as ResolveDisputeInstruction<
     TProgramAddress,
@@ -683,6 +753,7 @@ export function getResolveDisputeInstruction<
     TAccountEscrow,
     TAccountProtocolConfig,
     TAccountAuthority,
+    TAccountResolverAssignment,
     TAccountCreator,
     TAccountWorkerClaim,
     TAccountWorker,
@@ -712,17 +783,31 @@ export type ParsedResolveDisputeInstruction<
     task: TAccountMetas[1];
     escrow: TAccountMetas[2];
     protocolConfig: TAccountMetas[3];
+    /**
+     * The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
+     * roster. The OR is enforced in the handler against `resolver_assignment` below — a
+     * plain account constraint cannot express "this key OR that account exists".
+     */
     authority: TAccountMetas[4];
-    creator: TAccountMetas[5];
+    /**
+     * Optional roster entry proving `authority` is an assigned dispute resolver. A plain
+     * optional account (NOT seeds-derived) so the client can pass `None` when resolving as
+     * the protocol authority; when present it must be a program-owned `DisputeResolver`
+     * whose `resolver` equals the signer (enforced in the handler). Only the authority-
+     * gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
+     * so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+     */
+    resolverAssignment?: TAccountMetas[5] | undefined;
+    creator: TAccountMetas[6];
     /**
      * Worker's claim proving they worked on task (fix #59)
      * Required for Complete/Split resolutions that pay a worker
      * Made mutable to allow closing after dispute resolution (fix #439)
      */
-    workerClaim?: TAccountMetas[6] | undefined;
+    workerClaim?: TAccountMetas[7] | undefined;
     /** Worker agent account for the dispute defendant. */
-    worker?: TAccountMetas[7] | undefined;
-    workerWallet?: TAccountMetas[8] | undefined;
+    worker?: TAccountMetas[8] | undefined;
+    workerWallet?: TAccountMetas[9] | undefined;
     /**
      * Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
      * cannot be bypassed by settling through dispute resolution. A live (program-owned)
@@ -730,26 +815,26 @@ export type ParsedResolveDisputeInstruction<
      * system-owned PDA. CHECK: live-vs-absent decided by `owner` in the handler; a live
      * record is deserialized + validated there.
      */
-    hireRecord: TAccountMetas[9];
+    hireRecord: TAccountMetas[10];
     /** a live hire carries a non-zero operator fee. Receives the operator leg (SOL). */
-    disputeOperator?: TAccountMetas[10] | undefined;
-    systemProgram: TAccountMetas[11];
+    disputeOperator?: TAccountMetas[11] | undefined;
+    systemProgram: TAccountMetas[12];
     /** Token escrow ATA holding reward tokens (optional) */
-    tokenEscrowAta?: TAccountMetas[12] | undefined;
+    tokenEscrowAta?: TAccountMetas[13] | undefined;
     /** Creator's token account for refund (optional) */
-    creatorTokenAccount?: TAccountMetas[13] | undefined;
+    creatorTokenAccount?: TAccountMetas[14] | undefined;
     /** Worker's token account for payment (optional) */
-    workerTokenAccountAta?: TAccountMetas[14] | undefined;
+    workerTokenAccountAta?: TAccountMetas[15] | undefined;
     /** Treasury's token account for protocol fees (optional) */
-    treasuryTokenAccount?: TAccountMetas[15] | undefined;
+    treasuryTokenAccount?: TAccountMetas[16] | undefined;
     /** SPL token mint (optional, must match task.reward_mint) */
-    rewardMint?: TAccountMetas[16] | undefined;
+    rewardMint?: TAccountMetas[17] | undefined;
     /** SPL Token program (optional, required for token tasks) */
-    tokenProgram?: TAccountMetas[17] | undefined;
+    tokenProgram?: TAccountMetas[18] | undefined;
     /** forfeited to the treasury. Fully validated by settle_completion_bond. */
-    creatorCompletionBond: TAccountMetas[18];
-    workerCompletionBond: TAccountMetas[19];
-    bondTreasury: TAccountMetas[20];
+    creatorCompletionBond: TAccountMetas[19];
+    workerCompletionBond: TAccountMetas[20];
+    bondTreasury: TAccountMetas[21];
   };
   data: ResolveDisputeInstructionData;
 };
@@ -762,12 +847,12 @@ export function parseResolveDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedResolveDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 21) {
+  if (instruction.accounts.length < 22) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 21,
+        expectedAccountMetas: 22,
       },
     );
   }
@@ -791,6 +876,7 @@ export function parseResolveDisputeInstruction<
       escrow: getNextAccount(),
       protocolConfig: getNextAccount(),
       authority: getNextAccount(),
+      resolverAssignment: getNextOptionalAccount(),
       creator: getNextAccount(),
       workerClaim: getNextOptionalAccount(),
       worker: getNextOptionalAccount(),

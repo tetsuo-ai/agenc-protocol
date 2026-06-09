@@ -20,6 +20,7 @@ export * from "./createTaskHumanlessAuthorityRateLimit";
 export * from "./creatorCompletionBond";
 export * from "./delegation";
 export * from "./dispute";
+export * from "./disputeResolver";
 export * from "./escrow";
 export * from "./governanceConfig";
 export * from "./hireRecord";

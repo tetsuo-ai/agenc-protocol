@@ -327,6 +327,9 @@ pub enum CoordinationError {
     #[msg("Only protocol authority or dispute initiator can resolve disputes")]
     UnauthorizedResolver,
 
+    #[msg("Invalid dispute resolver: pubkey must be non-zero")]
+    InvalidDisputeResolver,
+
     #[msg("Agent has active dispute votes pending resolution")]
     ActiveDisputeVotes,
 

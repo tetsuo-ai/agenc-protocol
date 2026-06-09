@@ -6,7 +6,7 @@ use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
 use crate::instructions::completion_helpers::update_protocol_stats;
-use crate::instructions::constants::{MIN_VOTERS_FOR_RESOLUTION, PERCENT_BASE};
+use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
     check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
@@ -20,8 +20,8 @@ use crate::instructions::token_helpers::{
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task,
-    TaskClaim, TaskEscrow, TaskStatus, TaskType,
+    AgentRegistration, CompletionBond, Dispute, DisputeResolver, DisputeStatus, ProtocolConfig,
+    ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -79,11 +79,18 @@ pub struct ResolveDispute<'info> {
     )]
     pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
-    #[account(
-        constraint = authority.key() == protocol_config.authority
-            @ CoordinationError::UnauthorizedResolver
-    )]
+    /// The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
+    /// roster. The OR is enforced in the handler against `resolver_assignment` below — a
+    /// plain account constraint cannot express "this key OR that account exists".
     pub authority: Signer<'info>,
+
+    /// Optional roster entry proving `authority` is an assigned dispute resolver. A plain
+    /// optional account (NOT seeds-derived) so the client can pass `None` when resolving as
+    /// the protocol authority; when present it must be a program-owned `DisputeResolver`
+    /// whose `resolver` equals the signer (enforced in the handler). Only the authority-
+    /// gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
+    /// so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+    pub resolver_assignment: Option<Box<Account<'info, DisputeResolver>>>,
 
     /// CHECK: Task creator for refund - validated to match task.creator (fix #58)
     #[account(
@@ -172,7 +179,26 @@ pub struct ResolveDispute<'info> {
     pub bond_treasury: UncheckedAccount<'info>,
 }
 
-pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) -> Result<()> {
+pub fn handler<'info>(
+    ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>,
+    approve: bool,
+) -> Result<()> {
+    // Authorization: the protocol authority OR an assigned dispute resolver may resolve.
+    // This replaced the open staked-arbiter vote + quorum model: a single assigned
+    // resolver now decides the outcome directly (see assign_dispute_resolver).
+    let signer = ctx.accounts.authority.key();
+    let is_protocol_authority = signer == ctx.accounts.protocol_config.authority;
+    let is_assigned_resolver = ctx
+        .accounts
+        .resolver_assignment
+        .as_ref()
+        .map(|r| r.resolver == signer)
+        .unwrap_or(false);
+    require!(
+        ctx.accounts.authority.is_signer && (is_protocol_authority || is_assigned_resolver),
+        CoordinationError::UnauthorizedResolver
+    );
+
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
     let escrow = &mut ctx.accounts.escrow;
@@ -183,10 +209,6 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
     // party; it must work even while the protocol is paused (money never locks,
     // spec §7). Type-disable gates entry only, so it is NOT re-checked here.
     check_version_compatible_for_exit(config)?;
-    require!(
-        ctx.accounts.authority.is_signer,
-        CoordinationError::UnauthorizedResolver
-    );
 
     // Verify dispute is active
     require!(
@@ -194,11 +216,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
         CoordinationError::DisputeNotActive
     );
 
-    // Verify voting period has ended
-    require!(
-        clock.unix_timestamp >= dispute.voting_deadline,
-        CoordinationError::VotingNotEnded
-    );
+    // No voting-period wait: an assigned resolver decides directly. (The legacy
+    // voting_deadline field is retained on the account but no longer gates resolution.)
 
     // Validate and bind defendant worker accounts (fix #842)
     validate_worker_accounts(
@@ -238,19 +257,6 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
             (ctx.remaining_accounts, None)
         };
 
-    // Calculate total votes
-    let total_votes = dispute
-        .votes_for
-        .checked_add(dispute.votes_against)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-
-    // Require minimum quorum for dispute resolution (fix #546)
-    // A single arbiter should not be able to unilaterally decide outcomes
-    require!(
-        dispute.total_voters as usize >= MIN_VOTERS_FOR_RESOLUTION,
-        CoordinationError::InsufficientQuorum
-    );
-
     // Validate task is in disputed state and transitions are allowed (fix #538)
     require!(
         task.status == TaskStatus::Disputed,
@@ -262,12 +268,14 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
         CoordinationError::InvalidStatusTransition
     );
 
-    let (approved, outcome) = determine_dispute_outcome(
-        dispute.votes_for,
-        dispute.votes_against,
-        total_votes,
-        config,
-    )?;
+    // The decision is the resolver's `approve` argument — NOT a vote tally. `approved`
+    // upholds the initiator's requested `resolution_type`; `!approved` refunds the creator.
+    let approved = approve;
+    let outcome = if approved {
+        dispute_outcome::APPROVED
+    } else {
+        dispute_outcome::REJECTED
+    };
 
     // Calculate remaining escrow funds
     let remaining_funds = escrow
@@ -1007,34 +1015,4 @@ fn validate_worker_accounts(
     );
 
     Ok(())
-}
-
-/// Determine dispute outcome from vote counts.
-///
-/// Returns `(approved, outcome_code)` where outcome_code is one of:
-/// - `dispute_outcome::REJECTED` (0): Arbiters actively voted against
-/// - `dispute_outcome::APPROVED` (1): Arbiters voted in favor and met threshold
-/// - `dispute_outcome::NO_VOTE_DEFAULT` (2): No votes cast, defaulted to rejection
-fn determine_dispute_outcome(
-    votes_for: u64,
-    _votes_against: u64,
-    total_votes: u64,
-    config: &ProtocolConfig,
-) -> Result<(bool, u8)> {
-    if total_votes == 0 {
-        return Ok((false, dispute_outcome::NO_VOTE_DEFAULT));
-    }
-
-    let approval_pct = votes_for
-        .checked_mul(PERCENT_BASE)
-        .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(total_votes)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let is_approved = approval_pct >= config.dispute_threshold as u64;
-    let outcome = if is_approved {
-        dispute_outcome::APPROVED
-    } else {
-        dispute_outcome::REJECTED
-    };
-    Ok((is_approved, outcome))
 }

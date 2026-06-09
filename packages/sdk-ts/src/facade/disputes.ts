@@ -15,7 +15,11 @@ import {
   getApplyInitiatorSlashInstructionAsync,
   getResolveRejectFrozenInstructionAsync,
   getExpireRejectFrozenInstructionAsync,
+  getAssignDisputeResolverInstructionAsync,
+  getRevokeDisputeResolverInstructionAsync,
   // input types
+  type AssignDisputeResolverAsyncInput,
+  type RevokeDisputeResolverAsyncInput,
   type InitiateDisputeAsyncInput,
   type VoteDisputeAsyncInput,
   type ResolveDisputeAsyncInput,
@@ -27,12 +31,14 @@ import {
   type ExpireRejectFrozenAsyncInput,
   // PDA helpers
   findDisputePda,
+  findDisputeResolverPda,
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
 } from "../generated/index.js";
 
 export {
   findDisputePda,
+  findDisputeResolverPda,
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
 };
@@ -214,5 +220,51 @@ export async function expireRejectFrozen(input: ExpireRejectFrozenAsyncInput) {
     ...input,
     creatorCompletionBond,
     workerCompletionBond,
+  });
+}
+
+/**
+ * Build an assign_dispute_resolver instruction (authority-only).
+ *
+ * Adds `resolver` to the dispute-resolver roster so that wallet can resolve disputes
+ * directly (no vote tally, no quorum). The `disputeResolver` roster PDA (seeded by
+ * `resolver`), `protocolConfig`, and `systemProgram` all auto-derive in the generated
+ * builder — the caller supplies only the `authority` signer and the `resolver` pubkey.
+ */
+export async function assignDisputeResolver(
+  input: AssignDisputeResolverAsyncInput,
+) {
+  return getAssignDisputeResolverInstructionAsync(input);
+}
+
+/**
+ * Build a revoke_dispute_resolver instruction (authority-only).
+ *
+ * Removes a wallet from the dispute-resolver roster, closing its assignment PDA. The
+ * generated builder does NOT derive the roster PDA (its on-chain seed reads the stored
+ * `resolver`), so the facade derives it from the `resolver` pubkey when `disputeResolver`
+ * is not passed explicitly. protocolConfig still auto-derives.
+ */
+export async function revokeDisputeResolver(
+  input: Omit<RevokeDisputeResolverAsyncInput, "disputeResolver"> & {
+    /** The roster member being removed. Used to derive the assignment PDA. */
+    resolver?: Address;
+    /** Optional pre-derived override for the assignment PDA. */
+    disputeResolver?: Address;
+  },
+) {
+  const { resolver, disputeResolver, ...rest } = input;
+  let roster = disputeResolver;
+  if (!roster) {
+    if (!resolver) {
+      throw new Error(
+        "revokeDisputeResolver: provide resolver (or disputeResolver) so the roster PDA can be derived",
+      );
+    }
+    roster = (await findDisputeResolverPda({ resolver }))[0];
+  }
+  return getRevokeDisputeResolverInstructionAsync({
+    ...rest,
+    disputeResolver: roster,
   });
 }

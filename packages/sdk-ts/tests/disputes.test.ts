@@ -11,9 +11,12 @@ import {
   getApplyInitiatorSlashInstructionDataDecoder,
   getResolveRejectFrozenInstructionDataDecoder,
   getExpireRejectFrozenInstructionDataDecoder,
+  getAssignDisputeResolverInstructionDataDecoder,
+  getRevokeDisputeResolverInstructionDataDecoder,
   // PDA helpers (to assert the facade really derived the bond accounts)
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
+  findDisputeResolverPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../src/index.js";
 // Import the facade module directly: the orchestrator wires re-exports into
@@ -108,6 +111,7 @@ describe("disputes facade (structural)", () => {
       dispute: DISPUTE,
       task: TASK,
       authority: AUTHORITY,
+      approve: true,
       creator: CREATOR,
       worker: WORKER_AGENT,
       workerWallet: WORKER_WALLET,
@@ -184,6 +188,7 @@ describe("disputes facade (structural)", () => {
         dispute: DISPUTE,
         task: TASK,
         authority: AUTHORITY,
+        approve: true,
         creator: CREATOR,
         bondTreasury: TREASURY,
       }),
@@ -326,5 +331,45 @@ describe("disputes facade (structural)", () => {
     expect(() =>
       getExpireRejectFrozenInstructionDataDecoder().decode(ix.data),
     ).not.toThrow();
+  });
+
+  it("assignDisputeResolver: program, auto-derives the roster PDA, data round-trips", async () => {
+    const ix = await facade.assignDisputeResolver({
+      authority: AUTHORITY,
+      resolver: AGENT,
+    });
+    expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const accs = order(ix);
+    const [roster] = await findDisputeResolverPda({ resolver: AGENT });
+    // protocolConfig(0, derived), disputeResolver(1, derived), authority(2), systemProgram(3)
+    expect(accs[1]).toBe(roster);
+    expect(accs[2]).toBe(AUTHORITY_ADDR);
+    expect(accs[3]).toBe(SYSTEM_PROGRAM);
+
+    const decoded = getAssignDisputeResolverInstructionDataDecoder().decode(
+      ix.data,
+    );
+    expect(decoded.resolver).toBe(AGENT);
+  });
+
+  it("revokeDisputeResolver: derives the roster PDA from resolver, data round-trips", async () => {
+    const ix = await facade.revokeDisputeResolver({
+      authority: AUTHORITY,
+      resolver: AGENT,
+    });
+    const accs = order(ix);
+    const [roster] = await findDisputeResolverPda({ resolver: AGENT });
+    // protocolConfig(0, derived), disputeResolver(1, facade-derived), authority(2)
+    expect(accs[1]).toBe(roster);
+    expect(accs[2]).toBe(AUTHORITY_ADDR);
+    expect(() =>
+      getRevokeDisputeResolverInstructionDataDecoder().decode(ix.data),
+    ).not.toThrow();
+  });
+
+  it("revokeDisputeResolver: throws when neither resolver nor disputeResolver is given", async () => {
+    await expect(
+      facade.revokeDisputeResolver({ authority: AUTHORITY }),
+    ).rejects.toThrow(/resolver/);
   });
 });

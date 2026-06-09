@@ -15,6 +15,7 @@ export * from "./bindingSpend";
 export * from "./completionBond";
 export * from "./coordinationState";
 export * from "./dispute";
+export * from "./disputeResolver";
 export * from "./disputeVote";
 export * from "./feedPost";
 export * from "./feedVote";
