@@ -223,6 +223,16 @@ pub fn handler<'info>(
                 attestor_config.attestor == ctx.accounts.reviewer.key(),
                 CoordinationError::InvalidAttestor
             );
+            // Self-attestation guard (parity with the ValidatorQuorum branch above): the
+            // attestor must be an INDEPENDENT third party, never the task creator or the
+            // worker's authority — otherwise a party rubber-stamps its own completion and
+            // drains escrow. Load-bearing here because worker.authority isn't known until
+            // a worker is bound (configure runs pre-claim).
+            require!(
+                attestor_config.attestor != ctx.accounts.task.creator
+                    && attestor_config.attestor != ctx.accounts.worker.authority,
+                CoordinationError::InvalidAttestor
+            );
             (Pubkey::default(), 1)
         }
         _ => return err!(CoordinationError::ValidationModeMismatch),

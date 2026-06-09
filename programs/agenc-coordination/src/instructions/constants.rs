@@ -3,17 +3,18 @@
 /// Divisor for basis points calculations (100% = 10000 bps)
 pub const BASIS_POINTS_DIVISOR: u64 = 10000;
 
-/// Maximum protocol fee in basis points (10% = 1000 bps)
-pub const MAX_PROTOCOL_FEE_BPS: u16 = 1000;
+/// Maximum protocol fee in basis points (20% = 2000 bps)
+pub const MAX_PROTOCOL_FEE_BPS: u16 = 2000;
 
 /// Maximum operator (embedding-site) fee in basis points (20% = 2000 bps).
 /// Carried on a ServiceListing in Batch 1; enforced at settlement in Batch 2.
 pub const MAX_OPERATOR_FEE_BPS: u16 = 2000;
 
 /// Minimum share of a settlement the worker must always keep (60% = 6000 bps),
-/// per spec §4. Enforced defensively at settlement whenever an operator leg is
-/// applied (the per-leg caps already guarantee ≥70%, but this makes the floor an
-/// explicit, tested invariant rather than an emergent one).
+/// per spec §4. With protocol ≤20% (MAX_PROTOCOL_FEE_BPS) + operator ≤20%
+/// (MAX_OPERATOR_FEE_BPS), the worker is left exactly ≥60% at the caps, so this
+/// floor is the *binding* invariant at maximum fees — enforced + tested at
+/// settlement (`calculate_operator_fee`), not merely emergent.
 pub const WORKER_FLOOR_BPS: u16 = 6000;
 
 /// Base for percentage calculations (100 = 100%)

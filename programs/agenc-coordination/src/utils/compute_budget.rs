@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_tiered_fee_large_base() {
-        // MAX_PROTOCOL_FEE_BPS is 1000 (10%)
+        // 1000 bps (10%) is used here as an example fee input, not the cap.
         assert_eq!(calculate_tiered_fee(1000, 0), 1000);
         assert_eq!(calculate_tiered_fee(1000, 1000), 960);
     }
