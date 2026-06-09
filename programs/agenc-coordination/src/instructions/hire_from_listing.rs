@@ -373,6 +373,19 @@ pub fn handler(
         0,    // min_reputation: listing hires do not gate on reputation in Batch 1
         None, // reward_mint: SOL only in Batch 1
     )?;
+
+    // §4: stamp the operator terms onto the Task itself so settlement reads the
+    // 3-way split from the Task (the HireRecord stays the fallback for tasks hired
+    // before the Batch-2 redeploy / the 149 migrated tasks). A creator that is also
+    // the operator could self-deal the operator leg, so reject that here.
+    if listing_operator != Pubkey::default() {
+        require!(
+            listing_operator != creator_key,
+            CoordinationError::OperatorIsCreator
+        );
+        task.operator = listing_operator;
+        task.operator_fee_bps = listing_operator_fee_bps;
+    }
     let task_key = task.key();
 
     let escrow = ctx.accounts.escrow.as_mut();

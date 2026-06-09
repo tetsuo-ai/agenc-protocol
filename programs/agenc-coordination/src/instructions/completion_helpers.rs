@@ -404,11 +404,27 @@ pub fn validate_task_dependency(
             CoordinationError::InvalidAccountOwner
         );
 
-        // Deserialize and check parent task status
+        // Deserialize and check parent task status.
+        // BRICK-SAFE (Batch 2): the 149 live parents are at OLD_TASK_SIZE(382) until
+        // migrated, but the Task type is now SIZE(432). Borsh tolerates trailing bytes
+        // but NOT missing ones, so a raw `Task::try_deserialize` of a 382B parent would
+        // FAIL and brick create_dependent_task against every un-migrated parent. Since
+        // the new fields are append-only, zero-pad a short legacy account up to SIZE
+        // (operator=default/fee=0/_reserved=0) before deserializing; we only read
+        // `status`, which lives entirely within the unchanged 374-byte prefix.
         let parent_data = parent_task_info.try_borrow_data()?;
-        // Skip 8-byte discriminator, then deserialize Task
-        let parent_task = Task::try_deserialize(&mut &parent_data[..])
-            .map_err(|_| CoordinationError::InvalidInput)?;
+        let parent_task = if parent_data.len() >= Task::SIZE {
+            Task::try_deserialize(&mut &parent_data[..])
+                .map_err(|_| CoordinationError::InvalidInput)?
+        } else {
+            require!(
+                parent_data.len() >= Task::OLD_TASK_SIZE,
+                CoordinationError::InvalidInput
+            );
+            let mut buf = parent_data.to_vec();
+            buf.resize(Task::SIZE, 0);
+            Task::try_deserialize(&mut &buf[..]).map_err(|_| CoordinationError::InvalidInput)?
+        };
 
         require!(
             parent_task.status == TaskStatus::Completed,

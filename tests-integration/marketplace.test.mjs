@@ -257,6 +257,9 @@ async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilities = 1
   const buyer = Keypair.generate();
   const modAuth = Keypair.generate();
   for (const kp of [admin, provider, buyer, modAuth]) svm.airdrop(kp.publicKey, BigInt(100e9));
+  // Sentinel: set the listing operator to the buyer (who hires) to exercise the
+  // §4 operator!=creator self-deal guard.
+  if (operator === "__buyer__") operator = buyer.publicKey;
   // Pre-fund the operator payee so it is rent-exempt before receiving its fee leg.
   if (operator) svm.airdrop(operator, BigInt(1e9));
 
@@ -775,6 +778,15 @@ test("operator-fee protection: a hired task cannot be completed without paying t
   assert.equal(Number(w.svm.getBalance(operatorKp.publicKey)) - 1e9, Math.floor((r.reward * 1000) / 10000), "operator paid its exact cut once the correct account is passed");
 });
 
+test("operator-fee guard: a listing whose operator is the hiring creator is rejected (no self-deal)", async () => {
+  // Batch 2 §4: the operator (embedding site) must not be the task creator, or a
+  // creator could pay themselves the operator leg. The listing operator == buyer,
+  // and the buyer hires -> creator == operator -> OperatorIsCreator.
+  const w = await freshWorld({ price: 2_000_000, operator: "__buyer__", operatorFeeBps: 1000 });
+  const { ix } = await hireIx(w, {});
+  expectFail(send(w.svm, ix, [w.buyer]), "OperatorIsCreator", "hire rejected when operator == creator");
+});
+
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 5_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
@@ -782,6 +794,9 @@ test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + opera
 
   const t = decode(w.svm, "Task", r.task);
   assert.ok(t.status.Completed !== undefined, `task Completed (got ${JSON.stringify(t.status)})`);
+  // Batch 2: operator terms are stamped onto the Task itself (Task-first settlement).
+  assert.equal(t.operator.toBase58(), operatorKp.publicKey.toBase58(), "Task.operator stamped at hire");
+  assert.equal(t.operator_fee_bps, 1000, "Task.operator_fee_bps stamped at hire");
 
   // operator leg is exact: base(=reward, exclusive) * operatorFeeBps / 10000.
   const operatorAfter = Number(w.svm.getBalance(operatorKp.publicKey));

@@ -280,34 +280,40 @@ fn handle_complete_task<'info>(
 
     log_compute_units("complete_task_validated");
 
-    // §4 3-way split: hire_record is a REQUIRED account (seeds-fixed to ["hire", task]).
-    // If it is a live, program-owned HireRecord, the task was hired from a listing and
-    // its operator fee MUST be paid — a worker cannot omit the account to dodge the
-    // operator's cut. A non-hired task passes the empty (system-owned) PDA, so the leg
-    // is None and the 2-way settlement path is unchanged.
-    let operator_leg = if accounts.hire_record.owner == &crate::ID {
+    // §4 3-way split (Batch 2: Task-first, HireRecord fallback).
+    // A Batch-2 hire stamps the operator terms onto the Task itself, so settlement
+    // reads them straight from the (trusted, program-owned) Task account. The 149
+    // pre-Batch-2 tasks (and any hire created before the redeploy) carry
+    // `task.operator == default`, so we FALL BACK to the live ["hire", task]
+    // HireRecord — never drop this fallback or those operators go unpaid. A worker
+    // still cannot dodge the leg: the operator terms come from program-owned state,
+    // and the seeds-fixed hire_record account stays required by the struct.
+    let (operator_pubkey, operator_fee_bps_resolved) = if task.operator != Pubkey::default() {
+        (task.operator, task.operator_fee_bps)
+    } else if accounts.hire_record.owner == &crate::ID {
         let hire_info = accounts.hire_record.to_account_info();
         let hire = {
             let data = hire_info.try_borrow_data()?;
             HireRecord::try_deserialize(&mut &data[..])?
         };
         require!(hire.task == task_key, CoordinationError::InvalidHireRecord);
-        if hire.operator_fee_bps > 0 && hire.operator != Pubkey::default() {
-            let op = accounts
-                .operator
-                .as_ref()
-                .ok_or(CoordinationError::MissingOperatorAccount)?;
-            require!(
-                op.key() == hire.operator,
-                CoordinationError::InvalidOperatorAccount
-            );
-            Some(OperatorLeg {
-                payee: op.to_account_info(),
-                fee_bps: hire.operator_fee_bps,
-            })
-        } else {
-            None
-        }
+        (hire.operator, hire.operator_fee_bps)
+    } else {
+        (Pubkey::default(), 0)
+    };
+    let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
+        let op = accounts
+            .operator
+            .as_ref()
+            .ok_or(CoordinationError::MissingOperatorAccount)?;
+        require!(
+            op.key() == operator_pubkey,
+            CoordinationError::InvalidOperatorAccount
+        );
+        Some(OperatorLeg {
+            payee: op.to_account_info(),
+            fee_bps: operator_fee_bps_resolved,
+        })
     } else {
         None
     };

@@ -13668,6 +13668,21 @@ export type AgencCoordination = {
       "code": 6271,
       "name": "hiredTaskValidationUnsupported",
       "msg": "A hired task cannot be reconfigured for manual validation; it settles on the hire completion path"
+    },
+    {
+      "code": 6272,
+      "name": "operatorIsCreator",
+      "msg": "Operator payee cannot be the task creator (operator self-deal)"
+    },
+    {
+      "code": 6273,
+      "name": "taskNotMigratable",
+      "msg": "Task account is not a migratable size (expected the pre-Batch-2 layout)"
+    },
+    {
+      "code": 6274,
+      "name": "taskDiscriminatorMismatch",
+      "msg": "Task account discriminator does not match the Task type"
     }
   ],
   "types": [

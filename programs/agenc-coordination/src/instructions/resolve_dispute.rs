@@ -9,7 +9,8 @@ use crate::instructions::completion_helpers::update_protocol_stats;
 use crate::instructions::constants::{MIN_VOTERS_FOR_RESOLUTION, PERCENT_BASE};
 use crate::instructions::dispute_helpers::{
     check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
-    process_arbiter_vote_pair, process_worker_claim_pair, validate_remaining_accounts_structure,
+    process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
+    validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::slash_helpers::calculate_slash_amount;
@@ -259,6 +260,14 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
     // Prepare token context if this is a token-denominated task
     let is_token_task = task.reward_mint.is_some();
     let task_key = task.key();
+    // §4 operator leg (Task-first, HireRecord fallback) resolved once for the SOL
+    // Complete/Split branches below; hires are SOL-only so token paths take no leg.
+    let (dispute_operator_pubkey, dispute_operator_fee_bps) = resolve_task_operator_terms(
+        task.operator,
+        task.operator_fee_bps,
+        &ctx.accounts.hire_record.to_account_info(),
+        &task_key,
+    )?;
     let worker_stake_now = ctx
         .accounts
         .worker
@@ -462,11 +471,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
                     // §4 3-way split: pay the operator leg first if this is a hired task,
                     // so dispute resolution can't bypass the operator fee. No-op otherwise.
                     let op_fee = pay_dispute_operator_fee(
-                        &ctx.accounts.hire_record.to_account_info(),
+                        dispute_operator_pubkey,
+                        dispute_operator_fee_bps,
                         ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
                         &escrow.to_account_info(),
                         remaining_funds,
-                        &task_key,
                     )?;
                     let worker_net = remaining_funds
                         .checked_sub(op_fee)
@@ -577,11 +586,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
                         // §4 3-way split: carve the operator leg from the worker's half so
                         // a Split resolution can't bypass the operator fee (no-op if not hired).
                         let op_fee = pay_dispute_operator_fee(
-                            &ctx.accounts.hire_record.to_account_info(),
+                            dispute_operator_pubkey,
+                            dispute_operator_fee_bps,
                             ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
                             &escrow.to_account_info(),
                             worker_share,
-                            &task_key,
                         )?;
                         let worker_net = worker_share
                             .checked_sub(op_fee)

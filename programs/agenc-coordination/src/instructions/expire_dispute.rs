@@ -19,7 +19,8 @@ use crate::instructions::bid_settlement_helpers::{
 };
 use crate::instructions::dispute_helpers::{
     check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
-    process_arbiter_vote_pair, process_worker_claim_pair, validate_remaining_accounts_structure,
+    process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
+    validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::token_helpers::{
@@ -259,6 +260,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     // Fair refund distribution based on context (fix #418)
     let is_token_task = task.reward_mint.is_some();
     let task_key = task.key();
+    // §4 operator leg (Task-first, HireRecord fallback); SOL-only path below.
+    let (expire_operator_pubkey, expire_operator_fee_bps) = resolve_task_operator_terms(
+        task.operator,
+        task.operator_fee_bps,
+        &ctx.accounts.hire_record.to_account_info(),
+        &task_key,
+    )?;
     let worker_completed = ctx
         .accounts
         .worker_claim
@@ -416,9 +424,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
                     .as_ref()
                     .ok_or(CoordinationError::IncompleteWorkerAccounts)?
                     .to_account_info(),
-                &ctx.accounts.hire_record.to_account_info(),
+                expire_operator_pubkey,
+                expire_operator_fee_bps,
                 ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
-                &task_key,
                 remaining_funds,
                 worker_completed,
                 no_votes,
@@ -620,9 +628,9 @@ fn distribute_expired_funds<'a>(
     escrow_info: &AccountInfo<'a>,
     creator_info: &AccountInfo<'a>,
     worker_wallet_info: &AccountInfo<'a>,
-    hire_record: &AccountInfo<'a>,
+    operator_pubkey: Pubkey,
+    operator_fee_bps: u16,
     operator: Option<AccountInfo<'a>>,
-    task_key: &Pubkey,
     remaining_funds: u64,
     worker_completed: bool,
     no_votes: bool,
@@ -633,8 +641,13 @@ fn distribute_expired_funds<'a>(
     if no_votes && worker_completed {
         // Worker gets 100% minus the operator leg (hired tasks) so an expired dispute
         // cannot bypass the §4 operator fee. No-op for non-hired tasks.
-        let op_fee =
-            pay_dispute_operator_fee(hire_record, operator, escrow_info, remaining_funds, task_key)?;
+        let op_fee = pay_dispute_operator_fee(
+            operator_pubkey,
+            operator_fee_bps,
+            operator,
+            escrow_info,
+            remaining_funds,
+        )?;
         worker_amount = remaining_funds
             .checked_sub(op_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -647,8 +660,13 @@ fn distribute_expired_funds<'a>(
             .checked_sub(worker_share)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         // Carve the operator leg from the worker's half (no-op for non-hired tasks).
-        let op_fee =
-            pay_dispute_operator_fee(hire_record, operator, escrow_info, worker_share, task_key)?;
+        let op_fee = pay_dispute_operator_fee(
+            operator_pubkey,
+            operator_fee_bps,
+            operator,
+            escrow_info,
+            worker_share,
+        )?;
         let worker_net = worker_share
             .checked_sub(op_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?;

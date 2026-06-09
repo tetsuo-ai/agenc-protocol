@@ -853,4 +853,14 @@ pub enum CoordinationError {
 
     #[msg("A hired task cannot be reconfigured for manual validation; it settles on the hire completion path")]
     HiredTaskValidationUnsupported,
+
+    // === Batch 2 ===
+    #[msg("Operator payee cannot be the task creator (operator self-deal)")]
+    OperatorIsCreator,
+
+    #[msg("Task account is not a migratable size (expected the pre-Batch-2 layout)")]
+    TaskNotMigratable,
+
+    #[msg("Task account discriminator does not match the Task type")]
+    TaskDiscriminatorMismatch,
 }
