@@ -93,6 +93,10 @@ pub enum TaskStatus {
     Completed = 3,
     Cancelled = 4,
     Disputed = 5,
+    /// Batch 3 §8: a terminally-rejected submission frozen for review. Non-terminal —
+    /// exits via resolve_reject_frozen (multisig) or expire_reject_frozen (timeout).
+    /// Highest discriminant keeps 0-5 stable for the 149 live tasks (no layout change).
+    RejectFrozen = 6,
 }
 
 impl TaskStatus {
@@ -129,7 +133,11 @@ impl TaskStatus {
             (PendingValidation, Open) | (PendingValidation, Completed) |
             (PendingValidation, Disputed) |
             // From Disputed
-            (Disputed, Completed) | (Disputed, Cancelled)
+            (Disputed, Completed) | (Disputed, Cancelled) |
+            // From PendingValidation -> RejectFrozen (terminal reject freezes for review)
+            (PendingValidation, RejectFrozen) |
+            // From RejectFrozen (resolved/expired review)
+            (RejectFrozen, Completed) | (RejectFrozen, Cancelled)
         )
     }
 }
@@ -2172,6 +2180,23 @@ mod tests {
         assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::Disputed));
         assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::PendingValidation));
         assert!(!TaskStatus::Cancelled.can_transition_to(TaskStatus::InProgress));
+    }
+
+    #[test]
+    fn test_task_status_reject_frozen_transitions() {
+        // Allowed: PendingValidation -> RejectFrozen (terminal reject freezes for review),
+        // and RejectFrozen -> Completed / Cancelled (review resolved or expired).
+        assert!(TaskStatus::PendingValidation.can_transition_to(TaskStatus::RejectFrozen));
+        assert!(TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Completed));
+        assert!(TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Cancelled));
+        // Rejected: a frozen task cannot reopen, and terminal states cannot freeze.
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::InProgress));
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Open));
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::PendingValidation));
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Disputed));
+        assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::RejectFrozen));
+        assert!(!TaskStatus::Cancelled.can_transition_to(TaskStatus::RejectFrozen));
+        assert!(!TaskStatus::InProgress.can_transition_to(TaskStatus::RejectFrozen));
     }
 
     #[test]

@@ -20538,6 +20538,9 @@ export type AgencCoordination = {
           },
           {
             "name": "disputed"
+          },
+          {
+            "name": "rejectFrozen"
           }
         ]
       }

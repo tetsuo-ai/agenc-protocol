@@ -20532,6 +20532,9 @@
           },
           {
             "name": "Disputed"
+          },
+          {
+            "name": "RejectFrozen"
           }
         ]
       }
