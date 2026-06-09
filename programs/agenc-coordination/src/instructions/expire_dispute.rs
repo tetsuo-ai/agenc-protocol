@@ -18,20 +18,21 @@ use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
 use crate::instructions::dispute_helpers::{
-    check_duplicate_arbiters, check_duplicate_workers, process_arbiter_vote_pair,
-    process_worker_claim_pair, validate_remaining_accounts_structure,
+    check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
+    process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
+    validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
     validate_unchecked_token_mint,
 };
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::state::{
-    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim, TaskEscrow,
-    TaskStatus, TaskType,
+    AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim,
+    TaskEscrow, TaskStatus, TaskType,
 };
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -116,6 +117,21 @@ pub struct ExpireDispute<'info> {
     #[account(mut)]
     pub worker_wallet: Option<UncheckedAccount<'info>>,
 
+    /// Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
+    /// cannot be bypassed when an expired dispute pays the worker. Live (program-owned)
+    /// forces the operator leg; non-hired tasks pass the empty system-owned PDA.
+    /// CHECK: live-vs-absent decided by `owner` in the handler; a live record is validated there.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+
+    /// CHECK: operator payee — validated against hire_record.operator; required only when a
+    /// live hire carries a non-zero operator fee and the worker is paid. Receives SOL.
+    #[account(mut)]
+    pub dispute_operator: Option<UncheckedAccount<'info>>,
+
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
     /// Token escrow ATA holding reward tokens (optional)
     #[account(mut)]
@@ -136,6 +152,20 @@ pub struct ExpireDispute<'info> {
 
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
+
+    // === Batch 3 completion bonds (REQUIRED; both refunded on no-fault expiry) ===
+    // Required, not optional: expire_dispute is PERMISSIONLESS and always Cancels the
+    // task, so a posted bond is recoverable only here (reclaim_completion_bond needs a
+    // Completed task). If the caller could omit a bond it would be stranded forever on
+    // the Cancelled task. The caller passes the seeds-derived PDA even for an un-bonded
+    // task; settle_completion_bond validates the canonical derivation and no-ops when no
+    // live bond was posted (mirrors resolve_dispute / resolve_reject_frozen hardening).
+    /// CHECK: creator completion bond PDA; refunded on expiry. Validated by helper.
+    #[account(mut)]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA; refunded on expiry.
+    #[account(mut)]
+    pub worker_completion_bond: UncheckedAccount<'info>,
 }
 
 /// Expires a dispute after voting period ends.
@@ -157,8 +187,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     let config = &ctx.accounts.protocol_config;
     let clock = Clock::get()?;
 
-    check_version_compatible(config)?;
-    require_task_type_enabled(config, task.task_type)?;
+    // Exit path: expiring a stale dispute releases escrowed funds to the
+    // default winner; it must work even while the protocol is paused (money
+    // never locks, spec §7). Type-disable gates entry only, so it is NOT
+    // re-checked here.
+    check_version_compatible_for_exit(config)?;
     require!(
         dispute.status == DisputeStatus::Active,
         CoordinationError::DisputeNotActive
@@ -242,6 +275,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     // Fair refund distribution based on context (fix #418)
     let is_token_task = task.reward_mint.is_some();
     let task_key = task.key();
+    // §4 operator leg (Task-first, HireRecord fallback); SOL-only path below.
+    let (expire_operator_pubkey, expire_operator_fee_bps) = resolve_task_operator_terms(
+        task.operator,
+        task.operator_fee_bps,
+        &ctx.accounts.hire_record.to_account_info(),
+        &task_key,
+    )?;
     let worker_completed = ctx
         .accounts
         .worker_claim
@@ -399,6 +439,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
                     .as_ref()
                     .ok_or(CoordinationError::IncompleteWorkerAccounts)?
                     .to_account_info(),
+                expire_operator_pubkey,
+                expire_operator_fee_bps,
+                ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
                 remaining_funds,
                 worker_completed,
                 no_votes,
@@ -537,7 +580,56 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         .worker_wallet
         .as_ref()
         .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
-    claim.close(worker_wallet.to_account_info())?;
+    let worker_wallet_info = worker_wallet.to_account_info();
+    claim.close(worker_wallet_info.clone())?;
+
+    // Batch 3 §8: a no-fault expiry refunds BOTH completion bonds. The bond accounts are
+    // REQUIRED (see struct) so this permissionless exit cannot strand a posted bond on
+    // the now-Cancelled task. Both are pinned to their canonical PDA: settle_completion_bond
+    // no-ops on any non-program-owned account, so without this pin a caller could pass a
+    // junk account to skip a refund and strand the real bond. An un-bonded task still
+    // passes (correct address, no account → settle no-ops).
+    {
+        let creator_info = ctx.accounts.creator.to_account_info();
+        let (expected_creator_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                ctx.accounts.creator.key().as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.creator_completion_bond.key() == expected_creator_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+        let (expected_worker_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                worker_wallet_info.key().as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.worker_completion_bond.key() == expected_worker_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+        settle_completion_bond(
+            &ctx.accounts.creator_completion_bond.to_account_info(),
+            &creator_info,
+            &task_key,
+            CompletionBond::ROLE_CREATOR,
+            BondDisposition::Refund,
+        )?;
+        settle_completion_bond(
+            &ctx.accounts.worker_completion_bond.to_account_info(),
+            &worker_wallet_info,
+            &task_key,
+            CompletionBond::ROLE_WORKER,
+            BondDisposition::Refund,
+        )?;
+    }
 
     emit!(DisputeExpired {
         dispute_id: dispute.dispute_id,
@@ -595,10 +687,14 @@ fn validate_worker_accounts(
 /// - Some votes but insufficient quorum: Creator gets refund (dispute was contested)
 ///
 /// Returns (creator_amount, worker_amount) for event emission.
+#[allow(clippy::too_many_arguments)]
 fn distribute_expired_funds<'a>(
     escrow_info: &AccountInfo<'a>,
     creator_info: &AccountInfo<'a>,
     worker_wallet_info: &AccountInfo<'a>,
+    operator_pubkey: Pubkey,
+    operator_fee_bps: u16,
+    operator: Option<AccountInfo<'a>>,
     remaining_funds: u64,
     worker_completed: bool,
     no_votes: bool,
@@ -607,8 +703,19 @@ fn distribute_expired_funds<'a>(
     let mut worker_amount: u64 = 0;
 
     if no_votes && worker_completed {
-        worker_amount = remaining_funds;
-        transfer_lamports(escrow_info, worker_wallet_info, remaining_funds)?;
+        // Worker gets 100% minus the operator leg (hired tasks) so an expired dispute
+        // cannot bypass the §4 operator fee. No-op for non-hired tasks.
+        let op_fee = pay_dispute_operator_fee(
+            operator_pubkey,
+            operator_fee_bps,
+            operator,
+            escrow_info,
+            remaining_funds,
+        )?;
+        worker_amount = remaining_funds
+            .checked_sub(op_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        transfer_lamports(escrow_info, worker_wallet_info, worker_amount)?;
     } else if no_votes {
         let worker_share = remaining_funds
             .checked_div(2)
@@ -616,12 +723,29 @@ fn distribute_expired_funds<'a>(
         let creator_share = remaining_funds
             .checked_sub(worker_share)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
+        // Carve the operator leg from the worker's half (no-op for non-hired tasks).
+        let op_fee = pay_dispute_operator_fee(
+            operator_pubkey,
+            operator_fee_bps,
+            operator,
+            escrow_info,
+            worker_share,
+        )?;
+        let worker_net = worker_share
+            .checked_sub(op_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
         creator_amount = creator_share;
-        worker_amount = worker_share;
+        worker_amount = worker_net;
 
-        debit_lamports(escrow_info, remaining_funds)?;
+        // The operator leg was already debited from escrow by the helper.
+        debit_lamports(
+            escrow_info,
+            remaining_funds
+                .checked_sub(op_fee)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+        )?;
         credit_lamports(creator_info, creator_share)?;
-        credit_lamports(worker_wallet_info, worker_share)?;
+        credit_lamports(worker_wallet_info, worker_net)?;
     } else {
         creator_amount = remaining_funds;
         transfer_lamports(escrow_info, creator_info, remaining_funds)?;

@@ -20,7 +20,6 @@ use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
 };
@@ -30,7 +29,11 @@ use crate::state::{
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::{BidMarketplaceConfig, TaskType};
-use crate::utils::version::check_version_compatible;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
 /// Small reward for calling expire_claim (0.000001 SOL)
@@ -114,6 +117,16 @@ pub struct ExpireClaim<'info> {
     )]
     pub rent_recipient: UncheckedAccount<'info>,
 
+    /// CHECK: the worker's completion bond PDA (Batch 3, optional). On a pure no-show
+    /// (InProgress expiry) its principal is forfeited to the creator. Fully validated
+    /// in the handler by settle_completion_bond (owner, PDA, task, role, party).
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: forfeit recipient for the worker bond; validated == task.creator.
+    #[account(mut)]
+    pub bond_creator: Option<UncheckedAccount<'info>>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -129,14 +142,16 @@ pub struct ExpireClaim<'info> {
 /// Callers receive a small reward from the task escrow to incentivize
 /// timely cleanup of expired claims.
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Result<()> {
-    check_version_compatible(&ctx.accounts.protocol_config)?;
+    // Exit path: expiring a stale claim frees the slot and refunds the cleanup
+    // caller; it must work even while the protocol is paused (money never locks,
+    // spec §7). Type-disable gates entry only, so it is NOT re-checked here.
+    check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::InvalidInput
     );
 
     let task = &mut ctx.accounts.task;
-    require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     let worker = &mut ctx.accounts.worker;
     let escrow = &mut ctx.accounts.escrow;
     let claim = &ctx.accounts.claim;
@@ -212,6 +227,12 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         .checked_sub(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
+    // A pure no-show is an InProgress claim that expired without a submission
+    // (a submission would have moved the task to PendingValidation). Capture it
+    // BEFORE the status is mutated (the reopen below flips InProgress -> Open).
+    #[cfg(not(feature = "mainnet-canary"))]
+    let is_pure_noshow = task.status == TaskStatus::InProgress;
+
     if is_manual_validation_task(task) {
         let validation_config = ctx
             .accounts
@@ -264,6 +285,35 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
                 bid_marketplace.accepted_no_show_slash_bps,
             ),
         )?;
+    }
+
+    // Batch 3 §8: a pure no-show forfeits the worker's completion bond to the creator.
+    // This is the case the dedicated-PDA design exists for — the claim closes to the
+    // worker (auto-refunding their rent), but the bond lives in its own PDA so a
+    // no-show worker does NOT get their bond back. Skip BidExclusive (it already
+    // slashes a bid bond above — no double-charge). Optional: only fires when the
+    // bond accounts are supplied; an un-bonded task is unaffected.
+    #[cfg(not(feature = "mainnet-canary"))]
+    if is_pure_noshow && task.task_type != TaskType::BidExclusive {
+        if let (Some(bond), Some(creator)) = (
+            ctx.accounts.worker_completion_bond.as_ref(),
+            ctx.accounts.bond_creator.as_ref(),
+        ) {
+            require!(
+                creator.key() == task.creator,
+                CoordinationError::InvalidCreator
+            );
+            let creator_info = creator.to_account_info();
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &ctx.accounts.rent_recipient.to_account_info(),
+                &task.key(),
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Forfeit {
+                    recipient: &creator_info,
+                },
+            )?;
+        }
     }
 
     // Decrement worker active tasks

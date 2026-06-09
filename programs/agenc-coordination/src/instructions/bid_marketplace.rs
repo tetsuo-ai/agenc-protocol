@@ -12,7 +12,7 @@ use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::state::{
     AgentRegistration, AgentStatus, BidBookState, BidMarketplaceConfig, BidderMarketState,
     MatchingPolicy, ProtocolConfig, Task, TaskBid, TaskBidBook, TaskBidState, TaskClaim,
-    TaskStatus, TaskType, WeightedScoreWeights,
+    TaskJobSpec, TaskStatus, TaskType, WeightedScoreWeights,
 };
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use crate::utils::version::check_version_compatible;
@@ -34,6 +34,27 @@ fn require_bid_task(task: &Task) -> Result<()> {
     require!(
         task.reward_mint.is_none(),
         CoordinationError::BidTaskSolOnly
+    );
+    Ok(())
+}
+
+/// Reject self-dealing on the bid path (fix #831, parity with `claim_task`).
+///
+/// A task's creator must not also be the worker. Without this, one wallet
+/// creates a BidExclusive task, registers a second agent, self-bids, self-accepts
+/// (the creator signs `accept_bid`), and self-completes, farming +100 reputation
+/// per cycle with the bond refunded in full. `claim_task` enforces this for the
+/// FCFS path; the bid book is the only other way to become a worker.
+///
+/// IMPORTANT: in `accept_bid` only the creator signs and the bidder
+/// `AgentRegistration` carries no `has_one = authority`, so callers MUST pass the
+/// STORED `bid.bidder_authority` (set at `create_bid`), never a freshly-supplied
+/// bidder account's `authority`. In `create_bid` the bidder authority IS the
+/// signer, so its `authority.key()` is authoritative there.
+fn ensure_not_self_bid(bidder_authority: Pubkey, task_creator: Pubkey) -> Result<()> {
+    require!(
+        bidder_authority != task_creator,
+        CoordinationError::SelfTaskNotAllowed
     );
     Ok(())
 }
@@ -440,6 +461,8 @@ pub fn create_bid_handler(
     check_version_compatible(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
     require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
+    // create_bid: the bidder authority is the signer (has_one = authority).
+    ensure_not_self_bid(ctx.accounts.authority.key(), ctx.accounts.task.creator)?;
     require!(
         ctx.accounts.task.status == TaskStatus::Open,
         CoordinationError::TaskNotOpen
@@ -881,6 +904,20 @@ pub struct AcceptBid<'info> {
     )]
     pub bidder: Box<Account<'info, AgentRegistration>>,
 
+    /// Published, moderation-gated job spec for this task (PDA ["task_job_spec", task]).
+    /// Required so a bid can only be accepted for work that passed moderation at
+    /// publish time — `set_task_job_spec` is the only way this account can exist and
+    /// it hard-requires a publishable `task_moderation`. This gates `accept_bid`
+    /// before InProgress (spec §6) at parity with `claim_task_with_job_spec`, which
+    /// makes the legacy no-job-spec assignment path unreachable.
+    #[account(
+        seeds = [b"task_job_spec", task.key().as_ref()],
+        bump = task_job_spec.bump,
+        constraint = task_job_spec.task == task.key() @ CoordinationError::TaskJobSpecTaskMismatch,
+        constraint = task_job_spec.creator == task.creator @ CoordinationError::UnauthorizedTaskAction
+    )]
+    pub task_job_spec: Box<Account<'info, TaskJobSpec>>,
+
     #[account(mut)]
     pub creator: Signer<'info>,
 
@@ -891,6 +928,23 @@ pub fn accept_bid_handler(ctx: Context<AcceptBid>) -> Result<()> {
     require!(
         ctx.accounts.creator.is_signer,
         CoordinationError::UnauthorizedTaskAction
+    );
+    // §6 moderation gate (entry-only): a bid may only be accepted for work whose
+    // job spec passed moderation at publish time. The task_job_spec account can
+    // only exist via the moderation-gated set_task_job_spec, so requiring a valid
+    // pointer here enforces moderation on the accept_bid path before the task goes
+    // InProgress — parity with claim_task_with_job_spec.
+    require!(
+        ctx.accounts
+            .task_job_spec
+            .job_spec_hash
+            .iter()
+            .any(|byte| *byte != 0),
+        CoordinationError::InvalidTaskJobSpecHash
+    );
+    require!(
+        !ctx.accounts.task_job_spec.job_spec_uri.trim().is_empty(),
+        CoordinationError::InvalidTaskJobSpecUri
     );
     let task = &mut ctx.accounts.task;
     let bid = &mut ctx.accounts.bid;
@@ -903,6 +957,9 @@ pub fn accept_bid_handler(ctx: Context<AcceptBid>) -> Result<()> {
     check_version_compatible(config)?;
     require_bid_task(task)?;
     require_task_type_enabled(config, task.task_type)?;
+    // accept_bid: only the creator signs; the bidder account has no has_one,
+    // so compare the STORED bidder authority recorded at create_bid.
+    ensure_not_self_bid(bid.bidder_authority, task.creator)?;
     require!(
         task.status == TaskStatus::Open,
         CoordinationError::TaskNotOpen
@@ -1108,4 +1165,27 @@ pub fn expire_bid_handler(ctx: Context<ExpireBid>) -> Result<()> {
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Revert-sensitive guard test for the bid-path self-deal fix (#831).
+    // `ensure_not_self_bid` is the single source of the guard, called by both
+    // create_bid_handler (signer authority) and accept_bid_handler (stored
+    // bid.bidder_authority). Removing/weakening the require! turns
+    // rejects_self_bid_same_authority red.
+    #[test]
+    fn rejects_self_bid_same_authority() {
+        let same = Pubkey::new_unique();
+        assert!(ensure_not_self_bid(same, same).is_err());
+    }
+
+    #[test]
+    fn allows_distinct_authority() {
+        let bidder_authority = Pubkey::new_unique();
+        let task_creator = Pubkey::new_unique();
+        assert!(ensure_not_self_bid(bidder_authority, task_creator).is_ok());
+    }
 }

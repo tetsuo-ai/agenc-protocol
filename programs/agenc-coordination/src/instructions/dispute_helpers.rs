@@ -7,9 +7,73 @@
 use std::collections::HashSet;
 
 use crate::errors::CoordinationError;
+use crate::instructions::completion_helpers::calculate_operator_fee;
+use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::validation::validate_account_owner;
-use crate::state::{AgentRegistration, DisputeVote, TaskClaim};
+use crate::state::{AgentRegistration, DisputeVote, HireRecord, TaskClaim};
 use anchor_lang::prelude::*;
+
+/// Pay the operator (embedding-site) leg out of a HIRED task's dispute payout so a
+/// dispute cannot bypass the §4 3-way split (audit: operators were unpaid when a hired
+/// task settled via resolve_dispute/expire_dispute instead of complete_task).
+///
+/// `hire_record` is the REQUIRED ["hire", task] account: a live, program-owned
+/// HireRecord means the task was hired. When hired with a non-zero operator fee, this
+/// carves `operator_fee` from `worker_gross` (the lamports the worker is about to be
+/// paid), transfers it to the operator from the escrow, and returns the fee so the
+/// caller pays the worker `worker_gross - fee`. Returns 0 for a non-hired task (empty,
+/// system-owned PDA) or a zero-fee hire. Hired tasks are SOL-only, so this is a
+/// lamport-only path. Defense-in-depth: validates the HireRecord is bound to this task
+/// and that the operator account matches the snapshot.
+/// Resolve the operator terms (payee + fee bps) for a task settling via a dispute,
+/// Task-first with a HireRecord fallback. A Batch-2 hire stamps the operator onto the
+/// Task itself (trusted program-owned state); the 149 pre-Batch-2 tasks carry
+/// `task.operator == default`, so fall back to the live ["hire", task] HireRecord —
+/// never drop this fallback or those operators go unpaid. Returns (default, 0) for a
+/// non-hired / non-operator task.
+pub(crate) fn resolve_task_operator_terms(
+    task_operator: Pubkey,
+    task_operator_fee_bps: u16,
+    hire_record: &AccountInfo,
+    task_key: &Pubkey,
+) -> Result<(Pubkey, u16)> {
+    if task_operator != Pubkey::default() {
+        return Ok((task_operator, task_operator_fee_bps));
+    }
+    if hire_record.owner != &crate::ID {
+        return Ok((Pubkey::default(), 0)); // non-hired task: empty system-owned PDA
+    }
+    let hire = {
+        let data = hire_record.try_borrow_data()?;
+        HireRecord::try_deserialize(&mut &data[..])?
+    };
+    require!(hire.task == *task_key, CoordinationError::InvalidHireRecord);
+    Ok((hire.operator, hire.operator_fee_bps))
+}
+
+pub(crate) fn pay_dispute_operator_fee<'info>(
+    operator_pubkey: Pubkey,
+    operator_fee_bps: u16,
+    operator: Option<AccountInfo<'info>>,
+    escrow: &AccountInfo<'info>,
+    worker_gross: u64,
+) -> Result<u64> {
+    if operator_fee_bps == 0 || operator_pubkey == Pubkey::default() {
+        return Ok(0);
+    }
+    let op = operator.ok_or(CoordinationError::MissingOperatorAccount)?;
+    require!(
+        op.key() == operator_pubkey,
+        CoordinationError::InvalidOperatorAccount
+    );
+    // Disputes take no protocol fee, so pass protocol_fee_bps = 0; calculate_operator_fee
+    // still enforces the operator cap and the worker floor against the gross.
+    let fee = calculate_operator_fee(worker_gross, 0, operator_fee_bps)?;
+    if fee > 0 {
+        transfer_lamports(escrow, &op, fee)?;
+    }
+    Ok(fee)
+}
 
 /// Validates the structure of remaining_accounts for dispute processing.
 ///

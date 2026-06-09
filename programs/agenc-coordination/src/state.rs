@@ -93,6 +93,10 @@ pub enum TaskStatus {
     Completed = 3,
     Cancelled = 4,
     Disputed = 5,
+    /// Batch 3 §8: a terminally-rejected submission frozen for review. Non-terminal —
+    /// exits via resolve_reject_frozen (multisig) or expire_reject_frozen (timeout).
+    /// Highest discriminant keeps 0-5 stable for the 149 live tasks (no layout change).
+    RejectFrozen = 6,
 }
 
 impl TaskStatus {
@@ -129,7 +133,11 @@ impl TaskStatus {
             (PendingValidation, Open) | (PendingValidation, Completed) |
             (PendingValidation, Disputed) |
             // From Disputed
-            (Disputed, Completed) | (Disputed, Cancelled)
+            (Disputed, Completed) | (Disputed, Cancelled) |
+            // From PendingValidation -> RejectFrozen (terminal reject freezes for review)
+            (PendingValidation, RejectFrozen) |
+            // From RejectFrozen (resolved/expired review)
+            (RejectFrozen, Completed) | (RejectFrozen, Cancelled)
         )
     }
 }
@@ -934,6 +942,17 @@ pub struct Task {
     /// None = SOL rewards (default, backward compatible).
     /// Some(mint) = SPL token rewards using the specified mint.
     pub reward_mint: Option<Pubkey>,
+    // === Batch 2 layout additions (APPEND-ONLY — never reorder/insert above) ===
+    /// Operator (embedding-site) payee for the §4 3-way split. `Pubkey::default()`
+    /// means no operator leg (non-operator task, or a pre-Batch-2 task not yet
+    /// backfilled — settlement falls back to the HireRecord in that case).
+    pub operator: Pubkey,
+    /// Operator fee in basis points, snapshotted from the listing at hire time.
+    /// 0 = no operator leg. Capped at MAX_OPERATOR_FEE_BPS by listing creation.
+    pub operator_fee_bps: u16,
+    /// Reserved padding so future field adds become value-only migrates rather
+    /// than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
+    pub _reserved: [u8; 16],
 }
 
 impl Default for Task {
@@ -962,6 +981,9 @@ impl Default for Task {
             dependency_type: DependencyType::default(),
             min_reputation: 0,
             reward_mint: None,
+            operator: Pubkey::default(),
+            operator_fee_bps: 0,
+            _reserved: [0u8; 16],
         }
     }
 }
@@ -970,7 +992,23 @@ impl Task {
     /// Prefer using `8 + Task::INIT_SPACE` (from #[derive(InitSpace)]).
     /// This manual constant is kept for backwards compatibility.
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // reward_mint (Option<Pubkey>: 1 byte discriminator + 32 bytes pubkey)
+
+    /// On-chain byte size of the pre-Batch-2 `Task` (8-byte discriminator + 374
+    /// INIT_SPACE). The 149 live mainnet tasks are at this size; `migrate_task`
+    /// reallocs them up to `SIZE`. Do NOT change — it is the migration precondition.
+    pub const OLD_TASK_SIZE: usize = 382;
+
+    /// Reserved padding must stay zeroed; non-zero implies corruption or an
+    /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 16]
+    }
 }
+
+/// Compile-time pin: a layout drift (field add/reorder changing INIT_SPACE)
+/// fails the build instead of silently bricking the 149-task migration.
+const _: () = assert!(Task::SIZE == 432);
+const _: () = assert!(Task::OLD_TASK_SIZE + 50 == Task::SIZE);
 
 /// Worker's claim on a task
 /// PDA seeds: ["claim", task, worker_agent]
@@ -1548,6 +1586,217 @@ impl SkillRegistration {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // _reserved
 }
 
+/// Lifecycle state of a service listing.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
+#[repr(u8)]
+pub enum ListingState {
+    /// Open for hires.
+    #[default]
+    Active = 0,
+    /// Temporarily not hireable; can be reactivated.
+    Paused = 1,
+    /// Permanently retired; terminal (cannot be reactivated or updated).
+    Retired = 2,
+}
+
+impl ListingState {
+    /// Parse a client-supplied state byte. Used by `set_service_listing_state`.
+    pub fn from_u8(value: u8) -> anchor_lang::Result<Self> {
+        match value {
+            0 => Ok(ListingState::Active),
+            1 => Ok(ListingState::Paused),
+            2 => Ok(ListingState::Retired),
+            _ => Err(crate::errors::CoordinationError::ListingInvalidStateTransition.into()),
+        }
+    }
+}
+
+/// A standing, embeddable service listing: a provider agent advertising a fixed-price
+/// service that buyers (humans or other agents) can hire on demand. The listing is
+/// never escrow-bearing or task-bearing itself — each hire mints an independent
+/// one-shot `Task` (see `hire_from_listing`).
+/// PDA seeds: ["service_listing", provider_agent_pda, listing_id]
+#[account]
+#[derive(InitSpace)]
+pub struct ServiceListing {
+    /// Provider's agent PDA (the maker / worker that fulfils hires)
+    pub provider_agent: Pubkey,
+    /// Provider's signing authority (owns the listing)
+    pub authority: Pubkey,
+    /// Unique listing identifier
+    pub listing_id: [u8; 32],
+    /// Display name
+    pub name: [u8; 32],
+    /// Category (client-encoded)
+    pub category: [u8; 32],
+    /// Tags for discovery (client-encoded)
+    pub tags: [u8; 64],
+    /// Content-addressed job-spec hash (sha256 of the spec)
+    pub spec_hash: [u8; 32],
+    /// Job-spec URI (e.g. agenc://job-spec/sha256/<hash>)
+    #[max_len(256)]
+    pub spec_uri: String,
+    /// Price in lamports (SOL) or token smallest units
+    pub price: u64,
+    /// Optional SPL token mint for price denomination (None = SOL)
+    pub price_mint: Option<Pubkey>,
+    /// Capability bitmask a worker must satisfy
+    pub required_capabilities: u64,
+    /// Default task deadline in seconds from hire (0 = protocol default)
+    pub default_deadline_secs: i64,
+    /// Operator payee (the embedding site); `Pubkey::default()` = no operator.
+    /// Carried here in Batch 1; the on-chain 3-way settlement split lands in
+    /// Batch 2 with the `Task` layout change + migration.
+    pub operator: Pubkey,
+    /// Operator fee in basis points (applied at settlement once Batch 2 ships)
+    pub operator_fee_bps: u16,
+    /// Lifecycle state
+    pub state: ListingState,
+    /// Max concurrently-open hires (0 = unlimited)
+    pub max_open_jobs: u16,
+    /// Open-hire count: incremented by `hire_from_listing`, decremented only by
+    /// `close_task` (NOT at task termination via cancel/complete). It therefore
+    /// counts hires that have been created but not yet closed, which is
+    /// deliberately conservative: the count can lag high (blocking further hires)
+    /// but never lags low, so it can never over-admit past `max_open_jobs`. A
+    /// provider can always raise/zero `max_open_jobs` to relieve a lagging count.
+    /// (Batch 2's Task migration will let cancel/complete free the slot directly.)
+    pub open_jobs: u16,
+    /// Lifetime hire count
+    pub total_hires: u64,
+    /// Sum of reputation-weighted ratings
+    pub total_rating: u64,
+    /// Number of ratings received
+    pub rating_count: u32,
+    /// Version, bumped on every update (compare-and-swap target for hire)
+    pub version: u64,
+    /// Creation timestamp
+    pub created_at: i64,
+    /// Last update timestamp
+    pub updated_at: i64,
+    /// Bump seed
+    pub bump: u8,
+    /// Reserved for future growth (SLA refs, escrow refs, etc.)
+    pub _reserved: [u8; 32],
+}
+
+impl ServiceListing {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // + 8 discriminator
+}
+
+/// Links a one-shot hire to its source `ServiceListing`.
+///
+/// Created by `hire_from_listing` and closed by `close_task`. Its purpose is to
+/// let `close_task` decrement the listing's `open_jobs` capacity counter WITHOUT a
+/// `Task` layout change (no migration): the on-chain task<->listing link lives
+/// here instead of on `Task`. It also snapshots the operator fee terms at hire
+/// time so the Batch 2 settlement split can read them without touching `Task`.
+/// PDA seeds: ["hire", task]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct HireRecord {
+    /// The one-shot task minted by this hire.
+    pub task: Pubkey,
+    /// Source service listing whose `open_jobs` is decremented when the task closes.
+    pub listing: Pubkey,
+    /// Operator payee snapshot for the Batch 2 fee split (`Pubkey::default()` = none).
+    pub operator: Pubkey,
+    /// Operator fee in basis points, snapshotted at hire time.
+    pub operator_fee_bps: u16,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future hire metadata.
+    pub _reserved: [u8; 32],
+}
+
+impl HireRecord {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Symmetric 25/25 completion bond (spec §8). Both the creator and the worker post
+/// a bond equal to 25% of the reward into their own PDA; the loser of a dispute
+/// forfeits theirs, the winner is refunded, and a no-show worker's bond is forfeited
+/// to the creator on `expire_claim`. Kept in a DEDICATED PDA (never on `TaskClaim`,
+/// which closes to the worker on exit and would auto-refund a no-show).
+/// SOL-only in v1. PDA seeds: ["completion_bond", task, party] where `party` is the
+/// SIGNING WALLET (creator wallet / worker authority), so the two sides get distinct
+/// PDAs and one-bond-per-wallet-per-task is automatic.
+#[account]
+#[derive(Default, InitSpace)]
+pub struct CompletionBond {
+    /// Task this bond backs.
+    pub task: Pubkey,
+    /// Posting wallet (creator wallet for the creator bond, worker authority for the
+    /// worker bond). Also the seed component and the rent/refund recipient.
+    pub party: Pubkey,
+    /// 0 = creator bond, 1 = worker bond (see `ROLE_CREATOR` / `ROLE_WORKER`).
+    pub role: u8,
+    /// Bonded principal in lamports (held as excess lamports on this PDA).
+    pub amount: u64,
+    /// Bond denomination. `None` = SOL (v1); SPL deferred behind a feature flag.
+    pub bond_mint: Option<Pubkey>,
+    /// Post timestamp.
+    pub posted_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future bond metadata. MUST stay zeroed.
+    pub _reserved: [u8; 16],
+}
+
+impl CompletionBond {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+    pub const ROLE_CREATOR: u8 = 0;
+    pub const ROLE_WORKER: u8 = 1;
+    /// Bond rate: 25% of the reward (basis points), per the symmetric 25/25 design.
+    pub const BOND_BPS: u64 = 2500;
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 16]
+    }
+}
+
+/// On-chain moderation attestation for a service listing's pinned job-spec hash.
+///
+/// The task-bound `TaskModeration` PDA (`["task_moderation", task, hash]`) cannot
+/// exist before a task is minted, so it can't gate `hire_from_listing` at hire
+/// time. This listing/spec-keyed attestation does: the moderation authority attests
+/// the listing's `spec_hash` once, and the hire checks it. Recorded by
+/// `record_listing_moderation`. PDA seeds: ["listing_moderation", service_listing, job_spec_hash]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct ListingModeration {
+    /// Service listing this decision applies to.
+    pub listing: Pubkey,
+    /// Provider agent of the listing at decision time.
+    pub provider_agent: Pubkey,
+    /// Job-spec hash approved/held/rejected.
+    pub job_spec_hash: [u8; HASH_SIZE],
+    /// One of `task_moderation_status::*`.
+    pub status: u8,
+    /// Normalized 0-100 risk score.
+    pub risk_score: u8,
+    /// Bitmask of scanner categories.
+    pub category_mask: u64,
+    /// Hash of the moderation policy/threshold version.
+    pub policy_hash: [u8; HASH_SIZE],
+    /// Hash of the scanner/model version bundle.
+    pub scanner_hash: [u8; HASH_SIZE],
+    /// When the decision was recorded.
+    pub recorded_at: i64,
+    /// Optional expiry timestamp. Zero means no expiry.
+    pub expires_at: i64,
+    /// Signer that recorded the decision (the moderation authority).
+    pub moderator: Pubkey,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future attestation metadata.
+    pub _reserved: [u8; 7],
+}
+
+impl ListingModeration {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
 /// Skill rating record (one per rater per skill)
 /// PDA seeds: ["skill_rating", skill_pda, rater_agent_pda]
 #[account]
@@ -1865,6 +2114,31 @@ mod tests {
     }
 
     #[test]
+    fn test_service_listing_size() {
+        test_size_constant!(ServiceListing);
+    }
+
+    #[test]
+    fn test_hire_record_size() {
+        test_size_constant!(HireRecord);
+    }
+
+    #[test]
+    fn test_listing_moderation_size() {
+        test_size_constant!(ListingModeration);
+    }
+
+    #[test]
+    fn test_listing_state_from_u8() {
+        // ListingState has no Debug derive, so match with `matches!`.
+        assert!(matches!(ListingState::from_u8(0), Ok(ListingState::Active)));
+        assert!(matches!(ListingState::from_u8(1), Ok(ListingState::Paused)));
+        assert!(matches!(ListingState::from_u8(2), Ok(ListingState::Retired)));
+        assert!(ListingState::from_u8(3).is_err());
+        assert!(ListingState::from_u8(255).is_err());
+    }
+
+    #[test]
     fn test_purchase_record_size() {
         test_size_constant!(PurchaseRecord);
     }
@@ -1906,6 +2180,23 @@ mod tests {
         assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::Disputed));
         assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::PendingValidation));
         assert!(!TaskStatus::Cancelled.can_transition_to(TaskStatus::InProgress));
+    }
+
+    #[test]
+    fn test_task_status_reject_frozen_transitions() {
+        // Allowed: PendingValidation -> RejectFrozen (terminal reject freezes for review),
+        // and RejectFrozen -> Completed / Cancelled (review resolved or expired).
+        assert!(TaskStatus::PendingValidation.can_transition_to(TaskStatus::RejectFrozen));
+        assert!(TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Completed));
+        assert!(TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Cancelled));
+        // Rejected: a frozen task cannot reopen, and terminal states cannot freeze.
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::InProgress));
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Open));
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::PendingValidation));
+        assert!(!TaskStatus::RejectFrozen.can_transition_to(TaskStatus::Disputed));
+        assert!(!TaskStatus::Completed.can_transition_to(TaskStatus::RejectFrozen));
+        assert!(!TaskStatus::Cancelled.can_transition_to(TaskStatus::RejectFrozen));
+        assert!(!TaskStatus::InProgress.can_transition_to(TaskStatus::RejectFrozen));
     }
 
     #[test]
@@ -1968,5 +2259,38 @@ mod tests {
         let mut config = ZkConfig::default();
         config._reserved[0] = 0xFF;
         assert!(!config.validate_reserved_fields());
+    }
+
+    // === Batch 2 Task layout (migration safety) ===
+
+    #[test]
+    fn test_task_size_pins() {
+        // Runtime guard mirroring the compile-time const_assert. If a field add
+        // changes the layout, the 149-task realloc (OLD_TASK_SIZE -> SIZE) breaks;
+        // this fails loudly rather than silently bricking live accounts.
+        assert_eq!(Task::OLD_TASK_SIZE, 382, "OLD_TASK_SIZE is the migration precondition; do not change");
+        assert_eq!(Task::SIZE, 432, "Task grew by operator(32)+fee(2)+reserved(16)=50");
+        assert_eq!(Task::SIZE - Task::OLD_TASK_SIZE, 50, "realloc delta must be exactly +50 bytes");
+    }
+
+    #[test]
+    fn test_task_reserved_fields_default_to_zero() {
+        let task = Task::default();
+        assert_eq!(task._reserved, [0u8; 16]);
+        assert_eq!(task.operator, Pubkey::default());
+        assert_eq!(task.operator_fee_bps, 0);
+    }
+
+    #[test]
+    fn test_task_validate_reserved_fields_ok() {
+        let task = Task::default();
+        assert!(task.validate_reserved_fields());
+    }
+
+    #[test]
+    fn test_task_validate_reserved_fields_corrupted() {
+        let mut task = Task::default();
+        task._reserved[0] = 0xFF;
+        assert!(!task.validate_reserved_fields());
     }
 }

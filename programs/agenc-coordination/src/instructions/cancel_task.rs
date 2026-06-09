@@ -8,7 +8,6 @@ use crate::instructions::bid_settlement_helpers::{
     AcceptedBidBookDisposition,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
-use crate::instructions::launch_controls::require_task_type_enabled;
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
@@ -16,7 +15,11 @@ use crate::instructions::token_helpers::{
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::TaskType;
 use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus};
-use crate::utils::version::check_version_compatible;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 #[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{Mint, Token, TokenAccount};
@@ -72,6 +75,22 @@ pub struct CancelTask<'info> {
     #[cfg(feature = "spl-token-rewards")]
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
+
+    // === Batch 3 completion bonds (optional) ===
+    /// CHECK: creator completion bond PDA; refunded to the creator (== authority) on
+    /// cancel. Validated by settle_completion_bond.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut)]
+    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: worker completion bond PDA; forfeited to the creator when a (no-show)
+    /// worker bond is present (an InProgress past-deadline cancel).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: worker bond poster wallet (worker authority); validated == bond.party.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut)]
+    pub worker_bond_authority: Option<UncheckedAccount<'info>>,
 }
 
 pub fn process_cancel_task<'info>(
@@ -118,14 +137,16 @@ fn process_cancel_task_impl<'info>(
         accounts.authority.is_signer,
         CoordinationError::UnauthorizedTaskAction
     );
-    check_version_compatible(&accounts.protocol_config)?;
+    // Exit path: a paused protocol must still let an escrowed task be cancelled
+    // (money never locks, spec §7). Type-disable gates entry only, so it is NOT
+    // re-checked here.
+    check_version_compatible_for_exit(&accounts.protocol_config)?;
     require!(
         accounts.authority.is_signer,
         CoordinationError::UnauthorizedTaskAction
     );
 
     let task = &mut accounts.task;
-    require_task_type_enabled(&accounts.protocol_config, task.task_type)?;
     // SAFETY: `remaining_accounts` entries already carry `'info`; we only need
     // to rebind the slice reference itself so derived sub-slices can be reused
     // across the V2 settlement branches.
@@ -435,6 +456,39 @@ fn process_cancel_task_impl<'info>(
     task.current_workers = 0;
 
     escrow.close(accounts.authority.to_account_info())?;
+
+    // Batch 3 §8 bond disposition on cancel (authority == creator): refund the
+    // creator's bond; forfeit a (no-show) worker's bond to the creator. No-op for
+    // un-bonded tasks. cancel only runs on Open (no worker) or InProgress past
+    // deadline with no completion (a no-show), so forfeiting the worker bond is fair.
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        let task_key = accounts.task.key();
+        let creator_info = accounts.authority.to_account_info();
+        if let Some(bond) = accounts.creator_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &creator_info,
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
+        }
+        if let (Some(bond), Some(worker_wallet)) = (
+            accounts.worker_completion_bond.as_ref(),
+            accounts.worker_bond_authority.as_ref(),
+        ) {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &worker_wallet.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Forfeit {
+                    recipient: &creator_info,
+                },
+            )?;
+        }
+    }
 
     Ok(())
 }

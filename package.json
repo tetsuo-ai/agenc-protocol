@@ -5,7 +5,8 @@
   "description": "Public protocol source of truth for AgenC",
   "packageManager": "npm@11.7.0",
   "workspaces": [
-    "packages/protocol"
+    "packages/protocol",
+    "packages/sdk-ts"
   ],
   "scripts": {
     "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs && npm run sync:artifacts",

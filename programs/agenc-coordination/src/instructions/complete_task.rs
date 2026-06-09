@@ -7,16 +7,19 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
-    validate_completion_prereqs, validate_task_dependency,
+    validate_completion_prereqs, validate_task_dependency, OperatorLeg,
 };
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
-    AgentRegistration, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
+    AgentRegistration, HireRecord, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
 };
 use crate::utils::compute_budget::log_compute_units;
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -102,6 +105,36 @@ pub struct CompleteTask<'info> {
 
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
+
+    // === 3-way-split accounts (spec §4) ===
+    /// Hire link PDA for this task. ALWAYS required — the caller passes the derived
+    /// ["hire", task] address even for non-hired tasks (where it is an empty system
+    /// account). A live, program-owned record means the task was hired from a listing
+    /// and its operator fee MUST be paid at settlement, so a worker CANNOT omit the
+    /// account to pocket the operator's cut. Mirrors close_task's required-hire_record
+    /// design (the same dodge an audit caught there).
+    /// CHECK: address fixed by seeds; live-vs-absent is decided by `owner` in the
+    /// handler, and a live record is deserialized + validated there.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+
+    /// CHECK: operator payee — validated in the handler to equal hire_record.operator.
+    /// Required only when a live hire carries a non-zero operator fee. Receives the
+    /// operator fee leg in SOL.
+    #[account(mut)]
+    pub operator: Option<UncheckedAccount<'info>>,
+
+    // === Batch 3 completion bonds (optional) ===
+    /// CHECK: creator completion bond PDA; refunded to the creator on success.
+    /// Validated in the handler by settle_completion_bond (owner/PDA/task/role/party).
+    #[account(mut)]
+    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: worker completion bond PDA; refunded to the worker on success.
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handler<'info>(
@@ -151,8 +184,11 @@ fn handle_complete_task<'info>(
     let worker = &mut accounts.worker;
     let clock = Clock::get()?;
 
-    check_version_compatible(&accounts.protocol_config)?;
-    require_task_type_enabled(&accounts.protocol_config, task.task_type)?;
+    // Settlement path: an in-flight task must settle even while the protocol is
+    // paused or its type is disabled (both gate ENTRY only — spec §7, Decision #4
+    // "money never locks"). Paying out already-escrowed funds for completed work
+    // is an exit, not new work, so a pause must never strand a worker's reward.
+    check_version_compatible_for_exit(&accounts.protocol_config)?;
 
     // If task has a proof dependency, verify parent task is completed (shared helper)
     validate_task_dependency(task, remaining_accounts, program_id)?;
@@ -257,6 +293,44 @@ fn handle_complete_task<'info>(
 
     log_compute_units("complete_task_validated");
 
+    // §4 3-way split (Batch 2: Task-first, HireRecord fallback).
+    // A Batch-2 hire stamps the operator terms onto the Task itself, so settlement
+    // reads them straight from the (trusted, program-owned) Task account. The 149
+    // pre-Batch-2 tasks (and any hire created before the redeploy) carry
+    // `task.operator == default`, so we FALL BACK to the live ["hire", task]
+    // HireRecord — never drop this fallback or those operators go unpaid. A worker
+    // still cannot dodge the leg: the operator terms come from program-owned state,
+    // and the seeds-fixed hire_record account stays required by the struct.
+    let (operator_pubkey, operator_fee_bps_resolved) = if task.operator != Pubkey::default() {
+        (task.operator, task.operator_fee_bps)
+    } else if accounts.hire_record.owner == &crate::ID {
+        let hire_info = accounts.hire_record.to_account_info();
+        let hire = {
+            let data = hire_info.try_borrow_data()?;
+            HireRecord::try_deserialize(&mut &data[..])?
+        };
+        require!(hire.task == task_key, CoordinationError::InvalidHireRecord);
+        (hire.operator, hire.operator_fee_bps)
+    } else {
+        (Pubkey::default(), 0)
+    };
+    let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
+        let op = accounts
+            .operator
+            .as_ref()
+            .ok_or(CoordinationError::MissingOperatorAccount)?;
+        require!(
+            op.key() == operator_pubkey,
+            CoordinationError::InvalidOperatorAccount
+        );
+        Some(OperatorLeg {
+            payee: op.to_account_info(),
+            fee_bps: operator_fee_bps_resolved,
+        })
+    } else {
+        None
+    };
+
     // Execute reward transfer, state updates, event emissions, and conditional escrow closure
     execute_completion_rewards(
         task,
@@ -272,6 +346,7 @@ fn handle_complete_task<'info>(
         Some(claim_result_data),
         &clock,
         token_accounts,
+        operator_leg,
     )?;
 
     if let Some(settlement) = &bid_settlement {
@@ -285,6 +360,31 @@ fn handle_complete_task<'info>(
     }
 
     claim.close(accounts.authority.to_account_info())?;
+
+    // Batch 3 §8: a clean completion means nobody lost — refund BOTH completion
+    // bonds to their posters. No-op for un-bonded tasks (accounts omitted / empty).
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        let task_key = accounts.task.key();
+        if let Some(bond) = accounts.creator_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &accounts.creator.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
+        }
+        if let Some(bond) = accounts.worker_completion_bond.as_ref() {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &accounts.authority.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
+        }
+    }
 
     log_compute_units("complete_task_done");
 

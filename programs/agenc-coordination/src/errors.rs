@@ -795,4 +795,98 @@ pub enum CoordinationError {
 
     #[msg("Task claim requires a moderated job specification pointer")]
     TaskJobSpecRequired,
+
+    // Service listing errors (embeddable marketplace — Batch 1)
+    #[msg("Service listing ID cannot be all zeros")]
+    ListingInvalidId,
+
+    #[msg("Service listing name cannot be all zeros")]
+    ListingInvalidName,
+
+    #[msg("Service listing spec hash/URI is invalid")]
+    ListingInvalidSpec,
+
+    #[msg("Service listing price is below the minimum")]
+    ListingPriceTooLow,
+
+    #[msg("Service listing must declare at least one required capability")]
+    ListingCapabilitiesRequired,
+
+    #[msg("Operator fee exceeds the maximum allowed")]
+    ListingOperatorFeeTooHigh,
+
+    #[msg("A non-zero operator fee requires an operator payee")]
+    ListingOperatorRequired,
+
+    #[msg("Service listing is not active")]
+    ListingNotActive,
+
+    #[msg("Service listing is retired and cannot be modified")]
+    ListingRetired,
+
+    #[msg("Service listing version does not match the expected version")]
+    ListingVersionMismatch,
+
+    #[msg("Service listing price does not match the expected price")]
+    ListingPriceMismatch,
+
+    #[msg("Service listing has reached its maximum concurrent open hires")]
+    ListingCapacityReached,
+
+    #[msg("Invalid service listing state transition")]
+    ListingInvalidStateTransition,
+
+    #[msg("Task can only be closed once it is in a terminal state with no active workers")]
+    TaskNotClosable,
+
+    #[msg("Worker reward would fall below the protocol-mandated floor")]
+    WorkerRewardBelowFloor,
+
+    #[msg("Supplied hire record does not match this task")]
+    InvalidHireRecord,
+
+    #[msg("Operator payee account is required for this hire's operator fee")]
+    MissingOperatorAccount,
+
+    #[msg("Operator payee account does not match the hire record operator")]
+    InvalidOperatorAccount,
+
+    #[msg("A hired task cannot be reconfigured for manual validation; it settles on the hire completion path")]
+    HiredTaskValidationUnsupported,
+
+    // === Batch 2 ===
+    #[msg("Operator payee cannot be the task creator (operator self-deal)")]
+    OperatorIsCreator,
+
+    #[msg("Task account is not a migratable size (expected the pre-Batch-2 layout)")]
+    TaskNotMigratable,
+
+    #[msg("Task account discriminator does not match the Task type")]
+    TaskDiscriminatorMismatch,
+
+    // === Batch 3: bonds, revisions, reject-frozen ===
+    #[msg("Completion bond does not belong to this task")]
+    BondTaskMismatch,
+    #[msg("Completion bond party does not match the expected wallet")]
+    BondPartyMismatch,
+    #[msg("Completion bond has the wrong role for this disposition")]
+    BondRoleMismatch,
+    #[msg("A completion bond has already been posted for this party and task")]
+    BondAlreadyPosted,
+    #[msg("A required completion bond account was not provided")]
+    MissingCompletionBondAccount,
+    #[msg("Completion bonds are single-worker (Exclusive) only in v1")]
+    BondUnsupportedTaskType,
+    #[msg("Maximum revision rounds exceeded; escalate to reject")]
+    MaxRevisionRoundsExceeded,
+    #[msg("Task is not in the RejectFrozen state")]
+    TaskNotRejectFrozen,
+    #[msg("RejectFrozen review timeout has not elapsed")]
+    RejectFrozenTimeoutNotElapsed,
+    #[msg("Caller is not authorized to make this review decision")]
+    UnauthorizedReviewDecision,
+    #[msg("A frozen (rejected) task cannot be disputed")]
+    TaskFrozenCannotDispute,
+    #[msg("RejectFrozen review is single-worker (Exclusive) only")]
+    RejectFrozenSingleWorkerOnly,
 }

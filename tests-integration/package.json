@@ -1,0 +1,15 @@
+{
+  "name": "agenc-marketplace-integration-tests",
+  "private": true,
+  "type": "module",
+  "description": "In-process litesvm integration tests for hire_from_listing + close_task (not part of the workspace).",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-token": "^0.4.0",
+    "@solana/web3.js": "^1.98.4",
+    "litesvm": "^0.2.0"
+  }
+}

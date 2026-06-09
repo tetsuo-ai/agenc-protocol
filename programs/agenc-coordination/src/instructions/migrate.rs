@@ -4,10 +4,11 @@
 //! Only callable by the upgrade authority (multisig gated).
 
 use crate::errors::CoordinationError;
-use crate::events::{MigrationCompleted, ProtocolVersionUpdated};
-use crate::state::{ProtocolConfig, CURRENT_PROTOCOL_VERSION, MIN_SUPPORTED_VERSION};
+use crate::events::{MigrationCompleted, ProtocolVersionUpdated, TaskMigrated};
+use crate::state::{ProtocolConfig, Task, CURRENT_PROTOCOL_VERSION, MIN_SUPPORTED_VERSION};
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use anchor_lang::prelude::*;
+use anchor_lang::system_program;
 
 #[derive(Accounts)]
 pub struct MigrateProtocol<'info> {
@@ -93,6 +94,130 @@ pub fn handler(ctx: Context<MigrateProtocol>, target_version: u8) -> Result<()> 
         new_version: target_version,
         min_supported_version: config.min_supported_version,
         timestamp: clock.unix_timestamp,
+    });
+
+    Ok(())
+}
+
+/// Per-Task realloc migration to the Batch-2 layout (Task 382B -> 432B).
+///
+/// Grows each of the 149 live Task accounts and zero-fills the appended
+/// operator/operator_fee_bps/_reserved tail. Multisig/upgrade-authority gated, NOT
+/// permissionless. VERSION-UNGATED: it must run while `protocol_version == 1` so the
+/// binary can be deployed first, all tasks migrated, and the version bumped LAST
+/// (the reverse order would brick in-flight tasks via the version gate). Idempotent:
+/// a task already at the new size is a no-op, so the sweep is safely re-runnable.
+#[derive(Accounts)]
+pub struct MigrateTask<'info> {
+    #[account(
+        mut,
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+
+    /// CHECK: validated in the handler (owner == program, size, and a real Task via
+    /// try_deserialize). MUST be raw — a typed `Account<Task>` would reject the 382B
+    /// pre-migration account before the handler runs, making migration impossible.
+    #[account(mut)]
+    pub task: UncheckedAccount<'info>,
+
+    /// Funds the rent top-up for the +50-byte growth.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Migrate one Task account to the Batch-2 layout. `dry_run` validates the
+/// preconditions + asserts the post-image would deserialize, WITHOUT mutating —
+/// run it across all 149 tasks first to prove the sweep is safe.
+pub fn migrate_task_handler(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
+    let config = &ctx.accounts.protocol_config;
+
+    // Gate: multisig/upgrade-authority approval (same gate as migrate_protocol).
+    require!(
+        ctx.accounts.authority.is_signer,
+        CoordinationError::MultisigNotEnoughSigners
+    );
+    let unique_signers = unique_account_infos(ctx.remaining_accounts);
+    require_multisig_threshold(config, &unique_signers)?;
+
+    let task_info = ctx.accounts.task.to_account_info();
+    require!(
+        task_info.owner == &crate::ID,
+        CoordinationError::InvalidAccountOwner
+    );
+
+    let original_len = {
+        let data = task_info.try_borrow_data()?;
+        let len = data.len();
+        if len >= Task::SIZE {
+            // Idempotent: already migrated (or larger). Confirm it is genuinely a Task
+            // (validates the discriminator) and no-op.
+            Task::try_deserialize(&mut &data[..])
+                .map_err(|_| CoordinationError::TaskDiscriminatorMismatch)?;
+            return Ok(());
+        }
+        require!(
+            len == Task::OLD_TASK_SIZE,
+            CoordinationError::TaskNotMigratable
+        );
+        // Validate the pre-image is a real Task (checks the discriminator) by
+        // zero-padding to the new size and deserializing — the append-only invariant
+        // means the legacy prefix is unchanged and the new fields read as defaults.
+        // This is ALSO the dry-run post-image assertion (no mutation here).
+        let mut buf = data.to_vec();
+        buf.resize(Task::SIZE, 0);
+        Task::try_deserialize(&mut &buf[..])
+            .map_err(|_| CoordinationError::TaskDiscriminatorMismatch)?;
+        len
+    };
+
+    if dry_run {
+        return Ok(());
+    }
+
+    // Grow the account, then EXPLICITLY zero the appended 50 bytes so
+    // operator=default / fee=0 / _reserved=0 regardless of resize's zero-init
+    // semantics — a non-zeroed tail would deserialize as a garbage operator payee.
+    task_info.resize(Task::SIZE)?;
+    {
+        let mut data = task_info.try_borrow_mut_data()?;
+        for byte in data[original_len..].iter_mut() {
+            *byte = 0;
+        }
+    }
+
+    // Top up rent for the larger account from the payer (system-owned signer ->
+    // program-owned account is a valid system transfer).
+    let rent = Rent::get()?;
+    let required = rent.minimum_balance(Task::SIZE);
+    let current = task_info.lamports();
+    if required > current {
+        let deficit = required
+            .checked_sub(current)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.payer.to_account_info(),
+                    to: task_info.clone(),
+                },
+            ),
+            deficit,
+        )?;
+    }
+
+    emit!(TaskMigrated {
+        task: task_info.key(),
+        from_size: original_len as u32,
+        to_size: Task::SIZE as u32,
+        authority: ctx.accounts.authority.key(),
+        timestamp: Clock::get()?.unix_timestamp,
     });
 
     Ok(())

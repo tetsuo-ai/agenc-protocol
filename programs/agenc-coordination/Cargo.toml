@@ -45,3 +45,11 @@ solana-sha256-hasher = { version = "3.1.0", optional = true }
 
 [target.'cfg(target_os = "solana")'.dependencies]
 getrandom = { version = "=0.2.17", default-features = false, features = ["custom"] }
+
+# Defense-in-depth: the Rust release profile defaults overflow-checks = false, so any
+# integer add/sub/mul not written with checked_*/saturating_* would SILENTLY WRAP in the
+# deployed SBF program. All money paths already use checked arithmetic; this is the second
+# layer the Solana program-security guidance + Anchor recommend alongside it. No Cargo
+# [workspace] root exists, so this crate is the build root and its [profile] is honored.
+[profile.release]
+overflow-checks = true

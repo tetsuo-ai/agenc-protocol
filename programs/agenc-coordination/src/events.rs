@@ -226,6 +226,22 @@ pub struct TaskCancelled {
     pub timestamp: i64,
 }
 
+/// Emitted when a terminal task's account rent is reclaimed via close_task.
+#[event]
+pub struct TaskClosed {
+    pub task_id: [u8; 32],
+    pub creator: Pubkey,
+    /// Terminal status at close time (`TaskStatus` repr: 3=Completed, 4=Cancelled).
+    pub status: u8,
+    /// Whether a leftover job-spec pointer was closed in the same transaction.
+    pub job_spec_closed: bool,
+    /// Whether a still-alive (expire_dispute) escrow PDA was closed in the same tx.
+    pub escrow_closed: bool,
+    /// Whether a hire link was closed (and its listing's capacity slot freed).
+    pub hire_record_closed: bool,
+    pub timestamp: i64,
+}
+
 /// Emitted when Marketplace V2 configuration is initialized.
 #[event]
 pub struct BidMarketplaceInitialized {
@@ -447,6 +463,17 @@ pub struct RewardDistributed {
     pub timestamp: i64,
 }
 
+/// Emitted when an operator (embedding-site) fee leg is paid out of a settlement
+/// (spec §4 3-way split). Only emitted when the operator leg is non-zero.
+#[event]
+pub struct OperatorFeePaid {
+    pub task_id: [u8; 32],
+    pub operator: Pubkey,
+    pub amount: u64,
+    pub operator_fee_bps: u16,
+    pub timestamp: i64,
+}
+
 /// Emitted when a rate limit is hit
 #[event]
 pub struct RateLimitHit {
@@ -465,6 +492,84 @@ pub struct MigrationCompleted {
     pub from_version: u8,
     pub to_version: u8,
     pub authority: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when a single Task account is reallocated to the Batch-2 layout.
+#[event]
+pub struct TaskMigrated {
+    pub task: Pubkey,
+    pub from_size: u32,
+    pub to_size: u32,
+    pub authority: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when a completion bond is posted (Batch 3 §8).
+#[event]
+pub struct BondPosted {
+    pub task: Pubkey,
+    pub party: Pubkey,
+    pub role: u8,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a completion bond is refunded to its poster.
+#[event]
+pub struct BondRefunded {
+    pub task: Pubkey,
+    pub party: Pubkey,
+    pub role: u8,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a completion bond's principal is forfeited (to the creator or treasury).
+#[event]
+pub struct BondForfeited {
+    pub task: Pubkey,
+    pub party: Pubkey,
+    pub role: u8,
+    pub amount: u64,
+    pub recipient: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when a creator requests free, non-terminal revisions (Batch 3 §8).
+#[event]
+pub struct TaskChangesRequested {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker: Pubkey,
+    pub round: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted when a submission is terminally rejected and frozen for review.
+#[event]
+pub struct TaskRejectFrozen {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    pub worker: Pubkey,
+    pub rejection_hash: [u8; 32],
+    pub review_deadline_at: i64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a frozen task's review is resolved (Completed or Cancelled).
+#[event]
+pub struct RejectFrozenResolved {
+    pub task: Pubkey,
+    pub outcome: u8, // 1 = Completed (pay worker), 0 = Cancelled (refund creator)
+    pub timestamp: i64,
+}
+
+/// Emitted when a frozen task's review window expires and it defaults to the worker.
+#[event]
+pub struct RejectFrozenExpired {
+    pub task: Pubkey,
+    pub worker_payout: u64,
     pub timestamp: i64,
 }
 
@@ -655,6 +760,68 @@ pub struct SkillUpdated {
     pub content_hash: [u8; 32],
     pub price: u64,
     pub version: u8,
+    pub timestamp: i64,
+}
+
+/// Emitted when a maker publishes a standing service listing
+#[event]
+pub struct ServiceListingCreated {
+    pub listing: Pubkey,
+    pub provider_agent: Pubkey,
+    pub authority: Pubkey,
+    pub listing_id: [u8; 32],
+    pub price: u64,
+    pub price_mint: Option<Pubkey>,
+    pub operator: Pubkey,
+    pub operator_fee_bps: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted when a service listing's terms are updated
+#[event]
+pub struct ServiceListingUpdated {
+    pub listing: Pubkey,
+    pub authority: Pubkey,
+    pub price: u64,
+    pub operator_fee_bps: u16,
+    pub version: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a service listing's lifecycle state changes (pause/reactivate/retire)
+#[event]
+pub struct ServiceListingStateChanged {
+    pub listing: Pubkey,
+    pub authority: Pubkey,
+    pub new_state: u8,
+    pub timestamp: i64,
+}
+
+/// Emitted when the moderation authority records a decision for a listing/spec hash.
+#[event]
+pub struct ListingModerationRecorded {
+    pub listing: Pubkey,
+    pub provider_agent: Pubkey,
+    pub job_spec_hash: [u8; HASH_SIZE],
+    pub status: u8,
+    pub risk_score: u8,
+    pub expires_at: i64,
+    pub moderator: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when a buyer hires a provider from a standing service listing,
+/// minting a one-shot task. Links the source listing to the new task.
+#[event]
+pub struct ServiceListingHired {
+    pub listing: Pubkey,
+    pub task: Pubkey,
+    pub provider_agent: Pubkey,
+    pub buyer: Pubkey,
+    pub price: u64,
+    pub total_hires: u64,
+    /// Concurrent open hires after this one (capacity counter).
+    pub open_jobs: u16,
     pub timestamp: i64,
 }
 

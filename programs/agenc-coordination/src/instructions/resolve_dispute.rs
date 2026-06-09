@@ -7,22 +7,23 @@ use crate::instructions::bid_settlement_helpers::{
 };
 use crate::instructions::completion_helpers::update_protocol_stats;
 use crate::instructions::constants::{MIN_VOTERS_FOR_RESOLUTION, PERCENT_BASE};
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
-    check_duplicate_arbiters, check_duplicate_workers, process_arbiter_vote_pair,
-    process_worker_claim_pair, validate_remaining_accounts_structure,
+    check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
+    process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
+    validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::slash_helpers::calculate_slash_amount;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim,
-    TaskEscrow, TaskStatus, TaskType,
+    AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task,
+    TaskClaim, TaskEscrow, TaskStatus, TaskType,
 };
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
@@ -110,6 +111,22 @@ pub struct ResolveDispute<'info> {
     #[account(mut)]
     pub worker_wallet: Option<UncheckedAccount<'info>>,
 
+    /// Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
+    /// cannot be bypassed by settling through dispute resolution. A live (program-owned)
+    /// record forces the operator leg; for a non-hired task the caller passes the empty,
+    /// system-owned PDA. CHECK: live-vs-absent decided by `owner` in the handler; a live
+    /// record is deserialized + validated there.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+
+    /// CHECK: operator payee — validated against hire_record.operator; required only when
+    /// a live hire carries a non-zero operator fee. Receives the operator leg (SOL).
+    #[account(mut)]
+    pub dispute_operator: Option<UncheckedAccount<'info>>,
+
     pub system_program: Program<'info, System>,
 
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
@@ -136,6 +153,23 @@ pub struct ResolveDispute<'info> {
 
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
+
+    // === Batch 3 completion bonds (REQUIRED — see below) ===
+    // Required, not optional: a resolver must not be able to omit a forfeit-due bond
+    // (which `reclaim_completion_bond` could then refund to the loser on a Completed
+    // task, inverting the forfeit). The caller passes the seeds-derived PDA even for an
+    // un-bonded task; settle_completion_bond validates the canonical derivation and
+    // no-ops when no bond was posted (audit hardening, mirrors resolve_reject_frozen).
+    /// CHECK: creator completion bond PDA; refunded if the creator prevails, else
+    /// forfeited to the treasury. Fully validated by settle_completion_bond.
+    #[account(mut)]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA; refunded if the worker prevails, else forfeited.
+    #[account(mut)]
+    pub worker_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: treasury, recipient of a forfeited bond; validated == protocol_config.treasury.
+    #[account(mut)]
+    pub bond_treasury: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) -> Result<()> {
@@ -145,8 +179,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
     let config = &ctx.accounts.protocol_config;
     let clock = Clock::get()?;
 
-    check_version_compatible(config)?;
-    require_task_type_enabled(config, task.task_type)?;
+    // Exit path: dispute resolution releases escrowed funds to the rightful
+    // party; it must work even while the protocol is paused (money never locks,
+    // spec §7). Type-disable gates entry only, so it is NOT re-checked here.
+    check_version_compatible_for_exit(config)?;
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedResolver
@@ -242,6 +278,14 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
     // Prepare token context if this is a token-denominated task
     let is_token_task = task.reward_mint.is_some();
     let task_key = task.key();
+    // §4 operator leg (Task-first, HireRecord fallback) resolved once for the SOL
+    // Complete/Split branches below; hires are SOL-only so token paths take no leg.
+    let (dispute_operator_pubkey, dispute_operator_fee_bps) = resolve_task_operator_terms(
+        task.operator,
+        task.operator_fee_bps,
+        &ctx.accounts.hire_record.to_account_info(),
+        &task_key,
+    )?;
     let worker_stake_now = ctx
         .accounts
         .worker
@@ -442,10 +486,22 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
                         token_program,
                     )?;
                 } else {
+                    // §4 3-way split: pay the operator leg first if this is a hired task,
+                    // so dispute resolution can't bypass the operator fee. No-op otherwise.
+                    let op_fee = pay_dispute_operator_fee(
+                        dispute_operator_pubkey,
+                        dispute_operator_fee_bps,
+                        ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
+                        &escrow.to_account_info(),
+                        remaining_funds,
+                    )?;
+                    let worker_net = remaining_funds
+                        .checked_sub(op_fee)
+                        .ok_or(CoordinationError::ArithmeticOverflow)?;
                     transfer_lamports(
                         &escrow.to_account_info(),
                         &worker_wallet.to_account_info(),
-                        remaining_funds,
+                        worker_net,
                     )?;
                 }
                 task.status = TaskStatus::Completed;
@@ -545,10 +601,28 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
                             )?;
                         }
                     } else {
-                        debit_lamports(&escrow.to_account_info(), remaining_funds)?;
+                        // §4 3-way split: carve the operator leg from the worker's half so
+                        // a Split resolution can't bypass the operator fee (no-op if not hired).
+                        let op_fee = pay_dispute_operator_fee(
+                            dispute_operator_pubkey,
+                            dispute_operator_fee_bps,
+                            ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
+                            &escrow.to_account_info(),
+                            worker_share,
+                        )?;
+                        let worker_net = worker_share
+                            .checked_sub(op_fee)
+                            .ok_or(CoordinationError::ArithmeticOverflow)?;
+                        // The operator leg was already debited from escrow by the helper.
+                        debit_lamports(
+                            &escrow.to_account_info(),
+                            remaining_funds
+                                .checked_sub(op_fee)
+                                .ok_or(CoordinationError::ArithmeticOverflow)?,
+                        )?;
                         let creator_info = ctx.accounts.creator.to_account_info();
                         credit_lamports(&creator_info, creator_share)?;
-                        credit_lamports(&worker_wallet.to_account_info(), worker_share)?;
+                        credit_lamports(&worker_wallet.to_account_info(), worker_net)?;
                     }
                 }
                 task.status = TaskStatus::Cancelled;
@@ -755,6 +829,127 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>) ->
             .as_ref()
             .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
         claim.close(worker_wallet.to_account_info())?;
+    }
+
+    // Batch 3 §8: completion bond disposition follows the dispute outcome — the loser
+    // forfeits their bond to the treasury, the winner is refunded. A Split or a
+    // rejected dispute (no fault established) refunds both. No-op for un-bonded tasks.
+    //
+    // The bond accounts are REQUIRED (not optional): a resolver must not be able to
+    // omit a forfeit-due bond, which `reclaim_completion_bond` could then refund to
+    // the loser on the now-Completed task — inverting the forfeit. The caller passes
+    // the seeds-derived PDA even for an un-bonded task; settle_completion_bond
+    // validates the canonical derivation and no-ops when no live bond was posted
+    // (mirrors resolve_reject_frozen).
+    {
+        let bond_resolution = dispute.resolution_type;
+        // (creator_forfeit, worker_forfeit)
+        let (creator_forfeit, worker_forfeit) = if approved {
+            match bond_resolution {
+                ResolutionType::Complete => (true, false), // worker wins
+                ResolutionType::Refund => (false, true),   // worker loses
+                ResolutionType::Split => (false, false),
+            }
+        } else {
+            (false, false) // rejected: no fault, refund both
+        };
+
+        // Validate + bind the treasury (forfeit recipient).
+        require!(
+            ctx.accounts.bond_treasury.key() == ctx.accounts.protocol_config.treasury,
+            CoordinationError::InvalidInput
+        );
+        let treasury_info = ctx.accounts.bond_treasury.to_account_info();
+
+        // Pin both bond accounts to their canonical PDA. settle_completion_bond no-ops on
+        // any non-program-owned account, so without this a resolver could pass a junk
+        // (system-owned) account to SKIP a forfeit-due settle, leaving the real bond at
+        // its canonical PDA for reclaim_completion_bond to refund on the now-Completed
+        // task — inverting the forfeit. Required + canonical-pinned closes that. An
+        // un-bonded task still passes (correct address, no account → settle no-ops).
+        let worker_wallet_key = ctx
+            .accounts
+            .worker_wallet
+            .as_ref()
+            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
+            .key();
+        let (expected_creator_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                ctx.accounts.creator.key().as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.creator_completion_bond.key() == expected_creator_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+        let (expected_worker_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task_key.as_ref(),
+                worker_wallet_key.as_ref(),
+            ],
+            &crate::ID,
+        );
+        require!(
+            ctx.accounts.worker_completion_bond.key() == expected_worker_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+
+        // Creator bond: forfeit to treasury if the creator lost, else refund.
+        let creator_info = ctx.accounts.creator.to_account_info();
+        let creator_bond_info = ctx.accounts.creator_completion_bond.to_account_info();
+        if creator_forfeit {
+            settle_completion_bond(
+                &creator_bond_info,
+                &creator_info,
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Forfeit {
+                    recipient: &treasury_info,
+                },
+            )?;
+        } else {
+            settle_completion_bond(
+                &creator_bond_info,
+                &creator_info,
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
+        }
+
+        // Worker bond: forfeit to treasury if the worker lost, else refund. The
+        // poster is the worker's signing wallet (validated == worker.authority by
+        // validate_worker_accounts above, which also guarantees worker_wallet is Some).
+        let worker_info = ctx
+            .accounts
+            .worker_wallet
+            .as_ref()
+            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
+            .to_account_info();
+        let worker_bond_info = ctx.accounts.worker_completion_bond.to_account_info();
+        if worker_forfeit {
+            settle_completion_bond(
+                &worker_bond_info,
+                &worker_info,
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Forfeit {
+                    recipient: &treasury_info,
+                },
+            )?;
+        } else {
+            settle_completion_bond(
+                &worker_bond_info,
+                &worker_info,
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
+        }
     }
 
     emit!(DisputeResolved {

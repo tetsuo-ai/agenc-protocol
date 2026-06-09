@@ -736,6 +736,13 @@ pub mod agenc_coordination {
         instructions::migrate::handler(ctx, target_version)
     }
 
+    /// Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig
+    /// gated, VERSION-UNGATED (must run while version == 1, before the version
+    /// bump). `dry_run` validates without mutating. Idempotent / re-runnable.
+    pub fn migrate_task(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
+        instructions::migrate::migrate_task_handler(ctx, dry_run)
+    }
+
     /// Update minimum supported protocol version (multisig gated).
     /// Used to deprecate old versions after migration grace period.
     ///
@@ -858,6 +865,199 @@ pub mod agenc_coordination {
         is_active: Option<bool>,
     ) -> Result<()> {
         instructions::update_skill::handler(ctx, content_hash, price, tags, is_active)
+    }
+
+    /// Publish a standing service listing (embeddable marketplace).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_service_listing(
+        ctx: Context<CreateServiceListing>,
+        listing_id: [u8; 32],
+        name: [u8; 32],
+        category: [u8; 32],
+        tags: [u8; 64],
+        spec_hash: [u8; 32],
+        spec_uri: String,
+        price: u64,
+        price_mint: Option<Pubkey>,
+        required_capabilities: u64,
+        default_deadline_secs: i64,
+        max_open_jobs: u16,
+        operator: Option<Pubkey>,
+        operator_fee_bps: u16,
+    ) -> Result<()> {
+        instructions::create_service_listing::handler(
+            ctx,
+            listing_id,
+            name,
+            category,
+            tags,
+            spec_hash,
+            spec_uri,
+            price,
+            price_mint,
+            required_capabilities,
+            default_deadline_secs,
+            max_open_jobs,
+            operator,
+            operator_fee_bps,
+        )
+    }
+
+    /// Update a service listing's terms (provider-only).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_service_listing(
+        ctx: Context<UpdateServiceListing>,
+        price: Option<u64>,
+        spec_hash: Option<[u8; 32]>,
+        spec_uri: Option<String>,
+        tags: Option<[u8; 64]>,
+        required_capabilities: Option<u64>,
+        default_deadline_secs: Option<i64>,
+        max_open_jobs: Option<u16>,
+        operator: Option<Pubkey>,
+        operator_fee_bps: Option<u16>,
+    ) -> Result<()> {
+        instructions::update_service_listing::handler(
+            ctx,
+            price,
+            spec_hash,
+            spec_uri,
+            tags,
+            required_capabilities,
+            default_deadline_secs,
+            max_open_jobs,
+            operator,
+            operator_fee_bps,
+        )
+    }
+
+    /// Pause / reactivate / retire a service listing (provider-only).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn set_service_listing_state(
+        ctx: Context<SetServiceListingState>,
+        new_state: u8,
+    ) -> Result<()> {
+        instructions::set_service_listing_state::handler(ctx, new_state)
+    }
+
+    /// Hire a provider from a standing service listing, minting a one-shot task
+    /// that snapshots the listing's terms and funds escrow from the buyer.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn hire_from_listing(
+        ctx: Context<HireFromListing>,
+        task_id: [u8; 32],
+        expected_price: u64,
+        expected_version: u64,
+    ) -> Result<()> {
+        instructions::hire_from_listing::handler(ctx, task_id, expected_price, expected_version)
+    }
+
+    /// Record a moderation decision for a service listing's pinned job-spec hash,
+    /// so `hire_from_listing` can gate at hire time. Moderation-authority only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_listing_moderation(
+        ctx: Context<RecordListingModeration>,
+        job_spec_hash: [u8; 32],
+        status: u8,
+        risk_score: u8,
+        category_mask: u64,
+        policy_hash: [u8; 32],
+        scanner_hash: [u8; 32],
+        expires_at: i64,
+    ) -> Result<()> {
+        instructions::record_listing_moderation::handler(
+            ctx,
+            job_spec_hash,
+            status,
+            risk_score,
+            category_mask,
+            policy_hash,
+            scanner_hash,
+            expires_at,
+        )
+    }
+
+    /// Create a task as a human buyer with no registered agent. Always pins
+    /// ValidationMode::CreatorReview so settlement routes through buyer review.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_task_humanless(
+        ctx: Context<CreateTaskHumanless>,
+        task_id: [u8; 32],
+        required_capabilities: u64,
+        description: [u8; 64],
+        reward_amount: u64,
+        deadline: i64,
+        min_reputation: u16,
+        review_window_secs: i64,
+    ) -> Result<()> {
+        instructions::create_task_humanless::handler(
+            ctx,
+            task_id,
+            required_capabilities,
+            description,
+            reward_amount,
+            deadline,
+            min_reputation,
+            review_window_secs,
+        )
+    }
+
+    /// Reclaim a terminal task's account rent (and optional leftover job-spec
+    /// pointer). Allowed only when the task is Completed or Cancelled.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn close_task<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
+        instructions::close_task::handler(ctx)
+    }
+
+    /// Post a symmetric 25% completion bond (Batch 3 §8). `role`: 0 = creator,
+    /// 1 = worker. SOL-only v1; single-worker (Exclusive) tasks only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn post_completion_bond(ctx: Context<PostCompletionBond>, role: u8) -> Result<()> {
+        instructions::post_completion_bond::handler(ctx, role)
+    }
+
+    /// Permissionlessly refund a still-live completion bond to its poster once the
+    /// task is Completed — recovers a bond stranded by a terminal exit that omitted
+    /// the optional bond account (audit fix). `role`: 0 = creator, 1 = worker.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn reclaim_completion_bond(ctx: Context<ReclaimCompletionBond>, role: u8) -> Result<()> {
+        instructions::reclaim_completion_bond::handler(ctx, role)
+    }
+
+    /// Request free, non-terminal revisions on a submitted result (Batch 3 §8). Keeps
+    /// the claim open for an in-place resubmit; bounded by MAX_REVISION_ROUNDS.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn request_changes(ctx: Context<RequestChanges>, changes_hash: [u8; 32]) -> Result<()> {
+        instructions::request_changes::handler(ctx, changes_hash)
+    }
+
+    /// Terminally reject a submission and freeze the task for review (Batch 3 §8).
+    /// Settles only via resolve_reject_frozen / expire_reject_frozen.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn reject_and_freeze(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; 32]) -> Result<()> {
+        instructions::reject_and_freeze::handler(ctx, rejection_hash)
+    }
+
+    /// Multisig review decision on a frozen task (Batch 3 §8): pay the worker
+    /// (approve_completion=true) or refund the creator (false), disposing both bonds.
+    /// Exit path — settles even while paused (money never locks).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn resolve_reject_frozen(
+        ctx: Context<ResolveRejectFrozen>,
+        approve_completion: bool,
+    ) -> Result<()> {
+        instructions::reject_frozen_exits::resolve_handler(ctx, approve_completion)
+    }
+
+    /// Permissionless timeout exit for a frozen task (Batch 3 §8): after the review
+    /// window lapses, default to the worker (pay + refund both bonds). Exit path.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn expire_reject_frozen(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
+        instructions::reject_frozen_exits::expire_handler(ctx)
     }
 
     /// Rate a skill (1-5, reputation-weighted).
@@ -1222,6 +1422,12 @@ pub mod agenc_coordination {
             CoordinationError::MultisigNotEnoughSigners
         );
         instructions::migrate::handler(ctx, target_version)
+    }
+
+    /// Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig
+    /// gated, version-ungated, idempotent. `dry_run` validates without mutating.
+    pub fn migrate_task(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
+        instructions::migrate::migrate_task_handler(ctx, dry_run)
     }
 
     /// Update minimum supported protocol version.

@@ -170,7 +170,10 @@ pub fn decrement_pending_submission_count(config: &mut TaskValidationConfig) -> 
 }
 
 pub fn sync_task_validation_status(task: &mut Task, config: &TaskValidationConfig) {
-    if task.status == TaskStatus::Completed {
+    // Terminal/frozen states are sticky: never let a stray sync recompute (and thus
+    // silently un-freeze a RejectFrozen task back to Open/InProgress/PendingValidation,
+    // or revive a Completed one). RejectFrozen exits only via resolve/expire_reject_frozen.
+    if task.status == TaskStatus::Completed || task.status == TaskStatus::RejectFrozen {
         return;
     }
 
@@ -260,6 +263,23 @@ mod tests {
         sync_task_validation_status(&mut task, &config);
 
         assert!(task.status == TaskStatus::Completed);
+    }
+
+    #[test]
+    fn test_sync_task_validation_status_preserves_reject_frozen_state() {
+        // A frozen task must stay frozen — a stray sync (e.g. a pending submission or
+        // a remaining worker) must NOT recompute it back to PendingValidation/InProgress.
+        let mut task = Task {
+            status: TaskStatus::RejectFrozen,
+            current_workers: 1,
+            ..Task::default()
+        };
+        let mut config = TaskValidationConfig::default();
+        config.set_pending_submission_count(1);
+
+        sync_task_validation_status(&mut task, &config);
+
+        assert!(task.status == TaskStatus::RejectFrozen);
     }
 
     #[test]

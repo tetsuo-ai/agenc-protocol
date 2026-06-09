@@ -24,6 +24,8 @@ pub mod bid_settlement_helpers;
 pub mod completion_helpers;
 pub mod constants;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod bond_helpers;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod dispute_helpers;
 pub mod lamport_transfer;
 pub mod launch_controls;
@@ -63,6 +65,30 @@ pub mod create_dependent_task;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_proposal;
 pub mod create_task;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod create_service_listing;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod update_service_listing;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod set_service_listing_state;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod hire_from_listing;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod record_listing_moderation;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod create_task_humanless;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod close_task;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod post_completion_bond;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reclaim_completion_bond;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod request_changes;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reject_and_freeze;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reject_frozen_exits;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod delegate_reputation;
 pub mod deregister_agent;
@@ -166,6 +192,34 @@ pub use create_dependent_task::*;
 #[allow(ambiguous_glob_reexports)]
 pub use create_proposal::*;
 pub use create_task::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use create_service_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use update_service_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use set_service_listing_state::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use hire_from_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use record_listing_moderation::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use create_task_humanless::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use close_task::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use post_completion_bond::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use reclaim_completion_bond::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use request_changes::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use reject_and_freeze::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use reject_frozen_exits::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use delegate_reputation::*;

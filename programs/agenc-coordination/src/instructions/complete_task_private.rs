@@ -9,14 +9,13 @@ use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
     validate_completion_prereqs, validate_task_dependency,
 };
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
     AgentRegistration, BindingSpend, NullifierSpend, ProtocolConfig, Task, TaskClaim, TaskEscrow,
     ZkConfig, HASH_SIZE, RESULT_DATA_SIZE,
 };
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke;
@@ -463,8 +462,11 @@ fn validate_completion_inputs<'info>(
         CoordinationError::DeadlinePassed
     );
 
-    check_version_compatible(protocol_config)?;
-    require_task_type_enabled(protocol_config, task.task_type)?;
+    // Settlement path (ZK): an in-flight task must settle even while the protocol
+    // is paused or its type is disabled (both gate ENTRY only — spec §7, Decision
+    // #4 "money never locks"). Paying out already-escrowed funds for completed
+    // work is an exit, not new work.
+    check_version_compatible_for_exit(protocol_config)?;
     validate_task_dependency(task, remaining_accounts, program_id)?;
     validate_completion_prereqs(task, claim, clock)?;
 
@@ -761,6 +763,7 @@ fn finalize_private_completion<'info>(
         None,
         clock,
         token_accounts,
+        None, // operator leg: ZK completion is not a hire-from-listing path
     )
 }
 
