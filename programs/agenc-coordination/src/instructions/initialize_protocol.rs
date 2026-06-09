@@ -5,7 +5,7 @@
 //! - `dispute_threshold`: Minimum percentage of arbiter votes needed to resolve a dispute.
 //!   Must be in range 1-99 (inclusive). A value of 50 means majority vote required.
 //!   100% is disallowed as it makes disputes impossible to approve.
-//! - `protocol_fee_bps`: Fee charged on task completions in basis points (max 1000 = 10%).
+//! - `protocol_fee_bps`: Fee charged on task completions in basis points (max 2000 = 20%).
 //! - `min_stake`: Minimum stake required for agent/arbiter registration.
 //! - `min_stake_for_dispute`: Minimum stake required to initiate a dispute (must be > 0).
 //! - `multisig_threshold`: Number of signatures required for multisig operations.
@@ -59,7 +59,7 @@ const MIN_REASONABLE_STAKE: u64 = 1_000_000;
 /// * `dispute_threshold` - Minimum percentage of arbiter votes needed to resolve a dispute.
 ///   Valid range: 1-99 (inclusive). For example, 50 requires majority consensus,
 ///   67 requires supermajority. 100% is disallowed as it makes disputes impossible to approve.
-/// * `protocol_fee_bps` - Protocol fee in basis points (0-1000, where 1000 = 10%).
+/// * `protocol_fee_bps` - Protocol fee in basis points (0-2000, where 2000 = 20%).
 /// * `min_stake` - Minimum stake required for registration (must be >= 0.001 SOL).
 /// * `min_stake_for_dispute` - Minimum stake required to initiate a dispute (must be > 0).
 /// * `multisig_threshold` - Number of signatures required for multisig operations.

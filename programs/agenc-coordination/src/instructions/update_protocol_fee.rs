@@ -4,6 +4,7 @@ use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
 use crate::events::ProtocolFeeUpdated;
+use crate::instructions::constants::MAX_PROTOCOL_FEE_BPS;
 use crate::state::ProtocolConfig;
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 
@@ -21,7 +22,7 @@ pub struct UpdateProtocolFee<'info> {
 
 pub fn handler(ctx: Context<UpdateProtocolFee>, protocol_fee_bps: u16) -> Result<()> {
     require!(
-        protocol_fee_bps <= 1000,
+        protocol_fee_bps <= MAX_PROTOCOL_FEE_BPS,
         CoordinationError::InvalidProtocolFee
     );
     require!(
