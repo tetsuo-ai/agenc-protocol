@@ -67,6 +67,8 @@ export type AutoAcceptTaskResultInstruction<
   TAccountTreasury extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountWorkerAuthority extends string | AccountMeta<string> = string,
+  TAccountHireRecord extends string | AccountMeta<string> = string,
+  TAccountOperator extends string | AccountMeta<string> = string,
   TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
@@ -113,6 +115,12 @@ export type AutoAcceptTaskResultInstruction<
       TAccountWorkerAuthority extends string
         ? WritableAccount<TAccountWorkerAuthority>
         : TAccountWorkerAuthority,
+      TAccountHireRecord extends string
+        ? ReadonlyAccount<TAccountHireRecord>
+        : TAccountHireRecord,
+      TAccountOperator extends string
+        ? WritableAccount<TAccountOperator>
+        : TAccountOperator,
       TAccountCreatorCompletionBond extends string
         ? WritableAccount<TAccountCreatorCompletionBond>
         : TAccountCreatorCompletionBond,
@@ -188,6 +196,8 @@ export type AutoAcceptTaskResultAsyncInput<
   TAccountTreasury extends string = string,
   TAccountCreator extends string = string,
   TAccountWorkerAuthority extends string = string,
+  TAccountHireRecord extends string = string,
+  TAccountOperator extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountAuthority extends string = string,
@@ -208,6 +218,10 @@ export type AutoAcceptTaskResultAsyncInput<
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
+  /** operator-fee terms (current hires read them from the Task itself). */
+  hireRecord?: Address<TAccountHireRecord>;
+  /** when the task carries a non-zero operator fee; receives the operator leg (SOL). */
+  operator?: Address<TAccountOperator>;
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   authority: TransactionSigner<TAccountAuthority>;
@@ -230,6 +244,8 @@ export async function getAutoAcceptTaskResultInstructionAsync<
   TAccountTreasury extends string,
   TAccountCreator extends string,
   TAccountWorkerAuthority extends string,
+  TAccountHireRecord extends string,
+  TAccountOperator extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountAuthority extends string,
@@ -252,6 +268,8 @@ export async function getAutoAcceptTaskResultInstructionAsync<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountAuthority,
@@ -276,6 +294,8 @@ export async function getAutoAcceptTaskResultInstructionAsync<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountAuthority,
@@ -306,6 +326,8 @@ export async function getAutoAcceptTaskResultInstructionAsync<
     treasury: { value: input.treasury ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
+    operator: { value: input.operator ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -395,6 +417,8 @@ export async function getAutoAcceptTaskResultInstructionAsync<
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("workerAuthority", accounts.workerAuthority),
+      getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("operator", accounts.operator),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("authority", accounts.authority),
@@ -419,6 +443,8 @@ export async function getAutoAcceptTaskResultInstructionAsync<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountAuthority,
@@ -442,6 +468,8 @@ export type AutoAcceptTaskResultInput<
   TAccountTreasury extends string = string,
   TAccountCreator extends string = string,
   TAccountWorkerAuthority extends string = string,
+  TAccountHireRecord extends string = string,
+  TAccountOperator extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountAuthority extends string = string,
@@ -462,6 +490,10 @@ export type AutoAcceptTaskResultInput<
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
+  /** operator-fee terms (current hires read them from the Task itself). */
+  hireRecord?: Address<TAccountHireRecord>;
+  /** when the task carries a non-zero operator fee; receives the operator leg (SOL). */
+  operator?: Address<TAccountOperator>;
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   authority: TransactionSigner<TAccountAuthority>;
@@ -484,6 +516,8 @@ export function getAutoAcceptTaskResultInstruction<
   TAccountTreasury extends string,
   TAccountCreator extends string,
   TAccountWorkerAuthority extends string,
+  TAccountHireRecord extends string,
+  TAccountOperator extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountAuthority extends string,
@@ -506,6 +540,8 @@ export function getAutoAcceptTaskResultInstruction<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountAuthority,
@@ -529,6 +565,8 @@ export function getAutoAcceptTaskResultInstruction<
   TAccountTreasury,
   TAccountCreator,
   TAccountWorkerAuthority,
+  TAccountHireRecord,
+  TAccountOperator,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
   TAccountAuthority,
@@ -558,6 +596,8 @@ export function getAutoAcceptTaskResultInstruction<
     treasury: { value: input.treasury ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
+    operator: { value: input.operator ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -608,6 +648,8 @@ export function getAutoAcceptTaskResultInstruction<
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("workerAuthority", accounts.workerAuthority),
+      getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("operator", accounts.operator),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("authority", accounts.authority),
@@ -632,6 +674,8 @@ export function getAutoAcceptTaskResultInstruction<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
     TAccountAuthority,
@@ -660,15 +704,19 @@ export type ParsedAutoAcceptTaskResultInstruction<
     treasury: TAccountMetas[7];
     creator: TAccountMetas[8];
     workerAuthority: TAccountMetas[9];
-    creatorCompletionBond?: TAccountMetas[10] | undefined;
-    workerCompletionBond?: TAccountMetas[11] | undefined;
-    authority: TAccountMetas[12];
-    tokenEscrowAta?: TAccountMetas[13] | undefined;
-    workerTokenAccount?: TAccountMetas[14] | undefined;
-    treasuryTokenAccount?: TAccountMetas[15] | undefined;
-    rewardMint?: TAccountMetas[16] | undefined;
-    tokenProgram?: TAccountMetas[17] | undefined;
-    systemProgram: TAccountMetas[18];
+    /** operator-fee terms (current hires read them from the Task itself). */
+    hireRecord?: TAccountMetas[10] | undefined;
+    /** when the task carries a non-zero operator fee; receives the operator leg (SOL). */
+    operator?: TAccountMetas[11] | undefined;
+    creatorCompletionBond?: TAccountMetas[12] | undefined;
+    workerCompletionBond?: TAccountMetas[13] | undefined;
+    authority: TAccountMetas[14];
+    tokenEscrowAta?: TAccountMetas[15] | undefined;
+    workerTokenAccount?: TAccountMetas[16] | undefined;
+    treasuryTokenAccount?: TAccountMetas[17] | undefined;
+    rewardMint?: TAccountMetas[18] | undefined;
+    tokenProgram?: TAccountMetas[19] | undefined;
+    systemProgram: TAccountMetas[20];
   };
   data: AutoAcceptTaskResultInstructionData;
 };
@@ -681,12 +729,12 @@ export function parseAutoAcceptTaskResultInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedAutoAcceptTaskResultInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 19) {
+  if (instruction.accounts.length < 21) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 19,
+        expectedAccountMetas: 21,
       },
     );
   }
@@ -715,6 +763,8 @@ export function parseAutoAcceptTaskResultInstruction<
       treasury: getNextAccount(),
       creator: getNextAccount(),
       workerAuthority: getNextAccount(),
+      hireRecord: getNextOptionalAccount(),
+      operator: getNextOptionalAccount(),
       creatorCompletionBond: getNextOptionalAccount(),
       workerCompletionBond: getNextOptionalAccount(),
       authority: getNextAccount(),

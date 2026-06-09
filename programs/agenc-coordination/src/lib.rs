@@ -954,6 +954,27 @@ pub mod agenc_coordination {
         instructions::hire_from_listing::handler(ctx, task_id, expected_price, expected_version)
     }
 
+    /// Hire a provider from a standing service listing as a human buyer with NO
+    /// registered agent (single-agent storefront). Funds SOL escrow, carries the
+    /// listing's operator-fee leg (the embedding site's cut), and pins
+    /// ValidationMode::CreatorReview so the human reviews the work before payout.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn hire_from_listing_humanless(
+        ctx: Context<HireFromListingHumanless>,
+        task_id: [u8; 32],
+        expected_price: u64,
+        expected_version: u64,
+        review_window_secs: i64,
+    ) -> Result<()> {
+        instructions::hire_from_listing_humanless::handler(
+            ctx,
+            task_id,
+            expected_price,
+            expected_version,
+            review_window_secs,
+        )
+    }
+
     /// Record a moderation decision for a service listing's pinned job-spec hash,
     /// so `hire_from_listing` can gate at hire time. Moderation-authority only.
     #[cfg(not(feature = "mainnet-canary"))]

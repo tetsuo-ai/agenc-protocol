@@ -74,6 +74,8 @@ pub mod set_service_listing_state;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod hire_from_listing;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod hire_from_listing_humanless;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod record_listing_moderation;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_task_humanless;
@@ -201,6 +203,9 @@ pub use set_service_listing_state::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use hire_from_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use hire_from_listing_humanless::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use record_listing_moderation::*;

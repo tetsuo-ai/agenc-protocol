@@ -468,6 +468,22 @@ export type AgencCoordination = {
           "writable": true
         },
         {
+          "name": "hireRecord",
+          "docs": [
+            "operator-fee terms; for current hires the terms are read from the Task itself."
+          ],
+          "optional": true
+        },
+        {
+          "name": "operator",
+          "docs": [
+            "when the task carries a non-zero operator fee (a listing hire); receives the",
+            "operator fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "creatorCompletionBond",
           "docs": [
             "Validated by settle_completion_bond (owner/PDA/task/role/party)."
@@ -1034,6 +1050,21 @@ export type AgencCoordination = {
         {
           "name": "workerAuthority",
           "writable": true
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "operator-fee terms (current hires read them from the Task itself)."
+          ],
+          "optional": true
+        },
+        {
+          "name": "operator",
+          "docs": [
+            "when the task carries a non-zero operator fee; receives the operator leg (SOL)."
+          ],
+          "writable": true,
+          "optional": true
         },
         {
           "name": "creatorCompletionBond",
@@ -5871,6 +5902,348 @@ export type AgencCoordination = {
         {
           "name": "expectedVersion",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "hireFromListingHumanless",
+      "docs": [
+        "Hire a provider from a standing service listing as a human buyer with NO",
+        "registered agent (single-agent storefront). Funds SOL escrow, carries the",
+        "listing's operator-fee leg (the embedding site's cut), and pins",
+        "ValidationMode::CreatorReview so the human reviews the work before payout."
+      ],
+      "discriminator": [
+        90,
+        142,
+        39,
+        225,
+        150,
+        161,
+        217,
+        49
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "arg",
+                "path": "taskId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "Links this hire to its source listing (capacity decrement via close_task) and",
+            "snapshots the operator-fee terms for the settlement split."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "docs": [
+            "Forced CreatorReview validation config — initialized here so a humanless hire",
+            "can never settle on the auto-pay path; the human buyer always reviews first."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "docs": [
+            "Standing listing being hired from. Mutable to record the hire."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "serviceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "serviceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationConfig",
+          "docs": [
+            "Global moderation gate. REQUIRED so a hire is fail-closed (spec §6)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "listingModeration",
+          "docs": [
+            "Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103,
+                  95,
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.spec_hash",
+                "account": "serviceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authorityRateLimit",
+          "docs": [
+            "Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121,
+                  95,
+                  114,
+                  97,
+                  116,
+                  101,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "The human buyer's wallet — owns and pays for the hired task. No AgentRegistration."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "taskId",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedPrice",
+          "type": "u64"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "u64"
+        },
+        {
+          "name": "reviewWindowSecs",
+          "type": "i64"
         }
       ]
     },

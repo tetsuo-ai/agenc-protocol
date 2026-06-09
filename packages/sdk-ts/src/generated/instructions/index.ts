@@ -36,6 +36,7 @@ export * from "./expireClaim";
 export * from "./expireDispute";
 export * from "./expireRejectFrozen";
 export * from "./hireFromListing";
+export * from "./hireFromListingHumanless";
 export * from "./initializeBidBook";
 export * from "./initializeBidMarketplace";
 export * from "./initializeGovernance";

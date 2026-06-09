@@ -973,7 +973,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   if (decision === "accept") {
     expectOk(send(w.svm, await w.buyerProg.methods
       .acceptTaskResult()
-      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, hireRecord: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]), "manual:accept");
   } else if (decision === "reject") {
     expectOk(send(w.svm, await w.buyerProg.methods
@@ -1054,7 +1054,7 @@ test("request_changes: non-terminal revision keeps the claim, worker resubmits i
   assert.ok(decode(w.svm, "Task", r.task).status.PendingValidation !== undefined, "resubmit -> PendingValidation");
 
   expectOk(send(w.svm, await w.buyerProg.methods.acceptTaskResult()
-    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, taskValidationConfig: r.validation, taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "accept after revision");
+    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, taskValidationConfig: r.validation, taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, hireRecord: null, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "accept after revision");
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed after revision + accept");
 });
 
@@ -1110,7 +1110,7 @@ test("negative: a RejectFrozen task is refused by cancel / accept / request_chan
 
   // accept_task_result: requires PendingValidation; a frozen task is not.
   expectFail(send(w.svm, await w.buyerProg.methods.acceptTaskResult()
-    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskValidationConfig: f.validation, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskValidationConfig: f.validation, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, hireRecord: null, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "TaskNotPendingValidation", "accept refused on a frozen task");
 
   // request_changes + reject_and_freeze: both require PendingValidation.

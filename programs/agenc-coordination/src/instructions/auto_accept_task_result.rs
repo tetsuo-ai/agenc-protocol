@@ -7,7 +7,7 @@ use crate::instructions::bid_settlement_helpers::{
 };
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
+    calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency, OperatorLeg,
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
@@ -15,8 +15,8 @@ use crate::instructions::task_validation_helpers::{
 };
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
-    AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
-    TaskSubmission, TaskValidationConfig, ValidationMode,
+    AgentRegistration, HireRecord, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow,
+    TaskStatus, TaskSubmission, TaskValidationConfig, ValidationMode,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
@@ -102,6 +102,15 @@ pub struct AutoAcceptTaskResult<'info> {
         constraint = worker_authority.key() == worker.authority @ CoordinationError::UnauthorizedAgent
     )]
     pub worker_authority: UncheckedAccount<'info>,
+
+    // === §4 operator leg (makes timeout auto-accept hire-aware) ===
+    /// CHECK: ["hire", task] record — optional, read-only; pre-Batch-2 fallback for the
+    /// operator-fee terms (current hires read them from the Task itself).
+    pub hire_record: Option<UncheckedAccount<'info>>,
+    /// CHECK: operator payee — validated == the task's resolved operator. Required only
+    /// when the task carries a non-zero operator fee; receives the operator leg (SOL).
+    #[account(mut)]
+    pub operator: Option<UncheckedAccount<'info>>,
 
     // === Batch 3 completion bonds (optional; refunded on auto-accept) ===
     /// CHECK: creator completion bond PDA; refunded on auto-accept. Validated by helper.
@@ -269,6 +278,49 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
     ctx.accounts.claim.is_validated = true;
     ctx.accounts.claim.completed_at = clock.unix_timestamp;
 
+    // §4 3-way split on the timeout auto-accept path (Task-first, HireRecord fallback) — so a
+    // hired task whose human buyer ghosts past the review window still pays the operator leg.
+    // Optional accounts: a non-hired task (task.operator == default) settles unchanged with None.
+    let auto_accept_task_key = ctx.accounts.task.key();
+    let (operator_pubkey, operator_fee_bps_resolved) =
+        if ctx.accounts.task.operator != Pubkey::default() {
+            (ctx.accounts.task.operator, ctx.accounts.task.operator_fee_bps)
+        } else if let Some(hr) = ctx.accounts.hire_record.as_ref() {
+            if hr.owner == &crate::ID {
+                let hire_info = hr.to_account_info();
+                let hire = {
+                    let data = hire_info.try_borrow_data()?;
+                    HireRecord::try_deserialize(&mut &data[..])?
+                };
+                require!(
+                    hire.task == auto_accept_task_key,
+                    CoordinationError::InvalidHireRecord
+                );
+                (hire.operator, hire.operator_fee_bps)
+            } else {
+                (Pubkey::default(), 0)
+            }
+        } else {
+            (Pubkey::default(), 0)
+        };
+    let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
+        let op = ctx
+            .accounts
+            .operator
+            .as_ref()
+            .ok_or(CoordinationError::MissingOperatorAccount)?;
+        require!(
+            op.key() == operator_pubkey,
+            CoordinationError::InvalidOperatorAccount
+        );
+        Some(OperatorLeg {
+            payee: op.to_account_info(),
+            fee_bps: operator_fee_bps_resolved,
+        })
+    } else {
+        None
+    };
+
     execute_completion_rewards(
         &mut ctx.accounts.task,
         &mut ctx.accounts.claim,
@@ -283,7 +335,7 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         Some(ctx.accounts.task_submission.result_data),
         &clock,
         token_accounts,
-        None, // operator leg: manual-review settlement is not yet hire-aware (9b)
+        operator_leg,
     )?;
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;

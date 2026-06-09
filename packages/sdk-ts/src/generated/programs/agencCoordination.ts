@@ -179,6 +179,7 @@ import {
   getExpireClaimInstructionAsync,
   getExpireDisputeInstructionAsync,
   getExpireRejectFrozenInstructionAsync,
+  getHireFromListingHumanlessInstructionAsync,
   getHireFromListingInstructionAsync,
   getInitializeBidBookInstructionAsync,
   getInitializeBidMarketplaceInstructionAsync,
@@ -256,6 +257,7 @@ import {
   parseExpireClaimInstruction,
   parseExpireDisputeInstruction,
   parseExpireRejectFrozenInstruction,
+  parseHireFromListingHumanlessInstruction,
   parseHireFromListingInstruction,
   parseInitializeBidBookInstruction,
   parseInitializeBidMarketplaceInstruction,
@@ -334,6 +336,7 @@ import {
   type ExpireDisputeAsyncInput,
   type ExpireRejectFrozenAsyncInput,
   type HireFromListingAsyncInput,
+  type HireFromListingHumanlessAsyncInput,
   type InitializeBidBookAsyncInput,
   type InitializeBidMarketplaceAsyncInput,
   type InitializeGovernanceAsyncInput,
@@ -371,6 +374,7 @@ import {
   type ParsedExpireClaimInstruction,
   type ParsedExpireDisputeInstruction,
   type ParsedExpireRejectFrozenInstruction,
+  type ParsedHireFromListingHumanlessInstruction,
   type ParsedHireFromListingInstruction,
   type ParsedInitializeBidBookInstruction,
   type ParsedInitializeBidMarketplaceInstruction,
@@ -1008,6 +1012,7 @@ export enum AgencCoordinationInstruction {
   ExpireDispute,
   ExpireRejectFrozen,
   HireFromListing,
+  HireFromListingHumanless,
   InitializeBidBook,
   InitializeBidMarketplace,
   InitializeGovernance,
@@ -1390,6 +1395,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.HireFromListing;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([90, 142, 39, 225, 150, 161, 217, 49]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.HireFromListingHumanless;
   }
   if (
     containsBytes(
@@ -2008,6 +2024,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.HireFromListing;
     } & ParsedHireFromListingInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.HireFromListingHumanless;
+    } & ParsedHireFromListingHumanlessInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.InitializeBidBook;
     } & ParsedInitializeBidBookInstruction<TProgram>)
   | ({
@@ -2362,6 +2381,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.HireFromListing,
         ...parseHireFromListingInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.HireFromListingHumanless: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.HireFromListingHumanless,
+        ...parseHireFromListingHumanlessInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.InitializeBidBook: {
@@ -2910,6 +2936,10 @@ export type AgencCoordinationPluginInstructions = {
     input: HireFromListingAsyncInput,
   ) => ReturnType<typeof getHireFromListingInstructionAsync> &
     SelfPlanAndSendFunctions;
+  hireFromListingHumanless: (
+    input: HireFromListingHumanlessAsyncInput,
+  ) => ReturnType<typeof getHireFromListingHumanlessInstructionAsync> &
+    SelfPlanAndSendFunctions;
   initializeBidBook: (
     input: InitializeBidBookAsyncInput,
   ) => ReturnType<typeof getInitializeBidBookInstructionAsync> &
@@ -3419,6 +3449,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getHireFromListingInstructionAsync(input),
+            ),
+          hireFromListingHumanless: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getHireFromListingHumanlessInstructionAsync(input),
             ),
           initializeBidBook: (input) =>
             addSelfPlanAndSendFunctions(
