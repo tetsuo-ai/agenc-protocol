@@ -49,7 +49,7 @@ async function setMinSupportedVersion(svm, value) {
 // update_protocol_fee (multisig gated)
 // ---------------------------------------------------------------------------
 
-test("update_protocol_fee: 2-of-2 multisig lowers the fee; single signer rejected; >1000 bps rejected", async () => {
+test("update_protocol_fee: 2-of-2 multisig sets the fee; single signer rejected; 2000 bps (20%) cap accepted, >2000 rejected", async () => {
   const w = await freshWorld();
   const { signerMetas, signers } = twoOfTwoMultisig(w);
   await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
@@ -70,11 +70,19 @@ test("update_protocol_fee: 2-of-2 multisig lowers the fee; single signer rejecte
     "update_protocol_fee single signer rejected",
   );
 
-  // NEGATIVE: fee above the 1000 bps cap is rejected even with full multisig.
+  // NEGATIVE: fee above the 2000 bps (20%) cap is rejected even with full multisig.
   expectFail(
-    send(w.svm, await feeIx(1001, signerMetas), signers),
+    send(w.svm, await feeIx(2001, signerMetas), signers),
     "InvalidProtocolFee",
-    "update_protocol_fee >1000 bps rejected",
+    "update_protocol_fee >2000 bps rejected",
+  );
+
+  // POSITIVE: the 2000 bps (20%) cap itself is accepted (the raised MAX_PROTOCOL_FEE_BPS).
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await feeIx(2000, signerMetas), signers), "update_protocol_fee at 20% cap ok");
+  assert.equal(
+    decode(w.svm, "ProtocolConfig", w.protocolPda).protocol_fee_bps, 2000,
+    "protocol_fee_bps set to the 2000 bps (20%) cap",
   );
 
   // POSITIVE: full multisig changes the on-chain fee.
