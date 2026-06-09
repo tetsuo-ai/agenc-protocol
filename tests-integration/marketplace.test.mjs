@@ -1420,6 +1420,31 @@ async function setupFrozen(w, { postBonds = false } = {}) {
   return { ...r, creatorBond, workerBond };
 }
 
+test("negative: a RejectFrozen task is refused by cancel / accept / request_changes / reject_and_freeze", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const f = await setupFrozen(w);
+
+  // cancel_task: a frozen task is not cancellable (creator can't dodge the review).
+  expectFail(send(w.svm, await w.buyerProg.methods.cancelTask()
+    .accounts({ task: f.task, escrow: f.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null })
+    .instruction(), [w.buyer]), "TaskCannotBeCancelled", "cancel refused on a frozen task");
+
+  // accept_task_result: requires PendingValidation; a frozen task is not.
+  expectFail(send(w.svm, await w.buyerProg.methods.acceptTaskResult()
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskValidationConfig: f.validation, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "TaskNotPendingValidation", "accept refused on a frozen task");
+
+  // request_changes + reject_and_freeze: both require PendingValidation.
+  expectFail(send(w.svm, await w.buyerProg.methods.requestChanges(arr(Buffer.alloc(32, 9)))
+    .accounts({ task: f.task, claim: f.claim, taskValidationConfig: f.validation, taskSubmission: f.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey })
+    .instruction(), [w.buyer]), "TaskNotPendingValidation", "request_changes refused on a frozen task");
+  expectFail(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 9)))
+    .accounts({ task: f.task, claim: f.claim, taskValidationConfig: f.validation, taskSubmission: f.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey })
+    .instruction(), [w.buyer]), "TaskNotPendingValidation", "double-freeze refused");
+});
+
 test("dispute mutual-exclusion: a RejectFrozen task cannot be disputed", async () => {
   // The durable-submission path in initiate_dispute bypasses can_transition_to(Disputed),
   // so the freeze is guarded explicitly. Revert-sensitive: drop the guard and this
