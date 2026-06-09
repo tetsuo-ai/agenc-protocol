@@ -1514,6 +1514,27 @@ export type AgencCoordination = {
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "creatorCompletionBond",
+          "docs": [
+            "cancel. Validated by settle_completion_bond."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerCompletionBond",
+          "docs": [
+            "worker bond is present (an InProgress past-deadline cancel)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "workerBondAuthority",
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []

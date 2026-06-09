@@ -1508,6 +1508,27 @@
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "creator_completion_bond",
+          "docs": [
+            "cancel. Validated by settle_completion_bond."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worker_completion_bond",
+          "docs": [
+            "worker bond is present (an InProgress past-deadline cancel)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "worker_bond_authority",
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []

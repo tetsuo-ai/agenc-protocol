@@ -409,6 +409,7 @@ test("hire -> cancel -> close: frees capacity, closes task + hire record", async
       systemProgram: SystemProgram.programId,
       // optional SPL-token accounts (default build has spl-token-rewards) — None for SOL
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
     })
     .instruction();
   expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel");
@@ -973,6 +974,24 @@ test("completion bond: a clean completion refunds BOTH bonds to their posters", 
   // buyer (not a signer here) gets back the full creator bond (rent + principal), plus escrow rent.
   assert.ok(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore >= creatorBondLamports,
     "creator received their refunded bond");
+});
+
+test("completion bond: cancel refunds the creator bond on an Open task", async () => {
+  const w = await freshWorld({ price: 2_000_000 });
+  const { ix, task, escrow } = await hireIx(w, {});
+  expectOk(send(w.svm, ix, [w.buyer]), "hire"); // Open task, creator == buyer
+  const creatorBond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+  expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
+    .accounts({ task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
+
+  expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
+    .accounts({ task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: creatorBond, workerCompletionBond: null, workerBondAuthority: null })
+    .instruction(), [w.buyer]), "cancel with creator bond refund");
+
+  assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task Cancelled");
+  assert.ok(isClosed(w.svm, creatorBond), "creator bond refunded + closed on cancel");
 });
 
 test("3-way split: hire -> settle pays worker (>=60%) + AgenC (treasury) + operator (exact cut)", async () => {
@@ -1664,6 +1683,7 @@ test("exit allow-list: a paused protocol blocks new hires but still lets a hired
       task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
     })
     .instruction();
   expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel under paused protocol");
