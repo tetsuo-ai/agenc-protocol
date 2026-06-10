@@ -99,12 +99,18 @@ pub fn handler(
 
     require!(listing_id != [0u8; 32], CoordinationError::ListingInvalidId);
     require!(name != [0u8; 32], CoordinationError::ListingInvalidName);
-    require!(spec_hash != [0u8; 32], CoordinationError::ListingInvalidSpec);
+    require!(
+        spec_hash != [0u8; 32],
+        CoordinationError::ListingInvalidSpec
+    );
     require!(
         !spec_uri.trim().is_empty() && spec_uri.len() <= 256,
         CoordinationError::ListingInvalidSpec
     );
-    require!(price >= MIN_SKILL_PRICE, CoordinationError::ListingPriceTooLow);
+    require!(
+        price >= MIN_SKILL_PRICE,
+        CoordinationError::ListingPriceTooLow
+    );
     require!(
         required_capabilities != 0,
         CoordinationError::ListingCapabilitiesRequired
@@ -174,7 +180,8 @@ mod tests {
     #[test]
     fn operator_invariant_rejects_fee_over_cap() {
         assert!(
-            validate_operator_fee_invariant(Pubkey::new_unique(), MAX_OPERATOR_FEE_BPS + 1).is_err()
+            validate_operator_fee_invariant(Pubkey::new_unique(), MAX_OPERATOR_FEE_BPS + 1)
+                .is_err()
         );
     }
 

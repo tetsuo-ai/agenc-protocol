@@ -19,9 +19,7 @@ pub(crate) enum BondDisposition<'a, 'info> {
     /// Return the full balance (rent + principal) to the poster.
     Refund,
     /// Move the principal to `recipient`, return the rent to the poster.
-    Forfeit {
-        recipient: &'a AccountInfo<'info>,
-    },
+    Forfeit { recipient: &'a AccountInfo<'info> },
 }
 
 /// Settle one completion bond. No-op when `bond_info` is not a live, program-owned
@@ -55,7 +53,10 @@ pub(crate) fn settle_completion_bond<'info>(
             .map_err(|_| CoordinationError::MissingCompletionBondAccount)?
     };
     require!(bond.task == *task_key, CoordinationError::BondTaskMismatch);
-    require!(bond.role == expected_role, CoordinationError::BondRoleMismatch);
+    require!(
+        bond.role == expected_role,
+        CoordinationError::BondRoleMismatch
+    );
     require!(
         poster_wallet.key() == bond.party,
         CoordinationError::BondPartyMismatch

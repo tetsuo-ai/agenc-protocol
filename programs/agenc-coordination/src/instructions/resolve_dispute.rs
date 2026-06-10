@@ -5,9 +5,9 @@ use crate::events::{dispute_outcome, DisputeResolved};
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::update_protocol_stats;
 use crate::instructions::constants::PERCENT_BASE;
-use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
     check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
     process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
@@ -499,7 +499,10 @@ pub fn handler<'info>(
                     let op_fee = pay_dispute_operator_fee(
                         dispute_operator_pubkey,
                         dispute_operator_fee_bps,
-                        ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
+                        ctx.accounts
+                            .dispute_operator
+                            .as_ref()
+                            .map(|a| a.to_account_info()),
                         &escrow.to_account_info(),
                         remaining_funds,
                     )?;
@@ -614,7 +617,10 @@ pub fn handler<'info>(
                         let op_fee = pay_dispute_operator_fee(
                             dispute_operator_pubkey,
                             dispute_operator_fee_bps,
-                            ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
+                            ctx.accounts
+                                .dispute_operator
+                                .as_ref()
+                                .map(|a| a.to_account_info()),
                             &escrow.to_account_info(),
                             worker_share,
                         )?;

@@ -21,10 +21,10 @@
 
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod bid_settlement_helpers;
-pub mod completion_helpers;
-pub mod constants;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod bond_helpers;
+pub mod completion_helpers;
+pub mod constants;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod dispute_helpers;
 pub mod lamport_transfer;
@@ -45,6 +45,8 @@ pub mod apply_dispute_slash;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod apply_initiator_slash;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod assign_dispute_resolver;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod auto_accept_task_result;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod bid_marketplace;
@@ -55,6 +57,8 @@ pub mod cancel_proposal;
 pub mod cancel_task;
 pub mod claim_task;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod close_task;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod complete_task;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod complete_task_private;
@@ -64,33 +68,11 @@ pub mod configure_task_validation;
 pub mod create_dependent_task;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_proposal;
-pub mod create_task;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_service_listing;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod update_service_listing;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod set_service_listing_state;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod hire_from_listing;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod hire_from_listing_humanless;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod record_listing_moderation;
+pub mod create_task;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_task_humanless;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod close_task;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod post_completion_bond;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod reclaim_completion_bond;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod request_changes;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod reject_and_freeze;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod reject_frozen_exits;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod delegate_reputation;
 pub mod deregister_agent;
@@ -100,6 +82,10 @@ pub mod expire_claim;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod expire_dispute;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod hire_from_listing;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod hire_from_listing_humanless;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod initialize_governance;
 pub mod initialize_protocol;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -108,24 +94,36 @@ pub mod initialize_zk_config;
 pub mod initiate_dispute;
 pub mod migrate;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod post_completion_bond;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod post_to_feed;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod purchase_skill;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod rate_skill;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reclaim_completion_bond;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod record_listing_moderation;
 pub mod record_task_moderation;
 pub mod register_agent;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod register_skill;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reject_and_freeze;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reject_frozen_exits;
 pub mod reject_task_result;
 #[cfg(not(feature = "mainnet-canary"))]
-pub mod assign_dispute_resolver;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod revoke_dispute_resolver;
+pub mod request_changes;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod resolve_dispute;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod revoke_delegation;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod revoke_dispute_resolver;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod set_service_listing_state;
 pub mod set_task_job_spec;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod stake_reputation;
@@ -137,6 +135,8 @@ pub mod update_launch_controls;
 pub mod update_multisig;
 pub mod update_protocol_fee;
 pub mod update_rate_limits;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod update_service_listing;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod update_skill;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -167,6 +167,9 @@ pub use apply_dispute_slash::*;
 pub use apply_initiator_slash::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use assign_dispute_resolver::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use auto_accept_task_result::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
@@ -183,6 +186,9 @@ pub use cancel_task::*;
 pub use claim_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use close_task::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use complete_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
@@ -197,38 +203,12 @@ pub use create_dependent_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use create_proposal::*;
-pub use create_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 pub use create_service_listing::*;
-#[cfg(not(feature = "mainnet-canary"))]
-pub use update_service_listing::*;
-#[cfg(not(feature = "mainnet-canary"))]
-pub use set_service_listing_state::*;
-#[cfg(not(feature = "mainnet-canary"))]
-#[allow(ambiguous_glob_reexports)]
-pub use hire_from_listing::*;
-#[cfg(not(feature = "mainnet-canary"))]
-#[allow(ambiguous_glob_reexports)]
-pub use hire_from_listing_humanless::*;
-#[cfg(not(feature = "mainnet-canary"))]
-#[allow(ambiguous_glob_reexports)]
-pub use record_listing_moderation::*;
+pub use create_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use create_task_humanless::*;
-#[cfg(not(feature = "mainnet-canary"))]
-#[allow(ambiguous_glob_reexports)]
-pub use close_task::*;
-#[cfg(not(feature = "mainnet-canary"))]
-pub use post_completion_bond::*;
-#[cfg(not(feature = "mainnet-canary"))]
-pub use reclaim_completion_bond::*;
-#[cfg(not(feature = "mainnet-canary"))]
-pub use request_changes::*;
-#[cfg(not(feature = "mainnet-canary"))]
-pub use reject_and_freeze::*;
-#[cfg(not(feature = "mainnet-canary"))]
-pub use reject_frozen_exits::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use delegate_reputation::*;
@@ -243,6 +223,12 @@ pub use expire_claim::*;
 pub use expire_dispute::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use hire_from_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use hire_from_listing_humanless::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use initialize_governance::*;
 #[allow(ambiguous_glob_reexports)]
 pub use initialize_protocol::*;
@@ -255,6 +241,8 @@ pub use initiate_dispute::*;
 #[allow(ambiguous_glob_reexports)]
 pub use migrate::*;
 #[cfg(not(feature = "mainnet-canary"))]
+pub use post_completion_bond::*;
+#[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use post_to_feed::*;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -263,6 +251,11 @@ pub use purchase_skill::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use rate_skill::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use reclaim_completion_bond::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use record_listing_moderation::*;
 #[allow(ambiguous_glob_reexports)]
 pub use record_task_moderation::*;
 #[allow(ambiguous_glob_reexports)]
@@ -270,20 +263,25 @@ pub use register_agent::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use register_skill::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use reject_and_freeze::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use reject_frozen_exits::*;
 #[allow(ambiguous_glob_reexports)]
 pub use reject_task_result::*;
 #[cfg(not(feature = "mainnet-canary"))]
-#[allow(ambiguous_glob_reexports)]
-pub use assign_dispute_resolver::*;
-#[cfg(not(feature = "mainnet-canary"))]
-#[allow(ambiguous_glob_reexports)]
-pub use revoke_dispute_resolver::*;
+pub use request_changes::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use resolve_dispute::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use revoke_delegation::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use revoke_dispute_resolver::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use set_service_listing_state::*;
 #[allow(ambiguous_glob_reexports)]
 pub use set_task_job_spec::*;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -305,6 +303,8 @@ pub use update_multisig::*;
 pub use update_protocol_fee::*;
 #[allow(ambiguous_glob_reexports)]
 pub use update_rate_limits::*;
+#[cfg(not(feature = "mainnet-canary"))]
+pub use update_service_listing::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use update_skill::*;

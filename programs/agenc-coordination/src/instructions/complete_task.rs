@@ -4,6 +4,8 @@ use crate::errors::CoordinationError;
 use crate::instructions::bid_settlement_helpers::{
     finalize_bid_task_completion, load_bid_task_completion_meta,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
@@ -11,15 +13,13 @@ use crate::instructions::completion_helpers::{
 };
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use crate::state::{
     AgentRegistration, HireRecord, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
 };
 use crate::utils::compute_budget::log_compute_units;
 use crate::utils::version::check_version_compatible_for_exit;
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::CompletionBond;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 

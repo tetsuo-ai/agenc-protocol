@@ -19,20 +19,20 @@ use crate::errors::CoordinationError;
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
     TaskSubmission, TaskValidationConfig,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::{BidMarketplaceConfig, TaskType};
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::CompletionBond;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 

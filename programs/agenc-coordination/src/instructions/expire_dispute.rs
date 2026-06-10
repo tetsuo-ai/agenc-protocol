@@ -17,6 +17,7 @@ use crate::events::{ArbiterVotesCleanedUp, DisputeExpired};
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
     check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
     process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
@@ -27,7 +28,6 @@ use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
     validate_unchecked_token_mint,
 };
-use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::state::{
     AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim,
     TaskEscrow, TaskStatus, TaskType,
@@ -441,7 +441,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
                     .to_account_info(),
                 expire_operator_pubkey,
                 expire_operator_fee_bps,
-                ctx.accounts.dispute_operator.as_ref().map(|a| a.to_account_info()),
+                ctx.accounts
+                    .dispute_operator
+                    .as_ref()
+                    .map(|a| a.to_account_info()),
                 remaining_funds,
                 worker_completed,
                 no_votes,

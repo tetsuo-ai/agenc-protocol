@@ -5,23 +5,24 @@ use crate::events::TaskResultAccepted;
 use crate::instructions::bid_settlement_helpers::{
     finalize_bid_task_completion, load_bid_task_completion_meta,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency, OperatorLeg,
+    calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
+    OperatorLeg,
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, sync_task_validation_status,
 };
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use crate::state::{
     AgentRegistration, HireRecord, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow,
     TaskStatus, TaskSubmission, TaskValidationConfig, ValidationMode,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::CompletionBond;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
@@ -284,7 +285,10 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
     let auto_accept_task_key = ctx.accounts.task.key();
     let (operator_pubkey, operator_fee_bps_resolved) =
         if ctx.accounts.task.operator != Pubkey::default() {
-            (ctx.accounts.task.operator, ctx.accounts.task.operator_fee_bps)
+            (
+                ctx.accounts.task.operator,
+                ctx.accounts.task.operator_fee_bps,
+            )
         } else if let Some(hr) = ctx.accounts.hire_record.as_ref() {
             if hr.owner == &crate::ID {
                 let hire_info = hr.to_account_info();

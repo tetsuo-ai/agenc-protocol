@@ -9,7 +9,9 @@
 
 use crate::errors::CoordinationError;
 use crate::events::BondPosted;
-use crate::state::{CompletionBond, Task, TaskStatus, TaskType, HASH_SIZE, MANUAL_VALIDATION_SENTINEL};
+use crate::state::{
+    CompletionBond, Task, TaskStatus, TaskType, HASH_SIZE, MANUAL_VALIDATION_SENTINEL,
+};
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 

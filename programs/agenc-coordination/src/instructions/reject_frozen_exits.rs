@@ -120,10 +120,7 @@ pub struct ResolveRejectFrozen<'info> {
 ///   forfeit the creator bond to treasury.
 /// - false -> the rejection is upheld: refund the creator, forfeit the worker bond to
 ///   treasury, refund the creator bond.
-pub fn resolve_handler(
-    ctx: Context<ResolveRejectFrozen>,
-    approve_completion: bool,
-) -> Result<()> {
+pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bool) -> Result<()> {
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::MultisigNotEnoughSigners
