@@ -12,3 +12,4 @@ export * from "./instructions";
 export * from "./pdas";
 export * from "./programs";
 export * from "./types";
+export * from "./events/index.js";

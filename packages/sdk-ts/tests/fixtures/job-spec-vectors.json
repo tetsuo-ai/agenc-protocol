@@ -1,0 +1,772 @@
+{
+  "description": "Cross-implementation job-spec hash vectors. payload is the kit CLI job-spec envelope payload; expectedHex is envelope.integrity.payloadHash (canonicalization json-stable-v1, sha256). Generated locally (no network, no wallet) with: agenc-marketplace job-spec create --description ... --root-dir /tmp/... --out-file /tmp/...",
+  "source": {
+    "tool": "agenc-marketplace",
+    "version": "0.1.1",
+    "generated": "2026-06-09"
+  },
+  "vectors": [
+    {
+      "name": "simple-ascii-description",
+      "note": "plain --description, defaulted optional fields (nulls, empty arrays, nested objects)",
+      "expectedHex": "57eb649fde7d3f9443c0fdb01046955dc146282a01568130b627cc2f83bc146d",
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "agenc.marketplace.jobSpec",
+        "title": "Translate the API reference to French",
+        "shortDescription": "Translate the API reference to French",
+        "fullDescription": null,
+        "acceptanceCriteria": [],
+        "deliverables": [],
+        "constraints": null,
+        "attachments": [],
+        "execution": {
+          "planVersion": 1,
+          "sandbox": {
+            "workKind": "read_write_files_no_wallet",
+            "allowedToolGroups": [
+              "filesystem.read",
+              "filesystem.write",
+              "http.fetch"
+            ],
+            "forbiddenToolGroups": [
+              "wallet",
+              "signer",
+              "shell.unsafe",
+              "browser.credentials"
+            ],
+            "requiresWallet": false,
+            "requiresSigner": false,
+            "environment": {
+              "secretsAllowed": false,
+              "allowedEnv": [],
+              "blockedEnvPrefixes": [
+                "AGENC_WALLET",
+                "AGENC_MARKETPLACE_SIGNER",
+                "SOLANA_",
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "NPM_TOKEN",
+                "NODE_AUTH_TOKEN",
+                "SSH_AUTH_SOCK",
+                "KUBECONFIG",
+                "DOCKER_",
+                "CF_",
+                "STRIPE_",
+                "OPENAI_",
+                "ANTHROPIC_",
+                "AWS_",
+                "GCP_",
+                "GOOGLE_",
+                "AZURE_"
+              ]
+            }
+          },
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "output.result",
+              "kind": "artifact",
+              "required": true,
+              "description": "Worker-delivered artifact or concise result commitment.",
+              "artifactPolicyRef": "artifact.default",
+              "resultData": {
+                "mode": "artifact_sha256_commitment",
+                "prefix": "artifact:sha256:"
+              }
+            }
+          ],
+          "acceptanceCriteria": [],
+          "forbiddenActions": [
+            "change_signer_policy",
+            "select_wallet",
+            "change_program_id",
+            "change_reward",
+            "select_account_metas",
+            "accept_result",
+            "reject_result",
+            "auto_accept_result",
+            "send_sol",
+            "use_private_key",
+            "request_unlisted_network"
+          ],
+          "signerRequests": [
+            {
+              "id": "worker.claim_verified",
+              "kind": "claim_task",
+              "requestedBy": "worker",
+              "reason": "Worker may claim only after verifying the content-addressed job spec.",
+              "requiresHumanApproval": false,
+              "conditions": [
+                "job_spec_verified",
+                "task_open",
+                "worker_policy_allowed"
+              ],
+              "authorizes": false
+            },
+            {
+              "id": "worker.submit_result",
+              "kind": "submit_task_result",
+              "requestedBy": "worker",
+              "reason": "Worker may submit proofHash/resultData only after sandbox work and a won claim.",
+              "requiresHumanApproval": false,
+              "conditions": [
+                "job_spec_verified",
+                "claim_won",
+                "artifact.sha256_computed"
+              ],
+              "mayIncludeArtifactCommitment": true,
+              "authorizes": false
+            },
+            {
+              "id": "creator.review_accept_or_reject",
+              "kind": "creator_review_decision",
+              "requestedBy": "creator",
+              "reason": "Creator may accept or reject only after readonly submission review evidence.",
+              "requiresHumanApproval": true,
+              "conditions": [
+                "submission_review_prepared",
+                "job_spec_verified",
+                "artifact_hash_verified_or_unavailable_marked",
+                "human_approved"
+              ],
+              "authorizes": false
+            }
+          ],
+          "reviewPlan": {
+            "requiredBeforeSettlement": true,
+            "reviewTool": "agenc.market.prepareSubmissionReview",
+            "checks": [
+              {
+                "id": "check.jobSpecHash",
+                "kind": "job_spec_hash_matches_on_chain",
+                "required": true
+              },
+              {
+                "id": "check.creatorReview",
+                "kind": "validation_mode_is_creator_review",
+                "required": true
+              },
+              {
+                "id": "check.artifactDigest",
+                "kind": "artifact_sha256_matches_result_data",
+                "required": true,
+                "ifArtifactPresent": true
+              },
+              {
+                "id": "check.criteria",
+                "kind": "manual_acceptance_criteria_review",
+                "required": true
+              }
+            ],
+            "recommendedDefault": "needs_human_review"
+          },
+          "networkPolicy": [],
+          "artifactPolicy": [
+            {
+              "id": "artifact.default",
+              "required": true,
+              "allowedKinds": [
+                "file",
+                "https_uri"
+              ],
+              "sha256Required": true,
+              "maxBytes": 26214400,
+              "allowedRemoteHosts": [],
+              "durableStorageGuaranteed": false,
+              "treatContentAsUntrustedData": true
+            }
+          ],
+          "humanApproval": {
+            "settlementDefault": "required",
+            "autonomousSettlementAllowed": false,
+            "approvalEvidenceRequired": true
+          }
+        },
+        "custom": null,
+        "context": {}
+      }
+    },
+    {
+      "name": "key-order-scrambled",
+      "note": "every object key order deep-REVERSED versus the CLI envelope; json-stable-v1 sorts keys so the hash must be unchanged",
+      "expectedHex": "3f35d50a06f23097e9f125a213a364d52c1ebf6cb1a7a16eb09a660a1067a486",
+      "payload": {
+        "context": {},
+        "custom": null,
+        "execution": {
+          "humanApproval": {
+            "approvalEvidenceRequired": true,
+            "autonomousSettlementAllowed": false,
+            "settlementDefault": "required"
+          },
+          "artifactPolicy": [
+            {
+              "treatContentAsUntrustedData": true,
+              "durableStorageGuaranteed": false,
+              "allowedRemoteHosts": [],
+              "maxBytes": 26214400,
+              "sha256Required": true,
+              "allowedKinds": [
+                "file",
+                "https_uri"
+              ],
+              "required": true,
+              "id": "artifact.default"
+            }
+          ],
+          "networkPolicy": [],
+          "reviewPlan": {
+            "recommendedDefault": "needs_human_review",
+            "checks": [
+              {
+                "required": true,
+                "kind": "job_spec_hash_matches_on_chain",
+                "id": "check.jobSpecHash"
+              },
+              {
+                "required": true,
+                "kind": "validation_mode_is_creator_review",
+                "id": "check.creatorReview"
+              },
+              {
+                "ifArtifactPresent": true,
+                "required": true,
+                "kind": "artifact_sha256_matches_result_data",
+                "id": "check.artifactDigest"
+              },
+              {
+                "required": true,
+                "kind": "manual_acceptance_criteria_review",
+                "id": "check.criteria"
+              }
+            ],
+            "reviewTool": "agenc.market.prepareSubmissionReview",
+            "requiredBeforeSettlement": true
+          },
+          "signerRequests": [
+            {
+              "authorizes": false,
+              "conditions": [
+                "job_spec_verified",
+                "task_open",
+                "worker_policy_allowed"
+              ],
+              "requiresHumanApproval": false,
+              "reason": "Worker may claim only after verifying the content-addressed job spec.",
+              "requestedBy": "worker",
+              "kind": "claim_task",
+              "id": "worker.claim_verified"
+            },
+            {
+              "authorizes": false,
+              "mayIncludeArtifactCommitment": true,
+              "conditions": [
+                "job_spec_verified",
+                "claim_won",
+                "artifact.sha256_computed"
+              ],
+              "requiresHumanApproval": false,
+              "reason": "Worker may submit proofHash/resultData only after sandbox work and a won claim.",
+              "requestedBy": "worker",
+              "kind": "submit_task_result",
+              "id": "worker.submit_result"
+            },
+            {
+              "authorizes": false,
+              "conditions": [
+                "submission_review_prepared",
+                "job_spec_verified",
+                "artifact_hash_verified_or_unavailable_marked",
+                "human_approved"
+              ],
+              "requiresHumanApproval": true,
+              "reason": "Creator may accept or reject only after readonly submission review evidence.",
+              "requestedBy": "creator",
+              "kind": "creator_review_decision",
+              "id": "creator.review_accept_or_reject"
+            }
+          ],
+          "forbiddenActions": [
+            "change_signer_policy",
+            "select_wallet",
+            "change_program_id",
+            "change_reward",
+            "select_account_metas",
+            "accept_result",
+            "reject_result",
+            "auto_accept_result",
+            "send_sol",
+            "use_private_key",
+            "request_unlisted_network"
+          ],
+          "acceptanceCriteria": [],
+          "outputs": [
+            {
+              "resultData": {
+                "prefix": "artifact:sha256:",
+                "mode": "artifact_sha256_commitment"
+              },
+              "artifactPolicyRef": "artifact.default",
+              "description": "Worker-delivered artifact or concise result commitment.",
+              "required": true,
+              "kind": "artifact",
+              "id": "output.result"
+            }
+          ],
+          "inputs": [],
+          "sandbox": {
+            "environment": {
+              "blockedEnvPrefixes": [
+                "AGENC_WALLET",
+                "AGENC_MARKETPLACE_SIGNER",
+                "SOLANA_",
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "NPM_TOKEN",
+                "NODE_AUTH_TOKEN",
+                "SSH_AUTH_SOCK",
+                "KUBECONFIG",
+                "DOCKER_",
+                "CF_",
+                "STRIPE_",
+                "OPENAI_",
+                "ANTHROPIC_",
+                "AWS_",
+                "GCP_",
+                "GOOGLE_",
+                "AZURE_"
+              ],
+              "allowedEnv": [],
+              "secretsAllowed": false
+            },
+            "requiresSigner": false,
+            "requiresWallet": false,
+            "forbiddenToolGroups": [
+              "wallet",
+              "signer",
+              "shell.unsafe",
+              "browser.credentials"
+            ],
+            "allowedToolGroups": [
+              "filesystem.read",
+              "filesystem.write",
+              "http.fetch"
+            ],
+            "workKind": "read_write_files_no_wallet"
+          },
+          "planVersion": 1
+        },
+        "attachments": [],
+        "constraints": null,
+        "deliverables": [],
+        "acceptanceCriteria": [],
+        "fullDescription": null,
+        "shortDescription": "Label 500 images of street signs",
+        "title": "Label 500 images of street signs",
+        "kind": "agenc.marketplace.jobSpec",
+        "schemaVersion": 1
+      }
+    },
+    {
+      "name": "non-ascii-accented-description",
+      "note": "non-ASCII UTF-8 content (e-acute, e-grave, e-circumflex, c-cedilla, em dash); JSON.stringify emits raw UTF-8, no escaping, no unicode normalization",
+      "expectedHex": "47032a59280fa785d98ed419c52d1c61fe5717ddc70fba53c972c41c49d768ed",
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "agenc.marketplace.jobSpec",
+        "title": "Traduire le résumé technique en français — accents éèêç inclus",
+        "shortDescription": "Traduire le résumé technique en français — accents éèêç inclus",
+        "fullDescription": null,
+        "acceptanceCriteria": [],
+        "deliverables": [],
+        "constraints": null,
+        "attachments": [],
+        "execution": {
+          "planVersion": 1,
+          "sandbox": {
+            "workKind": "read_write_files_no_wallet",
+            "allowedToolGroups": [
+              "filesystem.read",
+              "filesystem.write",
+              "http.fetch"
+            ],
+            "forbiddenToolGroups": [
+              "wallet",
+              "signer",
+              "shell.unsafe",
+              "browser.credentials"
+            ],
+            "requiresWallet": false,
+            "requiresSigner": false,
+            "environment": {
+              "secretsAllowed": false,
+              "allowedEnv": [],
+              "blockedEnvPrefixes": [
+                "AGENC_WALLET",
+                "AGENC_MARKETPLACE_SIGNER",
+                "SOLANA_",
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "NPM_TOKEN",
+                "NODE_AUTH_TOKEN",
+                "SSH_AUTH_SOCK",
+                "KUBECONFIG",
+                "DOCKER_",
+                "CF_",
+                "STRIPE_",
+                "OPENAI_",
+                "ANTHROPIC_",
+                "AWS_",
+                "GCP_",
+                "GOOGLE_",
+                "AZURE_"
+              ]
+            }
+          },
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "output.result",
+              "kind": "artifact",
+              "required": true,
+              "description": "Worker-delivered artifact or concise result commitment.",
+              "artifactPolicyRef": "artifact.default",
+              "resultData": {
+                "mode": "artifact_sha256_commitment",
+                "prefix": "artifact:sha256:"
+              }
+            }
+          ],
+          "acceptanceCriteria": [],
+          "forbiddenActions": [
+            "change_signer_policy",
+            "select_wallet",
+            "change_program_id",
+            "change_reward",
+            "select_account_metas",
+            "accept_result",
+            "reject_result",
+            "auto_accept_result",
+            "send_sol",
+            "use_private_key",
+            "request_unlisted_network"
+          ],
+          "signerRequests": [
+            {
+              "id": "worker.claim_verified",
+              "kind": "claim_task",
+              "requestedBy": "worker",
+              "reason": "Worker may claim only after verifying the content-addressed job spec.",
+              "requiresHumanApproval": false,
+              "conditions": [
+                "job_spec_verified",
+                "task_open",
+                "worker_policy_allowed"
+              ],
+              "authorizes": false
+            },
+            {
+              "id": "worker.submit_result",
+              "kind": "submit_task_result",
+              "requestedBy": "worker",
+              "reason": "Worker may submit proofHash/resultData only after sandbox work and a won claim.",
+              "requiresHumanApproval": false,
+              "conditions": [
+                "job_spec_verified",
+                "claim_won",
+                "artifact.sha256_computed"
+              ],
+              "mayIncludeArtifactCommitment": true,
+              "authorizes": false
+            },
+            {
+              "id": "creator.review_accept_or_reject",
+              "kind": "creator_review_decision",
+              "requestedBy": "creator",
+              "reason": "Creator may accept or reject only after readonly submission review evidence.",
+              "requiresHumanApproval": true,
+              "conditions": [
+                "submission_review_prepared",
+                "job_spec_verified",
+                "artifact_hash_verified_or_unavailable_marked",
+                "human_approved"
+              ],
+              "authorizes": false
+            }
+          ],
+          "reviewPlan": {
+            "requiredBeforeSettlement": true,
+            "reviewTool": "agenc.market.prepareSubmissionReview",
+            "checks": [
+              {
+                "id": "check.jobSpecHash",
+                "kind": "job_spec_hash_matches_on_chain",
+                "required": true
+              },
+              {
+                "id": "check.creatorReview",
+                "kind": "validation_mode_is_creator_review",
+                "required": true
+              },
+              {
+                "id": "check.artifactDigest",
+                "kind": "artifact_sha256_matches_result_data",
+                "required": true,
+                "ifArtifactPresent": true
+              },
+              {
+                "id": "check.criteria",
+                "kind": "manual_acceptance_criteria_review",
+                "required": true
+              }
+            ],
+            "recommendedDefault": "needs_human_review"
+          },
+          "networkPolicy": [],
+          "artifactPolicy": [
+            {
+              "id": "artifact.default",
+              "required": true,
+              "allowedKinds": [
+                "file",
+                "https_uri"
+              ],
+              "sha256Required": true,
+              "maxBytes": 26214400,
+              "allowedRemoteHosts": [],
+              "durableStorageGuaranteed": false,
+              "treatContentAsUntrustedData": true
+            }
+          ],
+          "humanApproval": {
+            "settlementDefault": "required",
+            "autonomousSettlementAllowed": false,
+            "approvalEvidenceRequired": true
+          }
+        },
+        "custom": null,
+        "context": {}
+      }
+    },
+    {
+      "name": "optional-fields-present",
+      "note": "--title, --full-description, repeated --acceptance and --deliverable populated",
+      "expectedHex": "40eea4b1970b377f62e157d3851149ecbbf55ac79f738a4fa135e71c76c8157d",
+      "payload": {
+        "schemaVersion": 1,
+        "kind": "agenc.marketplace.jobSpec",
+        "title": "Invoice API endpoint",
+        "shortDescription": "Build a REST endpoint for invoices",
+        "fullDescription": "Implement a paginated GET endpoint returning invoice records as JSON.",
+        "acceptanceCriteria": [
+          "Returns HTTP 200 with valid JSON",
+          "Pagination works for 1000 records"
+        ],
+        "deliverables": [
+          "Source code patch",
+          "Test suite"
+        ],
+        "constraints": null,
+        "attachments": [],
+        "execution": {
+          "planVersion": 1,
+          "sandbox": {
+            "workKind": "read_write_files_no_wallet",
+            "allowedToolGroups": [
+              "filesystem.read",
+              "filesystem.write",
+              "http.fetch"
+            ],
+            "forbiddenToolGroups": [
+              "wallet",
+              "signer",
+              "shell.unsafe",
+              "browser.credentials"
+            ],
+            "requiresWallet": false,
+            "requiresSigner": false,
+            "environment": {
+              "secretsAllowed": false,
+              "allowedEnv": [],
+              "blockedEnvPrefixes": [
+                "AGENC_WALLET",
+                "AGENC_MARKETPLACE_SIGNER",
+                "SOLANA_",
+                "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "NPM_TOKEN",
+                "NODE_AUTH_TOKEN",
+                "SSH_AUTH_SOCK",
+                "KUBECONFIG",
+                "DOCKER_",
+                "CF_",
+                "STRIPE_",
+                "OPENAI_",
+                "ANTHROPIC_",
+                "AWS_",
+                "GCP_",
+                "GOOGLE_",
+                "AZURE_"
+              ]
+            }
+          },
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "output.1",
+              "kind": "artifact",
+              "required": true,
+              "description": "Source code patch",
+              "artifactPolicyRef": "artifact.default",
+              "resultData": {
+                "mode": "artifact_sha256_commitment",
+                "prefix": "artifact:sha256:"
+              }
+            },
+            {
+              "id": "output.2",
+              "kind": "artifact",
+              "required": true,
+              "description": "Test suite",
+              "artifactPolicyRef": "artifact.default",
+              "resultData": {
+                "mode": "artifact_sha256_commitment",
+                "prefix": "artifact:sha256:"
+              }
+            }
+          ],
+          "acceptanceCriteria": [
+            {
+              "id": "criterion.1",
+              "type": "manual_text_review",
+              "description": "Returns HTTP 200 with valid JSON",
+              "required": true,
+              "evidenceRefs": [
+                "output.1",
+                "output.2"
+              ]
+            },
+            {
+              "id": "criterion.2",
+              "type": "manual_text_review",
+              "description": "Pagination works for 1000 records",
+              "required": true,
+              "evidenceRefs": [
+                "output.1",
+                "output.2"
+              ]
+            }
+          ],
+          "forbiddenActions": [
+            "change_signer_policy",
+            "select_wallet",
+            "change_program_id",
+            "change_reward",
+            "select_account_metas",
+            "accept_result",
+            "reject_result",
+            "auto_accept_result",
+            "send_sol",
+            "use_private_key",
+            "request_unlisted_network"
+          ],
+          "signerRequests": [
+            {
+              "id": "worker.claim_verified",
+              "kind": "claim_task",
+              "requestedBy": "worker",
+              "reason": "Worker may claim only after verifying the content-addressed job spec.",
+              "requiresHumanApproval": false,
+              "conditions": [
+                "job_spec_verified",
+                "task_open",
+                "worker_policy_allowed"
+              ],
+              "authorizes": false
+            },
+            {
+              "id": "worker.submit_result",
+              "kind": "submit_task_result",
+              "requestedBy": "worker",
+              "reason": "Worker may submit proofHash/resultData only after sandbox work and a won claim.",
+              "requiresHumanApproval": false,
+              "conditions": [
+                "job_spec_verified",
+                "claim_won",
+                "artifact.sha256_computed"
+              ],
+              "mayIncludeArtifactCommitment": true,
+              "authorizes": false
+            },
+            {
+              "id": "creator.review_accept_or_reject",
+              "kind": "creator_review_decision",
+              "requestedBy": "creator",
+              "reason": "Creator may accept or reject only after readonly submission review evidence.",
+              "requiresHumanApproval": true,
+              "conditions": [
+                "submission_review_prepared",
+                "job_spec_verified",
+                "artifact_hash_verified_or_unavailable_marked",
+                "human_approved"
+              ],
+              "authorizes": false
+            }
+          ],
+          "reviewPlan": {
+            "requiredBeforeSettlement": true,
+            "reviewTool": "agenc.market.prepareSubmissionReview",
+            "checks": [
+              {
+                "id": "check.jobSpecHash",
+                "kind": "job_spec_hash_matches_on_chain",
+                "required": true
+              },
+              {
+                "id": "check.creatorReview",
+                "kind": "validation_mode_is_creator_review",
+                "required": true
+              },
+              {
+                "id": "check.artifactDigest",
+                "kind": "artifact_sha256_matches_result_data",
+                "required": true,
+                "ifArtifactPresent": true
+              },
+              {
+                "id": "check.criteria",
+                "kind": "manual_acceptance_criteria_review",
+                "required": true
+              }
+            ],
+            "recommendedDefault": "needs_human_review"
+          },
+          "networkPolicy": [],
+          "artifactPolicy": [
+            {
+              "id": "artifact.default",
+              "required": true,
+              "allowedKinds": [
+                "file",
+                "https_uri"
+              ],
+              "sha256Required": true,
+              "maxBytes": 26214400,
+              "allowedRemoteHosts": [],
+              "durableStorageGuaranteed": false,
+              "treatContentAsUntrustedData": true
+            }
+          ],
+          "humanApproval": {
+            "settlementDefault": "required",
+            "autonomousSettlementAllowed": false,
+            "approvalEvidenceRequired": true
+          }
+        },
+        "custom": null,
+        "context": {}
+      }
+    }
+  ]
+}
