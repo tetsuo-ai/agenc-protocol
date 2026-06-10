@@ -1,0 +1,76 @@
+# Nightly devnet sandbox canary — rot detection (PLAN.md P2.4 done-when).
+#
+# Purpose: the hosted devnet sandbox (seeded fixtures + auto-attestor + RPC)
+# is only trustworthy if something exercises it continuously. This workflow
+# runs examples/devnet-first-hire.ts nightly against REAL devnet — faucet
+# airdrop -> register -> list -> attest -> hire -> claim -> settle — so any
+# silent rot (devnet redeploy wiping fixtures, attestor outage, program/SDK
+# drift, faucet policy changes) turns into a red run instead of a broken
+# first-touch experience for a third party.
+#
+# Gating (two layers, both intentional):
+#   1. The job only runs when the repository variable SANDBOX_NIGHTLY_ENABLED
+#      is exactly "true". The human flips it only AFTER ALL of:
+#        a. the devnet full-surface redeploy (PLAN.md P2.2);
+#        b. the seeding run (scripts/seed-devnet-sandbox.mjs), with the seeded
+#           fixtures.json shipped in the checkout under test;
+#        c. the P2.3 sandbox auto-attestor deploy (agenc-services-storefront,
+#           SANDBOX_ATTESTOR_ENABLED=true) AND working DNS for the SDK's
+#           DEFAULT_SANDBOX_ATTESTOR_URL host — or, if the attestor lives at
+#           a different host, the repository variable SANDBOX_ATTESTOR_URL
+#           set to its full attest endpoint (e.g.
+#           https://marketplace.agenc.tech/api/sandbox/attest). The variable
+#           is forwarded to the test below and passed through to
+#           requestSandboxAttestation as the attestation endpoint, so no SDK
+#           release is needed to repoint the nightly.
+#      Until then the workflow is inert. (GitHub Actions is currently disabled
+#      repo-wide anyway — this file just makes the canary ready to switch on.)
+#   2. The test itself is env-gated: tests-e2e/devnet-nightly.test.ts only
+#      executes when SANDBOX_NIGHTLY=1, so ordinary `npm test` runs skip it.
+#
+# Zero extra dependencies: the flow runs through vitest (already a
+# devDependency), which executes the example's exported entry point directly
+# from TypeScript — no tsx/ts-node needed.
+name: Sandbox Nightly
+
+on:
+  schedule:
+    # 03:17 UTC nightly (odd minute to dodge the on-the-hour cron stampede).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  devnet-first-hire:
+    if: ${{ vars.SANDBOX_NIGHTLY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk-ts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 24 to match the SDK CI matrix (see sdk.yml).
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: .
+
+      # Build the SDK first: proves the published-artifact path (including the
+      # dist/sandbox fixtures bundling) stays green, not just the src tree.
+      - name: Build SDK (ESM + CJS + d.ts)
+        run: npm run build
+
+      - name: Run devnet first-hire canary (vitest, env-gated)
+        run: npx vitest run tests-e2e/devnet-nightly.test.ts
+        env:
+          SANDBOX_NIGHTLY: "1"
+          # Optional attestor-endpoint override (repository variable). Empty
+          # when unset — the test then falls back to the SDK's
+          # DEFAULT_SANDBOX_ATTESTOR_URL.
+          SANDBOX_ATTESTOR_URL: ${{ vars.SANDBOX_ATTESTOR_URL }}
