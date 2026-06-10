@@ -18,11 +18,12 @@ import {
   type RpcTransportSubscriptions,
 } from "../client/index.js";
 import type { WaitForTaskStatusRpc } from "../events/index.js";
+import {
+  resolveSandboxEnvironment,
+  SANDBOX_DEVNET_RPC_URL,
+} from "./environment.js";
+import { SANDBOX_FIXTURES } from "./fixtures.js";
 
-/** Default devnet HTTP RPC endpoint used by {@link createSandboxClient}. */
-export const SANDBOX_DEVNET_RPC_URL = "https://api.devnet.solana.com";
-/** Default devnet WebSocket endpoint used by {@link createSandboxClient}. */
-export const SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL = "wss://api.devnet.solana.com";
 /** Default airdrop request: 2 SOL of devnet play money. */
 export const DEFAULT_SANDBOX_AIRDROP_LAMPORTS = 2_000_000_000n;
 
@@ -61,18 +62,21 @@ export type SandboxRpc = RpcTransportRpc & SandboxAirdropRpc & WaitForTaskStatus
 /** Options for {@link createSandboxClient}. */
 export interface CreateSandboxClientOptions {
   /**
-   * HTTP RPC endpoint (default {@link SANDBOX_DEVNET_RPC_URL}). Must look
-   * devnet/local — hostname containing `"devnet"`, or
-   * localhost/127.0.0.1/::1 — unless `allowCustomRpc` is set; anything else
-   * is refused with {@link SandboxClusterError} before any key generation
-   * or airdrop.
+   * HTTP RPC endpoint. Defaults through the environment seam
+   * (`resolveSandboxEnvironment`): `AGENC_SANDBOX_RPC_URL` /
+   * `AGENC_SANDBOX_CLUSTER` when set, otherwise
+   * {@link SANDBOX_DEVNET_RPC_URL}. Must look devnet/local — hostname
+   * containing `"devnet"`, or localhost/127.0.0.1/::1 — unless
+   * `allowCustomRpc` is set; anything else is refused with
+   * {@link SandboxClusterError} before any key generation or airdrop.
    */
   rpcUrl?: string;
   /**
-   * WebSocket endpoint. Default: when `rpcUrl` is set, derived from it
-   * (`http` → `ws`, `https` → `wss`, same host/port/path) so confirmations
-   * come from the same cluster the sends go to; otherwise
-   * {@link SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL}.
+   * WebSocket endpoint. Defaults through the environment seam: when `rpcUrl`
+   * is overridden (option or env var), derived from it (`http` → `ws`,
+   * `https` → `wss`, same host/port/path) so confirmations come from the
+   * same cluster the sends go to; otherwise the resolved cluster default
+   * ({@link SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL} for devnet).
    */
   rpcSubscriptionsUrl?: string;
   /**
@@ -183,21 +187,6 @@ function assertDevnetLikeRpcUrl(rpcUrl: string): void {
   );
 }
 
-/**
- * Derive the WebSocket endpoint matching a custom HTTP RPC endpoint:
- * `http://` → `ws://`, `https://` → `wss://`, host/port/path unchanged.
- * Non-http(s) inputs (already `ws(s)://`) pass through untouched.
- */
-function deriveSubscriptionsUrl(rpcUrl: string): string {
-  if (/^https:\/\//i.test(rpcUrl)) {
-    return `wss://${rpcUrl.slice("https://".length)}`;
-  }
-  if (/^http:\/\//i.test(rpcUrl)) {
-    return `ws://${rpcUrl.slice("http://".length)}`;
-  }
-  return rpcUrl;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -250,6 +239,12 @@ async function fundViaAirdrop(
  * faucet airdrop (default 2 SOL), wait until it lands, and return
  * `{ client, signer, rpc }`.
  *
+ * Endpoint defaults flow through the environment seam
+ * (`resolveSandboxEnvironment`): with `AGENC_SANDBOX_CLUSTER=localnet` (or
+ * `AGENC_SANDBOX_RPC_URL` pointing at a local validator) the same call
+ * targets a localnet stack instead of public devnet — localhost URLs pass
+ * the cluster guard via the localhost allowlist.
+ *
  * ## DEVNET ONLY — throwaway keys, never real funds
  *
  * This is the test-mode entry point (PLAN.md P2.4). The generated key lives
@@ -287,30 +282,39 @@ async function fundViaAirdrop(
 export async function createSandboxClient(
   options: CreateSandboxClientOptions = {},
 ): Promise<SandboxClient> {
-  // Devnet guard FIRST: refuse a non-devnet-looking rpcUrl before any key
+  // The environment seam resolves the endpoints: explicit options beat the
+  // AGENC_SANDBOX_* env vars, which beat the shipped devnet defaults. The
+  // shipped fixtures are passed through so client creation never depends on
+  // an AGENC_SANDBOX_FIXTURES file it does not use.
+  const environment = await resolveSandboxEnvironment({
+    rpcUrl: options.rpcUrl,
+    rpcSubscriptionsUrl: options.rpcSubscriptionsUrl,
+    fixtures: SANDBOX_FIXTURES,
+  });
+  // Cluster guard FIRST: refuse a non-devnet-looking rpcUrl before any key
   // generation, airdrop, or send. The airdrop failure must never be the only
-  // thing standing between a throwaway key and a real cluster.
-  if (options.rpcUrl !== undefined && options.allowCustomRpc !== true) {
-    assertDevnetLikeRpcUrl(options.rpcUrl);
+  // thing standing between a throwaway key and a real cluster. The shipped
+  // devnet default needs no check; localnet URLs pass via the localhost
+  // allowlist (one source of truth: SANDBOX_LOCAL_HOSTNAMES below).
+  if (
+    environment.rpcUrl !== SANDBOX_DEVNET_RPC_URL &&
+    options.allowCustomRpc !== true
+  ) {
+    assertDevnetLikeRpcUrl(environment.rpcUrl);
   }
   const commitment = options.commitment ?? "confirmed";
-  const rpc: SandboxRpc =
-    options.rpc ?? createSolanaRpc(options.rpcUrl ?? SANDBOX_DEVNET_RPC_URL);
+  const rpc: SandboxRpc = options.rpc ?? createSolanaRpc(environment.rpcUrl);
   // Only dial a WebSocket when we also own the HTTP connection; an injected
-  // rpc (tests, custom stacks) gets subscriptions only if injected too.
-  // A custom rpcUrl derives its own ws endpoint (http→ws / https→wss, same
-  // host/port/path) so confirmations come from the SAME cluster the sends go
-  // to; the public-devnet wss default applies only when rpcUrl defaulted too.
+  // rpc (tests, custom stacks) gets subscriptions only if injected too. The
+  // seam already derived a matching ws endpoint for a custom rpcUrl (http→ws
+  // / https→wss, same host/port/path) so confirmations come from the SAME
+  // cluster the sends go to; the public-devnet wss default applies only when
+  // rpcUrl defaulted too.
   const rpcSubscriptions =
     options.rpcSubscriptions ??
     (options.rpc
       ? undefined
-      : createSolanaRpcSubscriptions(
-          options.rpcSubscriptionsUrl ??
-            (options.rpcUrl !== undefined
-              ? deriveSubscriptionsUrl(options.rpcUrl)
-              : SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL),
-        ));
+      : createSolanaRpcSubscriptions(environment.rpcSubscriptionsUrl));
 
   const signer = options.signer ?? (await generateKeyPairSigner());
 
