@@ -1,0 +1,13 @@
+{
+  "_comment": "Committed reference for the runtime-generated public/sandbox-config.json. The Playwright global-setup writes the real file (gitignored) with live sandbox addresses and a freshly generated buyer secret. The checkout SPA fetches /sandbox-config.json at boot and adopts buyerSecretKeyHex via the mock embedded wallet.",
+  "rpcUrl": "http://127.0.0.1:8899",
+  "listing": "<seeded ServiceListing PDA (base58)>",
+  "listingSpecHashHex": "<listing.spec_hash, 64 hex chars>",
+  "expectedPriceLamports": "<listing.price>",
+  "expectedVersion": "<listing.version>",
+  "reviewWindowSecs": "3600",
+  "workerAgent": "<seeded provider agent PDA (base58)>",
+  "workerAuthority": "<provider authority wallet = the seeder (base58)>",
+  "treasury": "<ProtocolConfig.treasury (base58)>",
+  "buyerSecretKeyHex": "<64-byte ed25519 secret (seed||pubkey) as 128 hex chars>"
+}

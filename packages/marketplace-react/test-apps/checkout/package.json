@@ -1,0 +1,28 @@
+{
+  "name": "@tetsuo-ai/marketplace-react-checkout-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Checkout test fixture for @tetsuo-ai/marketplace-react (PLAN_2 A3 Done-when: the checkout flow completes a real hire funded->accepted against the sandbox-up validator). Driven in a real browser by Playwright, and headlessly (jsdom) as the no-browser fallback.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3200",
+    "build": "vite build",
+    "preview": "vite preview --port 3200"
+  },
+  "dependencies": {
+    "@solana/kit": "6.9.0",
+    "@solana/program-client-core": "^6.4.0",
+    "@tanstack/react-query": "^5.62.0",
+    "@tetsuo-ai/marketplace-react": "file:../..",
+    "@tetsuo-ai/marketplace-sdk": "file:../../../sdk-ts",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "5.9.3",
+    "vite": "^5.4.11"
+  }
+}

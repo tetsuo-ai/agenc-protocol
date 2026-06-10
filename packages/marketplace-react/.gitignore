@@ -1,0 +1,9 @@
+# Build output (tsup)
+dist/
+
+# Ladle production build + cache
+build/
+.ladle/.cache/
+
+# tarballs
+*.tgz
