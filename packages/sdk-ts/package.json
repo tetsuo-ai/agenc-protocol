@@ -55,6 +55,7 @@
     "typecheck": "tsc --noEmit",
     "examples:check": "tsc --noEmit -p tsconfig.examples.json",
     "build": "tsup",
+    "pretest": "node scripts/sync-testing-so.mjs",
     "test": "vitest run",
     "test:structural": "vitest run tests/",
     "docs:api": "typedoc",
