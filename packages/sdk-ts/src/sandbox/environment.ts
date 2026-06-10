@@ -58,6 +58,15 @@ export interface ResolveSandboxEnvironmentOptions {
   /** Moderation auto-attestor endpoint (beats `AGENC_SANDBOX_ATTESTOR_URL`). */
   attestorUrl?: string;
   /**
+   * Moderation-scan endpoint — the Phase-3 storefront
+   * `POST /api/moderation/listings` surface `requestListingModeration` posts
+   * to (beats `AGENC_SANDBOX_MODERATION_URL`; the `.localnet/env.json`
+   * convention carries it as the `moderationUrl` field). Unlike the other
+   * endpoints there is NO shipped default: when neither this option nor the
+   * env var is set, the resolved value is `null`.
+   */
+  moderationUrl?: string;
+  /**
    * Fixtures object (beats `AGENC_SANDBOX_FIXTURES`). Passing this is also
    * the browser-side escape hatch: the env-var path is a FILE path, which
    * only Node can read.
@@ -75,6 +84,13 @@ export interface SandboxEnvironment {
   rpcSubscriptionsUrl: string;
   /** Resolved moderation auto-attestor endpoint. */
   attestorUrl: string;
+  /**
+   * Resolved moderation-scan endpoint (`AGENC_SANDBOX_MODERATION_URL` /
+   * env-file `moderationUrl`), or `null` when no endpoint is configured —
+   * there is no shipped default while the hosted moderation API (PLAN.md
+   * P3.4) is not deployed.
+   */
+  moderationUrl: string | null;
   /** Resolved sandbox fixtures (shipped, file-loaded, or explicit). */
   fixtures: SandboxFixtures;
 }
@@ -231,12 +247,15 @@ async function readSandboxFixturesFile(
  *    `typeof process` check — absent in browsers, where this step is a no-op:
  *    `AGENC_SANDBOX_CLUSTER`, `AGENC_SANDBOX_RPC_URL`,
  *    `AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL`, `AGENC_SANDBOX_ATTESTOR_URL`,
+ *    `AGENC_SANDBOX_MODERATION_URL`,
  *    `AGENC_SANDBOX_FIXTURES` (a JSON file path — Node only).
  * 3. **Shipped defaults**: public devnet RPC endpoints,
  *    {@link DEFAULT_SANDBOX_ATTESTOR_URL}, and the shipped
  *    {@link SANDBOX_FIXTURES} (for cluster `"localnet"` the RPC defaults are
  *    the `solana-test-validator` ports instead — see
- *    {@link SANDBOX_LOCALNET_RPC_URL}).
+ *    {@link SANDBOX_LOCALNET_RPC_URL}). The moderation-scan endpoint
+ *    (`moderationUrl`) has NO shipped default and resolves to `null` when
+ *    nothing sets it.
  *
  * When `rpcUrl` is overridden but `rpcSubscriptionsUrl` is not, the WebSocket
  * endpoint is derived from it (`http` → `ws`, `https` → `wss`, same
@@ -258,7 +277,7 @@ async function readSandboxFixturesFile(
  * @param options - Explicit overrides; see
  *   {@link ResolveSandboxEnvironmentOptions}.
  * @returns The resolved `{ cluster, rpcUrl, rpcSubscriptionsUrl, attestorUrl,
- *   fixtures }`.
+ *   moderationUrl, fixtures }`.
  * @throws TypeError when a cluster value (option or env var) is not
  *   `localnet`/`devnet`/`mainnet`.
  * @throws Error when cluster `"mainnet"` resolves without an explicit
@@ -283,6 +302,7 @@ export async function resolveSandboxEnvironment(
     envVars.AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL,
   );
   const envAttestorUrl = nonEmpty(envVars.AGENC_SANDBOX_ATTESTOR_URL);
+  const envModerationUrl = nonEmpty(envVars.AGENC_SANDBOX_MODERATION_URL);
   const envFixturesPath = nonEmpty(envVars.AGENC_SANDBOX_FIXTURES);
 
   const cluster =
@@ -319,11 +339,23 @@ export async function resolveSandboxEnvironment(
   const attestorUrl =
     options.attestorUrl ?? envAttestorUrl ?? DEFAULT_SANDBOX_ATTESTOR_URL;
 
+  // No shipped default: the hosted moderation API (P3.4) is deploy-gated, so
+  // an unset endpoint resolves to null and callers fail with a descriptive
+  // error instead of dialing a dead URL.
+  const moderationUrl = options.moderationUrl ?? envModerationUrl ?? null;
+
   const fixtures =
     options.fixtures ??
     (envFixturesPath !== undefined
       ? await readSandboxFixturesFile(envFixturesPath)
       : SANDBOX_FIXTURES);
 
-  return { cluster, rpcUrl, rpcSubscriptionsUrl, attestorUrl, fixtures };
+  return {
+    cluster,
+    rpcUrl,
+    rpcSubscriptionsUrl,
+    attestorUrl,
+    moderationUrl,
+    fixtures,
+  };
 }

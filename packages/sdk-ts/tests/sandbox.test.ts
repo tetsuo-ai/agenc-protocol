@@ -753,6 +753,8 @@ describe("resolveSandboxEnvironment", () => {
       rpcUrl: SANDBOX_DEVNET_RPC_URL,
       rpcSubscriptionsUrl: SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL,
       attestorUrl: DEFAULT_SANDBOX_ATTESTOR_URL,
+      // No shipped default for the P3.4 moderation endpoint — null, not a URL.
+      moderationUrl: null,
       fixtures: SANDBOX_FIXTURES,
     });
   });
@@ -763,12 +765,14 @@ describe("resolveSandboxEnvironment", () => {
     vi.stubEnv("AGENC_SANDBOX_RPC_URL", "http://127.0.0.1:7777");
     vi.stubEnv("AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL", "ws://127.0.0.1:7778");
     vi.stubEnv("AGENC_SANDBOX_ATTESTOR_URL", "http://127.0.0.1:7779/attest");
+    vi.stubEnv("AGENC_SANDBOX_MODERATION_URL", "http://127.0.0.1:7780/mod");
     vi.stubEnv("AGENC_SANDBOX_FIXTURES", fixturesPath);
     const env = await resolveSandboxEnvironment();
     expect(env.cluster).toBe("localnet");
     expect(env.rpcUrl).toBe("http://127.0.0.1:7777");
     expect(env.rpcSubscriptionsUrl).toBe("ws://127.0.0.1:7778");
     expect(env.attestorUrl).toBe("http://127.0.0.1:7779/attest");
+    expect(env.moderationUrl).toBe("http://127.0.0.1:7780/mod");
     expect(env.fixtures).toEqual(FILE_FIXTURES);
   });
 
@@ -777,6 +781,7 @@ describe("resolveSandboxEnvironment", () => {
     vi.stubEnv("AGENC_SANDBOX_RPC_URL", "http://127.0.0.1:7777");
     vi.stubEnv("AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL", "ws://127.0.0.1:7778");
     vi.stubEnv("AGENC_SANDBOX_ATTESTOR_URL", "http://127.0.0.1:7779/attest");
+    vi.stubEnv("AGENC_SANDBOX_MODERATION_URL", "http://127.0.0.1:7780/mod");
     vi.stubEnv("AGENC_SANDBOX_FIXTURES", "/nonexistent/fixtures.json");
     const explicitFixtures = {
       ...SANDBOX_FIXTURES,
@@ -787,12 +792,16 @@ describe("resolveSandboxEnvironment", () => {
       rpcUrl: "https://api.devnet.solana.com",
       rpcSubscriptionsUrl: "wss://api.devnet.solana.com",
       attestorUrl: "https://attestor.example/attest",
+      moderationUrl: "https://moderation.example/api/moderation/listings",
       fixtures: explicitFixtures,
     });
     expect(env.cluster).toBe("devnet");
     expect(env.rpcUrl).toBe("https://api.devnet.solana.com");
     expect(env.rpcSubscriptionsUrl).toBe("wss://api.devnet.solana.com");
     expect(env.attestorUrl).toBe("https://attestor.example/attest");
+    expect(env.moderationUrl).toBe(
+      "https://moderation.example/api/moderation/listings",
+    );
     // The explicit fixtures object also short-circuits the (broken) env path.
     expect(env.fixtures).toBe(explicitFixtures);
   });
@@ -801,6 +810,7 @@ describe("resolveSandboxEnvironment", () => {
     // Stub the env vars FIRST (needs a live process), then remove process.
     vi.stubEnv("AGENC_SANDBOX_CLUSTER", "localnet");
     vi.stubEnv("AGENC_SANDBOX_RPC_URL", "http://127.0.0.1:7777");
+    vi.stubEnv("AGENC_SANDBOX_MODERATION_URL", "http://127.0.0.1:7780/mod");
     vi.stubEnv("AGENC_SANDBOX_FIXTURES", "/nonexistent/fixtures.json");
     vi.stubGlobal("process", undefined);
     try {
@@ -812,6 +822,7 @@ describe("resolveSandboxEnvironment", () => {
         rpcUrl: SANDBOX_DEVNET_RPC_URL,
         rpcSubscriptionsUrl: SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL,
         attestorUrl: DEFAULT_SANDBOX_ATTESTOR_URL,
+        moderationUrl: null,
         fixtures: SANDBOX_FIXTURES,
       });
     } finally {
@@ -852,10 +863,30 @@ describe("resolveSandboxEnvironment", () => {
     vi.stubEnv("AGENC_SANDBOX_CLUSTER", "");
     vi.stubEnv("AGENC_SANDBOX_RPC_URL", "   ");
     vi.stubEnv("AGENC_SANDBOX_ATTESTOR_URL", "");
+    vi.stubEnv("AGENC_SANDBOX_MODERATION_URL", "  ");
     const env = await resolveSandboxEnvironment();
     expect(env.cluster).toBe("devnet");
     expect(env.rpcUrl).toBe(SANDBOX_DEVNET_RPC_URL);
     expect(env.attestorUrl).toBe(DEFAULT_SANDBOX_ATTESTOR_URL);
+    expect(env.moderationUrl).toBeNull();
+  });
+
+  it("resolves moderationUrl: option > AGENC_SANDBOX_MODERATION_URL > null", async () => {
+    // Default: null (no shipped endpoint while P3.4 is deploy-gated).
+    expect((await resolveSandboxEnvironment()).moderationUrl).toBeNull();
+    // Env var rung.
+    vi.stubEnv("AGENC_SANDBOX_MODERATION_URL", "http://env.example/mod");
+    expect((await resolveSandboxEnvironment()).moderationUrl).toBe(
+      "http://env.example/mod",
+    );
+    // Explicit option beats the env var.
+    expect(
+      (
+        await resolveSandboxEnvironment({
+          moderationUrl: "http://option.example/mod",
+        })
+      ).moderationUrl,
+    ).toBe("http://option.example/mod");
   });
 
   it("cluster mainnet has no shipped RPC default and demands an explicit rpcUrl", async () => {
