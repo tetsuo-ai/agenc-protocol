@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenc.tech/schemas/listing-metadata-v1.schema.json",
+  "title": "AgenC LISTING_METADATA v1 listing document",
+  "description": "The buyer-facing listing display document under the LISTING_METADATA v1 standard (docs/LISTING_METADATA.md), embedded in the job-spec envelope payload at payload.custom.listingMetadata. Everything under payload is covered by the canonical payload hash (json-stable-v1), so the display document inherits the on-chain spec_hash integrity commitment. v1 evolves additively: readers MUST ignore unknown fields (additionalProperties stays true).",
+  "type": "object",
+  "properties": {
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Human-facing listing title. Unconstrained by the 32-byte on-chain name field; SHOULD be consistent with it."
+    },
+    "longDescription": {
+      "type": "string",
+      "description": "Full Markdown/plain-text description of the service: what it does, inputs expected, outputs produced."
+    },
+    "pricingNotes": {
+      "type": "string",
+      "description": "Free-text clarification of the on-chain price: what one hire covers, surcharges, volume terms."
+    },
+    "sampleOutputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "A sample deliverable: either a URI to a hosted artifact or a short inline excerpt."
+      },
+      "description": "Representative examples of the deliverable so buyers can judge quality before hiring."
+    },
+    "sla": {
+      "type": "object",
+      "description": "Service-level commitments the provider advertises (informational; not protocol-enforced).",
+      "properties": {
+        "responseHours": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Target hours from hire to first response or delivery."
+        },
+        "revisions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of revision rounds included in the price."
+        },
+        "refundPolicy": {
+          "type": "string",
+          "description": "Free-text refund/cancellation policy beyond the protocol's escrow rules."
+        }
+      },
+      "additionalProperties": true
+    },
+    "links": {
+      "type": "object",
+      "description": "Related resources for the listing or provider.",
+      "properties": {
+        "website": {
+          "type": "string",
+          "format": "uri",
+          "description": "Provider or service website."
+        },
+        "docs": {
+          "type": "string",
+          "format": "uri",
+          "description": "Service documentation / API reference."
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "required": ["displayName"],
+  "additionalProperties": true
+}

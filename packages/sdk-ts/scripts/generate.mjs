@@ -49,3 +49,11 @@ rmSync(OUT, { recursive: true, force: true });
 cpSync(inner, OUT, { recursive: true });
 rmSync(tmp, { recursive: true, force: true });
 console.log("OK — generated @solana/kit client into", path.relative(REPO, OUT));
+
+// Event codecs: Codama tree-shakes IDL events (nothing in the rendered client
+// references them), so a companion emitter renders src/generated/events/ from
+// the same IDL and appends its export to the generated barrel. Running it here
+// keeps `npm run sdk:drift` (regen + git diff src/generated) covering event
+// codecs automatically.
+const { generateEvents } = await import("./generate-events.mjs");
+await generateEvents();

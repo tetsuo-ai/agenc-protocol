@@ -34,6 +34,19 @@ import {
   findHireRecordPda,
   findClaimPda,
 } from "../src/index.js";
+// values: domain-value helpers — random 32-byte ids, NFC description hashing,
+// LISTING_METADATA v1 field codecs, and the kit-compatible json-stable-v1
+// job-spec hash. (In a published integration: the `values` module of
+// `@tetsuo-ai/marketplace-sdk`.)
+import {
+  randomId32,
+  sha256,
+  descriptionHash,
+  canonicalJobSpecHash,
+  encodeListingName,
+  encodeListingCategory,
+  encodeListingTags,
+} from "../src/values/index.js";
 
 // ---------------------------------------------------------------------------
 // Placeholders. In a live integration these come from real keypairs / wallets
@@ -61,25 +74,19 @@ const workerAgent = address("Stake11111111111111111111111111111111111111");
 const treasury = address("SysvarRent111111111111111111111111111111111");
 const bondTreasury = address("SysvarC1ock11111111111111111111111111111111");
 
-// 32-byte ids / hashes (caller-chosen; could be random or derived from content).
-const providerAgentId = new Uint8Array(32).fill(1);
-const buyerAgentId = new Uint8Array(32).fill(2);
-const listingId = new Uint8Array(32).fill(3);
-const taskId = new Uint8Array(32).fill(4);
-const specHash = new Uint8Array(32).fill(9);
-const proofHash = new Uint8Array(32).fill(7);
-const rejectionHash = new Uint8Array(32).fill(8);
-const evidenceHash = new Uint8Array(32).fill(6);
-const disputeId = new Uint8Array(32).fill(5);
+// 32-byte ids (caller-chosen): fresh CSPRNG output via the values module —
+// ids seed PDAs, so they must never collide.
+const providerAgentId = randomId32();
+const buyerAgentId = randomId32();
+const listingId = randomId32();
+const taskId = randomId32();
+const disputeId = randomId32();
 
-// 32/64-byte fixed-width listing fields (name padded into 32 bytes, etc.).
-const listingName = new Uint8Array(32);
-listingName.set([...new TextEncoder().encode("translation-service")]);
-const listingCategory = new Uint8Array(32);
-listingCategory.set([...new TextEncoder().encode("nlp")]);
-const listingTags = new Uint8Array(64);
-const taskDescription = new Uint8Array(64);
-taskDescription.set([...new TextEncoder().encode("translate spec to fr")]);
+// Fixed-width LISTING_METADATA v1 fields, encoded from plain strings (UTF-8,
+// NUL-padded, length-checked — overflow and invalid kebab-case throw).
+const listingName = encodeListingName("translation-service");
+const listingCategory = encodeListingCategory("translation");
+const listingTags = encodeListingTags(["english-to-french", "docs"]);
 
 /**
  * Build every instruction in the embeddable flow and return them. Optionally
@@ -87,6 +94,24 @@ taskDescription.set([...new TextEncoder().encode("translate spec to fr")]);
  * the real facade API.
  */
 export async function main() {
+  // -- 0. Content hashes (values module) -----------------------------------
+  // The listing's spec hash commits to the off-chain spec document with the
+  // kit-compatible json-stable-v1 canonical-JSON hash, so the same payload
+  // hashed by the marketplace kit / explorer verifies bit-for-bit.
+  const { bytes: specHash } = await canonicalJobSpecHash({
+    schemaVersion: 1,
+    title: "Translate the API reference to French",
+    deliverables: ["French markdown translation"],
+  });
+  // Free-text / URI commitments use the documented NFC + UTF-8 + SHA-256
+  // description-hash convention; generic content (artifact bytes, result
+  // payloads) uses plain sha256.
+  const proofHash = await sha256("artifact:sha256:translated-docs-bundle-v1");
+  const rejectionHash = await descriptionHash(
+    "Sections 3-4 are missing from the delivered translation",
+  );
+  const evidenceHash = await descriptionHash("ipfs://dispute-evidence");
+
   // -- 1. Register the provider + buyer agents ----------------------------
   // The agent PDA auto-derives from agentId; only `authority` signs. In a live
   // flow you would derive the resulting PDA with `facade.findAgentPda` and read

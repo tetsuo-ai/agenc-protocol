@@ -20,16 +20,108 @@ import {
   type HireFromListingAsyncInput,
   type HireFromListingHumanlessAsyncInput,
 } from "../generated/index.js";
+import {
+  LISTING_CATEGORIES,
+  isListingCategory,
+  encodeListingName,
+  encodeListingCategory,
+  encodeListingTags,
+  type ListingCategory,
+} from "../values/index.js";
 
 export { findListingPda, findListingModerationPda };
+
+/**
+ * Friendly input for {@link createServiceListing}. Identical to the generated
+ * `CreateServiceListingAsyncInput`, except the three fixed-width metadata
+ * fields each accept EITHER the raw on-chain byte form (passed through
+ * byte-for-byte, for power users) OR the LISTING_METADATA v1 string form,
+ * which the facade validates and encodes via the `values` module
+ * (see docs/LISTING_METADATA.md).
+ */
+export type CreateServiceListingInput = Omit<
+  CreateServiceListingAsyncInput,
+  "name" | "category" | "tags"
+> & {
+  /** Display name: raw 32-byte field, or a string of at most 32 UTF-8 bytes. */
+  name: CreateServiceListingAsyncInput["name"] | string;
+  /** Category: raw 32-byte field, or a canonical {@link ListingCategory} token. */
+  category: CreateServiceListingAsyncInput["category"] | ListingCategory;
+  /** Tags: raw 64-byte field, or lowercase-kebab tokens (comma-joined ≤ 64 UTF-8 bytes). */
+  tags: CreateServiceListingAsyncInput["tags"] | readonly string[];
+};
+
+/** Runtime split between the raw-bytes and string-array forms of `tags`. */
+function isTagStrings(
+  tags: CreateServiceListingInput["tags"],
+): tags is readonly string[] {
+  return Array.isArray(tags);
+}
 
 /**
  * Build a create_service_listing instruction. The listing PDA (derived from
  * providerAgent + listingId), protocolConfig, and systemProgram are all
  * auto-derived by the async builder, so callers only supply identity + terms.
+ *
+ * `name`, `category`, and `tags` accept either form, independently per field:
+ *
+ * - **Strings** (LISTING_METADATA v1): `name` is any UTF-8 text up to 32
+ *   bytes; `category` must be one of the 20 canonical
+ *   {@link LISTING_CATEGORIES}; `tags` is an array of lowercase-kebab tokens
+ *   whose comma-joined encoding fits 64 bytes. The facade validates and
+ *   encodes them with the `values` module codecs (`encodeListingName`,
+ *   `encodeListingCategory`, `encodeListingTags`).
+ * - **Raw fixed-width bytes** (power users): exactly the generated builder's
+ *   `Uint8Array` form, forwarded byte-for-byte with no validation.
+ *
+ * @param input - {@link CreateServiceListingInput}: identity (providerAgent,
+ *   authority), listingId, metadata (name/category/tags in either form),
+ *   spec commitment (specHash, specUri), and terms (price, priceMint,
+ *   requiredCapabilities, defaultDeadlineSecs, maxOpenJobs, operator,
+ *   operatorFeeBps).
+ * @returns The assembled `create_service_listing` instruction.
+ * @throws TypeError when a string `category` is not a canonical
+ *   {@link ListingCategory}, a tag is not lowercase-kebab, or a string field
+ *   contains an embedded NUL.
+ * @throws RangeError when a string field's UTF-8 encoding overflows its
+ *   fixed on-chain width (name/category 32 bytes, joined tags 64 bytes).
+ *
+ * @example
+ * ```ts
+ * const ix = await facade.createServiceListing({
+ *   providerAgent,
+ *   authority,
+ *   listingId,
+ *   name: "Translation Pro",
+ *   category: "translation",
+ *   tags: ["english-to-french", "docs"],
+ *   specHash,
+ *   specUri: "agenc://job-spec/sha256/...",
+ *   price: 1_000_000n,
+ *   priceMint: null,
+ *   requiredCapabilities: 1n,
+ *   defaultDeadlineSecs: 3600n,
+ *   maxOpenJobs: 0,
+ *   operator: null,
+ *   operatorFeeBps: 0,
+ * });
+ * ```
  */
-export async function createServiceListing(input: CreateServiceListingAsyncInput) {
-  return getCreateServiceListingInstructionAsync(input);
+export async function createServiceListing(input: CreateServiceListingInput) {
+  const { name, category, tags, ...rest } = input;
+  if (typeof category === "string" && !isListingCategory(category)) {
+    throw new TypeError(
+      `listing category: ${JSON.stringify(category)} is not a canonical ` +
+        `LISTING_METADATA v1 category (expected one of: ${LISTING_CATEGORIES.join(", ")})`,
+    );
+  }
+  return getCreateServiceListingInstructionAsync({
+    ...rest,
+    name: typeof name === "string" ? encodeListingName(name) : name,
+    category:
+      typeof category === "string" ? encodeListingCategory(category) : category,
+    tags: isTagStrings(tags) ? encodeListingTags(tags) : tags,
+  });
 }
 
 /**
