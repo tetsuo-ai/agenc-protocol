@@ -1,5 +1,17 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.4.0
+
+### Minor Changes
+
+- Phase 3 data-plane client surfaces: `createIndexerClient()` (hosted-indexer read
+  transport with decode-parity against the `queries` gPA module),
+  `verifyAgencWebhookSignature()` (WebCrypto HMAC verification of the storefront's
+  `X-Agenc-Signature` deliveries), and `requestListingModeration()` at the package
+  root (the production moderation helper, resolved through the
+  `AGENC_SANDBOX_MODERATION_URL` environment seam). Adds the README RPC-strategy
+  section.
+
 ## 0.3.0
 
 ### Minor Changes
