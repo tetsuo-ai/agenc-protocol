@@ -1,0 +1,18 @@
+{
+  "name": "@tetsuo-ai/marketplace-react-playwright",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright browser e2e for the A3 checkout Done-when (real hire funded->accepted against the sandbox-up validator).",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test --config playwright.config.ts",
+    "test:headed": "playwright test --config playwright.config.ts --headed",
+    "typecheck": "tsc --noEmit -p tsconfig.playwright.json",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0",
+    "@solana/kit": "6.9.0",
+    "@tetsuo-ai/marketplace-sdk": "file:../../../sdk-ts"
+  }
+}

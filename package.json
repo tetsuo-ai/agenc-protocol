@@ -6,7 +6,8 @@
   "packageManager": "npm@11.7.0",
   "workspaces": [
     "packages/protocol",
-    "packages/sdk-ts"
+    "packages/sdk-ts",
+    "packages/marketplace-react"
   ],
   "scripts": {
     "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs && npm run sync:artifacts",

@@ -1,0 +1,10 @@
+# Playwright deps + run artifacts.
+node_modules/
+package-lock.json
+test-results/
+playwright-report/
+.cache/
+
+# Runtime harness context written by global-setup — carries a generated buyer
+# SECRET KEY. Never commit it.
+.playwright-sandbox.json

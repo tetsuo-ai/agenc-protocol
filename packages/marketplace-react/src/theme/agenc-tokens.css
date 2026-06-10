@@ -1,0 +1,132 @@
+/* ============================================================================
+ * VENDORED — do not hand-edit for brand changes; re-sync from source.
+ *
+ * Source repo:   agenc-ui-design-skill (sibling repo, NOT importable in CI)
+ * Source path:   tokens/colors.css
+ * Source commit: c842bba8eb9e8d029a13fbfd111686f831cd566f (2026-04-29)
+ * Vendored into: packages/marketplace-react/src/theme/agenc-tokens.css
+ * Reason:        cross-repo imports are impossible in CI; store-core and every
+ *                downstream consumer reads the AgenC theme FROM this package,
+ *                never from the design-skill repo directly.
+ * Resync:        copy tokens/colors.css from agenc-ui-design-skill HEAD and
+ *                update the commit line above.
+ * ============================================================================
+ */
+
+/* Tetsuo.ai / AgenC color tokens.
+ *
+ * All values are 8-bit sRGB hex. Sampled from official brand assets
+ * (mood-board/) where possible; the AgenC neon palette is derived from the
+ * AgenC "prompt cache > giant agent bills" infographic.
+ *
+ * Two modes:
+ *   - .agenc      → AgenC framework UI (canonical for product surfaces)
+ *   - .tetsuo-noir → Tetsuo.ai marketing/community surfaces (Akira homage)
+ *
+ * Default :root applies the AgenC neon mode. Add `class="tetsuo-noir"` to a
+ * surface root to switch into the noir palette.
+ */
+
+:root,
+.agenc {
+  /* Surfaces */
+  --agenc-void: #0A0612;            /* deepest layer, page background */
+  --agenc-surface: #16102A;         /* card / panel */
+  --agenc-surface-2: #221638;       /* raised surface, modal */
+  --agenc-surface-3: #2E1A4A;       /* hover / elevated */
+
+  /* Brand accents */
+  --agenc-violet: #7B3FFF;          /* primary brand purple */
+  --agenc-magenta: #FF2E93;         /* secondary accent */
+  --agenc-orange: #FF6B1A;          /* highlight only */
+  --agenc-cyan: #48C8EF;            /* HUD / readout accent */
+  --agenc-grid: #3A1F66;            /* circuit lines, grid floor */
+
+  /* Text */
+  --agenc-text: #F5F0FF;            /* primary on dark */
+  --agenc-text-muted: #B8A8D9;      /* secondary on dark */
+  --agenc-text-dim: #6E5C8F;        /* tertiary / disabled */
+
+  /* Semantic */
+  --agenc-success: #3FFFA0;
+  --agenc-warning: #FFC53F;
+  --agenc-danger: #FF3D3D;
+
+  /* Gradients */
+  --agenc-gradient-primary:
+    linear-gradient(135deg, #7B3FFF 0%, #FF2E93 60%, #FF6B1A 100%);
+  --agenc-gradient-cool:
+    linear-gradient(135deg, #48C8EF 0%, #7B3FFF 100%);
+  --agenc-gradient-text:
+    linear-gradient(90deg, #7B3FFF 0%, #FF2E93 50%, #FF6B1A 100%);
+
+  /* Glows (use as box-shadow / filter drop-shadow) */
+  --agenc-glow-violet: 0 0 24px #7B3FFF66, 0 0 48px #7B3FFF33;
+  --agenc-glow-magenta: 0 0 24px #FF2E9366, 0 0 48px #FF2E9333;
+  --agenc-glow-cyan: 0 0 24px #48C8EF66, 0 0 48px #48C8EF33;
+
+  /* Strokes */
+  --agenc-border: #2E1A4A;
+  --agenc-border-strong: #4A2E7A;
+
+  /* Radii (pixel-honest, not over-rounded) */
+  --agenc-radius-sm: 4px;
+  --agenc-radius: 8px;
+  --agenc-radius-lg: 12px;
+  --agenc-radius-pill: 9999px;
+
+  /* Spacing (4px base) */
+  --agenc-space-1: 4px;
+  --agenc-space-2: 8px;
+  --agenc-space-3: 12px;
+  --agenc-space-4: 16px;
+  --agenc-space-6: 24px;
+  --agenc-space-8: 32px;
+  --agenc-space-12: 48px;
+  --agenc-space-16: 64px;
+}
+
+.tetsuo-noir {
+  /* Tetsuo.ai marketing/community palette. Akira homage + manga off-white. */
+
+  /* Surfaces */
+  --tetsuo-noir: #0A0A0A;           /* true black background */
+  --tetsuo-noir-2: #141414;         /* card */
+  --tetsuo-paper: #F8F5E9;          /* manga off-white (sampled from circle logo) */
+
+  /* Reds (Akira) */
+  --tetsuo-akira-red: #E30426;      /* primary red — sampled from banner */
+  --tetsuo-akira-red-bright: #FA1232;
+  --tetsuo-blood: #7A0000;          /* deep red shadow (sampled from malware art) */
+
+  /* TETSUO.AI logo + $TETSUO synthwave */
+  --tetsuo-cyan: #48C8EF;           /* sampled from logo */
+  --tetsuo-magenta: #D01D7D;        /* sampled drop shadow */
+  --tetsuo-synth-pink: #EF5EC2;     /* sampled from $TETSUO Solana banner */
+  --tetsuo-synth-pink-soft: #F3A8CE;
+  --tetsuo-synth-purple: #7B3FFF;   /* matches AgenC violet — brand-consistent */
+  --tetsuo-synth-eggplant: #441535;
+
+  /* Text */
+  --tetsuo-text: #F8F5E9;           /* paper on noir */
+  --tetsuo-text-muted: #C8BFAA;
+  --tetsuo-text-on-paper: #0A0A0A;
+
+  /* Glitch (chromatic aberration: use cyan + magenta offsets) */
+  --tetsuo-glitch-cyan: #48C8EF;
+  --tetsuo-glitch-magenta: #D01D7D;
+}
+
+/* Convenience: when a surface is the noir mode, redefine the AgenC tokens to
+ * the noir equivalents so component recipes that target --agenc-* still work
+ * without rewriting. Use sparingly — most marketing pages should stay on
+ * .tetsuo-noir directly. */
+.tetsuo-noir.bridge-tokens {
+  --agenc-void: var(--tetsuo-noir);
+  --agenc-surface: var(--tetsuo-noir-2);
+  --agenc-text: var(--tetsuo-text);
+  --agenc-text-muted: var(--tetsuo-text-muted);
+  --agenc-violet: var(--tetsuo-synth-purple);
+  --agenc-magenta: var(--tetsuo-magenta);
+  --agenc-cyan: var(--tetsuo-cyan);
+}

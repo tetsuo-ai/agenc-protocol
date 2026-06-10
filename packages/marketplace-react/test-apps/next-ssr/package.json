@@ -1,0 +1,29 @@
+{
+  "name": "@tetsuo-ai/marketplace-react-next-ssr-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Committed Next.js 15 App Router SSR fixture for @tetsuo-ai/marketplace-react (PLAN_2 A1 Done-when: provider + one hook + one component, SSR with no hydration errors).",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3100",
+    "build": "next build",
+    "start": "next start -p 3100",
+    "test:ssr": "node ./scripts/check-ssr.mjs"
+  },
+  "dependencies": {
+    "@solana/kit": "6.9.0",
+    "@solana/program-client-core": "^6.4.0",
+    "@tanstack/react-query": "^5.62.0",
+    "@tetsuo-ai/marketplace-react": "file:../..",
+    "@tetsuo-ai/marketplace-sdk": "file:../../../sdk-ts",
+    "next": "15.5.19",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.18.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "5.9.3"
+  }
+}

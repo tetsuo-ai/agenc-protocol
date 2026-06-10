@@ -1,0 +1,16 @@
+# Test-app dependencies + build outputs (the apps are file:-linked fixtures;
+# their lockfiles/node_modules/build dirs are not committed).
+*/node_modules/
+*/package-lock.json
+*/.next/
+*/dist/
+*/.vite/
+
+# Next.js generated files (regenerated on build).
+next-ssr/next-env.d.ts
+next-ssr/tsconfig.tsbuildinfo
+
+# The checkout app's runtime config is written by the Playwright global-setup and
+# carries a generated buyer SECRET KEY — never commit it. The committed reference
+# is sandbox-config.example.json.
+checkout/public/sandbox-config.json
