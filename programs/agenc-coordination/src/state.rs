@@ -2163,7 +2163,10 @@ mod tests {
         // ListingState has no Debug derive, so match with `matches!`.
         assert!(matches!(ListingState::from_u8(0), Ok(ListingState::Active)));
         assert!(matches!(ListingState::from_u8(1), Ok(ListingState::Paused)));
-        assert!(matches!(ListingState::from_u8(2), Ok(ListingState::Retired)));
+        assert!(matches!(
+            ListingState::from_u8(2),
+            Ok(ListingState::Retired)
+        ));
         assert!(ListingState::from_u8(3).is_err());
         assert!(ListingState::from_u8(255).is_err());
     }
@@ -2298,9 +2301,21 @@ mod tests {
         // Runtime guard mirroring the compile-time const_assert. If a field add
         // changes the layout, the 149-task realloc (OLD_TASK_SIZE -> SIZE) breaks;
         // this fails loudly rather than silently bricking live accounts.
-        assert_eq!(Task::OLD_TASK_SIZE, 382, "OLD_TASK_SIZE is the migration precondition; do not change");
-        assert_eq!(Task::SIZE, 432, "Task grew by operator(32)+fee(2)+reserved(16)=50");
-        assert_eq!(Task::SIZE - Task::OLD_TASK_SIZE, 50, "realloc delta must be exactly +50 bytes");
+        assert_eq!(
+            Task::OLD_TASK_SIZE,
+            382,
+            "OLD_TASK_SIZE is the migration precondition; do not change"
+        );
+        assert_eq!(
+            Task::SIZE,
+            432,
+            "Task grew by operator(32)+fee(2)+reserved(16)=50"
+        );
+        assert_eq!(
+            Task::SIZE - Task::OLD_TASK_SIZE,
+            50,
+            "realloc delta must be exactly +50 bytes"
+        );
     }
 
     #[test]

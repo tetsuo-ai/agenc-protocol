@@ -327,9 +327,10 @@ pub fn handler(
 
     // Resolve the absolute deadline from the listing's relative offset (or the
     // protocol default), then validate it like create_task does.
-    let deadline = clock
-        .unix_timestamp
-        .saturating_add(hire_deadline_offset(listing_deadline_secs, config.max_claim_duration));
+    let deadline = clock.unix_timestamp.saturating_add(hire_deadline_offset(
+        listing_deadline_secs,
+        config.max_claim_duration,
+    ));
     validate_deadline(deadline, &clock, true)?;
 
     // Snapshot the content-commitment hash into the task description (hash-shaped:
@@ -464,7 +465,16 @@ pub fn handler(
 mod tests {
     use super::*;
 
-    fn ok_terms() -> (ListingState, u64, u64, u64, u64, Pubkey, Pubkey, Option<Pubkey>) {
+    fn ok_terms() -> (
+        ListingState,
+        u64,
+        u64,
+        u64,
+        u64,
+        Pubkey,
+        Pubkey,
+        Option<Pubkey>,
+    ) {
         (
             ListingState::Active,
             MIN_SKILL_PRICE,
@@ -514,9 +524,7 @@ mod tests {
     #[test]
     fn rejects_token_priced_listing() {
         let (s, p, v, ep, ev, b, pr, _m) = ok_terms();
-        assert!(
-            validate_hire_terms(s, p, v, ep, ev, b, pr, Some(Pubkey::new_unique())).is_err()
-        );
+        assert!(validate_hire_terms(s, p, v, ep, ev, b, pr, Some(Pubkey::new_unique())).is_err());
     }
 
     #[test]
@@ -604,7 +612,9 @@ mod tests {
     #[test]
     fn moderation_rejects_listing_mismatch() {
         let (c, m, _l, h) = mod_case(0, 0);
-        assert!(validate_listing_moderation_for_hire(&c, &m, Pubkey::new_unique(), &h, 100).is_err());
+        assert!(
+            validate_listing_moderation_for_hire(&c, &m, Pubkey::new_unique(), &h, 100).is_err()
+        );
     }
 
     #[test]

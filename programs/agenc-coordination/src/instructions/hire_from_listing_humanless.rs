@@ -185,9 +185,10 @@ pub fn handler(
         )?;
     }
 
-    let deadline = clock
-        .unix_timestamp
-        .saturating_add(hire_deadline_offset(listing_deadline_secs, config.max_claim_duration));
+    let deadline = clock.unix_timestamp.saturating_add(hire_deadline_offset(
+        listing_deadline_secs,
+        config.max_claim_duration,
+    ));
     validate_deadline(deadline, &clock, true)?;
 
     validate_listing_spec_hash(&listing_spec_hash)?;

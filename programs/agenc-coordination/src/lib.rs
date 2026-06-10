@@ -1076,7 +1076,10 @@ pub mod agenc_coordination {
     /// Terminally reject a submission and freeze the task for review (Batch 3 §8).
     /// Settles only via resolve_reject_frozen / expire_reject_frozen.
     #[cfg(not(feature = "mainnet-canary"))]
-    pub fn reject_and_freeze(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; 32]) -> Result<()> {
+    pub fn reject_and_freeze(
+        ctx: Context<RejectAndFreeze>,
+        rejection_hash: [u8; 32],
+    ) -> Result<()> {
         instructions::reject_and_freeze::handler(ctx, rejection_hash)
     }
 
