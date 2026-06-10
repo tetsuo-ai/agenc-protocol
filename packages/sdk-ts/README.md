@@ -204,6 +204,70 @@ unseeded — populated after the Phase-2 devnet redeploy);
 CLEAN moderation your hire needs. See
 [`examples/devnet-first-hire.ts`](./examples/devnet-first-hire.ts).
 
+## RPC strategy
+
+The SDK ships **no RPC endpoint and no RPC dependency** — you bring your own
+`@solana/kit` RPC (`createSolanaRpc(url)`) and the SDK builds
+instructions/transactions against it. Pick the endpoint by what the code path
+needs:
+
+**Bring-your-own RPC (sending transactions, fetching single accounts).** Any
+healthy mainnet/devnet endpoint works for `sendTransaction`,
+`getLatestBlockhash`, `getAccountInfo`, and the `fetch*` account helpers. The
+public endpoints (`api.mainnet-beta.solana.com`, `api.devnet.solana.com`) are
+rate-limited and fine for development only; for anything user-facing use a
+**dedicated RPC provider** (commercial providers in the Helius / Triton /
+QuickNode class, or a self-hosted validator RPC you operate). Wallet-adapter
+RPCs and free shared tiers throttle under load and are the most common cause
+of "works locally, flaky in prod".
+
+**The gPA restriction (read this before building list views).** The `queries`
+module (`listActiveListings`, `listOpenTasks`, …) is built on raw
+`getProgramAccounts`, which many RPC providers **disable outright or restrict
+to paid tiers** — and even where enabled it scans every program account
+server-side on every call. It is the **trustless** read path, not the scale
+path. If a provider rejects gPA you will see provider-specific errors
+(`-32601` method not found, 403s, or empty results); switch the read side to
+the **hosted indexer client**, which is the intended scale path:
+
+```ts
+import { createIndexerClient } from "@tetsuo-ai/marketplace-sdk";
+
+const indexer = createIndexerClient({ baseUrl: "https://marketplace.agenc.tech" });
+// Same return shape as the queries module — decoded from the FULL raw
+// account bytes the indexer serves, so decode-parity holds by construction.
+// Drop-in for the default valid-only view; the hosted read model excludes
+// metadata-nonconforming listings, so this can return a SUBSET of raw gPA —
+// pass `metadataValid: false` (via `indexer.listings(...)`) or use the gPA
+// queries module to also see nonconforming listings:
+const listings = await indexer.listActiveListings({ category: "code-generation" });
+```
+
+`listActiveListings` on the indexer client returns the identical
+`Array<{ address, account: ServiceListing }>` shape as the `queries` module
+(decoded with the same generated decoder from the `accountData` bytes every
+response carries), so swapping the read transport is a call-site-neutral
+change. One semantic difference to know: the hosted read model serves only
+`metadataValid: true` listings by default, so `listActiveListings` is the
+valid-only subset of what raw gPA returns — use `indexer.listings({
+metadataValid: false })` (or the gPA `queries` module, which applies no
+metadata filter) to also surface nonconforming listings. The indexer also
+exposes the no-RPC write path (`POST /v1/hires`
+builds an unsigned hire transaction server-side — you sign locally and
+broadcast through your own RPC) plus webhooks
+(`verifyAgencWebhookSignature`) so polling loops can go away entirely.
+
+**Local development: the localnet stack.** Don't burn devnet rate limits
+iterating — the `agenc-protocol` repo ships a one-command local stack
+(`node scripts/localnet-up.mjs`, see `docs/LOCALNET.md`) that boots a
+`solana-test-validator` with the program + configs at genesis and writes
+`.localnet/env.json`. Export the `AGENC_SANDBOX_*` variables it derives
+(cluster/RPC/WS/attestor/moderation/fixtures) and every sandbox helper —
+`resolveSandboxEnvironment`, `createSandboxClient`,
+`requestSandboxAttestation`, `requestListingModeration` — retargets to
+localhost with **zero code changes**. The same seam later retargets to devnet
+(unset everything) or a hosted surface (point the variables at it).
+
 ## Layout
 
 | Path | What |

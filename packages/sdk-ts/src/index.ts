@@ -3,11 +3,31 @@
 // facade/    = hand-written ergonomic instruction builders.
 // client/    = transaction runtime (createMarketplaceClient, AgencError, Transport).
 // queries/   = typed getProgramAccounts read path (indexer-swappable transport).
+// indexer/   = hosted indexer API client (the scale read path + tx builder).
+// webhooks/  = webhook delivery signature verification.
 // events/    = log parsing, subscriptions, waitForTaskStatus.
 // values/    = ids, hashing, listing-metadata codecs, canonical job-spec hash.
 export * from "./generated/index.js";
 export * as facade from "./facade/index.js";
 export * from "./client/index.js";
 export * from "./queries/index.js";
+export * from "./indexer/index.js";
+export * from "./webhooks/index.js";
 export * from "./events/index.js";
 export * as values from "./values/index.js";
+
+// The P3.4 public moderation helper lives next to the devnet sandbox helpers
+// in src/sandbox/ but is NOT devnet-only: it POSTs a job spec to the
+// configured moderation endpoint (the environment seam, which includes a
+// production hosted endpoint) and holds no key, sends no funds, and
+// broadcasts nothing. Re-export it from the package root — alongside
+// createIndexerClient / verifyAgencWebhookSignature — so mainnet integrators
+// reach it without importing through the "DEVNET ONLY" `/sandbox` subpath.
+export {
+  ListingModerationError,
+  requestListingModeration,
+  type ListingModerationAttestation,
+  type ListingModerationResult,
+  type ListingModerationVerdict,
+  type RequestListingModerationInput,
+} from "./sandbox/moderation.js";

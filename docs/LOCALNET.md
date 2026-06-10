@@ -204,3 +204,73 @@ $ node scripts/localnet-down.mjs
 validator: pid 2995404 stopped (SIGTERM)
 attestor: pid 2997290 stopped (SIGTERM)      # .localnet/attestor.pid honored
 ```
+
+## Phase 3 verified run (2026-06-10, this machine)
+
+The full hosted-data-plane surface (PLAN.md Phase 3: listings indexer + explorer
+read API, API keys, `POST /v1/hires` tx builder, signed webhooks, public
+moderation API, SDK indexer/webhook/moderation clients) exercised end to end
+against this localnet stack — localhost only, throwaway keys, output trimmed.
+
+```console
+# 1. boot + seed (18.3s + 28.3s)
+$ node scripts/localnet-down.mjs --purge && node scripts/localnet-up.mjs
+localnet is up (18.3s total).
+# gotcha: a stale env.json attestorUrl from a previous run makes the seeder try
+# HTTP attestation — null it (or run the attestor) before seeding:
+$ node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs --env-file .localnet/env.json \
+    --keypair .localnet/keys/seeder.json --moderator-keypair .localnet/keys/moderator.json
+... (x10 providers, listings moderated CLEAN via the moderator key)   # 28.3s
+
+# 2. storefront (from the agenc-services-storefront checkout) — indexer +
+#    moderation API on, attestor off, throwaway data dir, pid under .localnet/:
+$ PORT=4185 STOREFRONT_DATA_DIR=$(mktemp -d) SOLANA_RPC_URL=http://127.0.0.1:8899 \
+  LISTINGS_INDEXER_ENABLED=true LISTINGS_INDEXER_RPC_URL=http://127.0.0.1:8899 \
+  LISTINGS_INDEXER_POLL_INTERVAL_MS=3000 MODERATION_API_ENABLED=true \
+  MODERATION_AUTHORITY_KEYPAIR_PATH=<repo>/.localnet/keys/moderator.json \
+  MODERATION_ALLOW_CUSTOM_RPC=true \
+  nohup node --import tsx server/index.ts > <repo>/.localnet/logs/storefront.log &
+AgenC Services storefront listening on http://localhost:4185
+
+# 3. ingest — all 10 seeded listings indexed within ~14s of boot:
+$ curl -s 'http://127.0.0.1:4185/api/explorer/listings?pageSize=50'
+success: true total: 10  (all metadataValid=true, accountData base64 present)
+GET /listings/:pda, /listings/:pda/hires, /agents/:pda/track-record,
+and the LISTING_NOT_FOUND 404 envelope all verified.
+
+# 4. parity (0.13s) — SDK queries.listActiveListings over gPA vs
+#    createIndexerClient({baseUrl}).listActiveListings:
+gPA listings: 10 / indexer listings: 10
+PARITY OK: same listing set, deep-equal decoded accounts
+
+# 5. tx builder (1.9s) — fresh airdropped buyer (createSandboxClient over the
+#    AGENC_SANDBOX_* seam), registered as agent, POST /v1/hires via the SDK
+#    client, signed locally with @solana/kit, broadcast, confirmed:
+listing 5NCHsZ…t3Xq: price=700000 version=1
+broadcast signature: tJV6m5ZkBpoepSyyuwjQYL5hiBzLJTgdcSg1Ux2jSSdrAgDWnAXNMa6EskwBTUSrSK3McxUV1HmRxKP6iUBejcp
+on-chain: Task exists (reward=700000), HireRecord exists (task ok, listing ok)
+
+# 6. webhooks (4.2s) — POST /v1/api-keys, registerWebhook -> local receiver,
+#    another hire, signed deliveries verified with the SDK helper:
+delivery listing.hired: sig VERIFIED via verifyAgencWebhookSignature (tamper fails)
+delivery task.created:  sig VERIFIED via verifyAgencWebhookSignature (tamper fails)
+replay: GET /v1/events shows both delivered event ids
+
+# 7. moderation (5.1s) — fresh UNMODERATED listing created via the SDK, then
+#    sdk requestListingModeration (endpoint from AGENC_SANDBOX_MODERATION_URL=
+#    http://127.0.0.1:4185/api/moderation/listings), then a public-path hire:
+spec canonical hash: 716e75d0…aa106  ->  verdict clean, riskScore 0
+policyHash == sha256(GET /api/moderation/policy bytes)  (8235 bytes)
+ListingModeration on-chain at ARX8a9…7GJb (riskScore=0, policyHash matches)
+hire on that listing: built -> signed -> broadcast -> Task + HireRecord on-chain
+
+# 7b. negative path — raw-category listing NOT in the v1 taxonomy:
+metadataValid: false, issues: ["category … is not one of the 20 canonical …"]
+default query excludes it; ?metadataValid=false includes it. After this exists,
+gPA returns 12 listings vs indexer 11 — the indexer's documented default
+exclusion of metadataValid:false listings (contract behavior, not drift).
+
+# 8. teardown
+$ kill $(cat .localnet/storefront.pid) && node scripts/localnet-down.mjs
+storefront stopped / validator stopped (SIGTERM)
+```

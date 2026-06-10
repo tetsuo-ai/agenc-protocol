@@ -67,3 +67,11 @@ export {
   type SandboxAttestationResponse,
   type SandboxFetchLike,
 } from "./attest.js";
+export {
+  ListingModerationError,
+  requestListingModeration,
+  type ListingModerationAttestation,
+  type ListingModerationResult,
+  type ListingModerationVerdict,
+  type RequestListingModerationInput,
+} from "./moderation.js";
