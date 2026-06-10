@@ -29,6 +29,7 @@
     "canary:test": "cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@types/node": "^25.4.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"

@@ -1,0 +1,92 @@
+name: SDK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  # Fast checks: no Rust toolchain needed (the IDL is committed).
+  sdk-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk-ts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: .
+
+      - name: Drift gate (generated client vs committed IDL)
+        run: npm run sdk:drift
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # tests/ trailing slash matters: a bare "tests" filter substring-matches
+      # tests-e2e/ too, which needs the compiled .so this job doesn't build.
+      - name: Structural tests
+        run: npm run test:structural
+
+      - name: Build (ESM + CJS + d.ts)
+        run: npm run build
+
+      - name: Examples compile
+        run: npm run examples:check
+
+      - name: Pack smoke (tarball install, ESM + CJS entry points)
+        run: node scripts/pack-smoke.mjs
+
+  # On-chain e2e: builds the program .so with cargo-build-sbf (no anchor CLI;
+  # the committed IDL is the interface source of truth) and runs the litesvm suite.
+  sdk-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + sbf target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            programs/agenc-coordination/target
+          key: sdk-e2e-sbf-${{ runner.os }}-${{ hashFiles('programs/agenc-coordination/Cargo.lock', 'programs/agenc-coordination/Cargo.toml') }}
+
+      - name: Install Solana platform tools
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Build program (full surface, default features)
+        run: cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: On-chain e2e tests (litesvm)
+        run: npx vitest run tests-e2e
+        working-directory: packages/sdk-ts

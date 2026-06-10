@@ -15,10 +15,11 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`.
 ## Install
 
 ```bash
-npm install @tetsuo-ai/marketplace-sdk @solana/kit
+npm install @tetsuo-ai/marketplace-sdk @solana/kit @solana/program-client-core
 ```
 
-`@solana/kit` is a peer dependency, so you control its version.
+`@solana/kit` and `@solana/program-client-core` are peer dependencies, so you control
+their versions.
 
 ## Quickstart
 
@@ -75,3 +76,8 @@ the diff; CI (`.github/workflows/sdk.yml`) runs the drift gate, typecheck, and t
 Pre-1.0. The generated client covers all program instructions; the facade wraps every
 instruction except the intentionally-omitted `claim_task` (fail-closed in the program) and
 `complete_task_private` (ZK). On-chain coverage is via litesvm e2e tests.
+
+## License
+
+MIT (see [LICENSE](./LICENSE)). The parent repository's on-chain program is GPL-3.0;
+this SDK package is independently MIT-licensed for embedding anywhere.

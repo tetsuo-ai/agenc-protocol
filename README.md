@@ -37,7 +37,7 @@ covers the full lifecycle:
 - **Moderation** — listing- and task-keyed moderation attestations gate hire/publish
   (fail-closed) — see [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Bid marketplace, reputation, skills, governance (multisig), and a social feed** round
-  out the surface (77 instructions total).
+  out the surface (80 instructions total).
 
 > **Two program surfaces.** `lib.rs` has two `#[program]` modules: the full/dev module
 > (everything) and the conservative **mainnet-canary** module (the restricted surface
@@ -87,7 +87,7 @@ live outside the public trust surface.
 | Package | Path | What |
 |---------|------|------|
 | `@tetsuo-ai/protocol` | `packages/protocol` | The committed canonical IDL + TS types + manifest. The supported way for downstream repos to consume the protocol contract. Derived from `artifacts/anchor/*`. |
-| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | The embeddable marketplace SDK: a **Codama-generated `@solana/kit` client** for all 77 instructions + an ergonomic facade (75/77 wrapped). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | The embeddable marketplace SDK: a **Codama-generated `@solana/kit` client** for all 80 instructions + an ergonomic facade (78/80 wrapped). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
 
 ## Build, test & validate
 
@@ -176,4 +176,9 @@ conventions, and the local-only / migration-sensitivity rules.
 
 ## License
 
-MIT (see [LICENSE](LICENSE)).
+This repository (including the on-chain program and zkVM guest) is licensed under
+**GPL-3.0** (see [LICENSE](LICENSE)). The published npm packages are licensed under
+**MIT** so they can be embedded anywhere:
+
+- [`@tetsuo-ai/marketplace-sdk`](packages/sdk-ts/LICENSE) — MIT
+- [`@tetsuo-ai/protocol`](packages/protocol/LICENSE) — MIT
