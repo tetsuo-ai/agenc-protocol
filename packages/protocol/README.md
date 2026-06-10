@@ -40,3 +40,8 @@ Raw artifact subpaths are also exported:
 Use this package when you need released protocol artifacts in downstream repos such as `agenc-sdk`, `agenc-prover`, or external integrations.
 
 Use the repo-root artifacts when you are maintaining protocol source of truth inside `agenc-protocol`.
+
+## License
+
+MIT (see [LICENSE](./LICENSE)). The parent repository's on-chain program is GPL-3.0;
+this artifacts package is independently MIT-licensed.

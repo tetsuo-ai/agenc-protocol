@@ -1,0 +1,128 @@
+name: Release
+
+# Tag-triggered npm publish. Tag formats:
+#   protocol-vX.Y.Z  -> publishes @tetsuo-ai/protocol
+#   sdk-vX.Y.Z       -> publishes @tetsuo-ai/marketplace-sdk
+#
+# Requires the NPM_TOKEN repo secret (npm automation token with publish rights
+# to the @tetsuo-ai scope). Provisioning that secret is a human-owned step.
+#
+# NOTE on provenance: `npm publish --provenance` requires a PUBLIC repository
+# (the attestation goes to a public transparency log). This repo is currently
+# private, so provenance is OFF. When the repo goes public (PLAN.md P0.6/P8.3),
+# add `--provenance` to both publish commands below.
+
+on:
+  push:
+    tags:
+      - "protocol-v*"
+      - "sdk-v*"
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # OIDC for npm provenance (no-op until provenance is enabled)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve package from tag
+        id: pkg
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in
+            protocol-v*)
+              echo "name=@tetsuo-ai/protocol" >> "$GITHUB_OUTPUT"
+              echo "dir=packages/protocol" >> "$GITHUB_OUTPUT"
+              echo "version=${TAG#protocol-v}" >> "$GITHUB_OUTPUT"
+              ;;
+            sdk-v*)
+              echo "name=@tetsuo-ai/marketplace-sdk" >> "$GITHUB_OUTPUT"
+              echo "dir=packages/sdk-ts" >> "$GITHUB_OUTPUT"
+              echo "version=${TAG#sdk-v}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unrecognized tag: $TAG" >&2; exit 1
+              ;;
+          esac
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./${{ steps.pkg.outputs.dir }}/package.json').version")
+          if [ "$PKG_VERSION" != "${{ steps.pkg.outputs.version }}" ]; then
+            echo "Tag version ${{ steps.pkg.outputs.version }} != package.json $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      # --- Gate: SDK (full gate incl. on-chain e2e) ---
+      - name: Setup Rust (SDK e2e)
+        if: startsWith(github.ref_name, 'sdk-v')
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Solana platform tools (SDK e2e)
+        if: startsWith(github.ref_name, 'sdk-v')
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Build program for e2e (SDK)
+        if: startsWith(github.ref_name, 'sdk-v')
+        run: cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
+
+      - name: SDK gate (drift, typecheck, tests incl. e2e, build, examples)
+        if: startsWith(github.ref_name, 'sdk-v')
+        working-directory: packages/sdk-ts
+        run: |
+          npm run sdk:drift
+          npx tsc --noEmit
+          npm test
+          npm run build
+          npm run examples:check
+          node scripts/pack-smoke.mjs
+
+      # --- Gate: protocol ---
+      - name: Protocol gate (artifacts check, build, typecheck, pack smoke)
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: |
+          npm run artifacts:check
+          npm run build
+          npm run typecheck
+          npm run pack:smoke
+
+      # Both publish steps are idempotent so a re-run after a partial failure
+      # converges instead of dying on the already-done half.
+      - name: Publish to npm
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version > /dev/null 2>&1; then
+            echo "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} already on npm — skipping publish"
+          else
+            npm publish --access public
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists — skipping"
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" \
+              --notes "See ${{ steps.pkg.outputs.dir }}/CHANGELOG.md for details."
+          fi

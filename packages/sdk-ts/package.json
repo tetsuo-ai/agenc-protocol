@@ -4,22 +4,28 @@
   "description": "Embeddable AgenC marketplace SDK — Codama-generated @solana/kit client + ergonomic facade",
   "packageManager": "npm@11.7.0",
   "type": "module",
-  "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "default": "./dist/index.mjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "sdk:generate": "node scripts/generate.mjs",
@@ -28,8 +34,10 @@
     "examples:check": "tsc --noEmit -p tsconfig.examples.json",
     "build": "tsup",
     "test": "vitest run",
+    "test:structural": "vitest run tests/",
     "docs:api": "typedoc",
-    "test:e2e": "vitest run tests-e2e"
+    "test:e2e": "vitest run tests-e2e",
+    "pack:smoke": "npm run build && node scripts/pack-smoke.mjs"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0",
@@ -72,6 +80,6 @@
   ],
   "author": "Tetsuo AI",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.18.0"
   }
 }

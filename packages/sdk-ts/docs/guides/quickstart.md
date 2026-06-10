@@ -23,7 +23,7 @@ top-level.
 ## Install
 
 ```bash
-npm install @tetsuo-ai/marketplace-sdk @solana/kit
+npm install @tetsuo-ai/marketplace-sdk @solana/kit @solana/program-client-core
 ```
 
 `@solana/kit` (and `@solana/program-client-core`) are **peer dependencies** —
