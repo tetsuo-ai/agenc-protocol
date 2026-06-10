@@ -1,5 +1,9 @@
 name: SDK
 
+# Node 24 (LTS) required: the litesvm 1.1.0 native binding nondeterministically
+# hangs vitest fork workers (stuck in native code) under node 20/22; stable on
+# 24/25 (5/5 stress runs each).
+
 on:
   workflow_dispatch:
   pull_request:
@@ -23,7 +27,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -61,7 +65,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Setup Rust
