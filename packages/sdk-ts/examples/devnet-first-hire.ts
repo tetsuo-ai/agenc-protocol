@@ -27,7 +27,14 @@
 //      complete_task (the direct-pay path hired tasks use — mirrors the
 //      client e2e settlement recipe), and we waitForTaskStatus -> Completed.
 //
-// DEVNET ONLY. Throwaway keys. Never real funds.
+// DEVNET ONLY (or a LOCAL validator). Throwaway keys. Never real funds.
+//
+// Everything routes through the environment seam (resolveSandboxEnvironment):
+// run the one-command localnet stack (node scripts/localnet-up.mjs at the
+// repo root), export the AGENC_SANDBOX_* variables it derives from
+// .localnet/env.json (including AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json),
+// and this SAME example drives the local validator today — and public devnet
+// later, by simply unsetting those variables.
 //
 // Run it (post-deploy) through vitest — same path the nightly workflow uses:
 //   SANDBOX_NIGHTLY=1 npx vitest run tests-e2e/devnet-nightly.test.ts
@@ -54,10 +61,12 @@ import { descriptionHash, randomId32 } from "../src/values/index.js";
 import {
   createSandboxClient,
   requestSandboxAttestation,
-  SANDBOX_FIXTURES,
+  resolveSandboxEnvironment,
   sandboxListings,
   SandboxAirdropError,
   type SandboxClient,
+  type SandboxEnvironment,
+  type SandboxFixtures,
   type SandboxRpc,
 } from "../src/sandbox/index.js";
 
@@ -65,27 +74,36 @@ import {
 const log = (...parts: unknown[]): void => console.log(...parts);
 
 const NOT_SEEDED_MESSAGE = [
-  "devnet-first-hire: the devnet sandbox is NOT seeded yet, so this example",
+  "devnet-first-hire: the resolved sandbox is NOT seeded yet, so this example",
   "did not broadcast anything.",
   "",
-  "SANDBOX_FIXTURES.seeded is false in this build: the devnet full-surface",
-  "redeploy (PLAN.md P2.2) and the seeding run (scripts/seed-devnet-sandbox.mjs)",
-  "have not happened yet, or you are on a pre-seeding SDK release.",
+  "The resolved fixtures have seeded: false. For the SHIPPED devnet fixtures",
+  "that means the devnet full-surface redeploy (PLAN.md P2.2) and the seeding",
+  "run (scripts/seed-devnet-sandbox.mjs) have not happened yet, or you are on",
+  "a pre-seeding SDK release.",
   "",
-  "Once seeded, re-run and this example will drive a real faucet-to-settled",
-  "hire on devnet. Nothing to do right now — this is expected today.",
+  "Run it locally TODAY instead: start the one-command localnet stack",
+  "(node scripts/localnet-up.mjs at the repo root), then export the",
+  "AGENC_SANDBOX_* variables it prints (cluster/RPC/attestor plus",
+  "AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json) and re-run — this SAME",
+  "example drives the local validator through the environment seam.",
+  "",
+  "Once devnet is seeded, re-run with no AGENC_SANDBOX_* variables and it",
+  "will drive a real faucet-to-settled hire on devnet.",
 ].join("\n");
 
 /** Options for {@link runDevnetFirstHire} (all optional). */
 export interface RunDevnetFirstHireOptions {
   /** Throw (instead of returning early) when fixtures are unseeded — the nightly uses this. */
   requireSeeded?: boolean;
-  /** Override the devnet HTTP RPC endpoint. */
+  /** Override the HTTP RPC endpoint (beats AGENC_SANDBOX_RPC_URL). */
   rpcUrl?: string;
-  /** Override the devnet WebSocket endpoint. */
+  /** Override the WebSocket endpoint (beats AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL). */
   rpcSubscriptionsUrl?: string;
-  /** Override the P2.3 attestor endpoint. */
+  /** Override the P2.3 attestor endpoint (beats AGENC_SANDBOX_ATTESTOR_URL). */
   attestorUrl?: string;
+  /** Override the sandbox fixtures (beats AGENC_SANDBOX_FIXTURES). */
+  fixtures?: SandboxFixtures;
 }
 
 /** Fetch + decode raw account bytes via the sandbox rpc (base64 path). */
@@ -125,7 +143,7 @@ const AIRDROP_RETRY_BACKOFF_MS = 5_000;
  * friendlier failure when the faucet keeps rate-limiting. */
 async function fundedSandboxClient(
   label: string,
-  options: RunDevnetFirstHireOptions,
+  environment: SandboxEnvironment,
 ): Promise<SandboxClient> {
   // One signer across both attempts: if the first airdrop was accepted but
   // landed late, the retry's balance wait picks it up instead of burning a
@@ -135,11 +153,11 @@ async function fundedSandboxClient(
   for (let attempt = 1; ; attempt += 1) {
     try {
       const sandbox = await createSandboxClient({
-        rpcUrl: options.rpcUrl,
-        rpcSubscriptionsUrl: options.rpcSubscriptionsUrl,
+        rpcUrl: environment.rpcUrl,
+        rpcSubscriptionsUrl: environment.rpcSubscriptionsUrl,
         signer,
       });
-      log(`${label}: throwaway signer ${sandbox.signer.address} funded with devnet SOL`);
+      log(`${label}: throwaway signer ${sandbox.signer.address} funded with ${environment.cluster} SOL`);
       return sandbox;
     } catch (error) {
       if (error instanceof SandboxAirdropError) {
@@ -167,8 +185,20 @@ async function fundedSandboxClient(
 export async function runDevnetFirstHire(
   options: RunDevnetFirstHireOptions = {},
 ): Promise<Address | undefined> {
-  // ---- 0) seeded-fixtures guard: inert until the devnet sandbox exists ----
-  if (!SANDBOX_FIXTURES.seeded) {
+  // ---- 0) resolve the environment seam: options > AGENC_SANDBOX_* > shipped
+  // devnet defaults. Exporting the localnet variables (see
+  // scripts/localnet-up.mjs at the repo root) retargets this WHOLE example at
+  // a local validator — same code, different environment.
+  const environment = await resolveSandboxEnvironment({
+    rpcUrl: options.rpcUrl,
+    rpcSubscriptionsUrl: options.rpcSubscriptionsUrl,
+    attestorUrl: options.attestorUrl,
+    fixtures: options.fixtures,
+  });
+  log(`environment: cluster ${environment.cluster}, rpc ${environment.rpcUrl}`);
+
+  // ---- 0b) seeded-fixtures guard: inert until the resolved sandbox exists --
+  if (!environment.fixtures.seeded) {
     if (options.requireSeeded) {
       throw new Error(NOT_SEEDED_MESSAGE);
     }
@@ -177,17 +207,18 @@ export async function runDevnetFirstHire(
   }
 
   // ---- 1) two funded throwaway actors (buyer + provider) ----
-  const buyer = await fundedSandboxClient("buyer", options);
-  const provider = await fundedSandboxClient("provider", options);
+  const buyer = await fundedSandboxClient("buyer", environment);
+  const provider = await fundedSandboxClient("provider", environment);
   const rpc = buyer.rpc;
 
   // ---- 2) fixture rot-check: the published listing must still be live ----
-  const fixture = sandboxListings()[0]!;
+  const fixture = sandboxListings(environment.fixtures)[0]!;
   const fixtureBytes = await fetchAccountBytes(rpc, fixture.address);
   if (fixtureBytes === null) {
     throw new Error(
       `sandbox fixture listing ${fixture.address} ("${fixture.name}") is gone ` +
-        `on devnet — the sandbox has rotted; re-run scripts/seed-devnet-sandbox.mjs`,
+        `on ${environment.cluster} — the sandbox has rotted; re-run ` +
+        `scripts/seed-devnet-sandbox.mjs (with --env-file for a localnet stack)`,
     );
   }
   const fixtureListing = getServiceListingDecoder().decode(fixtureBytes);
@@ -205,6 +236,24 @@ export async function runDevnetFirstHire(
   }
   log(`fixtures: "${fixture.name}" is Active at ${fixture.address} (${fixture.priceLamports} lamports)`);
 
+  // ---- 2b) protocol config: register_agent enforces stake_amount >=
+  // min_agent_stake (the initialize_protocol floor is 0.001 SOL, so a 0n
+  // stake fails with InsufficientStake on any properly initialized cluster),
+  // and complete_task later pays the protocol fee to the on-chain treasury.
+  const [protocolConfigPda] = await findProtocolConfigPda();
+  const configBytes = await fetchAccountBytes(rpc, protocolConfigPda);
+  if (configBytes === null) {
+    throw new Error(
+      `ProtocolConfig ${protocolConfigPda} not found on ${environment.cluster} ` +
+        `— the program is not initialized (devnet: did the P2.2 redeploy run? ` +
+        `localnet: did scripts/localnet-up.mjs finish its config-init step?)`,
+    );
+  }
+  const protocolConfig = getProtocolConfigDecoder().decode(configBytes);
+  const stakeAmount = protocolConfig.minAgentStake;
+  const treasury = protocolConfig.treasury;
+  log(`protocol: minAgentStake ${stakeAmount} lamports, treasury ${treasury}`);
+
   // ---- 3) provider registers an agent + lists a service ----
   const providerAgentId = randomId32();
   await provider.client.registerAgent({
@@ -213,7 +262,7 @@ export async function runDevnetFirstHire(
     capabilities: 1n,
     endpoint: "https://example.invalid/devnet-first-hire/provider",
     metadataUri: null,
-    stakeAmount: 0n,
+    stakeAmount,
   });
   const [providerAgent] = await findAgentPda({ agentId: providerAgentId });
 
@@ -247,7 +296,7 @@ export async function runDevnetFirstHire(
     kind: "listing",
     address: listing,
     specHash: listingSpecHash,
-    endpoint: options.attestorUrl,
+    endpoint: environment.attestorUrl,
   });
   const [listingModeration] = await facade.findListingModerationPda({
     listing,
@@ -264,7 +313,7 @@ export async function runDevnetFirstHire(
     capabilities: 1n,
     endpoint: "https://example.invalid/devnet-first-hire/buyer",
     metadataUri: null,
-    stakeAmount: 0n,
+    stakeAmount,
   });
   const [buyerAgent] = await findAgentPda({ agentId: buyerAgentId });
 
@@ -290,7 +339,7 @@ export async function runDevnetFirstHire(
     kind: "task",
     address: task,
     specHash: jobSpecHash,
-    endpoint: options.attestorUrl,
+    endpoint: environment.attestorUrl,
   });
   const [taskModeration] = await findTaskModerationPda({ task, jobSpecHash });
   await waitForAccount(rpc, taskModeration, "TaskModeration");
@@ -315,17 +364,8 @@ export async function runDevnetFirstHire(
   });
   log("provider: claimed (task InProgress)");
 
-  // complete_task pays the protocol fee to the on-chain treasury — read it.
-  const [protocolConfigPda] = await findProtocolConfigPda();
-  const configBytes = await fetchAccountBytes(rpc, protocolConfigPda);
-  if (configBytes === null) {
-    throw new Error(
-      `ProtocolConfig ${protocolConfigPda} not found on devnet — the program ` +
-        `is not initialized (did the P2.2 redeploy run?)`,
-    );
-  }
-  const treasury = getProtocolConfigDecoder().decode(configBytes).treasury;
-
+  // complete_task pays the protocol fee to the on-chain treasury (read from
+  // ProtocolConfig in step 2b).
   const [hireRecord] = await findHireRecordPda({ task });
   const completeResult = await provider.client.send([
     await facade.completeTask({
@@ -344,8 +384,10 @@ export async function runDevnetFirstHire(
   });
   log(`provider: settled (sig ${completeResult.signature})`);
   log(
-    `done — faucet to settled result on devnet. Task: ` +
-      `https://explorer.solana.com/address/${task}?cluster=devnet`,
+    environment.cluster === "devnet"
+      ? `done — faucet to settled result on devnet. Task: ` +
+          `https://explorer.solana.com/address/${task}?cluster=devnet`
+      : `done — faucet to settled result on ${environment.cluster}. Task: ${task}`,
   );
   return task;
 }

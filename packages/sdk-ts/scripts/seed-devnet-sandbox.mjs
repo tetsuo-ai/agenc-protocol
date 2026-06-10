@@ -15,10 +15,21 @@
 //        [--rpc <url>]                    default https://api.devnet.solana.com
 //        [--attestor-url <url>]           P2.3 auto-attestor (POST {kind,address,specHash})
 //        [--moderator-keypair <path>]     fallback: record CLEAN moderation directly
+//        [--env-file <path>]              .localnet/env.json convention; CLI flags
+//                                         still override every env-file value
 //        [--help]
 //
 // One of --attestor-url / --moderator-keypair is required (listings must be
-// attested CLEAN or the fail-closed moderation gate blocks every hire).
+// attested CLEAN or the fail-closed moderation gate blocks every hire); with
+// --env-file those can come from the file's attestorUrl / keypairs.moderator,
+// and --keypair from keypairs.seeder. When no --env-file is passed but the
+// canonical <repo>/.localnet/env.json exists, it is picked up automatically.
+//
+// LOCALNET RULE: when the (env-file) cluster is "localnet", fixtures are
+// written to the env file's fixturesPath (e.g. .localnet/fixtures.json) —
+// src/sandbox/fixtures.json is RESERVED for the shipped public devnet
+// fixtures and the script refuses to write it for a localnet run. Cluster
+// "mainnet" is always refused.
 //
 // Idempotent: provider agent ids and listing ids are derived
 // deterministically from the blueprint names, so a re-run detects existing
@@ -31,6 +42,7 @@
 // Requires the built SDK: run `npm run build` in packages/sdk-ts first (the
 // script imports ../dist/index.js so it needs no TS loader).
 import { readFile, rename, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -39,6 +51,13 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_PATH = path.resolve(SCRIPT_DIR, "../src/sandbox/fixtures.json");
 const DIST_ENTRY = path.resolve(SCRIPT_DIR, "../dist/index.js");
 const DEFAULT_RPC = "https://api.devnet.solana.com";
+/** Canonical env-file location (repo root): picked up when it exists and no
+ * --env-file was passed. */
+const DEFAULT_ENV_FILE_PATH = path.resolve(
+  SCRIPT_DIR,
+  "../../../.localnet/env.json",
+);
+const ENV_FILE_CLUSTERS = ["localnet", "devnet", "mainnet"];
 
 /**
  * The 10 sandbox providers. Names are stable identifiers: agent ids and
@@ -62,40 +81,65 @@ export const SANDBOX_PROVIDER_BLUEPRINTS = [
 /** Usage text for --help (and argument errors). */
 export function usage() {
   return [
-    "seed-devnet-sandbox — seed devnet with the P2.4 sandbox fixtures",
+    "seed-devnet-sandbox — seed devnet (or a localnet stack) with the P2.4 sandbox fixtures",
     "",
     "USAGE",
     "  node scripts/seed-devnet-sandbox.mjs --keypair <path> [options]",
+    "  node scripts/seed-devnet-sandbox.mjs --env-file <repo>/.localnet/env.json",
     "",
     "OPTIONS",
-    "  --keypair <path>            Funding + provider authority keypair JSON (required)",
-    `  --rpc <url>                 RPC endpoint (default ${DEFAULT_RPC})`,
+    "  --keypair <path>            Funding + provider authority keypair JSON",
+    "                              (required unless the env file has keypairs.seeder)",
+    `  --rpc <url>                 RPC endpoint (default ${DEFAULT_RPC},`,
+    "                              or the env file's rpcUrl)",
     "  --attestor-url <url>        P2.3 sandbox auto-attestor endpoint",
-    "  --moderator-keypair <path>  Devnet moderation-authority keypair (fallback",
+    "  --moderator-keypair <path>  Moderation-authority keypair (fallback",
     "                              when no attestor is deployed yet)",
+    "  --env-file <path>           JSON environment file (the .localnet/env.json",
+    "                              convention: cluster/rpcUrl/attestorUrl/",
+    "                              fixturesPath/keypairs). CLI flags override",
+    "                              every env-file value. When omitted, the",
+    "                              canonical <repo>/.localnet/env.json is picked",
+    "                              up automatically if it exists. Relative paths",
+    "                              inside the file resolve against the cwd.",
     "  --help                      Show this help and exit",
     "",
-    "One of --attestor-url / --moderator-keypair is required for a real run.",
-    "Run AFTER the devnet full-surface redeploy (PLAN.md P2.2), and after",
+    "One of --attestor-url / --moderator-keypair (or the env file's attestorUrl /",
+    "keypairs.moderator) is required for a real run. Run AFTER the program is",
+    "deployed + config-initialized on the target cluster, and after",
     "`npm run build` (the script imports the built dist/).",
     "",
-    "On success the script REWRITES src/sandbox/fixtures.json (seeded: true)",
-    "with the real devnet addresses; commit that file and ship a release so",
-    "SANDBOX_FIXTURES picks it up.",
+    "FIXTURES OUTPUT",
+    "  cluster devnet (default): REWRITES src/sandbox/fixtures.json",
+    "    (seeded: true) with the real devnet addresses; commit that file and",
+    "    ship a release so SANDBOX_FIXTURES picks it up.",
+    "  cluster localnet: writes the env file's fixturesPath (e.g.",
+    "    .localnet/fixtures.json) instead — src/sandbox/fixtures.json is",
+    "    RESERVED for the shipped public devnet fixtures and is refused.",
+    "    Consume via AGENC_SANDBOX_FIXTURES=<fixturesPath>.",
+    "  cluster mainnet: always refused.",
   ].join("\n");
 }
 
 /**
  * Pure argv parser (exported for unit tests). Returns collected errors
  * instead of throwing so --help can always win.
+ *
+ * `--rpc` defaults to null here; {@link mergeEnvFileConfig} applies the
+ * env-file value and then DEFAULT_RPC, so an explicit flag always wins.
+ * Required-argument errors are skipped when an env file is in play
+ * (`--env-file` given, or `hasDefaultEnvFile` because the canonical
+ * .localnet/env.json exists) — the merged config is validated by
+ * {@link validateSeedConfig} instead.
  */
-export function parseSeedArgs(argv) {
+export function parseSeedArgs(argv, { hasDefaultEnvFile = false } = {}) {
   const args = {
     help: false,
     keypair: null,
-    rpc: DEFAULT_RPC,
+    rpc: null,
     attestorUrl: null,
     moderatorKeypair: null,
+    envFile: null,
     errors: [],
   };
   const takesValue = new Map([
@@ -103,6 +147,7 @@ export function parseSeedArgs(argv) {
     ["--rpc", "rpc"],
     ["--attestor-url", "attestorUrl"],
     ["--moderator-keypair", "moderatorKeypair"],
+    ["--env-file", "envFile"],
   ]);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -123,7 +168,7 @@ export function parseSeedArgs(argv) {
     args[key] = value;
     i += 1;
   }
-  if (!args.help) {
+  if (!args.help && args.envFile === null && !hasDefaultEnvFile) {
     if (args.keypair === null) args.errors.push("--keypair is required");
     if (args.attestorUrl === null && args.moderatorKeypair === null) {
       args.errors.push(
@@ -135,15 +180,154 @@ export function parseSeedArgs(argv) {
 }
 
 /**
- * Pure fixtures-file shaper (exported for unit tests): turns seeded entries
- * into the exact JSON object written to src/sandbox/fixtures.json. Entries
- * are sorted by name so re-runs produce byte-stable output.
+ * Pure env-file parser (exported for unit tests): validates the
+ * .localnet/env.json convention — { cluster, rpcUrl, rpcSubscriptionsUrl,
+ * programId, attestorUrl, fixturesPath, keypairs: { authority, moderator,
+ * seeder } | null }. Keypair PATHS only, never key material. Throws one
+ * error listing every problem; never echoes unexpected values that could be
+ * key bytes.
  */
-export function buildFixturesFile({ programId, seededAtSlot, entries }) {
+export function parseEnvFile(raw, filePath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`invalid env file ${filePath}: not valid JSON`);
+  }
+  const problems = [];
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    problems.push("not a JSON object");
+  } else {
+    if (!ENV_FILE_CLUSTERS.includes(parsed.cluster)) {
+      problems.push(`cluster must be one of ${ENV_FILE_CLUSTERS.join(" | ")}`);
+    }
+    if (typeof parsed.rpcUrl !== "string" || parsed.rpcUrl === "") {
+      problems.push("rpcUrl must be a non-empty string");
+    }
+    for (const key of ["attestorUrl", "fixturesPath"]) {
+      const value = parsed[key];
+      if (value !== null && value !== undefined && typeof value !== "string") {
+        problems.push(`${key} must be a string or null`);
+      }
+    }
+    const keypairs = parsed.keypairs;
+    if (keypairs !== null && keypairs !== undefined) {
+      if (typeof keypairs !== "object" || Array.isArray(keypairs)) {
+        problems.push("keypairs must be an object of file paths or null");
+      } else {
+        for (const role of ["authority", "moderator", "seeder"]) {
+          const value = keypairs[role];
+          if (value !== undefined && typeof value !== "string") {
+            problems.push(
+              `keypairs.${role} must be a file path string (PATHS only, never key material)`,
+            );
+          }
+        }
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `invalid env file ${filePath}: ${problems.join("; ")}`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Pure config merge (exported for unit tests): CLI flags > env-file values >
+ * defaults. `envFile` may be null (no env file in play).
+ */
+export function mergeEnvFileConfig({ args, envFile }) {
+  const keypairs = envFile?.keypairs ?? null;
+  return {
+    cluster: envFile?.cluster ?? "devnet",
+    rpc: args.rpc ?? envFile?.rpcUrl ?? DEFAULT_RPC,
+    attestorUrl: args.attestorUrl ?? envFile?.attestorUrl ?? null,
+    keypair: args.keypair ?? keypairs?.seeder ?? null,
+    moderatorKeypair: args.moderatorKeypair ?? keypairs?.moderator ?? null,
+    fixturesPath: envFile?.fixturesPath ?? null,
+  };
+}
+
+/**
+ * Pure merged-config validation (exported for unit tests). Mirrors the
+ * argv-only required checks once env-file values are folded in, and enforces
+ * the cluster rules: mainnet seeding is always refused, and a localnet run
+ * must say where its fixtures go (never the shipped file).
+ */
+export function validateSeedConfig(config) {
+  const errors = [];
+  if (config.cluster === "mainnet") {
+    errors.push(
+      "refusing to seed cluster mainnet: the sandbox seeder is devnet/localnet-only",
+    );
+  }
+  if (config.keypair === null) {
+    errors.push(
+      "a funding keypair is required: pass --keypair or set keypairs.seeder in the env file",
+    );
+  }
+  if (config.attestorUrl === null && config.moderatorKeypair === null) {
+    errors.push(
+      "one of --attestor-url / --moderator-keypair is required (or attestorUrl / keypairs.moderator in the env file)",
+    );
+  }
+  if (config.cluster === "localnet" && config.fixturesPath === null) {
+    errors.push(
+      "env cluster is localnet but fixturesPath is not set: localnet fixtures must go to e.g. .localnet/fixtures.json (src/sandbox/fixtures.json is reserved for the shipped public devnet fixtures)",
+    );
+  }
+  return errors;
+}
+
+/**
+ * Pure fixtures-output resolver (exported for unit tests): devnet writes the
+ * shipped src/sandbox/fixtures.json (unless the env file points elsewhere);
+ * localnet MUST write its own fixturesPath and is REFUSED the shipped path.
+ * Returns an absolute path (relative inputs resolve against the cwd).
+ */
+export function resolveFixturesOutPath({
+  cluster,
+  fixturesPath,
+  shippedPath = FIXTURES_PATH,
+}) {
+  if (cluster === "localnet") {
+    if (fixturesPath === null || fixturesPath === undefined) {
+      throw new Error(
+        "env cluster is localnet but fixturesPath is not set — refusing to guess",
+      );
+    }
+    const resolved = path.resolve(fixturesPath);
+    if (resolved === path.resolve(shippedPath)) {
+      throw new Error(
+        `refusing to write ${shippedPath} for a localnet run: that file is ` +
+          `reserved for the SHIPPED public devnet fixtures. Point fixturesPath ` +
+          `at e.g. .localnet/fixtures.json instead.`,
+      );
+    }
+    return resolved;
+  }
+  return path.resolve(fixturesPath ?? shippedPath);
+}
+
+/**
+ * Pure fixtures-file shaper (exported for unit tests): turns seeded entries
+ * into the exact JSON object written to the fixtures file (the shipped
+ * src/sandbox/fixtures.json for devnet, the env file's fixturesPath for
+ * localnet). Entries are sorted by name so re-runs produce byte-stable
+ * output.
+ */
+export function buildFixturesFile({
+  programId,
+  seededAtSlot,
+  entries,
+  cluster = "devnet",
+}) {
   const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name));
   return {
     seeded: true,
-    cluster: "devnet",
+    cluster,
     programId,
     seededAtSlot,
     providers: sorted.map((e) => ({
@@ -334,7 +518,9 @@ async function waitForAccount(rpc, address, what, timeoutMs = 60_000) {
 }
 
 async function main() {
-  const args = parseSeedArgs(process.argv.slice(2));
+  const args = parseSeedArgs(process.argv.slice(2), {
+    hasDefaultEnvFile: existsSync(DEFAULT_ENV_FILE_PATH),
+  });
   if (args.help) {
     console.log(usage());
     return;
@@ -345,6 +531,31 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+
+  // Env-file seam: --env-file wins; otherwise the canonical
+  // <repo>/.localnet/env.json is picked up when it exists. CLI flags still
+  // override every env-file value (mergeEnvFileConfig).
+  let envFilePath = args.envFile;
+  if (envFilePath === null && existsSync(DEFAULT_ENV_FILE_PATH)) {
+    envFilePath = DEFAULT_ENV_FILE_PATH;
+  }
+  let envFile = null;
+  if (envFilePath !== null) {
+    envFile = parseEnvFile(await readFile(envFilePath, "utf8"), envFilePath);
+    console.log(`env file: ${envFilePath} (cluster ${envFile.cluster})`);
+  }
+  const config = mergeEnvFileConfig({ args, envFile });
+  const configErrors = validateSeedConfig(config);
+  if (configErrors.length > 0) {
+    console.error(configErrors.map((e) => `error: ${e}`).join("\n"));
+    console.error("\n" + usage());
+    process.exitCode = 1;
+    return;
+  }
+  const fixturesOutPath = resolveFixturesOutPath({
+    cluster: config.cluster,
+    fixturesPath: config.fixturesPath,
+  });
 
   // The SDK build + kit are imported lazily so `--help` works with no build.
   let sdk;
@@ -372,27 +583,48 @@ async function main() {
     }
   }
 
-  const rpc = kit.createSolanaRpc(args.rpc);
-  const authority = await loadKeypairSigner(kit, args.keypair);
+  const rpc = kit.createSolanaRpc(config.rpc);
+  const authority = await loadKeypairSigner(kit, config.keypair);
   const client = sdk.createMarketplaceClient({
-    rpcUrl: args.rpc,
+    rpcUrl: config.rpc,
     signer: authority,
     // Single facade instructions consume ~15-35k CU; keep fees honest.
     computeUnitLimit: 200_000,
   });
-  const moderator = args.moderatorKeypair
-    ? await loadKeypairSigner(kit, args.moderatorKeypair)
+  const moderator = config.moderatorKeypair
+    ? await loadKeypairSigner(kit, config.moderatorKeypair)
     : null;
   const moderatorClient = moderator
     ? sdk.createMarketplaceClient({
-        rpcUrl: args.rpc,
+        rpcUrl: config.rpc,
         signer: moderator,
         computeUnitLimit: 200_000,
       })
     : null;
 
-  console.log(`seeding devnet sandbox via ${args.rpc}`);
+  console.log(`seeding ${config.cluster} sandbox via ${config.rpc}`);
   console.log(`authority: ${authority.address}`);
+
+  // register_agent enforces stake_amount >= ProtocolConfig.min_agent_stake
+  // (InsufficientStake otherwise). The program floor in initialize_protocol is
+  // 0.001 SOL, so a hard-coded 0n stake fails on any properly initialized
+  // cluster — read the real minimum from chain and stake exactly that.
+  const [protocolConfigPda] = await sdk.findProtocolConfigPda();
+  const protocolConfig = await sdk.fetchMaybeProtocolConfig(
+    rpc,
+    protocolConfigPda,
+    { commitment: "confirmed" },
+  );
+  if (!protocolConfig.exists) {
+    throw new Error(
+      `ProtocolConfig ${protocolConfigPda} not found via ${config.rpc} — the ` +
+        `program is not initialized on this cluster. Localnet: run ` +
+        `\`node scripts/localnet-up.mjs\` at the repo root first; devnet: ` +
+        `follow scripts/devnet-deploy.md.`,
+    );
+  }
+  const stakeAmount = protocolConfig.data.minAgentStake;
+  console.log(`provider stake: ${stakeAmount} lamports (ProtocolConfig.min_agent_stake)`);
 
   const entries = [];
   for (const blueprint of SANDBOX_PROVIDER_BLUEPRINTS) {
@@ -423,7 +655,7 @@ async function main() {
         capabilities: 1n,
         endpoint: "https://sandbox.agenc.tech/providers",
         metadataUri: null,
-        stakeAmount: 0n,
+        stakeAmount,
       });
       providerAuthority = authority.address;
       console.log(`registered agent: ${blueprint.name} (${agent})`);
@@ -510,12 +742,12 @@ async function main() {
         onChainStatus: moderationAccount.data.status,
       });
       console.log(`listing already attested CLEAN: ${blueprint.name}`);
-    } else if (args.attestorUrl) {
+    } else if (config.attestorUrl) {
       await sandbox.requestSandboxAttestation({
         kind: "listing",
         address: listing,
         specHash,
-        endpoint: args.attestorUrl,
+        endpoint: config.attestorUrl,
       });
       await waitForAccount(rpc, listingModeration, "ListingModeration");
       console.log(`attested via attestor: ${blueprint.name}`);
@@ -551,18 +783,25 @@ async function main() {
     programId: sdk.AGENC_COORDINATION_PROGRAM_ADDRESS,
     seededAtSlot,
     entries,
+    cluster: config.cluster,
   });
-  await writeJsonAtomic(FIXTURES_PATH, fixtures);
+  await writeJsonAtomic(fixturesOutPath, fixtures);
 
   console.log("");
-  console.log(`wrote ${FIXTURES_PATH} (seeded: true, slot ${seededAtSlot})`);
+  console.log(`wrote ${fixturesOutPath} (seeded: true, cluster ${config.cluster}, slot ${seededAtSlot})`);
   console.log(`seeded ${entries.length} providers + listings:`);
   for (const entry of entries) {
     console.log(`  ${entry.name.padEnd(24)} ${entry.category.padEnd(16)} listing ${entry.listing}`);
   }
   console.log("");
-  console.log("next: commit src/sandbox/fixtures.json and ship an SDK release");
-  console.log("so SANDBOX_FIXTURES picks up the seeded addresses.");
+  if (config.cluster === "localnet") {
+    console.log("next: export AGENC_SANDBOX_FIXTURES=" + fixturesOutPath);
+    console.log("(plus the other AGENC_SANDBOX_* variables from the env file)");
+    console.log("so the SDK environment seam picks up the localnet fixtures.");
+  } else {
+    console.log("next: commit src/sandbox/fixtures.json and ship an SDK release");
+    console.log("so SANDBOX_FIXTURES picks up the seeded addresses.");
+  }
 }
 
 // Run only when executed directly (the pure helpers above are unit-tested).

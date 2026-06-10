@@ -3,19 +3,11 @@
 // ListingModeration / TaskModeration attestations so the fail-closed
 // moderation gate passes without a human moderator.
 import type { Address } from "@solana/kit";
-
-/**
- * Default endpoint of the hosted devnet sandbox moderation auto-attestor.
- *
- * The service itself ships in Phase 2.3 (PLAN.md P2.3 — a devnet-only service
- * holding the devnet moderation authority key, rate-limited per IP). This
- * constant is updated when the human operator deploys it; until then, calls
- * against the default endpoint fail at the network layer, and you can point
- * {@link requestSandboxAttestation} at a self-hosted instance via
- * `input.endpoint`.
- */
-export const DEFAULT_SANDBOX_ATTESTOR_URL =
-  "https://sandbox.agenc.tech/api/sandbox/attest";
+import {
+  DEFAULT_SANDBOX_ATTESTOR_URL,
+  resolveSandboxEnvironment,
+} from "./environment.js";
+import { SANDBOX_FIXTURES } from "./fixtures.js";
 
 /** What the attestor is asked to moderate: a service listing or a task. */
 export type SandboxAttestationKind = "listing" | "task";
@@ -52,7 +44,11 @@ export interface RequestSandboxAttestationInput {
    * 64-char hex string (optionally `0x`-prefixed).
    */
   specHash: Uint8Array | string;
-  /** Override the attestor endpoint (default {@link DEFAULT_SANDBOX_ATTESTOR_URL}). */
+  /**
+   * Override the attestor endpoint. Default: the environment seam's resolved
+   * attestor (`AGENC_SANDBOX_ATTESTOR_URL` when set, otherwise
+   * {@link DEFAULT_SANDBOX_ATTESTOR_URL}).
+   */
   endpoint?: string;
   /** Override the fetch implementation (tests / custom transports). */
   fetch?: SandboxFetchLike;
@@ -158,6 +154,11 @@ function parseRetryAfterSeconds(
  * on-chain `ListingModeration` / `TaskModeration` account appears within
  * seconds of a 2xx response — poll the PDA before depending on it.
  *
+ * The default endpoint flows through the environment seam
+ * (`resolveSandboxEnvironment`): set `AGENC_SANDBOX_ATTESTOR_URL` to point a
+ * whole workflow (e.g. a localnet stack's self-hosted attestor) somewhere
+ * else without touching call sites.
+ *
  * **Devnet-only.** The attestor holds the devnet moderation authority key and
  * exists so third parties can exercise the flagship hire flow; there is no
  * mainnet equivalent.
@@ -184,7 +185,15 @@ function parseRetryAfterSeconds(
 export async function requestSandboxAttestation(
   input: RequestSandboxAttestationInput,
 ): Promise<SandboxAttestationResponse> {
-  const endpoint = input.endpoint ?? DEFAULT_SANDBOX_ATTESTOR_URL;
+  // Default endpoint comes from the environment seam: an explicit
+  // `input.endpoint` beats AGENC_SANDBOX_ATTESTOR_URL, which beats
+  // DEFAULT_SANDBOX_ATTESTOR_URL. The shipped fixtures are passed through so
+  // attestation never depends on an AGENC_SANDBOX_FIXTURES file it does not
+  // use.
+  const endpoint =
+    input.endpoint ??
+    (await resolveSandboxEnvironment({ fixtures: SANDBOX_FIXTURES }))
+      .attestorUrl;
   // Wrapped so the global fetch keeps its expected receiver in browsers.
   const fetchImpl: SandboxFetchLike =
     input.fetch ?? ((url, init) => globalThis.fetch(url, init));

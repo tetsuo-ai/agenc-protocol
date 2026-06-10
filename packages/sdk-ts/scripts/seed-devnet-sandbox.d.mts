@@ -5,11 +5,43 @@
 export interface SeedArgs {
   help: boolean;
   keypair: string | null;
-  rpc: string;
+  /** Explicit --rpc value; null until {@link mergeEnvFileConfig} applies the
+   * env-file rpcUrl and then the devnet default. */
+  rpc: string | null;
   attestorUrl: string | null;
   moderatorKeypair: string | null;
+  /** Explicit --env-file path (the .localnet/env.json convention). */
+  envFile: string | null;
   /** Validation problems; empty when the invocation is runnable. */
   errors: string[];
+}
+
+/** A sandbox environment cluster per the .localnet/env.json convention. */
+export type SeedEnvCluster = "localnet" | "devnet" | "mainnet";
+
+/** The parsed .localnet/env.json convention file (keypair PATHS only). */
+export interface SeedEnvFile {
+  cluster: SeedEnvCluster;
+  rpcUrl: string;
+  rpcSubscriptionsUrl?: string;
+  programId?: string;
+  attestorUrl?: string | null;
+  fixturesPath?: string | null;
+  keypairs?: {
+    authority?: string;
+    moderator?: string;
+    seeder?: string;
+  } | null;
+}
+
+/** Effective seeding config after CLI > env-file > defaults merging. */
+export interface SeedConfig {
+  cluster: SeedEnvCluster;
+  rpc: string;
+  attestorUrl: string | null;
+  keypair: string | null;
+  moderatorKeypair: string | null;
+  fixturesPath: string | null;
 }
 
 /** One sandbox provider/listing blueprint baked into the script. */
@@ -31,10 +63,10 @@ export interface SeededEntry {
   listing: string;
 }
 
-/** The JSON object written to src/sandbox/fixtures.json. */
+/** The JSON object written to the fixtures file (shipped devnet or localnet). */
 export interface SeededFixturesFile {
   seeded: true;
-  cluster: "devnet";
+  cluster: "devnet" | "localnet";
   programId: string;
   seededAtSlot: number;
   providers: { authority: string; agent: string; name: string }[];
@@ -49,12 +81,35 @@ export interface SeededFixturesFile {
 
 export declare const SANDBOX_PROVIDER_BLUEPRINTS: readonly SeedBlueprint[];
 export declare function usage(): string;
-export declare function parseSeedArgs(argv: readonly string[]): SeedArgs;
+export declare function parseSeedArgs(
+  argv: readonly string[],
+  options?: { hasDefaultEnvFile?: boolean },
+): SeedArgs;
 export declare function buildFixturesFile(input: {
   programId: string;
   seededAtSlot: number;
   entries: readonly SeededEntry[];
+  cluster?: "devnet" | "localnet";
 }): SeededFixturesFile;
+
+/** Parses + validates the .localnet/env.json convention file. */
+export declare function parseEnvFile(raw: string, filePath: string): SeedEnvFile;
+
+/** CLI flags > env-file values > defaults. `envFile` may be null. */
+export declare function mergeEnvFileConfig(input: {
+  args: SeedArgs;
+  envFile: SeedEnvFile | null;
+}): SeedConfig;
+
+/** Validates the merged config; returns human-readable errors (empty = ok). */
+export declare function validateSeedConfig(config: SeedConfig): string[];
+
+/** Resolves where fixtures are written; refuses the shipped path on localnet. */
+export declare function resolveFixturesOutPath(input: {
+  cluster: SeedEnvCluster;
+  fixturesPath: string | null;
+  shippedPath?: string;
+}): string;
 
 /** Parses a solana-keygen keypair file; throws a fixed message (never echoing
  * file contents / parse-error text) on any malformed input. */

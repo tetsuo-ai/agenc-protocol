@@ -15,6 +15,12 @@ const enabled = process.env.SANDBOX_NIGHTLY === "1";
 // variable SANDBOX_ATTESTOR_URL (empty when unset) so the nightly can point
 // at the real P2.3 attestor deployment without an SDK release — the SDK's
 // DEFAULT_SANDBOX_ATTESTOR_URL DNS may lag the deploy.
+//
+// Cluster/RPC/fixtures selection is handled INSIDE the example by the
+// environment seam (resolveSandboxEnvironment): with no AGENC_SANDBOX_*
+// variables exported this runs against public devnet with the shipped
+// fixtures; exporting the localnet variables (from .localnet/env.json via
+// scripts/localnet-up.mjs) points the very same flow at a local validator.
 const attestorUrlEnv = process.env.SANDBOX_ATTESTOR_URL?.trim();
 const attestorUrl =
   attestorUrlEnv !== undefined && attestorUrlEnv !== ""

@@ -11,6 +11,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md) - RFC for bid-book accounts, lifecycle, settlement hooks, and anti-spam controls
 - [./ARTIFACT_PIPELINE.md](./ARTIFACT_PIPELINE.md) - how `anchor build` output becomes committed and published artifacts
 - [./VALIDATION.md](./VALIDATION.md) - local toolchain and CI-equivalent commands
+- [./LOCALNET.md](./LOCALNET.md) - one-command local stack (localnet-up/status/down), the env-file convention, and the localnet-to-devnet-to-hosted switchover map
 - [./TASK_VALIDATION_V2.md](./TASK_VALIDATION_V2.md) - reviewed public-task completion and validation-account model
 - [./ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md) - private-completion and zk-config flow
 - [./JOB_SPEC_REQUIRED_FLAG_DECISION.md](./JOB_SPEC_REQUIRED_FLAG_DECISION.md) - decision record for job-spec-required protocol flag evaluation

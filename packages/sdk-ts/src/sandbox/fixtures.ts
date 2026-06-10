@@ -44,6 +44,15 @@ export interface SandboxListingFixture {
   priceLamports: number;
 }
 
+/**
+ * The cluster a fixtures file was seeded against. The SHIPPED
+ * `src/sandbox/fixtures.json` is always `"devnet"`; a localnet stack writes
+ * its own `"localnet"` fixtures file (e.g. `.localnet/fixtures.json`) and
+ * routes it in through the environment seam (`AGENC_SANDBOX_FIXTURES` /
+ * `resolveSandboxEnvironment({ fixtures })`). Never mainnet.
+ */
+export type SandboxFixturesCluster = "devnet" | "localnet";
+
 /** The shape of `src/sandbox/fixtures.json`. */
 export interface SandboxFixtures {
   /**
@@ -52,8 +61,8 @@ export interface SandboxFixtures {
    * {@link sandboxProviders}, which check it for you).
    */
   seeded: boolean;
-  /** Fixtures are devnet-only. Never point these at mainnet. */
-  cluster: "devnet";
+  /** Fixtures are devnet- or localnet-only. Never point these at mainnet. */
+  cluster: SandboxFixturesCluster;
   /** The agenc-coordination program ID the fixtures were seeded against. */
   programId: Address;
   /** Devnet slot observed when the seeding run finished, or `null` when unseeded. */
