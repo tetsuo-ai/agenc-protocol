@@ -18,12 +18,33 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./testing": {
+      "import": {
+        "types": "./dist/testing/index.d.ts",
+        "default": "./dist/testing/index.js"
+      },
+      "require": {
+        "types": "./dist/testing/index.d.cts",
+        "default": "./dist/testing/index.cjs"
+      }
+    },
+    "./sandbox": {
+      "import": {
+        "types": "./dist/sandbox/index.d.ts",
+        "default": "./dist/sandbox/index.js"
+      },
+      "require": {
+        "types": "./dist/sandbox/index.d.cts",
+        "default": "./dist/sandbox/index.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "src",
     "schemas",
+    "testing-assets",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -38,11 +59,19 @@
     "test:structural": "vitest run tests/",
     "docs:api": "typedoc",
     "test:e2e": "vitest run tests-e2e",
-    "pack:smoke": "npm run build && node scripts/pack-smoke.mjs"
+    "testing:sync-so": "node scripts/sync-testing-so.mjs",
+    "prepack": "npm run build && npm run testing:sync-so",
+    "pack:smoke": "npm run build && npm run testing:sync-so && node scripts/pack-smoke.mjs"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0",
-    "@solana/program-client-core": "^6.4.0"
+    "@solana/program-client-core": "^6.4.0",
+    "litesvm": "^1.1.0"
+  },
+  "peerDependenciesMeta": {
+    "litesvm": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@codama/nodes-from-anchor": "1.5.0",

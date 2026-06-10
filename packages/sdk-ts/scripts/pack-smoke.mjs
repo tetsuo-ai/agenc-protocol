@@ -92,6 +92,50 @@ try {
 
   execFileSync("node", [smokeMjs], { cwd: tempDir, stdio: "inherit" });
   execFileSync("node", [smokeCjs], { cwd: tempDir, stdio: "inherit" });
+
+  // ./testing subpath: the tarball must ship the program .so and the subpath
+  // must boot the litesvm sandbox from BOTH entry points (this guards the
+  // dist-relative testing-assets path resolution against tsup config drift).
+  const tarList = execFileSync("tar", ["-tzf", path.join(packDir, tarballName)], {
+    cwd: tempDir,
+    encoding: "utf8",
+  });
+  if (!tarList.includes("package/testing-assets/agenc_coordination.so")) {
+    throw new Error("tarball is missing testing-assets/agenc_coordination.so");
+  }
+
+  const testingBody = [
+    "const market = await startLocalMarketplace();",
+    "const signer = await market.fundedSigner();",
+    "await market.clientFor(signer).registerAgent({",
+    "  authority: signer,",
+    "  agentId: new Uint8Array(32).fill(11),",
+    "  capabilities: 1n,",
+    '  endpoint: "https://smoke.example",',
+    "  metadataUri: null,",
+    "  stakeAmount: 0n,",
+    "});",
+    'console.log("testing subpath sandbox ok");',
+  ];
+  const testingMjs = path.join(tempDir, "testing-smoke.mjs");
+  await writeFile(
+    testingMjs,
+    ['import { startLocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";', ...testingBody].join("\n"),
+    "utf8",
+  );
+  const testingCjs = path.join(tempDir, "testing-smoke.cjs");
+  await writeFile(
+    testingCjs,
+    [
+      'const { startLocalMarketplace } = require("@tetsuo-ai/marketplace-sdk/testing");',
+      "(async () => {",
+      ...testingBody.map((l) => `  ${l}`),
+      "})().catch((e) => { console.error(e); process.exit(1); });",
+    ].join("\n"),
+    "utf8",
+  );
+  execFileSync("node", [testingMjs], { cwd: tempDir, stdio: "inherit" });
+  execFileSync("node", [testingCjs], { cwd: tempDir, stdio: "inherit" });
 } finally {
   await rm(tempDir, { recursive: true, force: true });
 }
