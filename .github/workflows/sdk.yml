@@ -91,6 +91,10 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Sync testing program asset
+        run: npm run testing:sync-so
+        working-directory: packages/sdk-ts
+
       - name: On-chain e2e tests (litesvm)
         run: npx vitest run tests-e2e
         working-directory: packages/sdk-ts
