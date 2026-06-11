@@ -9,10 +9,10 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskRejectFrozen;
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, ensure_validation_mode, is_manual_validation_task,
 };
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::state::{
     AgentStats, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
     TaskType, TaskValidationConfig, ValidationMode, HASH_SIZE,

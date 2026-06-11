@@ -3,6 +3,8 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskResultRejected;
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
@@ -10,8 +12,6 @@ use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, release_claim_slot, sync_task_validation_status,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::AgentStats;
 use crate::state::{

@@ -233,7 +233,10 @@ mod tests {
             4700,
             "documented single-slash veteran floor",
         );
-        assert_eq!(PROBATIONARY_REPUTATION, 3000, "documented probationary start");
+        assert_eq!(
+            PROBATIONARY_REPUTATION, 3000,
+            "documented probationary start"
+        );
     }
 
     /// Probationary start must not exceed the common task `min_reputation` (which is 0
@@ -248,8 +251,7 @@ mod tests {
         //   `task.min_reputation == 0 || worker.reputation >= task.min_reputation`.
         // Representative entry-level gates honest new agents should still clear:
         for task_min_reputation in [0u16, 250, 1000, PROBATIONARY_REPUTATION] {
-            let passes =
-                task_min_reputation == 0 || PROBATIONARY_REPUTATION >= task_min_reputation;
+            let passes = task_min_reputation == 0 || PROBATIONARY_REPUTATION >= task_min_reputation;
             assert!(
                 passes,
                 "honest fresh agent (rep {PROBATIONARY_REPUTATION}) locked out of \
@@ -266,7 +268,9 @@ mod tests {
         let mut rep = PROBATIONARY_REPUTATION;
         // Enough completions to blow past both the probationary start and the max cap.
         for _ in 0..200 {
-            rep = rep.saturating_add(REPUTATION_PER_COMPLETION).min(MAX_REPUTATION);
+            rep = rep
+                .saturating_add(REPUTATION_PER_COMPLETION)
+                .min(MAX_REPUTATION);
         }
         assert_eq!(rep, MAX_REPUTATION, "reputation must climb to the max cap");
         assert!(
@@ -277,7 +281,9 @@ mod tests {
         // probationary deterrent is a starting handicap, not a permanent demotion.
         let mut rep2 = PROBATIONARY_REPUTATION;
         for _ in 0..20 {
-            rep2 = rep2.saturating_add(REPUTATION_PER_COMPLETION).min(MAX_REPUTATION);
+            rep2 = rep2
+                .saturating_add(REPUTATION_PER_COMPLETION)
+                .min(MAX_REPUTATION);
         }
         assert!(
             rep2 >= INITIAL_REPUTATION,
@@ -308,7 +314,10 @@ mod tests {
         let registers_with = |stake_amount: u64| stake_amount >= min;
 
         // Below the floor (incl. zero) is rejected.
-        assert!(!registers_with(0), "stake 0 must be rejected on fresh default");
+        assert!(
+            !registers_with(0),
+            "stake 0 must be rejected on fresh default"
+        );
         assert!(
             !registers_with(min - 1),
             "stake just below the floor must be rejected",

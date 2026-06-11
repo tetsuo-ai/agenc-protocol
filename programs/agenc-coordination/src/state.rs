@@ -2441,7 +2441,10 @@ mod tests {
     #[test]
     fn test_dispute_rationale_defaults_are_empty() {
         let d = Dispute::default();
-        assert_eq!(d.rationale_hash, [0u8; 32], "fresh rationale_hash is zeroed");
+        assert_eq!(
+            d.rationale_hash, [0u8; 32],
+            "fresh rationale_hash is zeroed"
+        );
         assert_eq!(d.rationale_uri, "", "fresh rationale_uri is empty");
         assert_eq!(
             d.resolved_by,
@@ -2660,7 +2663,8 @@ mod tests {
     #[test]
     fn test_validate_verified_domain_rejects_too_long() {
         // 254 ASCII chars (one over the 253 cap), kept label-legal.
-        let long = "a".repeat(63) + "." + &"b".repeat(63) + "." + &"c".repeat(63) + "." + &"d".repeat(62);
+        let long =
+            "a".repeat(63) + "." + &"b".repeat(63) + "." + &"c".repeat(63) + "." + &"d".repeat(62);
         assert_eq!(long.len(), 254);
         assert!(!validate_verified_domain(&long));
     }
@@ -2673,7 +2677,7 @@ mod tests {
         assert!(!validate_verified_domain(".example.com")); // leading dot
         assert!(!validate_verified_domain("example.com.")); // trailing dot
         assert!(!validate_verified_domain("a..b")); // empty label
-        // A label over 63 octets is rejected even within the 253 cap.
+                                                    // A label over 63 octets is rejected even within the 253 cap.
         let big_label = "a".repeat(64) + ".com";
         assert!(!validate_verified_domain(&big_label));
     }

@@ -16,6 +16,8 @@
 
 use crate::errors::CoordinationError;
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
@@ -26,15 +28,13 @@ use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
 };
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::state::AgentStats;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::state::CompletionBond;
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
     TaskSubmission, TaskValidationConfig,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::AgentStats;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::{BidMarketplaceConfig, TaskType};
 use crate::utils::version::check_version_compatible_for_exit;
