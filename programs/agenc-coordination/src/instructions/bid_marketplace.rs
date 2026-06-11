@@ -15,7 +15,7 @@ use crate::state::{
     TaskJobSpec, TaskStatus, TaskType, WeightedScoreWeights,
 };
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::{check_version_compatible, check_version_compatible_for_exit};
 
 const BID_WINDOW_SECONDS: i64 = 86_400;
 const COMPLETION_BUFFER: i64 = 3_600;
@@ -1120,9 +1120,15 @@ pub struct ExpireBid<'info> {
 }
 
 pub fn expire_bid_handler(ctx: Context<ExpireBid>) -> Result<()> {
-    check_version_compatible(&ctx.accounts.protocol_config)?;
+    // Exit-safety: expire_bid is a permissionless cleanup that closes an expired bid and
+    // returns the bidder's rent + bond. Like every other refund/settlement path it must
+    // remain available while the protocol is paused or the task type is disabled (money
+    // never locks). Previously it used the ENTRY gate (rejects while paused) +
+    // require_task_type_enabled (entry-only), against the codebase convention and unlike
+    // cancel_bid which has no such gate (audit). require_bid_task (a structural check that
+    // the task is a bid task) is kept.
+    check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     require_bid_task(&ctx.accounts.task)?;
-    require_task_type_enabled(&ctx.accounts.protocol_config, ctx.accounts.task.task_type)?;
     require!(
         ctx.accounts.bid.state == TaskBidState::Active,
         CoordinationError::BidNotActive

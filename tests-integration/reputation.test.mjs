@@ -160,6 +160,42 @@ test("stake_reputation: second stake accumulates staked_amount", async () => {
   assert.equal(Number(stake.staked_amount), 5_000_000, "staked_amount accumulated across calls");
 });
 
+test("deregister_agent: blocked while reputation stake is live; allowed after full withdrawal (audit: strand + re-registration theft)", async () => {
+  const w = await freshWorld();
+  const { kp, prog, agentPda } = await registerAgent(w);
+  const stakePda = repStakePda(agentPda);
+
+  expectOk(
+    send(w.svm, await prog.methods.stakeReputation(new BN(4_000_000))
+      .accounts({ authority: kp.publicKey, agent: agentPda, reputationStake: stakePda, systemProgram: SystemProgram.programId })
+      .instruction(), [kp]),
+    "stake",
+  );
+
+  const deregIx = async () => prog.methods.deregisterAgent()
+    .accounts({ agent: agentPda, protocolConfig: w.protocolPda, reputationStake: stakePda, authority: kp.publicKey })
+    .instruction();
+
+  // Revert-sensitive: with a live stake, deregistration is refused. Drop the
+  // staked_amount == 0 guard in deregister_agent and this stops failing — re-opening the
+  // stranded-SOL + re-registration-theft path the audit flagged.
+  expectFail(send(w.svm, await deregIx(), [kp]), "ReputationStakeNotWithdrawn", "deregister blocked while staked");
+
+  // Warp past the staking cooldown and withdraw the full stake.
+  const clk = w.svm.getClock(); clk.unixTimestamp = clk.unixTimestamp + REPUTATION_STAKING_COOLDOWN + 1n; w.svm.setClock(clk);
+  expectOk(
+    send(w.svm, await prog.methods.withdrawReputationStake(new BN(4_000_000))
+      .accounts({ authority: kp.publicKey, agent: agentPda, reputationStake: stakePda })
+      .instruction(), [kp]),
+    "withdraw full stake",
+  );
+
+  // With the stake withdrawn (staked_amount == 0), deregistration now succeeds.
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await deregIx(), [kp]), "deregister after withdrawal");
+  assert.ok(isClosed(w.svm, agentPda), "agent PDA closed");
+});
+
 test("stake_reputation: amount=0 rejected (ReputationStakeAmountTooLow)", async () => {
   const w = await freshWorld();
   const { kp, prog, agentPda } = await registerAgent(w);

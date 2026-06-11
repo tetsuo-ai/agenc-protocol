@@ -249,6 +249,14 @@ pub fn handler(
     config.dispute_initiation_cooldown = DEFAULT_DISPUTE_INITIATION_COOLDOWN;
     config.max_disputes_per_24h = DEFAULT_MAX_DISPUTES_PER_24H;
     config.min_stake_for_dispute = min_stake_for_dispute;
+    // The account is created via `init` (zero-filled), NOT via Default, so any field that
+    // must not be 0 has to be set explicitly. state_update_cooldown was missed (audit):
+    // it landed at 0 on every fresh deploy, and update_state treats 0 as "disabled", so
+    // the fix-#415 per-agent anti-spam cooldown was permanently off with no instruction
+    // able to enable it. Match ProtocolConfig::default() (60s). NOTE: the LIVE mainnet
+    // ProtocolConfig already exists with this field at 0 — this init fix only covers
+    // fresh deploys; enabling it on the live config needs a migration (flagged in report).
+    config.state_update_cooldown = 60;
     // Compile-time assertion: DEFAULT_SLASH_PERCENTAGE must not exceed 100%
     const _: () = assert!(ProtocolConfig::DEFAULT_SLASH_PERCENTAGE <= 100);
     config.slash_percentage = ProtocolConfig::DEFAULT_SLASH_PERCENTAGE;

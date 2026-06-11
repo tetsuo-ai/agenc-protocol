@@ -83,7 +83,7 @@ describe("e2e: CreatorReview manual validation settles on the real program", () 
     // --- create_task: Auto type, plain SOL reward, non-hired (constraintHash = null) ---
     const taskId = new Uint8Array(32).fill(33);
     const reward = 2_000_000n;
-    const description = new Uint8Array(64).fill(7);
+    const description = new Uint8Array(64).fill(7, 0, 32);
     const now = svm.getClock().unixTimestamp; // 1_700_000_000n from freshSvm
     await send(svm, creator, [
       await facade.createTask({

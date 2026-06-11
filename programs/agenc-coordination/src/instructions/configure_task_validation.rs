@@ -106,6 +106,19 @@ pub fn handler(
     validate_configurable_task(&ctx.accounts.task)?;
     validate_task_supports_validation_mode(&ctx.accounts.task, parsed_mode)?;
 
+    // The ValidatorQuorum / ExternalAttestation settlement path (validate_task_result)
+    // pays NO referrer leg (it calls execute_completion_rewards with referrer_leg = None),
+    // so configuring a referrer-bearing task for those modes would silently stiff the
+    // referrer and over-pay the worker the referrer's share (audit). Only CreatorReview
+    // (accept_task_result / auto_accept_task_result) honors task.referrer_fee_bps. Fail
+    // closed: refuse to switch a referred task into a mode that cannot pay the leg.
+    if parsed_mode != ValidationMode::CreatorReview {
+        require!(
+            ctx.accounts.task.referrer_fee_bps == 0,
+            CoordinationError::InvalidInput
+        );
+    }
+
     let task_key = ctx.accounts.task.key();
     let task = &mut ctx.accounts.task;
     let config = &mut ctx.accounts.task_validation_config;

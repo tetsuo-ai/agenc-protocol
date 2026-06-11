@@ -1567,8 +1567,9 @@ pub mod agenc_coordination {
         instructions::migrate::handler(ctx, target_version)
     }
 
-    /// Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig
-    /// gated, version-ungated, idempotent. `dry_run` validates without mutating.
+    /// Migrate one Task account to the current layout (382B or 432B -> 466B; the shared
+    /// handler reallocs to Task::SIZE = 466B). Multisig gated, version-ungated, idempotent.
+    /// `dry_run` validates without mutating. (Was stale "382B -> 432B" — audit doc drift.)
     pub fn migrate_task(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
         instructions::migrate::migrate_task_handler(ctx, dry_run)
     }

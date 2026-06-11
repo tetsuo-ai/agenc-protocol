@@ -163,7 +163,7 @@ test("deregister_agent: closes the agent PDA and decrements total_agents", async
       w.svm,
       await a.prog.methods
         .deregisterAgent()
-        .accounts({ agent: a.agentPda, protocolConfig: w.protocolPda, authority: a.kp.publicKey })
+        .accounts({ agent: a.agentPda, protocolConfig: w.protocolPda, reputationStake: pda([enc("reputation_stake"), a.agentPda.toBuffer()])[0], authority: a.kp.publicKey })
         .instruction(),
       [a.kp],
     ),
@@ -185,7 +185,7 @@ test("deregister_agent: a non-authority cannot deregister (UnauthorizedAgent)", 
       w.svm,
       await w.buyerProg.methods
         .deregisterAgent()
-        .accounts({ agent: a.agentPda, protocolConfig: w.protocolPda, authority: w.buyer.publicKey })
+        .accounts({ agent: a.agentPda, protocolConfig: w.protocolPda, reputationStake: pda([enc("reputation_stake"), a.agentPda.toBuffer()])[0], authority: w.buyer.publicKey })
         .instruction(),
       [w.buyer],
     ),

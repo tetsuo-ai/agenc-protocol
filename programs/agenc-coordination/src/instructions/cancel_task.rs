@@ -227,6 +227,17 @@ fn process_cancel_task_impl<'info>(
     // Validate protocol-level cancellation rules before escrow deserialization.
     validate_cancel_prereqs(task, clock.unix_timestamp)?;
 
+    // #70 fix: capture whether this is a genuine no-show cancel BEFORE the status is
+    // mutated to Cancelled. validate_cancel_prereqs only admits two cases — an Open task,
+    // or an InProgress task past its deadline with zero completions (a no-show). ONLY the
+    // no-show case may forfeit the worker's completion bond to the creator. An Open cancel
+    // includes a task reopened by reject_task_result after the worker DELIVERED work and
+    // was rejected; forfeiting their bond there would let a malicious creator seize an
+    // honest worker's bond (the exact theft #70 was filed to stop), so it is refunded.
+    // Only used by the completion-bond block, which is full-surface (non-canary) only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    let is_no_show_cancel = matches!(task.status, TaskStatus::InProgress);
+
     let mut escrow = load_task_escrow(&accounts.escrow)?;
     require!(escrow.bump > 0, CoordinationError::CorruptedData);
 
@@ -527,9 +538,8 @@ fn process_cancel_task_impl<'info>(
     escrow.close(accounts.authority.to_account_info())?;
 
     // Batch 3 §8 bond disposition on cancel (authority == creator): refund the
-    // creator's bond; forfeit a (no-show) worker's bond to the creator. No-op for
-    // un-bonded tasks. cancel only runs on Open (no worker) or InProgress past
-    // deadline with no completion (a no-show), so forfeiting the worker bond is fair.
+    // creator's bond; forfeit a worker's bond to the creator ONLY on a genuine no-show
+    // (see `is_no_show_cancel`), otherwise refund it (audit #70). No-op for un-bonded tasks.
     #[cfg(not(feature = "mainnet-canary"))]
     {
         let task_key = accounts.task.key();
@@ -547,14 +557,21 @@ fn process_cancel_task_impl<'info>(
             accounts.worker_completion_bond.as_ref(),
             accounts.worker_bond_authority.as_ref(),
         ) {
+            // #70 fix: forfeit to the creator ONLY on a genuine no-show; on an Open cancel
+            // the worker is not at fault, so refund their bond to them (the poster).
+            let disposition = if is_no_show_cancel {
+                BondDisposition::Forfeit {
+                    recipient: &creator_info,
+                }
+            } else {
+                BondDisposition::Refund
+            };
             settle_completion_bond(
                 &bond.to_account_info(),
                 &worker_wallet.to_account_info(),
                 &task_key,
                 CompletionBond::ROLE_WORKER,
-                BondDisposition::Forfeit {
-                    recipient: &creator_info,
-                },
+                disposition,
             )?;
         }
     }

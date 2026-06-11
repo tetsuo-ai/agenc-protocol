@@ -213,7 +213,7 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
           creatorAgent,
           taskId,
           requiredCapabilities,
-          description: new Uint8Array(64).fill(0x44),
+          description: new Uint8Array(64).fill(0x44, 0, 32),
           rewardAmount,
           maxWorkers: 1,
           deadline: now + 3600n,

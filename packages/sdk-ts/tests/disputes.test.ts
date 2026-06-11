@@ -211,19 +211,21 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       workerClaim: CLAIM,
       workerAgent: WORKER_AGENT,
+      workerAuthority: CREATOR,
       treasury: TREASURY,
       authority: AUTHORITY,
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // dispute, task, workerClaim, workerAgent, protocolConfig, treasury, authority, ...
+    // dispute, task, workerClaim, workerAgent, workerAuthority, protocolConfig, treasury, authority, ...
     const accs = order(ix);
     expect(accs[0]).toBe(DISPUTE);
     expect(accs[1]).toBe(TASK);
     expect(accs[2]).toBe(CLAIM);
     expect(accs[3]).toBe(WORKER_AGENT);
-    expect(accs[5]).toBe(TREASURY);
-    expect(accs[6]).toBe(AUTHORITY_ADDR);
+    expect(accs[4]).toBe(CREATOR);
+    expect(accs[6]).toBe(TREASURY);
+    expect(accs[7]).toBe(AUTHORITY_ADDR);
     expect(accs).toContain(TOKEN_PROGRAM);
 
     expect(() =>

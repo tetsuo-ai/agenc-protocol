@@ -273,6 +273,16 @@ pub fn handler<'info>(
         ctx.accounts.authority.is_signer && (is_protocol_authority || is_assigned_resolver),
         CoordinationError::UnauthorizedResolver
     );
+    // Self-dealing guard: the dispute initiator must never resolve their own dispute,
+    // even if they are also on the resolver roster (or are the protocol authority).
+    // The InitiatorCannotResolve error was declared but never wired (audit) — without
+    // this a roster member could initiate a dispute on their own task and rule in
+    // their own favor, then drive the permissionless slash finalizers against the
+    // counterparty's stake.
+    require!(
+        signer != ctx.accounts.dispute.initiator_authority,
+        CoordinationError::InitiatorCannotResolve
+    );
 
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;

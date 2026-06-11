@@ -16,6 +16,11 @@ const MAX_RATE_LIMIT: u64 = 1000;
 /// Maximum cooldown value: 1 week in seconds (matches update_rate_limits.rs)
 const MAX_COOLDOWN: i64 = 604_800;
 
+/// Minimum dispute stake floor (must match execute_proposal.rs MIN_DISPUTE_STAKE and
+/// update_rate_limits.rs). Validated at creation so a proposal that would revert at
+/// execution can never be created and stranded as permanently-Active (audit).
+const MIN_DISPUTE_STAKE: u64 = 1000;
+
 #[derive(Accounts)]
 #[instruction(nonce: u64)]
 pub struct CreateProposal<'info> {
@@ -148,6 +153,20 @@ pub fn handler(
             );
             require!(
                 (max_disputes_per_24h as u64) <= MAX_RATE_LIMIT,
+                CoordinationError::InvalidProposalPayload
+            );
+            // payload[18..26] = min_stake_for_dispute (u64 LE). execute_proposal enforces
+            // a MIN_DISPUTE_STAKE floor here too; validating it at creation prevents a
+            // proposal that would revert at execution from being created and stranded
+            // permanently Active (voting closes, the tx reverts on the error, so it can
+            // never be re-tallied or executed) — audit, governance liveness.
+            let min_stake_for_dispute = u64::from_le_bytes(
+                payload[18..26]
+                    .try_into()
+                    .map_err(|_| error!(CoordinationError::InvalidProposalPayload))?,
+            );
+            require!(
+                min_stake_for_dispute >= MIN_DISPUTE_STAKE,
                 CoordinationError::InvalidProposalPayload
             );
         }

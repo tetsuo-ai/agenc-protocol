@@ -342,6 +342,21 @@ fn validate_disputable_task_state(
     status: TaskStatus,
     submission_is_disputable: bool,
 ) -> Result<()> {
+    // One dispute per task. The normal path is blocked from re-disputing by the
+    // (Disputed -> Disputed) transition being absent from the state machine, but the
+    // durable-submission path SKIPS can_transition_to when the submission is still
+    // Submitted — so an already-Disputed task with a live Submitted submission could
+    // otherwise be disputed again. Each extra dispute increments the worker's
+    // disputes_as_defendant and, once the first dispute resolves the task out of
+    // Disputed, the surplus disputes can never be resolved/expired (both require
+    // task.status == Disputed), permanently locking the worker's reputation stake
+    // (withdraw_reputation_stake requires disputes_as_defendant == 0). Guard it
+    // explicitly so it holds on BOTH the normal and durable paths (audit).
+    require!(
+        status != TaskStatus::Disputed,
+        CoordinationError::InvalidStatusTransition
+    );
+
     require!(
         status == TaskStatus::InProgress
             || status == TaskStatus::PendingValidation
@@ -403,5 +418,24 @@ mod tests {
     fn active_submission_still_allows_released_slot_dispute_path() {
         assert!(validate_disputable_task_state(TaskStatus::Open, true).is_ok());
         assert!(validate_disputable_worker_count(0, true).is_ok());
+    }
+
+    // Revert-sensitive (audit: concurrent disputes via the durable-submission path):
+    // an already-Disputed task must NOT be disputable again on EITHER path. Drop the
+    // `status != Disputed` guard in validate_disputable_task_state and the durable
+    // (submission_is_disputable == true) case below stops failing, re-opening the
+    // multiple-concurrent-dispute fund-lock.
+    #[test]
+    fn already_disputed_task_cannot_be_redisputed_normal_path() {
+        let err = validate_disputable_task_state(TaskStatus::Disputed, false).unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidStatusTransition.into());
+    }
+
+    #[test]
+    fn already_disputed_task_cannot_be_redisputed_durable_path() {
+        // Even with a live Submitted submission (the path that skips can_transition_to),
+        // a Disputed task is refused.
+        let err = validate_disputable_task_state(TaskStatus::Disputed, true).unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidStatusTransition.into());
     }
 }

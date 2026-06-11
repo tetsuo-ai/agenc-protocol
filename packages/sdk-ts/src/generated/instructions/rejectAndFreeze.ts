@@ -76,7 +76,7 @@ export type RejectAndFreezeInstruction<
         ? ReadonlyAccount<TAccountClaim>
         : TAccountClaim,
       TAccountTaskValidationConfig extends string
-        ? ReadonlyAccount<TAccountTaskValidationConfig>
+        ? WritableAccount<TAccountTaskValidationConfig>
         : TAccountTaskValidationConfig,
       TAccountTaskSubmission extends string
         ? WritableAccount<TAccountTaskSubmission>
@@ -207,7 +207,7 @@ export async function getRejectAndFreezeInstructionAsync<
     claim: { value: input.claim ?? null, isWritable: false },
     taskValidationConfig: {
       value: input.taskValidationConfig ?? null,
-      isWritable: false,
+      isWritable: true,
     },
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
@@ -348,7 +348,7 @@ export function getRejectAndFreezeInstruction<
     claim: { value: input.claim ?? null, isWritable: false },
     taskValidationConfig: {
       value: input.taskValidationConfig ?? null,
-      isWritable: false,
+      isWritable: true,
     },
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },

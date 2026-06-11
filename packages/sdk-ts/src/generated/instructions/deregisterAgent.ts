@@ -26,6 +26,7 @@ import {
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
+  type ReadonlyAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
@@ -33,9 +34,10 @@ import {
 } from "@solana/kit";
 import {
   getAccountMetaFactory,
+  getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findProtocolConfigPda } from "../pdas";
+import { findProtocolConfigPda, findReputationStakePda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const DEREGISTER_AGENT_DISCRIMINATOR: ReadonlyUint8Array =
@@ -51,6 +53,7 @@ export type DeregisterAgentInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountAgent extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
+  TAccountReputationStake extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
@@ -63,6 +66,9 @@ export type DeregisterAgentInstruction<
       TAccountProtocolConfig extends string
         ? WritableAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
+      TAccountReputationStake extends string
+        ? ReadonlyAccount<TAccountReputationStake>
+        : TAccountReputationStake,
       TAccountAuthority extends string
         ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
@@ -103,22 +109,35 @@ export function getDeregisterAgentInstructionDataCodec(): FixedSizeCodec<
 export type DeregisterAgentAsyncInput<
   TAccountAgent extends string = string,
   TAccountProtocolConfig extends string = string,
+  TAccountReputationStake extends string = string,
   TAccountAuthority extends string = string,
 > = {
   agent: Address<TAccountAgent>;
   protocolConfig?: Address<TAccountProtocolConfig>;
+  /**
+   * The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit
+   * it to dodge the "stake must be withdrawn first" guard (audit). For an agent that
+   * never staked this is an empty system-owned PDA (the handler treats it as zero
+   * stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve
+   * `slash_count` history — so the agent must withdraw its stake before deregistering;
+   * otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the
+   * `agent_id` becomes re-registerable by anyone, withdrawable by a new owner.
+   */
+  reputationStake?: Address<TAccountReputationStake>;
   authority: TransactionSigner<TAccountAuthority>;
 };
 
 export async function getDeregisterAgentInstructionAsync<
   TAccountAgent extends string,
   TAccountProtocolConfig extends string,
+  TAccountReputationStake extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: DeregisterAgentAsyncInput<
     TAccountAgent,
     TAccountProtocolConfig,
+    TAccountReputationStake,
     TAccountAuthority
   >,
   config?: { programAddress?: TProgramAddress },
@@ -127,6 +146,7 @@ export async function getDeregisterAgentInstructionAsync<
     TProgramAddress,
     TAccountAgent,
     TAccountProtocolConfig,
+    TAccountReputationStake,
     TAccountAuthority
   >
 > {
@@ -138,6 +158,10 @@ export async function getDeregisterAgentInstructionAsync<
   const originalAccounts = {
     agent: { value: input.agent ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
+    reputationStake: {
+      value: input.reputationStake ?? null,
+      isWritable: false,
+    },
     authority: { value: input.authority ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
@@ -149,12 +173,21 @@ export async function getDeregisterAgentInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.reputationStake.value) {
+    accounts.reputationStake.value = await findReputationStakePda({
+      agent: getAddressFromResolvedInstructionAccount(
+        "agent",
+        accounts.agent.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
     accounts: [
       getAccountMeta("agent", accounts.agent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
+      getAccountMeta("reputationStake", accounts.reputationStake),
       getAccountMeta("authority", accounts.authority),
     ],
     data: getDeregisterAgentInstructionDataEncoder().encode({}),
@@ -163,6 +196,7 @@ export async function getDeregisterAgentInstructionAsync<
     TProgramAddress,
     TAccountAgent,
     TAccountProtocolConfig,
+    TAccountReputationStake,
     TAccountAuthority
   >);
 }
@@ -170,22 +204,35 @@ export async function getDeregisterAgentInstructionAsync<
 export type DeregisterAgentInput<
   TAccountAgent extends string = string,
   TAccountProtocolConfig extends string = string,
+  TAccountReputationStake extends string = string,
   TAccountAuthority extends string = string,
 > = {
   agent: Address<TAccountAgent>;
   protocolConfig: Address<TAccountProtocolConfig>;
+  /**
+   * The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit
+   * it to dodge the "stake must be withdrawn first" guard (audit). For an agent that
+   * never staked this is an empty system-owned PDA (the handler treats it as zero
+   * stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve
+   * `slash_count` history — so the agent must withdraw its stake before deregistering;
+   * otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the
+   * `agent_id` becomes re-registerable by anyone, withdrawable by a new owner.
+   */
+  reputationStake: Address<TAccountReputationStake>;
   authority: TransactionSigner<TAccountAuthority>;
 };
 
 export function getDeregisterAgentInstruction<
   TAccountAgent extends string,
   TAccountProtocolConfig extends string,
+  TAccountReputationStake extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: DeregisterAgentInput<
     TAccountAgent,
     TAccountProtocolConfig,
+    TAccountReputationStake,
     TAccountAuthority
   >,
   config?: { programAddress?: TProgramAddress },
@@ -193,6 +240,7 @@ export function getDeregisterAgentInstruction<
   TProgramAddress,
   TAccountAgent,
   TAccountProtocolConfig,
+  TAccountReputationStake,
   TAccountAuthority
 > {
   // Program address.
@@ -203,6 +251,10 @@ export function getDeregisterAgentInstruction<
   const originalAccounts = {
     agent: { value: input.agent ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
+    reputationStake: {
+      value: input.reputationStake ?? null,
+      isWritable: false,
+    },
     authority: { value: input.authority ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
@@ -215,6 +267,7 @@ export function getDeregisterAgentInstruction<
     accounts: [
       getAccountMeta("agent", accounts.agent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
+      getAccountMeta("reputationStake", accounts.reputationStake),
       getAccountMeta("authority", accounts.authority),
     ],
     data: getDeregisterAgentInstructionDataEncoder().encode({}),
@@ -223,6 +276,7 @@ export function getDeregisterAgentInstruction<
     TProgramAddress,
     TAccountAgent,
     TAccountProtocolConfig,
+    TAccountReputationStake,
     TAccountAuthority
   >);
 }
@@ -235,7 +289,17 @@ export type ParsedDeregisterAgentInstruction<
   accounts: {
     agent: TAccountMetas[0];
     protocolConfig: TAccountMetas[1];
-    authority: TAccountMetas[2];
+    /**
+     * The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit
+     * it to dodge the "stake must be withdrawn first" guard (audit). For an agent that
+     * never staked this is an empty system-owned PDA (the handler treats it as zero
+     * stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve
+     * `slash_count` history — so the agent must withdraw its stake before deregistering;
+     * otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the
+     * `agent_id` becomes re-registerable by anyone, withdrawable by a new owner.
+     */
+    reputationStake: TAccountMetas[2];
+    authority: TAccountMetas[3];
   };
   data: DeregisterAgentInstructionData;
 };
@@ -248,12 +312,12 @@ export function parseDeregisterAgentInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedDeregisterAgentInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 3) {
+  if (instruction.accounts.length < 4) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 3,
+        expectedAccountMetas: 4,
       },
     );
   }
@@ -268,6 +332,7 @@ export function parseDeregisterAgentInstruction<
     accounts: {
       agent: getNextAccount(),
       protocolConfig: getNextAccount(),
+      reputationStake: getNextAccount(),
       authority: getNextAccount(),
     },
     data: getDeregisterAgentInstructionDataDecoder().decode(instruction.data),

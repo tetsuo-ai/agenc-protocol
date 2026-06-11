@@ -54,6 +54,7 @@ export type ApplyDisputeSlashInstruction<
   TAccountTask extends string | AccountMeta<string> = string,
   TAccountWorkerClaim extends string | AccountMeta<string> = string,
   TAccountWorkerAgent extends string | AccountMeta<string> = string,
+  TAccountWorkerAuthority extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountTreasury extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
@@ -75,11 +76,14 @@ export type ApplyDisputeSlashInstruction<
         ? ReadonlyAccount<TAccountTask>
         : TAccountTask,
       TAccountWorkerClaim extends string
-        ? ReadonlyAccount<TAccountWorkerClaim>
+        ? WritableAccount<TAccountWorkerClaim>
         : TAccountWorkerClaim,
       TAccountWorkerAgent extends string
         ? WritableAccount<TAccountWorkerAgent>
         : TAccountWorkerAgent,
+      TAccountWorkerAuthority extends string
+        ? WritableAccount<TAccountWorkerAuthority>
+        : TAccountWorkerAuthority,
       TAccountProtocolConfig extends string
         ? ReadonlyAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
@@ -143,6 +147,7 @@ export type ApplyDisputeSlashAsyncInput<
   TAccountTask extends string = string,
   TAccountWorkerClaim extends string = string,
   TAccountWorkerAgent extends string = string,
+  TAccountWorkerAuthority extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
   TAccountAuthority extends string = string,
@@ -154,8 +159,17 @@ export type ApplyDisputeSlashAsyncInput<
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
+  /**
+   * The losing worker's claim. resolve_dispute deliberately DEFERS closing this when a
+   * slash is pending (fix #838) so this finalizer can re-validate it; this instruction
+   * is the designated finalizer, so it closes the claim and returns its rent to the
+   * worker authority (audit: previously left read-only, permanently stranding the rent
+   * the non-slash path returns).
+   */
   workerClaim: Address<TAccountWorkerClaim>;
   workerAgent: Address<TAccountWorkerAgent>;
+  /** against worker_agent.authority so the rent cannot be redirected. */
+  workerAuthority: Address<TAccountWorkerAuthority>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
   authority: TransactionSigner<TAccountAuthority>;
@@ -176,6 +190,7 @@ export async function getApplyDisputeSlashInstructionAsync<
   TAccountTask extends string,
   TAccountWorkerClaim extends string,
   TAccountWorkerAgent extends string,
+  TAccountWorkerAuthority extends string,
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
   TAccountAuthority extends string,
@@ -191,6 +206,7 @@ export async function getApplyDisputeSlashInstructionAsync<
     TAccountTask,
     TAccountWorkerClaim,
     TAccountWorkerAgent,
+    TAccountWorkerAuthority,
     TAccountProtocolConfig,
     TAccountTreasury,
     TAccountAuthority,
@@ -208,6 +224,7 @@ export async function getApplyDisputeSlashInstructionAsync<
     TAccountTask,
     TAccountWorkerClaim,
     TAccountWorkerAgent,
+    TAccountWorkerAuthority,
     TAccountProtocolConfig,
     TAccountTreasury,
     TAccountAuthority,
@@ -226,8 +243,9 @@ export async function getApplyDisputeSlashInstructionAsync<
   const originalAccounts = {
     dispute: { value: input.dispute ?? null, isWritable: true },
     task: { value: input.task ?? null, isWritable: false },
-    workerClaim: { value: input.workerClaim ?? null, isWritable: false },
+    workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     workerAgent: { value: input.workerAgent ?? null, isWritable: true },
+    workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
@@ -261,6 +279,7 @@ export async function getApplyDisputeSlashInstructionAsync<
       getAccountMeta("task", accounts.task),
       getAccountMeta("workerClaim", accounts.workerClaim),
       getAccountMeta("workerAgent", accounts.workerAgent),
+      getAccountMeta("workerAuthority", accounts.workerAuthority),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("authority", accounts.authority),
@@ -278,6 +297,7 @@ export async function getApplyDisputeSlashInstructionAsync<
     TAccountTask,
     TAccountWorkerClaim,
     TAccountWorkerAgent,
+    TAccountWorkerAuthority,
     TAccountProtocolConfig,
     TAccountTreasury,
     TAccountAuthority,
@@ -294,6 +314,7 @@ export type ApplyDisputeSlashInput<
   TAccountTask extends string = string,
   TAccountWorkerClaim extends string = string,
   TAccountWorkerAgent extends string = string,
+  TAccountWorkerAuthority extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
   TAccountAuthority extends string = string,
@@ -305,8 +326,17 @@ export type ApplyDisputeSlashInput<
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
+  /**
+   * The losing worker's claim. resolve_dispute deliberately DEFERS closing this when a
+   * slash is pending (fix #838) so this finalizer can re-validate it; this instruction
+   * is the designated finalizer, so it closes the claim and returns its rent to the
+   * worker authority (audit: previously left read-only, permanently stranding the rent
+   * the non-slash path returns).
+   */
   workerClaim: Address<TAccountWorkerClaim>;
   workerAgent: Address<TAccountWorkerAgent>;
+  /** against worker_agent.authority so the rent cannot be redirected. */
+  workerAuthority: Address<TAccountWorkerAuthority>;
   protocolConfig: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
   authority: TransactionSigner<TAccountAuthority>;
@@ -327,6 +357,7 @@ export function getApplyDisputeSlashInstruction<
   TAccountTask extends string,
   TAccountWorkerClaim extends string,
   TAccountWorkerAgent extends string,
+  TAccountWorkerAuthority extends string,
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
   TAccountAuthority extends string,
@@ -342,6 +373,7 @@ export function getApplyDisputeSlashInstruction<
     TAccountTask,
     TAccountWorkerClaim,
     TAccountWorkerAgent,
+    TAccountWorkerAuthority,
     TAccountProtocolConfig,
     TAccountTreasury,
     TAccountAuthority,
@@ -358,6 +390,7 @@ export function getApplyDisputeSlashInstruction<
   TAccountTask,
   TAccountWorkerClaim,
   TAccountWorkerAgent,
+  TAccountWorkerAuthority,
   TAccountProtocolConfig,
   TAccountTreasury,
   TAccountAuthority,
@@ -375,8 +408,9 @@ export function getApplyDisputeSlashInstruction<
   const originalAccounts = {
     dispute: { value: input.dispute ?? null, isWritable: true },
     task: { value: input.task ?? null, isWritable: false },
-    workerClaim: { value: input.workerClaim ?? null, isWritable: false },
+    workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     workerAgent: { value: input.workerAgent ?? null, isWritable: true },
+    workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
@@ -407,6 +441,7 @@ export function getApplyDisputeSlashInstruction<
       getAccountMeta("task", accounts.task),
       getAccountMeta("workerClaim", accounts.workerClaim),
       getAccountMeta("workerAgent", accounts.workerAgent),
+      getAccountMeta("workerAuthority", accounts.workerAuthority),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("authority", accounts.authority),
@@ -424,6 +459,7 @@ export function getApplyDisputeSlashInstruction<
     TAccountTask,
     TAccountWorkerClaim,
     TAccountWorkerAgent,
+    TAccountWorkerAuthority,
     TAccountProtocolConfig,
     TAccountTreasury,
     TAccountAuthority,
@@ -443,21 +479,30 @@ export type ParsedApplyDisputeSlashInstruction<
   accounts: {
     dispute: TAccountMetas[0];
     task: TAccountMetas[1];
+    /**
+     * The losing worker's claim. resolve_dispute deliberately DEFERS closing this when a
+     * slash is pending (fix #838) so this finalizer can re-validate it; this instruction
+     * is the designated finalizer, so it closes the claim and returns its rent to the
+     * worker authority (audit: previously left read-only, permanently stranding the rent
+     * the non-slash path returns).
+     */
     workerClaim: TAccountMetas[2];
     workerAgent: TAccountMetas[3];
-    protocolConfig: TAccountMetas[4];
-    treasury: TAccountMetas[5];
-    authority: TAccountMetas[6];
+    /** against worker_agent.authority so the rent cannot be redirected. */
+    workerAuthority: TAccountMetas[4];
+    protocolConfig: TAccountMetas[5];
+    treasury: TAccountMetas[6];
+    authority: TAccountMetas[7];
     /** Escrow PDA for the disputed task (kept open until slash for token disputes) */
-    escrow?: TAccountMetas[7] | undefined;
+    escrow?: TAccountMetas[8] | undefined;
     /** Token escrow ATA holding deferred slash amount */
-    tokenEscrowAta?: TAccountMetas[8] | undefined;
+    tokenEscrowAta?: TAccountMetas[9] | undefined;
     /** Treasury token ATA receiving slashed tokens */
-    treasuryTokenAccount?: TAccountMetas[9] | undefined;
+    treasuryTokenAccount?: TAccountMetas[10] | undefined;
     /** SPL mint for task rewards (must match task.reward_mint) */
-    rewardMint?: TAccountMetas[10] | undefined;
+    rewardMint?: TAccountMetas[11] | undefined;
     /** SPL Token program */
-    tokenProgram?: TAccountMetas[11] | undefined;
+    tokenProgram?: TAccountMetas[12] | undefined;
   };
   data: ApplyDisputeSlashInstructionData;
 };
@@ -470,12 +515,12 @@ export function parseApplyDisputeSlashInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedApplyDisputeSlashInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 12) {
+  if (instruction.accounts.length < 13) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 12,
+        expectedAccountMetas: 13,
       },
     );
   }
@@ -498,6 +543,7 @@ export function parseApplyDisputeSlashInstruction<
       task: getNextAccount(),
       workerClaim: getNextAccount(),
       workerAgent: getNextAccount(),
+      workerAuthority: getNextAccount(),
       protocolConfig: getNextAccount(),
       treasury: getNextAccount(),
       authority: getNextAccount(),

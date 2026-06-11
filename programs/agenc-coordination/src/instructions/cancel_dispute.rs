@@ -12,10 +12,9 @@
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeCancelled;
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::validation::validate_account_owner;
 use crate::state::{AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskStatus};
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -54,10 +53,14 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
         ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedResolver
     );
-    check_version_compatible(&ctx.accounts.protocol_config)?;
+    // Exit-safety: cancelling a dispute restores the task to a workable state and must
+    // remain available while the protocol is paused or a task type is disabled, like
+    // every other settlement/restoration path (money never locks). Use the exit gate,
+    // not the entry gate (which rejects while paused) + require_task_type_enabled
+    // (an entry-only control) the way this path previously did (audit).
+    check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let dispute = &mut ctx.accounts.dispute;
     let task = &mut ctx.accounts.task;
-    require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     let clock = Clock::get()?;
 
     // Can only cancel if no votes have been cast

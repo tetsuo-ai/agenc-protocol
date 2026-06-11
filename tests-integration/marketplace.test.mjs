@@ -677,6 +677,41 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
   assert.equal(buyerDelta, 1_000_000, `creator received the forfeited bond principal (got ${buyerDelta})`);
 });
 
+test("completion bond (#70): cancelling a task REOPENED after a reject refunds the worker bond (not forfeit to creator)", async () => {
+  // #70 theft: a worker posts a bond, claims, submits, and the creator rejects — which
+  // reopens the task to Open WITHOUT settling the worker's bond. Pre-fix, cancel_task
+  // forfeited any supplied worker bond to the creator regardless of status, so the creator
+  // could then cancel the (Open) task and SEIZE an honest worker's bond. The fix forfeits
+  // only on a genuine no-show (InProgress past deadline); an Open cancel refunds the worker.
+  // Revert-sensitive: drop the is_no_show_cancel gate in cancel_task and the worker delta
+  // below goes to 0 (the bond is forfeited to the creator instead).
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const m = await runManualSettlement(w, { decision: "reject", postBonds: true });
+
+  assert.ok(decode(w.svm, "Task", m.task).status.Open !== undefined, "task reopened to Open after reject");
+  assert.ok(!isClosed(w.svm, m.workerBond), "worker bond still live after reject");
+
+  const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  // Full live balance of the worker bond PDA (principal + rent). A Refund returns ALL of
+  // it to the worker; a Forfeit would send the 1,000,000 principal to the creator and only
+  // the rent back to the worker — so the worker delta cleanly distinguishes the two.
+  const workerBondBal = Number(w.svm.getBalance(m.workerBond));
+  assert.ok(workerBondBal > 1_000_000, "worker bond holds principal + rent before cancel");
+  expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
+    .accounts({ task: m.task, escrow: m.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: m.creatorBond, workerCompletionBond: m.workerBond, workerBondAuthority: w.provider.publicKey,
+      creatorAgent: null, agentStats: null })
+    .instruction(), [w.buyer]), "cancel reopened task with worker bond present");
+
+  assert.ok(isClosed(w.svm, m.workerBond), "worker bond settled on cancel");
+  const workerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - workerBefore;
+  // Revert-sensitive: the honest worker is REFUNDED the full bond (principal + rent). Drop
+  // the is_no_show_cancel gate and the principal is forfeited to the creator, so the worker
+  // delta drops by 1,000,000 and this fails.
+  assert.equal(workerDelta, workerBondBal, `honest worker fully refunded their bond, not forfeited (got ${workerDelta} of ${workerBondBal})`);
+});
+
 test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omitting the bond accounts on self-expire", async () => {
   // Exploit chain #71: within the 60s grace window the worker is an allowed expire caller.
   // Pre-fix, the forfeit only fired `if let (Some(bond), Some(creator))`, so the worker
@@ -1470,6 +1505,9 @@ test("resolve_reject_frozen (reject): refunds the creator, forfeits worker bond,
   const f = await setupFrozen(w, { postBonds: true });
   const signerMetas = [{ pubkey: w.admin.publicKey, isSigner: true, isWritable: false }, { pubkey: owner2.publicKey, isSigner: true, isWritable: false }];
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+  // Worker holds a live claim slot going into the uphold path.
+  assert.equal(Number(decode(w.svm, "AgentRegistration", w.providerAgent).active_tasks), 1, "worker active_tasks == 1 before resolve");
+  assert.equal(Number(decode(w.svm, "Task", f.task).current_workers), 1, "task current_workers == 1 before resolve");
   expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(false)
     .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, bondTreasury: w.admin.publicKey, systemProgram: SystemProgram.programId })
     .remainingAccounts(signerMetas).instruction(), [w.admin, owner2]), "resolve reject");
@@ -1478,6 +1516,12 @@ test("resolve_reject_frozen (reject): refunds the creator, forfeits worker bond,
   assert.ok(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore >= f.reward, "creator refunded the reward");
   assert.ok(isClosed(w.svm, f.workerBond), "worker bond forfeited + closed");
   assert.ok(isClosed(w.svm, f.creatorBond), "creator bond refunded + closed");
+  // Revert-sensitive (audit: uphold branch never released the claim slot): drop the
+  // release_claim_slot call in resolve_handler's else branch and these two go red,
+  // leaving the worker permanently unable to claim again or deregister, and the task
+  // permanently unclosable.
+  assert.equal(Number(decode(w.svm, "AgentRegistration", w.providerAgent).active_tasks), 0, "worker claim slot released (active_tasks decremented)");
+  assert.equal(Number(decode(w.svm, "Task", f.task).current_workers), 0, "task current_workers zeroed (close_task now possible)");
 });
 
 test("expire_reject_frozen: after the review window defaults to the worker + refunds both bonds (permissionless, exit-safe)", async () => {
@@ -1826,7 +1870,7 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
   await setProtocolPaused(w.svm, true);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .applyDisputeSlash()
-    .accounts({ dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey, escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .accounts({ dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent, workerAuthority: w.provider.publicKey, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey, escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
     .instruction(), [w.admin]), "slash:apply_dispute_slash while paused");
 
   const stakeAfter = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);

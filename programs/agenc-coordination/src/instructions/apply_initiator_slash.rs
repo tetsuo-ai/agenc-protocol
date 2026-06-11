@@ -10,13 +10,12 @@
 
 use crate::errors::CoordinationError;
 use crate::instructions::constants::PERCENT_BASE;
-use crate::instructions::launch_controls::require_task_type_enabled;
 use crate::instructions::slash_helpers::{
     apply_reputation_penalty, calculate_approval_percentage, transfer_slash_to_treasury,
     validate_slash_window,
 };
 use crate::state::{AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task};
-use crate::utils::version::check_version_compatible;
+use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -70,8 +69,14 @@ pub fn handler(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
     let initiator_agent = &mut ctx.accounts.initiator_agent;
     let config = &ctx.accounts.protocol_config;
 
-    check_version_compatible(config)?;
-    require_task_type_enabled(config, task.task_type)?;
+    // Exit/finalizer gate, matching the sibling apply_dispute_slash. This permissionless
+    // finalizer's own docstring says "slashing cannot be avoided", but it previously used
+    // the ENTRY gate (rejects while paused) + require_task_type_enabled (entry-only): a
+    // pause or a retroactive task-type disable that outlasts the 7-day SLASH_WINDOW would
+    // make it permanently unrunnable, silently evading the frivolous-dispute deterrent
+    // (audit). The exit gate keeps slashing available while paused; no escrow moves here
+    // beyond the initiator's own stake, so it is settlement-class.
+    check_version_compatible_for_exit(config)?;
     require!(
         dispute.status == DisputeStatus::Resolved || dispute.status == DisputeStatus::Cancelled,
         CoordinationError::DisputeNotResolved

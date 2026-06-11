@@ -105,7 +105,7 @@ async function claimedAutoTask(salt: number): Promise<BondWorld> {
 
   // 2) create an Auto task (constraintHash null => complete_task settlement path).
   const taskId = new Uint8Array(32).fill(salt + 2);
-  const description = new Uint8Array(64).fill(salt + 3);
+  const description = new Uint8Array(64).fill(salt + 3, 0, 32);
   const now = svm.getClock().unixTimestamp;
   await send(svm, creator, [
     await facade.createTask({
@@ -200,7 +200,7 @@ async function openAutoTask(salt: number): Promise<OpenWorld> {
   const [creatorAgent] = await facade.findAgentPda({ agentId: creatorAgentId });
 
   const taskId = new Uint8Array(32).fill(salt + 2);
-  const description = new Uint8Array(64).fill(salt + 3);
+  const description = new Uint8Array(64).fill(salt + 3, 0, 32);
   const now = svm.getClock().unixTimestamp;
   await send(svm, creator, [
     await facade.createTask({
