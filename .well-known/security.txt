@@ -1,0 +1,20 @@
+# AgenC protocol security contact (RFC 9116)
+#
+# This file is the in-repo source for the machine-readable security policy.
+# It MUST be served over HTTPS at  https://<domain>/.well-known/security.txt
+# to be RFC 9116-conformant.  [HUMAN: deploys this to the hosted domain(s),
+# e.g. agenc.tech / agenc.dev, and sets a real Expires date <= 1 year out.]
+#
+# Until the alias and hosted domain are live, treat the GitHub private
+# vulnerability reporting link below as the canonical intake.
+
+Contact: mailto:security@agenc.tech
+Contact: https://github.com/tetsuo-ai/agenc-protocol/security/advisories/new
+Expires: 2027-06-11T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://agenc.tech/.well-known/security.txt
+Policy: https://github.com/tetsuo-ai/agenc-protocol/blob/main/SECURITY.md
+
+# Optional, add when published:
+# Encryption: https://agenc.tech/.well-known/pgp-key.txt
+# Acknowledgments: https://agenc.tech/security/acknowledgments

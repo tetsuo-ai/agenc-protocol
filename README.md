@@ -146,6 +146,35 @@ Before any mainnet deploy of the staged feature work:
    version-bump last; multisig/upgrade-authority gated.
 4. **SDK/client updates** for any new required accounts.
 
+## Security & trust
+
+The program custodies escrow, completion bonds, and agent stakes. Trust
+artifacts (PLAN.md Phase 8):
+
+- **Verifiable builds** — every `protocol-v*` release records a reproducible
+  SHA-256 of the on-chain program built in a pinned Docker image
+  (`.github/workflows/verify.yml`). Reproduce it yourself and compare against
+  the deployed `HJsZ…` program — see
+  [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md). The build is
+  reproducible and hash-pinned today; full *third-party* source-verification
+  (`solana-verify verify-from-repo` + the on-chain osec.io PDA) is gated on the
+  repo going public (PLAN.md P0.6) and is documented but not yet active.
+- **Money-never-locks** exit guarantees (cancel/refund/reclaim paths), symmetric
+  completion bonds, checked arithmetic + `overflow-checks = true`, and
+  fail-closed moderation are core money-safety properties — see
+  [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md) and
+  [docs/audit/THREAT_MODEL.md](docs/audit/THREAT_MODEL.md).
+- **Upgrade authority:** `HJsZ…` is upgradeable; custody and the multisig
+  migration runbook are tracked under PLAN.md P8.5.
+- **Credible-exit test** — "the operator vanishes and it still works." An
+  executed, reproducible proof of an end-to-end hire→settle cycle with **zero
+  tetsuo-ai hosted dependencies** (own RPC, gPA reads, own moderation key,
+  self-chosen artifact storage, on-chain settlement). The runtime independence
+  is proven; the source-availability / third-party-verifiable-build /
+  multisig-custody pillars are honestly flagged as deferred. See
+  [docs/CREDIBLE_EXIT.md](docs/CREDIBLE_EXIT.md) (run it:
+  `node scripts/credible-exit.mjs`).
+
 ## Scope rules
 
 - Do not add runtime, MCP, app, or control-plane code here.
@@ -165,6 +194,7 @@ Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for develop
 | [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md) | Batch 1–3 changes, audits, coverage matrix |
 | [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md) | SDK build/automation plan + status |
 | [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md) | Deployed source-of-truth + branch policy |
+| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md) | Reproducible build + how to verify `HJsZ…` matches this source (what's provable now vs public-repo-gated) |
 | [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md) | How `anchor build` output becomes published artifacts |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | Local toolchain + CI-equivalent commands |
 | [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md) | Reviewed-completion validation model |

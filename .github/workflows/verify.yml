@@ -1,0 +1,175 @@
+name: Verifiable Build
+
+# Reproducible / verifiable build of the on-chain `agenc-coordination` program.
+#
+# WHY: the program custodies escrow, completion bonds, and agent stakes. A
+# reproducible build lets anyone confirm the bytecode deployed at
+# `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` was produced from a specific
+# source tag — it is the "money path" supply-chain control (PLAN.md P8.3).
+#
+# WHAT THIS DOES TODAY (works while the repo is PRIVATE):
+#   - Builds the program inside the pinned `solana-verify` Docker image so the
+#     `.so` is deterministic (same input source -> same output bytes).
+#   - Emits the SHA-256 executable hash for BOTH on-chain surfaces:
+#       * the mainnet-canary 25-instruction surface (what is LIVE on mainnet),
+#       * the full default-feature surface (deploy-gated, Phase 9).
+#   - Attaches `verifiable-build-hashes.txt` to the GitHub Release for the tag,
+#     so every release permanently records the hash an integrator can reproduce.
+#
+# WHAT THIS DOES *NOT* DO YET (BLOCKED on PLAN.md P0.6 — repo going PUBLIC):
+#   - `solana-verify verify-from-repo` / the OtterSec (osec.io) on-chain
+#     verification PDA require a PUBLIC git URL the OtterSec builder can clone.
+#     While the repo is private, third parties cannot independently verify the
+#     source. This workflow therefore stops at the reproducible hash and does
+#     NOT submit a remote verification job. See docs/VERIFIABLE_BUILDS.md.
+#
+# Targets solana-verify v0.5.x (Solana Foundation fork). The build image's
+# Solana CLI version is read from programs/agenc-coordination/Cargo.toml
+# [workspace.metadata.cli].solana = "3.0.13" (kept in sync with Anchor.toml).
+
+on:
+  # Fire on the program-source release tags. SDK-only tags (sdk-v*) do not
+  # change the on-chain program, so they do not need a verifiable build.
+  push:
+    tags:
+      - "protocol-v*"
+  # Manual reproducibility spot-check against any ref.
+  workflow_dispatch:
+
+permissions:
+  contents: write # attach the hash artifact to the GitHub Release
+
+# Pin the verifier so the build image and hashing logic are themselves
+# reproducible. Bump deliberately and re-record hashes when upgrading.
+env:
+  SOLANA_VERIFY_VERSION: "0.5.0"
+  PROGRAM_ID: "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK"
+  LIBRARY_NAME: "agenc_coordination"
+  MOUNT_PATH: "programs/agenc-coordination"
+
+jobs:
+  verifiable-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history so the tag commit is reproducible)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: solana-verify-${{ env.SOLANA_VERIFY_VERSION }}-${{ runner.os }}
+
+      # solana-verify drives a deterministic Docker build; the runner already
+      # has Docker. --locked pins the verifier's own dependency tree.
+      - name: Install solana-verify
+        run: cargo install solana-verify --version "${SOLANA_VERIFY_VERSION}" --locked
+
+      - name: Tool versions (recorded in the log for auditability)
+        run: |
+          solana-verify --version
+          docker --version
+
+      # --- LIVE surface: mainnet-canary (25 instructions) ---
+      # This is the surface actually deployed at PROGRAM_ID today, so its hash
+      # is the one that should match `get-program-hash` against mainnet.
+      # Extra cargo args are passed after the `--` separator, exactly as the
+      # canary:build npm script does (--no-default-features --features mainnet-canary).
+      - name: Reproducible build (mainnet-canary surface)
+        working-directory: programs/agenc-coordination
+        run: |
+          solana-verify build \
+            --library-name "${LIBRARY_NAME}" \
+            -- --no-default-features --features mainnet-canary
+          mv "target/deploy/${LIBRARY_NAME}.so" \
+             "/tmp/${LIBRARY_NAME}.canary.so"
+
+      - name: Hash the mainnet-canary build
+        id: canary_hash
+        run: |
+          HASH=$(solana-verify get-executable-hash "/tmp/${LIBRARY_NAME}.canary.so")
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+          echo "mainnet-canary .so SHA-256: ${HASH}"
+
+      # --- FULL surface: default features (deploy-gated, Phase 9) ---
+      # Recorded too so the full surface has a reproducible hash on file before
+      # it is ever deployed. Not what is live today.
+      - name: Reproducible build (full default-feature surface)
+        working-directory: programs/agenc-coordination
+        run: |
+          solana-verify build --library-name "${LIBRARY_NAME}"
+          mv "target/deploy/${LIBRARY_NAME}.so" \
+             "/tmp/${LIBRARY_NAME}.full.so"
+
+      - name: Hash the full build
+        id: full_hash
+        run: |
+          HASH=$(solana-verify get-executable-hash "/tmp/${LIBRARY_NAME}.full.so")
+          echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
+          echo "full-surface .so SHA-256: ${HASH}"
+
+      - name: Write hash manifest
+        run: |
+          {
+            echo "# AgenC verifiable build hashes"
+            echo "#"
+            echo "# Program ID:   ${PROGRAM_ID}"
+            echo "# Git ref:      ${GITHUB_REF_NAME}"
+            echo "# Git commit:   ${GITHUB_SHA}"
+            echo "# solana-verify: ${SOLANA_VERIFY_VERSION}"
+            echo "# Built:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "#"
+            echo "# Reproduce locally: see docs/VERIFIABLE_BUILDS.md"
+            echo ""
+            echo "mainnet-canary (LIVE surface, --no-default-features --features mainnet-canary):"
+            echo "  ${{ steps.canary_hash.outputs.hash }}"
+            echo ""
+            echo "full (default features, deploy-gated / Phase 9):"
+            echo "  ${{ steps.full_hash.outputs.hash }}"
+          } > verifiable-build-hashes.txt
+          cat verifiable-build-hashes.txt
+
+      - name: Upload hash manifest as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: verifiable-build-hashes
+          path: verifiable-build-hashes.txt
+
+      # Attach to the GitHub Release the release.yml workflow created for this
+      # tag. Best-effort: if the release does not exist yet (race with
+      # release.yml), the workflow artifact above still preserves the hashes.
+      - name: Attach hash manifest to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" verifiable-build-hashes.txt --clobber
+          else
+            echo "Release ${GITHUB_REF_NAME} not found yet — hash preserved as a workflow artifact only."
+          fi
+
+      # PUBLIC-REPO-GATED (PLAN.md P0.6). Intentionally NOT run while private:
+      # solana-verify verify-from-repo clones the git URL inside the OtterSec
+      # builder, which cannot reach a private repo, and the on-chain
+      # verification PDA / `remote submit-job` would advertise an unverifiable
+      # source. Activate this step only after the repo is public AND the
+      # canary-surface hash above matches `get-program-hash` against mainnet.
+      #
+      # - name: Verify deployed program matches this repo (PUBLIC REPO ONLY)
+      #   run: |
+      #     solana-verify verify-from-repo \
+      #       -u "$MAINNET_RPC_URL" \
+      #       --program-id "${PROGRAM_ID}" \
+      #       --library-name "${LIBRARY_NAME}" \
+      #       --mount-path "${MOUNT_PATH}" \
+      #       --commit-hash "${GITHUB_SHA}" \
+      #       https://github.com/tetsuo-ai/agenc-protocol \
+      #       -- --no-default-features --features mainnet-canary

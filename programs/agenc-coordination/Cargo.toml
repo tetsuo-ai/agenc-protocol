@@ -49,7 +49,21 @@ getrandom = { version = "=0.2.17", default-features = false, features = ["custom
 # Defense-in-depth: the Rust release profile defaults overflow-checks = false, so any
 # integer add/sub/mul not written with checked_*/saturating_* would SILENTLY WRAP in the
 # deployed SBF program. All money paths already use checked arithmetic; this is the second
-# layer the Solana program-security guidance + Anchor recommend alongside it. No Cargo
-# [workspace] root exists, so this crate is the build root and its [profile] is honored.
+# layer the Solana program-security guidance + Anchor recommend alongside it. This crate is
+# the Cargo build root (the [workspace] table below is empty, so it stays a single-member
+# root — see the cargo metadata check), and its [profile] is honored.
 [profile.release]
 overflow-checks = true
+
+# Single-member Cargo workspace rooted at this crate. The ONLY reason this empty
+# [workspace] table exists is to host [workspace.metadata.cli] below: solana-verify (the
+# reproducible-build tool, docs/VERIFIABLE_BUILDS.md) reads [workspace.metadata.cli].solana
+# to pick the deterministic Docker build image's Solana CLI version. Without it, the tool
+# falls back to the Cargo.lock solana-program entry (currently 2.3.0, a transitive dep), NOT
+# the toolchain this program is actually deployed with. Pin it to the Anchor.toml
+# solana_version (3.0.13) so the verifiable build uses the same toolchain as the live deploy.
+# Keep this in sync with Anchor.toml [toolchain] solana_version.
+[workspace]
+
+[workspace.metadata.cli]
+solana = "3.0.13"

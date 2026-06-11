@@ -1,4 +1,11 @@
-# Batch 1 — Audit Prep (embeddable marketplace)
+# Batch 1–4 — Audit Prep (embeddable marketplace)
+
+> **Filename note.** This file is retained at the historical path
+> `docs/BATCH_1_3_AUDIT_PREP.md` (it is cross-linked from `README.md`, `CLAUDE.md`,
+> and `PLAN.md`) but its scope is now **Batch 1 through Batch 4 (Phase 6)**. The
+> Batch 4 section is at the end (["Batch 4 — Phase 6"](#batch-4--phase-6-embeddable-economics--trust-2026-06-10)).
+> For the consolidated auditor entry point, see
+> [`docs/audit/AUDITOR_HANDOFF.md`](audit/AUDITOR_HANDOFF.md).
 
 Pre-audit map of the additive, no-migration Batch 1 of the embeddable-marketplace
 work, for a professional security review **before any deploy**. Pairs with the full
@@ -325,3 +332,176 @@ the upgradeable ProgramData account litesvm does not model — hence the inject 
    `workerCompletionBond` = PDA`["completion_bond", task, workerAuthority]`, and (resolve only)
    `bondTreasury` = `protocolConfig.treasury`. The SDK currently has **no** completion-bond
    support at all, so these calls will fail against the hardened program until wired.
+
+---
+
+# Batch 4 — Phase 6 (embeddable economics + trust, 2026-06-10)
+
+> Local only — nothing pushed/deployed. Phase 6 is **two layout migrations** (a
+> per-`Task` realloc 382/432→466B AND a `ProtocolConfig` realloc 349→351B), so it is
+> **§11.5-gated** exactly like Batch 2/3 and requires the external audit + the migration
+> choreography below before any mainnet deploy. The full surface is **82 IDL
+> instructions** (the spec's "80-instruction surface" plus the two `bid_book` /
+> `bid_marketplace` initializers and `update_min_version`; `vote_dispute` was **retired**,
+> P6.3); the live **mainnet-canary surface stays at 25** (enforced by
+> `scripts/check-canary-idl.mjs`), and the referrer 4th leg is **fail-closed on canary**
+> (see the canary referrer guard below).
+
+## 1. Change inventory (Phase 6)
+
+| ID | Commit | Area | Layout? |
+|----|--------|------|---------|
+| **P6.1** | `f7f42bf` | `rate_hire` + `HireRating` PDA (`["hire_rating", task]`): makes the dead `ServiceListing.total_rating`/`rating_count` live; buyer-only, terminal-`Completed`-only, one-per-hire (`init`), score `1..=5`, bounded `review_uri`. Listing aggregate updated; provider rollup emitted via `ListingRated` for the P6.6 backfill. | No (new PDA + writes pre-allocated `ServiceListing` fields) |
+| **P6.2** | `0d927f6` | Referrer (demand-side embedder) **4th settlement leg** + the `Task`/`HireRecord` realloc that snapshots `referrer`/`referrer_fee_bps`. Shared `calculate_combined_fees` carves operator+referrer in ONE combined-cap calc; SOL-only; rejected on token tasks. | **YES — `Task` 382/432 → 466B; `HireRecord` append-only** |
+| **P6.3** | `f7f42bf` | **Retire `vote_dispute`**: instruction removed; `resolve_dispute`/`expire_dispute` no longer take `(vote, arbiter)` pairs; `MAX_DISPUTE_VOTERS` left unreferenced for API stability. | No |
+| **P6.4** | `f7f42bf`, `1ed851a` | **Accountable disputes**: `resolve_dispute` requires a reasoned ruling (`rationale_hash: [u8;32]` mandatory by type + bounded `rationale_uri`); the deciding resolver + hash are persisted and emitted in `DisputeResolved`. Assigned-resolver case counters (`resolved_count`/`last_resolved_at`) bumped on `DisputeResolver`. (Challenge-window design approved; BUILD DEFERRED until real dispute volume — `docs/DISPUTE_CHALLENGE_WINDOW.md`.) | No |
+| **P6.5** | `0d927f6` | `ProtocolConfig.surface_revision: u16` (append-only, after `multisig_owners`) + the `migrate_protocol` realloc 349→351B; `SURFACE_REVISION_FULL = 1`; SDK `getDeployedSurface`. | **YES — `ProtocolConfig` 349 → 351B** |
+| **P6.6** | `f7f42bf` | `AgentStats` PDA (`["agent_stats", agent]`): negative/non-success counters (`tasks_rejected`, `disputes_won`, `disputes_lost`, `claims_expired`, `total_cancelled`) that don't fit `AgentRegistration`'s reserved bytes. **Telemetry, never gates settlement** — passed OPTIONALLY, `init_if_needed` on first write, no-op when absent. | No (new optional PDA) |
+| **P6.7** | `1ed851a` | **Sybil / reputation-reset deterrent**: fresh-agent reputation `5000 → 3000` (`PROBATIONARY_REPUTATION`); `min_agent_stake` default `0 → 1_000_000` lamports (`MIN_REASONABLE_STAKE`, fresh inits only). | No (new-`init` value change) |
+| **P6.8** | `f7f42bf` | **Attestor registry** (`assign_moderation_attestor`/`revoke_moderation_attestor` + `ModerationAttestor` PDA `["moderation_attestor", attestor]`): the moderation authority deputizes additional attestors; mirrors the dispute-resolver roster. **Registry mechanism only** — the neutrality posture decision is `docs/MODERATION_NEUTRALITY.md`. | No (new PDA) |
+| **review fix** | `d1b4b82` | Phase-6 money-path/migration review fixes (the 2 majors below): `migrate_task` decoupled from `migrate_protocol` ordering + the canary referrer guard. | No |
+| **SDK** | `d4f7d7f` | `@tetsuo-ai/marketplace-sdk 0.5.0` — Phase 6 client surfaces (`rateHire`, referrer-aware settlement accounts, `getDeployedSurface`, agent-stats/attestor/resolver helpers). | — |
+
+PR #47 (2026-06-09, `708e67f`) — the **assignable dispute-resolver roster**
+(`assign_dispute_resolver`/`revoke_dispute_resolver`) + `hire_from_listing_humanless` —
+is the substrate P6.4 builds on; the single-resolver model **replaced** the
+vote+quorum design (see `docs/audit/THREAT_MODEL.md` and `CLAUDE.md`).
+
+## 2. NEW invariants (Phase 6) & where they are enforced
+
+- **4-way split conserves exactly.** `execute_completion_rewards` +
+  `calculate_combined_fees` (`completion_helpers.rs`): for a SOL settlement,
+  `worker + protocol_fee + operator_fee + referrer_fee == base` to the lamport; each
+  fee leg is floored independently so the **worker keeps all rounding dust**; operator
+  and referrer legs are added to the escrow-balance check and to `escrow.distributed`.
+  Both legs are gated `operator_active || referrer_active`, so a non-referred,
+  non-hired task is **byte-for-byte the 2-way path** (zero behavioral change for the
+  149 live tasks). Runtime-proven: `referral-fee.test.mjs` —
+  `"4-way split … paid to the lamport"` asserts
+  `protocol + operator + referrer + worker == reward`, and
+  `"REFERRER-ONLY … protocol + referrer + worker conserves exactly"` the 3-way subset.
+- **The 4000-bps combined cap (binding worker floor).** `MAX_COMBINED_FEE_BPS = 4000`
+  and `WORKER_FLOOR_BPS = 6000` (`4000 + 6000 == 10000`). `calculate_combined_fees`
+  rejects `protocol + operator + referrer > 4000 bps` (`CombinedFeeAboveCap`) in **bps,
+  before any lamport math**, so the worker ALWAYS keeps ≥ 60%. The SAME cap is enforced
+  at snapshot time (`resolve_referrer_snapshot`, at hire/create) so a bad referral
+  fails at task creation, not only at settlement. Per-leg ceilings
+  (`MAX_OPERATOR_FEE_BPS`/`MAX_REFERRER_FEE_BPS = 2000`) are defense-in-depth; the
+  combined cap is the binding invariant. Runtime: `"COMBINED CAP … exceeds 4000 bps is
+  rejected"`, `"REFERRER OVER PER-LEG CAP"`.
+- **Referrer no-self-deal + SOL-only + no-silent-drop.** `resolve_referrer_snapshot`:
+  `referrer != creator` (`ReferrerIsCreator`); a non-zero fee with a default/absent
+  payee is rejected (`MissingReferrerAccount`) so args can't silently drop the fee; a
+  referrer fee on a token-denominated task is rejected at creation (`create_task`,
+  SOL-only). Settlement re-binds the supplied payee to the snapshot
+  (`build_referrer_leg`: `InvalidReferrerAccount`), so a worker cannot dodge or redirect
+  the leg. Runtime: `"REFERRER SELF-DEAL"`, `"REFERRER PROTECTION … cannot be completed
+  without paying the referrer"`, `"SPL path … referrer fee is rejected"`.
+- **Migration old-size preconditions + append-only layouts.**
+  - `classify_task_migration` (`migrate.rs`) accepts **only** `Task::OLD_TASK_SIZE`
+    (382, the 149 live tasks) **or** `Task::BATCH2_TASK_SIZE` (432) as a realloc
+    precondition; `>= Task::SIZE` (466) is idempotent no-op; **everything else
+    (incl. the 433–465 gap) is rejected** (`TaskNotMigratable`) so a corrupt/unexpected
+    account is never grown. `const_assert(Task::SIZE == 466)`; the appended tail is
+    **explicitly zero-filled** (operator/referrer payees → default, fees → 0) regardless
+    of `resize`'s zero-init semantics. Append-only: the legacy 382B prefix is unchanged,
+    so the migrated account deserializes the new fields as defaults.
+  - `classify_config_migration` accepts **only** `OLD_CONFIG_SIZE` (349) or
+    `>= SIZE` (351, idempotent); `350` (the in-between byte) is **rejected** so
+    `surface_revision` can't be corrupted; `const_assert` the size; the appended 2 bytes
+    are zero-filled (`surface_revision` reads `0` = unstamped until an operator declares
+    it).
+  - `is_valid_surface_revision` accepts only `0` or `SURFACE_REVISION_FULL` (1) — an
+    operator cannot stamp a surface the SDK doesn't understand. Unit-tested
+    (`migrate.rs` tests: old-size→realloc, new-size→idempotent, `350`/`433..465`/`348`
+    rejected, surface-revision bounds).
+- **Canary referrer guard (fail-closed on the live surface).**
+  `require_canary_referrer_disabled` (`task_init_helpers.rs`) under
+  `#[cfg(feature = "mainnet-canary")]` requires `referrer.is_none() &&
+  referrer_fee_bps == 0` in `create_task` (a canary instruction), mirroring the existing
+  canary `reward_mint`/`constraint_hash` rejections. Guarantees **every canary task has
+  `referrer == default`**, so the unaudited 4th leg can never route money on the live
+  mainnet surface until Phase 9 / audit. Unit-tested under the `mainnet-canary` cfg
+  (`create_rejects_nondefault_referrer_on_canary`, revert-proven; canary unit count
+  212 → 214).
+- **Probationary-reputation / min-stake sybil invariant.** `register_agent.rs`:
+  `PROBATIONARY_REPUTATION = 3000`, and a **compile-time** `const_assert(
+  PROBATIONARY_REPUTATION < INITIAL_REPUTATION − REPUTATION_SLASH_LOSS)` — i.e. a fresh
+  agent (3000) sits strictly below what a once-slashed veteran retains (5000 − 300 =
+  4700), killing the wipe-and-re-register inversion. `min_agent_stake` default raised to
+  `MIN_REASONABLE_STAKE` (1_000_000 lamports) so a fresh identity costs slashable stake.
+  3000 ≥ the `min_reputation == 0` that essentially all real tasks use, so honest new
+  agents are **not** locked out (supply isn't starved). Revert-sensitive unit tests in
+  `register_agent.rs`. **Scope caveat:** these apply to **fresh `initialize_protocol`**
+  (devnet/localnet/new deploys); there is currently **no on-chain path to raise
+  `min_agent_stake` on the already-live mainnet config** (only `initialize_protocol`
+  sets it; `update_launch_controls` can't) — a deliberate governance follow-up. The
+  reputation fix DOES apply to mainnet on the next deploy. See P6.7 in `PLAN.md`.
+
+## 3. Adversarial reviews run (Phase 6) + resolution
+
+| Review | Surface | Result |
+|--------|---------|--------|
+| Phase-6 money-path / migration review (`d1b4b82`) | the P6.1–P6.8 money paths + the two migrations | **2 confirmed majors — both fixed** (0 fund-loss; 8 findings refuted) |
+| P6.7/P6.8/P6.4 decision pass (`1ed851a`) | sybil deterrent + neutrality/challenge-window posture | sybil deterrent BUILT (revert-sensitive tests); two posture decisions recorded as docs (1 finding reported, see below) |
+
+**The two confirmed majors (`d1b4b82`), both fixed:**
+
+1. **`migrate_task` was hard-coupled to `migrate_protocol` ordering.** Its typed
+   `Account<ProtocolConfig>` could not deserialize the **live 349B** config (the struct
+   is now 351B) until `migrate_protocol` grew it — so a tasks-first sweep would fail
+   **opaquely** (`AccountDidNotDeserialize`) on the *irreversible* mainnet migration.
+   **Fix:** `MigrateTask.protocol_config` is now `UncheckedAccount` + size-tolerant
+   hand-validation (owner, canonical `["protocol"]` PDA, zero-pad-to-`SIZE` deserialize)
+   mirroring `migrate_protocol`, so the two migrations are **order-independent**. A
+   litesvm test runs `migrate_task` against a 349B config (revert-proven:
+   `AccountDidNotDeserialize` against the old typed account). `docs/VERSIONS.md`
+   documents `migrate_protocol` as the mandatory **first** post-deploy call.
+2. **The referrer 4th leg leaked onto the live mainnet-canary surface.** `create_task`
+   (a canary instruction) accepted referrer args and would pay the 4th leg on the
+   restricted live surface — **unaudited money-routing**. **Fix:**
+   `require_canary_referrer_disabled` fails it closed on the canary build (see the
+   canary referrer guard invariant above). Canary unit 212 → 214 (revert-proven).
+
+**Reported-not-built (deliberate, tracked):** no on-chain instruction raises
+`min_agent_stake` on the *already-live* config (the stake deterrent applies to fresh
+deploys only until a governance follow-up adds the setter). Authority-scoped slash
+history (sybil option 3) and the dispute challenge-window (`docs/DISPUTE_CHALLENGE_WINDOW.md`)
+are **design-approved, build-deferred** until there is real dispute/abuse volume.
+
+## 4. Test counts (Phase 6, HEAD)
+
+- **300 Rust unit** (`cargo test --lib` — verified green this pass) + **219** under the
+  `--features mainnet-canary` build (both re-run green this pass; the `d1b4b82` commit's
+  295/214 grew with the P6.7 tests in `1ed851a`); **198 litesvm** (`cd tests-integration && node
+  --test`, incl. `referral-fee`, `rate-hire`, `agent-track-record`,
+  `surface-versioning`, `moderation-attestor`/`security-attestor`,
+  `dispute-accountable-ruling`, `dispute-vote-retired`); **~390 SDK** (`marketplace-sdk
+  0.5.0`).
+- clippy `--lib -D warnings` + `--features mainnet-canary` clean; `anchor build` +
+  `npm run artifacts:check` clean; `npm run canary:check-idl` confirms the live surface
+  is **exactly 25 instructions**; full IDL is **82**.
+
+## 5. Residual deploy gates (Phase 6, unchanged in spirit from Batch 2/3)
+
+1. **§11.5 human go/no-go** — owns the whole embeddable track incl. Phase 6.
+2. **Professional external audit** of the **full 82-instruction surface + both
+   migrations** (`migrate_protocol` realloc + the per-`Task` `migrate_task` realloc).
+   All internal adversarial findings are fixed (0 open); this is independent
+   confirmation. **[HUMAN: commissions]** — see `docs/audit/AUDITOR_HANDOFF.md`.
+3. **The migration choreography (now TWO reallocs), irreversible, multisig-gated:**
+   **binary-first → `migrate_protocol` (config 349→351B) FIRST → `migrate_task` sweep
+   over all 149 tasks (382/432→466B), `dry_run` across all 149 first → version-bump
+   LAST.** Reverse order bricks in-flight paths via the version gate; both migrations
+   are version-ungated and idempotent for this reason. `migrate_protocol` is the
+   mandatory first post-deploy call (`docs/VERSIONS.md`).
+4. **SDK + client updates** for the new required/optional accounts (referrer payee on
+   settlement; `migrate_task` no longer needs the config pre-grown). `marketplace-sdk
+   0.5.0` carries the Phase-6 surfaces; confirm the referrer-aware settlement accounts
+   are threaded by integrators.
+5. **Canary stays at 25 + referrer fail-closed.** Do not widen the canary surface or
+   lift `require_canary_referrer_disabled` without the audit + explicit intent
+   (Phase 9).
+6. **Sybil min-stake governance follow-up** — add an on-chain setter for
+   `min_agent_stake` so the stake deterrent reaches the *live* mainnet config (the
+   reputation half already applies on deploy).
