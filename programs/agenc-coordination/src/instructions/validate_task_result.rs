@@ -419,9 +419,9 @@ pub fn handler<'info>(
             &clock,
             token_accounts,
             None, // operator leg: unreachable for hired tasks — configure_task_validation
-                  // rejects any live-HireRecord task (HiredTaskValidationUnsupported), so an
-                  // operator-bearing task can never reach Quorum/ExternalAttestation. The
-                  // hire-aware settlement paths are complete_task (Auto) and accept/auto_accept (CreatorReview).
+            // rejects any live-HireRecord task (HiredTaskValidationUnsupported), so an
+            // operator-bearing task can never reach Quorum/ExternalAttestation. The
+            // hire-aware settlement paths are complete_task (Auto) and accept/auto_accept (CreatorReview).
             None, // referrer leg: same unreachability — a referred hire never reaches this path.
         )?;
 

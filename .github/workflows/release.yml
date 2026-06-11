@@ -3,6 +3,12 @@ name: Release
 # Tag-triggered npm publish. Tag formats:
 #   protocol-vX.Y.Z  -> publishes @tetsuo-ai/protocol
 #   sdk-vX.Y.Z       -> publishes @tetsuo-ai/marketplace-sdk
+#   react-vX.Y.Z     -> publishes @tetsuo-ai/marketplace-react
+#   tools-vX.Y.Z     -> publishes @tetsuo-ai/marketplace-tools
+#   mcp-vX.Y.Z       -> publishes @tetsuo-ai/marketplace-mcp
+#
+# Publish order matters for first-time installs: sdk before tools/react,
+# tools before mcp (dependency ranges point at the published versions).
 #
 # Requires the NPM_TOKEN repo secret (npm automation token with publish rights
 # to the @tetsuo-ai scope). Provisioning that secret is a human-owned step.
@@ -23,6 +29,9 @@ on:
     tags:
       - "protocol-v*"
       - "sdk-v*"
+      - "react-v*"
+      - "tools-v*"
+      - "mcp-v*"
 
 permissions:
   contents: write # create the GitHub Release
@@ -60,6 +69,21 @@ jobs:
               echo "dir=packages/sdk-ts" >> "$GITHUB_OUTPUT"
               echo "version=${TAG#sdk-v}" >> "$GITHUB_OUTPUT"
               ;;
+            react-v*)
+              echo "name=@tetsuo-ai/marketplace-react" >> "$GITHUB_OUTPUT"
+              echo "dir=packages/marketplace-react" >> "$GITHUB_OUTPUT"
+              echo "version=${TAG#react-v}" >> "$GITHUB_OUTPUT"
+              ;;
+            tools-v*)
+              echo "name=@tetsuo-ai/marketplace-tools" >> "$GITHUB_OUTPUT"
+              echo "dir=packages/marketplace-tools" >> "$GITHUB_OUTPUT"
+              echo "version=${TAG#tools-v}" >> "$GITHUB_OUTPUT"
+              ;;
+            mcp-v*)
+              echo "name=@tetsuo-ai/marketplace-mcp" >> "$GITHUB_OUTPUT"
+              echo "dir=packages/marketplace-mcp" >> "$GITHUB_OUTPUT"
+              echo "version=${TAG#mcp-v}" >> "$GITHUB_OUTPUT"
+              ;;
             *)
               echo "Unrecognized tag: $TAG" >&2; exit 1
               ;;
@@ -73,19 +97,19 @@ jobs:
             exit 1
           fi
 
-      # --- Gate: SDK (full gate incl. on-chain e2e) ---
-      - name: Setup Rust (SDK e2e)
-        if: startsWith(github.ref_name, 'sdk-v')
+      # --- Gate: SDK / MCP (on-chain e2e needs the compiled program) ---
+      - name: Setup Rust (e2e)
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v')
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Solana platform tools (SDK e2e)
-        if: startsWith(github.ref_name, 'sdk-v')
+      - name: Install Solana platform tools (e2e)
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v')
         run: |
           sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
-      - name: Build program for e2e (SDK)
-        if: startsWith(github.ref_name, 'sdk-v')
+      - name: Build program for e2e
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v')
         run: cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
 
       - name: SDK gate (drift, typecheck, tests incl. e2e, build, examples)
@@ -98,6 +122,34 @@ jobs:
           npm run build
           npm run examples:check
           node scripts/pack-smoke.mjs
+
+      # --- Gate: react ---
+      - name: React gate (typecheck, tests, build)
+        if: startsWith(github.ref_name, 'react-v')
+        working-directory: packages/marketplace-react
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      # --- Gate: tools ---
+      - name: Tools gate (typecheck, tests, build)
+        if: startsWith(github.ref_name, 'tools-v')
+        working-directory: packages/marketplace-tools
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      # --- Gate: mcp (litesvm e2e boots the real .so via the SDK testing sandbox) ---
+      - name: MCP gate (typecheck, tests incl. e2e, build)
+        if: startsWith(github.ref_name, 'mcp-v')
+        working-directory: packages/marketplace-mcp
+        run: |
+          node ../sdk-ts/scripts/sync-testing-so.mjs
+          npm run typecheck
+          npm test
+          npm run build
 
       # --- Gate: protocol ---
       - name: Protocol gate (artifacts check, build, typecheck, pack smoke)

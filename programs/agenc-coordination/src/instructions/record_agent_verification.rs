@@ -202,6 +202,9 @@ mod tests {
         let auth = Pubkey::new_unique();
         let stranger = Pubkey::new_unique();
         let err = require_moderation_authorized(stranger, auth, false).unwrap_err();
-        assert_eq!(err, CoordinationError::UnauthorizedModerationAttestor.into());
+        assert_eq!(
+            err,
+            CoordinationError::UnauthorizedModerationAttestor.into()
+        );
     }
 }

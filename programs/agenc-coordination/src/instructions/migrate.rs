@@ -99,7 +99,11 @@ pub fn handler(ctx: Context<MigrateProtocol>, target_version: u8) -> Result<()> 
         CoordinationError::InvalidAccountOwner
     );
     let (expected_pda, _bump) = Pubkey::find_program_address(&[b"protocol"], &crate::ID);
-    require_keys_eq!(config_info.key(), expected_pda, CoordinationError::InvalidPda);
+    require_keys_eq!(
+        config_info.key(),
+        expected_pda,
+        CoordinationError::InvalidPda
+    );
 
     // Classify the account by size and validate it is a real ProtocolConfig BEFORE any
     // mutation. The zero-padded deserialize works for both the old (349B) and new
@@ -634,7 +638,9 @@ mod tests {
 
     #[test]
     fn test_surface_revision_full_is_valid() {
-        assert!(is_valid_surface_revision(ProtocolConfig::SURFACE_REVISION_FULL));
+        assert!(is_valid_surface_revision(
+            ProtocolConfig::SURFACE_REVISION_FULL
+        ));
         assert_eq!(ProtocolConfig::SURFACE_REVISION_FULL, 1);
     }
 

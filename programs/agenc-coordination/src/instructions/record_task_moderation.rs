@@ -207,7 +207,10 @@ mod tests {
         // also the revoked-attestor case: once revoked, the PDA is closed, the account
         // fails to load, so `attestor_supplied` is false here.
         let err = require_moderation_authorized(stranger, auth, false).unwrap_err();
-        assert_eq!(err, CoordinationError::UnauthorizedModerationAttestor.into());
+        assert_eq!(
+            err,
+            CoordinationError::UnauthorizedModerationAttestor.into()
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/marketplace-react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless React hooks + themable components for the AgenC marketplace — provider, indexer-first read transport, and the P6.2-gated referrer config",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -86,7 +86,7 @@
   "peerDependencies": {
     "@solana/kit": "^6.9.0",
     "@solana/program-client-core": "^6.4.0",
-    "@tetsuo-ai/marketplace-sdk": "^0.4.0",
+    "@tetsuo-ai/marketplace-sdk": "^0.4.0 || ^0.5.0 || ^0.6.0",
     "react": ">=18"
   },
   "dependencies": {

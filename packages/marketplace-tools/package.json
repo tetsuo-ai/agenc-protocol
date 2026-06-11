@@ -34,7 +34,7 @@
     "docs:api": "typedoc"
   },
   "dependencies": {
-    "@tetsuo-ai/marketplace-sdk": "*"
+    "@tetsuo-ai/marketplace-sdk": "^0.6.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"

@@ -158,13 +158,8 @@ pub fn handler(
     task.constraint_hash = MANUAL_VALIDATION_SENTINEL;
 
     // P6.2 demand-side referral leg (no operator leg on a direct humanless create).
-    let (referrer_key, referrer_bps) = resolve_referrer_snapshot(
-        referrer,
-        referrer_fee_bps,
-        protocol_fee_bps,
-        0,
-        creator_key,
-    )?;
+    let (referrer_key, referrer_bps) =
+        resolve_referrer_snapshot(referrer, referrer_fee_bps, protocol_fee_bps, 0, creator_key)?;
     task.referrer = referrer_key;
     task.referrer_fee_bps = referrer_bps;
     let task_key = task.key();

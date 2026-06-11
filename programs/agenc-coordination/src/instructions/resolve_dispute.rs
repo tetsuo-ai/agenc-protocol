@@ -2,6 +2,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{dispute_outcome, DisputeResolved};
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
@@ -13,7 +14,6 @@ use crate::instructions::dispute_helpers::{
     resolve_task_operator_terms, validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::slash_helpers::calculate_slash_amount;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
@@ -1222,8 +1222,16 @@ mod tests {
     // `ruling_vote_bits` and these equalities go red.
     #[test]
     fn ruling_vote_bits_encode_approve_and_reject() {
-        assert_eq!(ruling_vote_bits(true), (1, 0), "approve -> (votes_for=1, votes_against=0)");
-        assert_eq!(ruling_vote_bits(false), (0, 1), "reject -> (votes_for=0, votes_against=1)");
+        assert_eq!(
+            ruling_vote_bits(true),
+            (1, 0),
+            "approve -> (votes_for=1, votes_against=0)"
+        );
+        assert_eq!(
+            ruling_vote_bits(false),
+            (0, 1),
+            "reject -> (votes_for=0, votes_against=1)"
+        );
     }
 
     // The ruling bits must reproduce the EXACT slash decision the finalizers compute:
@@ -1238,12 +1246,18 @@ mod tests {
         let (f, a) = ruling_vote_bits(true);
         let (_total, approval_pct) = calculate_approval_percentage(f, a).unwrap();
         assert_eq!(approval_pct, 100, "approve ruling reads as 100% approval");
-        assert!(approval_pct >= DEFAULT_THRESHOLD, "approve ruling clears the threshold");
+        assert!(
+            approval_pct >= DEFAULT_THRESHOLD,
+            "approve ruling clears the threshold"
+        );
 
         let (f, a) = ruling_vote_bits(false);
         let (_total, approval_pct) = calculate_approval_percentage(f, a).unwrap();
         assert_eq!(approval_pct, 0, "reject ruling reads as 0% approval");
-        assert!(approval_pct < DEFAULT_THRESHOLD, "reject ruling fails the threshold");
+        assert!(
+            approval_pct < DEFAULT_THRESHOLD,
+            "reject ruling fails the threshold"
+        );
     }
 
     // Negative pin: a (0, 0) tally — the bug the ruling-bit fix avoids — must error

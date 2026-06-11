@@ -203,7 +203,10 @@ mod tests {
     #[test]
     fn accepts_scores_one_through_five() {
         for score in 1u8..=5 {
-            assert!(validate_rating_score(score).is_ok(), "score {score} rejected");
+            assert!(
+                validate_rating_score(score).is_ok(),
+                "score {score} rejected"
+            );
         }
     }
 

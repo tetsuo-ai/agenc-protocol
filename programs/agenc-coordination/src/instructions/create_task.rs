@@ -458,14 +458,14 @@ mod create_task_canary_gate_tests {
         // would FALL THROUGH to validate_description_is_content_hash and return Ok — the
         // referrer leg would silently ride onto the live surface.
         let referrer = Some(Pubkey::new_unique());
-        let err = run_canary_create_preconditions_full(&hash_description(), referrer, 250)
-            .unwrap_err();
+        let err =
+            run_canary_create_preconditions_full(&hash_description(), referrer, 250).unwrap_err();
         assert_eq!(err, CoordinationError::InvalidInput.into());
 
         // Even a referrer with a ZERO fee is rejected — the arg-layout itself must not
         // reach the canary surface.
-        let err_zero_fee = run_canary_create_preconditions_full(&hash_description(), referrer, 0)
-            .unwrap_err();
+        let err_zero_fee =
+            run_canary_create_preconditions_full(&hash_description(), referrer, 0).unwrap_err();
         assert_eq!(err_zero_fee, CoordinationError::InvalidInput.into());
 
         // A bare non-zero fee with no referrer pubkey is also rejected.

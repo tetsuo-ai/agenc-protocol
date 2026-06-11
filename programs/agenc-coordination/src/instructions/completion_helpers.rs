@@ -1053,9 +1053,7 @@ mod tests {
         // the fee can't be silently dropped.
         let creator = Pubkey::new_unique();
         assert!(resolve_referrer_snapshot(None, 500, 100, 0, creator).is_err());
-        assert!(
-            resolve_referrer_snapshot(Some(Pubkey::default()), 500, 100, 0, creator).is_err()
-        );
+        assert!(resolve_referrer_snapshot(Some(Pubkey::default()), 500, 100, 0, creator).is_err());
     }
 
     #[test]

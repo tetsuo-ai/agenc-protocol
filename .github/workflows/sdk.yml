@@ -51,9 +51,6 @@ jobs:
       - name: Examples compile
         run: npm run examples:check
 
-      - name: Pack smoke (tarball install, ESM + CJS entry points)
-        run: node scripts/pack-smoke.mjs
-
   # On-chain e2e: builds the program .so with cargo-build-sbf (no anchor CLI;
   # the committed IDL is the interface source of truth) and runs the litesvm suite.
   sdk-e2e:
@@ -97,4 +94,10 @@ jobs:
 
       - name: On-chain e2e tests (litesvm)
         run: npx vitest run tests-e2e
+        working-directory: packages/sdk-ts
+
+      # Runs here (not sdk-checks): the tarball ships testing-assets/, which
+      # needs the freshly built + synced .so this job produces.
+      - name: Pack smoke (tarball install, ESM + CJS entry points)
+        run: node scripts/pack-smoke.mjs
         working-directory: packages/sdk-ts

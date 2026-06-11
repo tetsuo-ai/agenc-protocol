@@ -3,6 +3,8 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskCancelled;
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
     close_bid_book_without_accepted_bid, settle_accepted_bid, AcceptedBidBondDisposition,
     AcceptedBidBookDisposition,
@@ -15,14 +17,12 @@ use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
 };
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::state::AgentStats;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::state::CompletionBond;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::TaskType;
 use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus};
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::AgentStats;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 #[cfg(feature = "spl-token-rewards")]

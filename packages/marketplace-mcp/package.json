@@ -39,8 +39,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@tetsuo-ai/marketplace-sdk": "*",
-    "@tetsuo-ai/marketplace-tools": "*"
+    "@tetsuo-ai/marketplace-sdk": "^0.6.0",
+    "@tetsuo-ai/marketplace-tools": "^0.1.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"
