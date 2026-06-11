@@ -70,6 +70,26 @@ pub fn validate_description_is_content_hash(description: &[u8; 64]) -> Result<()
     Ok(())
 }
 
+/// Fail-closed guard for the P6.2 referral fee leg on the restricted mainnet-canary
+/// surface. The referrer 4th settlement leg is UNAUDITED money-routing and must NOT be
+/// exposed on the live mainnet surface until Phase 9 / audit. Rejecting a non-default
+/// referrer here (mirroring the canary reward_mint / constraint_hash rejections)
+/// guarantees every canary task has `referrer == default` and `referrer_fee_bps == 0`,
+/// so the shared settlement always SKIPS the referrer leg on the canary surface.
+///
+/// Shared so the unit test exercises the EXACT predicate the handler enforces (the test
+/// goes red if this guard is removed or weakened).
+pub fn require_canary_referrer_disabled(
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
+) -> Result<()> {
+    require!(
+        referrer.is_none() && referrer_fee_bps == 0,
+        CoordinationError::InvalidInput
+    );
+    Ok(())
+}
+
 /// Validates Marketplace V2 task restrictions that depend on reward denomination.
 pub fn validate_bid_task_mode(
     task_type: u8,

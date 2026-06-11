@@ -28,7 +28,7 @@ import {
   getInitializeZkConfigInstructionAsync,
   getUpdateZkImageIdInstructionAsync,
   // migrations
-  getMigrateTaskInstructionAsync,
+  getMigrateTaskInstruction,
   getMigrateProtocolInstruction,
   // PDA helpers (re-exported for convenience)
   findProposalPda,
@@ -52,7 +52,7 @@ import {
   type InitializeProtocolAsyncInput,
   type InitializeZkConfigAsyncInput,
   type UpdateZkImageIdAsyncInput,
-  type MigrateTaskAsyncInput,
+  type MigrateTaskInput,
   type MigrateProtocolInput,
 } from "../generated/index.js";
 
@@ -191,11 +191,16 @@ export async function updateZkImageId(input: UpdateZkImageIdAsyncInput) {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a migrate_task instruction. protocolConfig defaults to its PDA. `task`
- * is the raw (pre-migration) task account; `payer` funds the rent top-up.
+ * Build a migrate_task instruction. `protocolConfig` is the raw (pre-migration)
+ * `ProtocolConfig` account — supply it explicitly via {@link findProtocolConfigPda}
+ * (a typed `Account<ProtocolConfig>` would reject the 349B pre-`migrate_protocol`
+ * config before the handler runs, so the account is an `UncheckedAccount` and the
+ * generated client no longer auto-resolves its PDA). `task` is the raw
+ * (pre-migration) task account; `payer` funds the rent top-up. This makes
+ * `migrate_task` order-independent vs `migrate_protocol`.
  */
-export async function migrateTask(input: MigrateTaskAsyncInput) {
-  return getMigrateTaskInstructionAsync(input);
+export function migrateTask(input: MigrateTaskInput) {
+  return getMigrateTaskInstruction(input);
 }
 
 /**

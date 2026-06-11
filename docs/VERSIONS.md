@@ -86,6 +86,23 @@ program deploy/upgrade:
 3. Run the **149-task + single-config migration choreography** (binary-first → migrate
    all live accounts → version/surface stamp last). `migrate_protocol` reallocs the
    config; `migrate_task` reallocs the 149 tasks. Both are idempotent and multisig-gated.
+
+   **Precondition — `migrate_protocol` MUST be the FIRST post-deploy call.** Because
+   `ProtocolConfig` grew (349B → 351B) when `surface_revision` was appended, after the new
+   binary is deployed but BEFORE `migrate_protocol` runs, the single live config account is
+   still 349 bytes. Every instruction that takes a **typed** `Account<ProtocolConfig>` then
+   fails at Anchor account resolution with `AccountDidNotDeserialize` (borsh: "Unexpected
+   length of input") — it cannot deserialize a 349B buffer into the now-351B struct. So the
+   normal surface is effectively frozen until the config is grown. Run `migrate_protocol`
+   (the realloc-only path, `target_version == current_version == 1`) first to restore normal
+   operation, then sweep the tasks.
+
+   `migrate_protocol` and `migrate_task` are themselves **order-independent** between each
+   other: both take the config as a RAW `UncheckedAccount` and hand-decode it
+   size-tolerantly, so `migrate_task` succeeds against BOTH the 349B (pre-`migrate_protocol`)
+   and 351B (post) config. The natural "migrate the 149 tasks, then the config" order is
+   therefore safe. The first-call constraint above is about restoring the rest of the live
+   surface (every typed-`Account<ProtocolConfig>` instruction), not about the migration pair.
 4. **Stamp the surface**: `update_launch_controls(..., surface_revision)` —
    `SURFACE_REVISION_FULL` only after the full surface is verified live; otherwise leave
    `0`.

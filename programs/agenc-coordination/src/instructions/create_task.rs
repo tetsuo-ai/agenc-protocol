@@ -145,6 +145,12 @@ pub fn handler(
         require!(max_workers == 1, CoordinationError::InvalidMaxWorkers);
         require!(reward_mint.is_none(), CoordinationError::InvalidTokenMint);
         require!(constraint_hash.is_none(), CoordinationError::InvalidInput);
+        // P6.2 referral fee leg is UNAUDITED money-routing — fail it CLOSED on the
+        // conservative live mainnet (canary) surface until Phase 9 / audit. Mirrors the
+        // reward_mint / constraint_hash rejections above. This guarantees every canary
+        // task has `referrer == default` and `referrer_fee_bps == 0`, so the shared
+        // settlement (completion_helpers) always SKIPS the referrer leg on this surface.
+        super::task_init_helpers::require_canary_referrer_disabled(referrer, referrer_fee_bps)?;
     }
     // Validate reward is not zero (#540) - not in shared validator since dependent tasks allow zero
     require!(reward_amount > 0, CoordinationError::InvalidReward);
@@ -377,17 +383,34 @@ mod create_task_canary_gate_tests {
     //! prose description is rejected and a hash-shaped one is accepted on the same
     //! path create_task takes on mainnet.
     use super::super::task_init_helpers::{
-        validate_bid_task_mode, validate_description_is_content_hash, validate_task_params,
+        require_canary_referrer_disabled, validate_bid_task_mode,
+        validate_description_is_content_hash, validate_task_params,
     };
     use crate::errors::CoordinationError;
     use crate::state::TaskType;
 
+    use anchor_lang::prelude::Pubkey;
+
     fn run_canary_create_preconditions(description: &[u8; 64]) -> anchor_lang::Result<()> {
+        run_canary_create_preconditions_full(description, None, 0)
+    }
+
+    /// Replicates the FULL mainnet-canary precondition block from `create_task::handler`,
+    /// including the P6.2 referrer fail-closed gate, so the unit test exercises the exact
+    /// `require!(referrer.is_none() && referrer_fee_bps == 0, ...)` the handler runs
+    /// before any account mutation.
+    fn run_canary_create_preconditions_full(
+        description: &[u8; 64],
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
+    ) -> anchor_lang::Result<()> {
         let task_id = [1u8; 32];
         let required_capabilities = 1u64;
         let max_workers = 1u8;
         let task_type = TaskType::Exclusive as u8;
         let min_reputation = 0u16;
+        let reward_mint: Option<Pubkey> = None;
+        let constraint_hash: Option<[u8; 32]> = None;
         validate_task_params(
             &task_id,
             description,
@@ -396,15 +419,59 @@ mod create_task_canary_gate_tests {
             task_type,
             min_reputation,
         )?;
-        validate_bid_task_mode(task_type, max_workers, None)?;
-        // mainnet-canary preconditions (mirrors create_task::handler)
+        validate_bid_task_mode(task_type, max_workers, reward_mint)?;
+        // mainnet-canary preconditions (mirrors create_task::handler EXACTLY, in order)
         anchor_lang::require!(
             task_type == TaskType::Exclusive as u8,
             CoordinationError::InvalidTaskType
         );
         anchor_lang::require!(max_workers == 1, CoordinationError::InvalidMaxWorkers);
+        anchor_lang::require!(reward_mint.is_none(), CoordinationError::InvalidTokenMint);
+        anchor_lang::require!(constraint_hash.is_none(), CoordinationError::InvalidInput);
+        // P6.2 referral leg fail-closed on the canary surface — calls the SAME source
+        // guard the handler runs, so reverting that guard turns these tests red.
+        require_canary_referrer_disabled(referrer, referrer_fee_bps)?;
         validate_description_is_content_hash(description)?;
         Ok(())
+    }
+
+    fn hash_description() -> [u8; 64] {
+        let mut d = [0u8; 64];
+        d[..32].copy_from_slice(&[9u8; 32]); // 32-byte digest, zero tail
+        d
+    }
+
+    #[test]
+    fn create_accepts_default_referrer_on_canary() {
+        // Sanity: a hash-shaped task with NO referrer leg passes the canary gate. This is
+        // the only referral shape the live mainnet surface allows.
+        assert!(run_canary_create_preconditions_full(&hash_description(), None, 0).is_ok());
+    }
+
+    #[test]
+    fn create_rejects_nondefault_referrer_on_canary() {
+        // The P6.2 referrer fee leg is UNAUDITED money-routing and must fail CLOSED on
+        // the live mainnet (canary) surface. A non-default referrer (with or without a
+        // fee) is rejected with InvalidInput before any state change.
+        //
+        // REVERT-SENSITIVE: against the pre-fix code (no canary referrer gate), this
+        // would FALL THROUGH to validate_description_is_content_hash and return Ok — the
+        // referrer leg would silently ride onto the live surface.
+        let referrer = Some(Pubkey::new_unique());
+        let err = run_canary_create_preconditions_full(&hash_description(), referrer, 250)
+            .unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidInput.into());
+
+        // Even a referrer with a ZERO fee is rejected — the arg-layout itself must not
+        // reach the canary surface.
+        let err_zero_fee = run_canary_create_preconditions_full(&hash_description(), referrer, 0)
+            .unwrap_err();
+        assert_eq!(err_zero_fee, CoordinationError::InvalidInput.into());
+
+        // A bare non-zero fee with no referrer pubkey is also rejected.
+        let err_fee_only =
+            run_canary_create_preconditions_full(&hash_description(), None, 100).unwrap_err();
+        assert_eq!(err_fee_only, CoordinationError::InvalidInput.into());
     }
 
     #[test]

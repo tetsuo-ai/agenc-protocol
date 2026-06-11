@@ -539,6 +539,65 @@ test("migrate_task: reallocs a legacy 382B Task to 466B (multisig-gated, dry-run
   assert.equal(w.svm.getAccount(task).data.length, 466, "still 466 after idempotent re-run");
 });
 
+test("migrate_task: succeeds against a PRE-migration 349B ProtocolConfig (order-independent vs migrate_protocol)", async () => {
+  // Finding 1 regression: migrate_task must NOT be hard-coupled to migrate_protocol
+  // having already grown the ProtocolConfig (349B -> 351B). The natural sweep order is
+  // "migrate the 149 tasks, THEN the config"; that must work. With the OLD typed
+  // `Account<ProtocolConfig>` on MigrateTask, account resolution borsh-deserializes the
+  // 349B live config into the now-351B struct and fails with AccountDidNotDeserialize —
+  // so EVERY migrate_task bricked until the config was grown first. The fix hand-decodes
+  // a RAW (UncheckedAccount) config size-tolerantly, so the two migrations are
+  // order-independent.
+  const w = await freshWorld({ price: 2_000_000 });
+  const [protocolPda] = pda([enc("protocol")]);
+
+  // A new hire inits the Task at the P6.2 size (466B); truncate it to the 382B legacy
+  // pre-Batch-2 layout so migrate_task has real work to do.
+  const { ix, task } = await hireIx(w, {});
+  expectOk(send(w.svm, ix, [w.buyer]), "hire");
+  assert.equal(w.svm.getAccount(task).data.length, 466, "new task at P6.2 size");
+  const legacyTask = Buffer.from(w.svm.getAccount(task).data).subarray(0, 382);
+  const rentTask382 = Number(w.svm.minimumBalanceForRentExemption(382n));
+  const rentTask466 = Number(w.svm.minimumBalanceForRentExemption(466n));
+  w.svm.setAccount(task, { lamports: rentTask382, data: legacyTask, owner: PID, executable: false, rentEpoch: 0 });
+
+  // Arm the 2-of-2 multisig on the FULL-size (351B) config FIRST (setMultisig
+  // decodes/re-encodes via the BorshCoder, which needs the surface_revision tail), THEN
+  // truncate the config down to the pre-migration 349B layout (drop the 2-byte
+  // surface_revision) and fund it at only the 349-byte rent.
+  const owner2 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  assert.equal(w.svm.getAccount(protocolPda).data.length, 351, "config is the migrated 351B layout before truncation");
+  const legacyConfig = Buffer.from(w.svm.getAccount(protocolPda).data).subarray(0, 349);
+  const rentCfg349 = Number(w.svm.minimumBalanceForRentExemption(349n));
+  w.svm.setAccount(protocolPda, { lamports: rentCfg349, data: legacyConfig, owner: PID, executable: false, rentEpoch: 0 });
+  assert.equal(w.svm.getAccount(protocolPda).data.length, 349, "config truncated to the PRE-migration 349B layout");
+
+  const signerMetas = [
+    { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner2.publicKey, isSigner: true, isWritable: false },
+  ];
+  const migrateIx = await makeProgram(w.admin).methods
+    .migrateTask(false)
+    .accounts({ protocolConfig: protocolPda, task, payer: w.admin.publicKey, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
+    .remainingAccounts(signerMetas)
+    .instruction();
+
+  // The migrate_task against the 349B (pre-migrate_protocol) config must SUCCEED and
+  // realloc the task to 466B. Against the OLD typed-Account code this fails at account
+  // resolution with AccountDidNotDeserialize ("Unexpected length of input").
+  expectOk(send(w.svm, migrateIx, [w.admin, owner2]), "migrate_task vs 349B config");
+  const migrated = w.svm.getAccount(task);
+  assert.equal(migrated.data.length, 466, "task reallocated to the P6.2 size against the OLD config");
+  assert.ok(Number(migrated.lamports) >= rentTask466, `task rent topped up (got ${migrated.lamports})`);
+  // The config itself is untouched by migrate_task — it stays at the pre-migration size.
+  assert.equal(w.svm.getAccount(protocolPda).data.length, 349, "config left at 349B (migrate_task does not grow the config)");
+  const t = decode(w.svm, "Task", task);
+  assert.equal(t.referrer.toBase58(), PublicKey.default.toBase58(), "referrer zero-filled by migration");
+  assert.equal(t.referrer_fee_bps, 0, "referrer_fee_bps zero-filled by migration");
+});
+
 test("completion bond: creator + worker each post a 25% bond into distinct PDAs (dup + self-deal rejected)", async () => {
   const w = await freshWorld({ price: 2_000_000 });
   const { ix, task } = await hireIx(w, {});

@@ -196,7 +196,7 @@ import {
   getInitializeZkConfigInstructionAsync,
   getInitiateDisputeInstructionAsync,
   getMigrateProtocolInstruction,
-  getMigrateTaskInstructionAsync,
+  getMigrateTaskInstruction,
   getPostCompletionBondInstructionAsync,
   getPostToFeedInstructionAsync,
   getPurchaseSkillInstructionAsync,
@@ -360,7 +360,7 @@ import {
   type InitializeZkConfigAsyncInput,
   type InitiateDisputeAsyncInput,
   type MigrateProtocolInput,
-  type MigrateTaskAsyncInput,
+  type MigrateTaskInput,
   type ParsedAcceptBidInstruction,
   type ParsedAcceptTaskResultInstruction,
   type ParsedApplyDisputeSlashInstruction,
@@ -3119,9 +3119,8 @@ export type AgencCoordinationPluginInstructions = {
   ) => ReturnType<typeof getMigrateProtocolInstruction> &
     SelfPlanAndSendFunctions;
   migrateTask: (
-    input: MakeOptional<MigrateTaskAsyncInput, "payer">,
-  ) => ReturnType<typeof getMigrateTaskInstructionAsync> &
-    SelfPlanAndSendFunctions;
+    input: MakeOptional<MigrateTaskInput, "payer">,
+  ) => ReturnType<typeof getMigrateTaskInstruction> & SelfPlanAndSendFunctions;
   postCompletionBond: (
     input: PostCompletionBondAsyncInput,
   ) => ReturnType<typeof getPostCompletionBondInstructionAsync> &
@@ -3673,7 +3672,7 @@ export function agencCoordinationProgram() {
           migrateTask: (input) =>
             addSelfPlanAndSendFunctions(
               client,
-              getMigrateTaskInstructionAsync({
+              getMigrateTaskInstruction({
                 ...input,
                 payer: input.payer ?? client.payer,
               }),

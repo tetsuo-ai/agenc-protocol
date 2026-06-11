@@ -249,12 +249,14 @@ pub fn handler(ctx: Context<MigrateProtocol>, target_version: u8) -> Result<()> 
 /// is a no-op, so the sweep is safely re-runnable.
 #[derive(Accounts)]
 pub struct MigrateTask<'info> {
-    #[account(
-        mut,
-        seeds = [b"protocol"],
-        bump = protocol_config.bump
-    )]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    /// CHECK: validated in the handler (owner == program, the canonical `["protocol"]`
+    /// PDA, and a real ProtocolConfig via a size-tolerant try_deserialize). MUST be raw
+    /// — a typed `Account<ProtocolConfig>` would reject the 349B PRE-`migrate_protocol`
+    /// config (the struct is now 351B) before the handler runs, hard-coupling the task
+    /// sweep to `migrate_protocol` having already grown the config. The size-tolerant
+    /// hand-decode in the handler reads the multisig gate from BOTH the 349B and 351B
+    /// layouts, so the two migrations are order-independent. Mirrors `MigrateProtocol`.
+    pub protocol_config: UncheckedAccount<'info>,
 
     /// CHECK: validated in the handler (owner == program, size, and a real Task via
     /// try_deserialize). MUST be raw — a typed `Account<Task>` would reject the 382B
@@ -301,15 +303,52 @@ pub(crate) fn classify_task_migration(len: usize) -> Result<TaskMigrationAction>
 /// preconditions + asserts the post-image would deserialize, WITHOUT mutating —
 /// run it across all 149 tasks first to prove the sweep is safe.
 pub fn migrate_task_handler(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
-    let config = &ctx.accounts.protocol_config;
+    // Hand-validate the RAW protocol_config exactly like `migrate_protocol`, so the task
+    // sweep does NOT require `migrate_protocol` to have grown the config first: a typed
+    // `Account<ProtocolConfig>` cannot deserialize the 349B pre-migration config (the
+    // struct is now 351B), which would brick every `migrate_task` until the config grew.
+    //   (1) owner == program; (2) canonical `["protocol"]` PDA;
+    //   (3) size-tolerant deserialize (zero-pad to SIZE) so it decodes BOTH the 349B
+    //       pre-migration and 351B post-migration layouts — the multisig owners/threshold
+    //       and bump live in the unchanged legacy prefix, so the gate reads the same way
+    //       either way.
+    let config_info = ctx.accounts.protocol_config.to_account_info();
+    require!(
+        config_info.owner == &crate::ID,
+        CoordinationError::InvalidAccountOwner
+    );
+    let (expected_config_pda, _config_bump) =
+        Pubkey::find_program_address(&[b"protocol"], &crate::ID);
+    require_keys_eq!(
+        config_info.key(),
+        expected_config_pda,
+        CoordinationError::InvalidPda
+    );
+    let config = {
+        let data = config_info.try_borrow_data()?;
+        // The config is EITHER the 349B pre-migration layout OR >= the 351B migrated
+        // layout. Zero-pad up to SIZE so the new `surface_revision` tail reads as 0 on
+        // the old layout; reject anything smaller than the legacy size as corrupt.
+        require!(
+            data.len() >= ProtocolConfig::OLD_CONFIG_SIZE,
+            CoordinationError::ConfigNotMigratable
+        );
+        let mut buf = data.to_vec();
+        if buf.len() < ProtocolConfig::SIZE {
+            buf.resize(ProtocolConfig::SIZE, 0);
+        }
+        ProtocolConfig::try_deserialize(&mut &buf[..])
+            .map_err(|_| CoordinationError::CorruptedData)?
+    };
 
-    // Gate: multisig/upgrade-authority approval (same gate as migrate_protocol).
+    // Gate FIRST (before any task state change): multisig/upgrade-authority approval
+    // (same gate, same order as migrate_protocol).
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::MultisigNotEnoughSigners
     );
     let unique_signers = unique_account_infos(ctx.remaining_accounts);
-    require_multisig_threshold(config, &unique_signers)?;
+    require_multisig_threshold(&config, &unique_signers)?;
 
     let task_info = ctx.accounts.task.to_account_info();
     require!(

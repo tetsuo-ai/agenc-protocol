@@ -7436,24 +7436,14 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "protocolConfig",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "PDA, and a real ProtocolConfig via a size-tolerant try_deserialize). MUST be raw",
+            "— a typed `Account<ProtocolConfig>` would reject the 349B PRE-`migrate_protocol`",
+            "config (the struct is now 351B) before the handler runs, hard-coupling the task",
+            "sweep to `migrate_protocol` having already grown the config. The size-tolerant",
+            "hand-decode in the handler reads the multisig gate from BOTH the 349B and 351B",
+            "layouts, so the two migrations are order-independent. Mirrors `MigrateProtocol`."
+          ]
         },
         {
           "name": "task",
