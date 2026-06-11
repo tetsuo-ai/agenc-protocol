@@ -113,7 +113,11 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     // Extend both bounds to at least now + the review window so the worker always
     // has time to resubmit before the task can become no-show-cancellable. Read the
     // window before borrowing claim/task mutably below.
-    let resubmit_window = ctx.accounts.task_validation_config.review_window_secs.max(0);
+    let resubmit_window = ctx
+        .accounts
+        .task_validation_config
+        .review_window_secs
+        .max(0);
     let min_resubmit_deadline = clock
         .unix_timestamp
         .checked_add(resubmit_window)
