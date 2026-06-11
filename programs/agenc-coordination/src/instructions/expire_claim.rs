@@ -321,29 +321,80 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
     // This is the case the dedicated-PDA design exists for — the claim closes to the
     // worker (auto-refunding their rent), but the bond lives in its own PDA so a
     // no-show worker does NOT get their bond back. Skip BidExclusive (it already
-    // slashes a bid bond above — no double-charge). Optional: only fires when the
-    // bond accounts are supplied; an un-bonded task is unaffected.
+    // slashes a bid bond above — no double-charge).
+    //
+    // SECURITY (#71): the forfeit is NON-SKIPPABLE. The bond accounts cannot be made
+    // required+seeds-fixed in the struct (`ExpireClaim` is shared with the canary
+    // `expire_claim`, whose frozen account list carries them as OPTIONAL — see the
+    // `agent_stats` cfg comment), so the "cannot be omitted" guarantee is enforced
+    // HERE in the full-surface handler instead: on a pure no-show, REQUIRE the worker
+    // bond account be present and equal to the canonical ["completion_bond", task,
+    // worker_authority] PDA, and the creator recipient be present and == task.creator.
+    // Without this, a worker self-expiring inside the grace window could OMIT the bond
+    // accounts to dodge the forfeit, then re-claim the reopened task (the bond PDA is
+    // keyed to [task, wallet], NOT the claim/epoch, so it survives) and reclaim the bond
+    // on completion — denying the creator the no-show penalty (exploit chain #71).
+    //
+    // The check is STATELESS — it pins the canonical PDA via find_program_address, no
+    // new Task/claim flag. settle_completion_bond is a safe no-op when that canonical
+    // PDA holds no live bond, so an un-bonded no-show still expires cleanly (the required
+    // account is the empty system-owned PDA → no-op), and a DIFFERENT worker expiring a
+    // reopened task only ever pins THEIR OWN bond PDA (rent_recipient == their authority).
+    //
+    // SCOPED TO EXCLUSIVE: completion bonds can ONLY be posted on Exclusive tasks
+    // (post_completion_bond requires task_type == Exclusive), so a Collaborative or
+    // Competitive no-show can never have a worker bond. Gating on `== Exclusive` (NOT
+    // merely `!= BidExclusive`) is load-bearing: the hard `require!(bond present)` below
+    // would otherwise MissingCompletionBondAccount-FREEZE every Collaborative/Competitive
+    // no-show, permanently stranding the slot. Do not re-widen this guard unless bonds
+    // are also permitted on those task types.
     #[cfg(not(feature = "mainnet-canary"))]
-    if is_pure_noshow && task.task_type != TaskType::BidExclusive {
-        if let (Some(bond), Some(creator)) = (
-            ctx.accounts.worker_completion_bond.as_ref(),
-            ctx.accounts.bond_creator.as_ref(),
-        ) {
-            require!(
-                creator.key() == task.creator,
-                CoordinationError::InvalidCreator
-            );
-            let creator_info = creator.to_account_info();
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &ctx.accounts.rent_recipient.to_account_info(),
-                &task.key(),
-                CompletionBond::ROLE_WORKER,
-                BondDisposition::Forfeit {
-                    recipient: &creator_info,
-                },
-            )?;
-        }
+    if is_pure_noshow && task.task_type == TaskType::Exclusive {
+        // rent_recipient is constrained == worker.authority by the struct, so it is the
+        // worker bond's `party` and the seed component of the canonical bond PDA.
+        let worker_wallet_info = ctx.accounts.rent_recipient.to_account_info();
+        let (expected_worker_bond, _) = Pubkey::find_program_address(
+            &[
+                b"completion_bond",
+                task.key().as_ref(),
+                worker_wallet_info.key().as_ref(),
+            ],
+            &crate::ID,
+        );
+
+        let bond = ctx
+            .accounts
+            .worker_completion_bond
+            .as_ref()
+            .ok_or(CoordinationError::MissingCompletionBondAccount)?;
+        require!(
+            bond.key() == expected_worker_bond,
+            CoordinationError::MissingCompletionBondAccount
+        );
+
+        let creator = ctx
+            .accounts
+            .bond_creator
+            .as_ref()
+            .ok_or(CoordinationError::MissingCompletionBondAccount)?;
+        require!(
+            creator.key() == task.creator,
+            CoordinationError::InvalidCreator
+        );
+
+        let creator_info = creator.to_account_info();
+        // No-op when the canonical PDA holds no live bond (un-bonded task); forfeits the
+        // principal to the creator and tombstones the PDA when a live worker bond exists,
+        // so it can never be re-claimed after the task reopens (closes exploit #71).
+        settle_completion_bond(
+            &bond.to_account_info(),
+            &worker_wallet_info,
+            &task.key(),
+            CompletionBond::ROLE_WORKER,
+            BondDisposition::Forfeit {
+                recipient: &creator_info,
+            },
+        )?;
     }
 
     // Decrement worker active tasks

@@ -677,6 +677,168 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
   assert.equal(buyerDelta, 1_000_000, `creator received the forfeited bond principal (got ${buyerDelta})`);
 });
 
+test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omitting the bond accounts on self-expire", async () => {
+  // Exploit chain #71: within the 60s grace window the worker is an allowed expire caller.
+  // Pre-fix, the forfeit only fired `if let (Some(bond), Some(creator))`, so the worker
+  // could self-expire OMITTING both accounts — the task reopened to Open, the bond PDA
+  // (keyed to [task, wallet], NOT the claim) survived intact, and the worker re-claimed +
+  // completed + reclaimed the bond, dodging the no-show penalty. The fix makes the bond
+  // account REQUIRED + canonical-PDA-pinned on the pure-no-show path. Revert-sensitive:
+  // restore the old `if let (Some, Some)` gate and the omitting-expire below succeeds.
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress
+
+  const [workerBond] = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .postCompletionBond(1)
+    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "worker posts bond");
+
+  // warp PAST claim expiry but WITHIN the 60s grace window: only the worker authority may
+  // expire here, which is exactly the window the dodge exploited.
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 700_000n; // past expires_at
+  w.svm.setClock(clk);
+
+  // The worker self-expires OMITTING the bond accounts (the #71 dodge). MUST be rejected.
+  expectFail(send(w.svm, await w.providerProg.methods
+    .expireClaim()
+    .accounts({
+      authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      taskSubmission: null, rentRecipient: w.provider.publicKey,
+      workerCompletionBond: null, bondCreator: null,
+      systemProgram: SystemProgram.programId, agentStats: null,
+    })
+    .instruction(), [w.provider]),
+    "MissingCompletionBondAccount", "self-expire omitting the worker bond is rejected (#71)");
+
+  // The bond is still live and the task is still InProgress (the dodge did not go through).
+  assert.ok(!isClosed(w.svm, workerBond), "worker bond still live after the rejected dodge");
+  assert.ok(decode(w.svm, "Task", r.task).status.InProgress !== undefined, "task did NOT reopen via the dodge");
+
+  // Passing a junk (wrong-key) bond account is also rejected — it cannot stand in for the
+  // canonical PDA to make settle no-op while leaving the real bond intact for reclaim.
+  const junkBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+  expectFail(send(w.svm, await w.providerProg.methods
+    .expireClaim()
+    .accounts({
+      authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      taskSubmission: null, rentRecipient: w.provider.publicKey,
+      workerCompletionBond: junkBond, bondCreator: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId, agentStats: null,
+    })
+    .instruction(), [w.provider]),
+    "MissingCompletionBondAccount", "self-expire with a non-canonical bond PDA is rejected (#71)");
+
+  // The honest expire (correct canonical PDA + creator) still forfeits, proving the fix
+  // does not freeze the legitimate no-show path.
+  const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+  expectOk(send(w.svm, await w.providerProg.methods
+    .expireClaim()
+    .accounts({
+      authority: w.provider.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      taskSubmission: null, rentRecipient: w.provider.publicKey,
+      workerCompletionBond: workerBond, bondCreator: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId, agentStats: null,
+    })
+    .instruction(), [w.provider]), "honest self-expire forfeits the bond");
+  assert.ok(isClosed(w.svm, workerBond), "worker bond forfeited + closed on honest expire");
+  assert.equal(Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore, 1_000_000,
+    "creator received the forfeited principal even on a worker-initiated expire");
+});
+
+test("completion bond (#71): an UN-BONDED no-show still expires cleanly (fix must not freeze it)", async () => {
+  // The required-account fix must NOT brick a legitimate no-show on a task with no worker
+  // bond. The caller passes the canonical (empty, system-owned) PDA; settle_completion_bond
+  // no-ops, the task reopens, the claim closes. Revert-sensitive in spirit: a fix that
+  // required a *live* bond would make this fail.
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress, NO bond
+
+  // canonical worker bond PDA for [task, worker_authority] — exists only as an address.
+  const [workerBondPda] = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()]);
+  assert.ok(isClosed(w.svm, workerBondPda), "no worker bond posted (PDA is empty)");
+
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 700_000n;
+  w.svm.setClock(clk);
+
+  const cleaner = Keypair.generate();
+  w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
+  expectOk(send(w.svm, await makeProgram(cleaner).methods
+    .expireClaim()
+    .accounts({
+      authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
+      taskSubmission: null, rentRecipient: w.provider.publicKey,
+      workerCompletionBond: workerBondPda, bondCreator: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId, agentStats: null,
+    })
+    .instruction(), [cleaner]), "un-bonded no-show expires cleanly with the canonical empty PDA");
+
+  assert.ok(isClosed(w.svm, r.claim), "claim closed");
+  assert.ok(decode(w.svm, "Task", r.task).status.Open !== undefined, "un-bonded no-show task reopened to Open");
+});
+
+// Competitive (task_type=2) is omitted here because Task Validation V2 (CreatorReview)
+// rejects it (ValidationModeUnsupportedTaskType), so the manual setup can't build one.
+// Collaborative is a sufficient revert-sensitive guard: the `== Exclusive` fix treats every
+// non-Exclusive type identically (the bond block is skipped), so type 1 proves the class.
+for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
+  test(`completion bond (#71 freeze-guard): a ${name} no-show expires cleanly with null bond accounts`, async () => {
+    // Completion bonds are EXCLUSIVE-ONLY (post_completion_bond requires task_type==Exclusive),
+    // so the #71 required-forfeit must be gated on `== Exclusive`, NOT `!= BidExclusive`: a
+    // non-Exclusive no-show can never have a worker bond, and a hard require!(bond present)
+    // for it would MissingCompletionBondAccount-FREEZE the expire, permanently stranding the
+    // slot. Revert-sensitive: against the `!= BidExclusive` guard this expire fails
+    // MissingCompletionBondAccount; with `== Exclusive` it expires cleanly.
+    const w = await freshWorld({ moderationEnabled: true });
+    const modProg = makeProgram(w.modAuth);
+    const m = await setupManualTask(w, { mode: 1, taskType: type, maxWorkers: 2 });
+    const { task, escrow, validation } = m;
+
+    const jobHash = id32();
+    const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+    const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
+    expectOk(send(w.svm, await modProg.methods
+      .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
+      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
+      .instruction(), [w.modAuth]), `${name}:task-mod`);
+    expectOk(send(w.svm, await w.buyerProg.methods
+      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/noshow")
+      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [w.buyer]), `${name}:publish`);
+
+    const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+    expectOk(send(w.svm, await w.providerProg.methods.claimTaskWithJobSpec()
+      .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [w.provider]), `${name}:claim`);
+    assert.ok(decode(w.svm, "Task", task).status.InProgress !== undefined, `${name} task InProgress after claim`);
+
+    const clk = w.svm.getClock();
+    clk.unixTimestamp = clk.unixTimestamp + 700_000n;
+    w.svm.setClock(clk);
+
+    const cleaner = Keypair.generate();
+    w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
+    // null bond accounts MUST be accepted on a no-show for a non-Exclusive task (no bond can exist).
+    expectOk(send(w.svm, await makeProgram(cleaner).methods
+      .expireClaim()
+      .accounts({
+        authority: cleaner.publicKey, task, escrow, claim,
+        worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: validation,
+        taskSubmission: null, rentRecipient: w.provider.publicKey,
+        workerCompletionBond: null, bondCreator: null,
+        systemProgram: SystemProgram.programId, agentStats: null,
+      })
+      .instruction(), [cleaner]), `${name} no-show expires with null bond accounts (no freeze)`);
+    assert.ok(isClosed(w.svm, claim), `${name} no-show claim closed`);
+  });
+}
+
 test("completion bond: a clean completion refunds BOTH bonds to their posters", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress
