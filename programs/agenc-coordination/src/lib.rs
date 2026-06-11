@@ -1066,6 +1066,31 @@ pub mod agenc_coordination {
         )
     }
 
+    /// Record a domain-verification attestation for an agent (P7.3). A TRUSTED attestor
+    /// (the global moderation authority OR a registered, non-revoked `ModerationAttestor`)
+    /// records that operator domain `verified_domain` was proven to control the agent. The
+    /// off-chain domain-control proof (TXT record / `.well-known` + signed challenge) is the
+    /// attestor SERVICE's job; on-chain this only records the trusted verdict. `method`:
+    /// 0 = TxtRecord, 1 = WellKnown. `expires_at`: 0 = no expiry. Re-verification overwrites
+    /// the `["agent_verification", agent]` PDA in place.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn record_agent_verification(
+        ctx: Context<RecordAgentVerification>,
+        verified_domain: String,
+        method: u8,
+        expires_at: i64,
+    ) -> Result<()> {
+        instructions::record_agent_verification::handler(ctx, verified_domain, method, expires_at)
+    }
+
+    /// Revoke an agent's domain verification (P7.3), marking it `revoked = true` so the
+    /// record stays readable. Same trusted-roster authorization as
+    /// `record_agent_verification`.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn revoke_agent_verification(ctx: Context<RevokeAgentVerification>) -> Result<()> {
+        instructions::revoke_agent_verification::handler(ctx)
+    }
+
     /// Create a task as a human buyer with no registered agent. Always pins
     /// ValidationMode::CreatorReview so settlement routes through buyer review.
     #[cfg(not(feature = "mainnet-canary"))]

@@ -36,6 +36,7 @@ import {
 import {
   getAgentRegistrationCodec,
   getAgentStatsCodec,
+  getAgentVerificationCodec,
   getAuthorityRateLimitCodec,
   getBidderMarketStateCodec,
   getBidMarketplaceConfigCodec,
@@ -78,6 +79,8 @@ import {
   type AgentRegistrationArgs,
   type AgentStats,
   type AgentStatsArgs,
+  type AgentVerification,
+  type AgentVerificationArgs,
   type AuthorityRateLimit,
   type AuthorityRateLimitArgs,
   type BidderMarketState,
@@ -203,6 +206,7 @@ import {
   getRateHireInstructionAsync,
   getRateSkillInstructionAsync,
   getReclaimCompletionBondInstructionAsync,
+  getRecordAgentVerificationInstructionAsync,
   getRecordListingModerationInstructionAsync,
   getRecordTaskModerationInstructionAsync,
   getRegisterAgentInstructionAsync,
@@ -212,6 +216,7 @@ import {
   getRequestChangesInstructionAsync,
   getResolveDisputeInstructionAsync,
   getResolveRejectFrozenInstructionAsync,
+  getRevokeAgentVerificationInstructionAsync,
   getRevokeDelegationInstruction,
   getRevokeDisputeResolverInstructionAsync,
   getRevokeModerationAttestorInstructionAsync,
@@ -285,6 +290,7 @@ import {
   parseRateHireInstruction,
   parseRateSkillInstruction,
   parseReclaimCompletionBondInstruction,
+  parseRecordAgentVerificationInstruction,
   parseRecordListingModerationInstruction,
   parseRecordTaskModerationInstruction,
   parseRegisterAgentInstruction,
@@ -294,6 +300,7 @@ import {
   parseRequestChangesInstruction,
   parseResolveDisputeInstruction,
   parseResolveRejectFrozenInstruction,
+  parseRevokeAgentVerificationInstruction,
   parseRevokeDelegationInstruction,
   parseRevokeDisputeResolverInstruction,
   parseRevokeModerationAttestorInstruction,
@@ -408,6 +415,7 @@ import {
   type ParsedRateHireInstruction,
   type ParsedRateSkillInstruction,
   type ParsedReclaimCompletionBondInstruction,
+  type ParsedRecordAgentVerificationInstruction,
   type ParsedRecordListingModerationInstruction,
   type ParsedRecordTaskModerationInstruction,
   type ParsedRegisterAgentInstruction,
@@ -417,6 +425,7 @@ import {
   type ParsedRequestChangesInstruction,
   type ParsedResolveDisputeInstruction,
   type ParsedResolveRejectFrozenInstruction,
+  type ParsedRevokeAgentVerificationInstruction,
   type ParsedRevokeDelegationInstruction,
   type ParsedRevokeDisputeResolverInstruction,
   type ParsedRevokeModerationAttestorInstruction,
@@ -449,6 +458,7 @@ import {
   type RateHireAsyncInput,
   type RateSkillAsyncInput,
   type ReclaimCompletionBondAsyncInput,
+  type RecordAgentVerificationAsyncInput,
   type RecordListingModerationAsyncInput,
   type RecordTaskModerationAsyncInput,
   type RegisterAgentAsyncInput,
@@ -458,6 +468,7 @@ import {
   type RequestChangesAsyncInput,
   type ResolveDisputeAsyncInput,
   type ResolveRejectFrozenAsyncInput,
+  type RevokeAgentVerificationAsyncInput,
   type RevokeDelegationInput,
   type RevokeDisputeResolverAsyncInput,
   type RevokeModerationAttestorAsyncInput,
@@ -489,6 +500,7 @@ import {
   findAcceptTaskResultClaimPda,
   findAgentPda,
   findAgentStatsPda,
+  findAgentVerificationPda,
   findAuthorityRateLimitPda,
   findBidBookPda,
   findBidderMarketStatePda,
@@ -541,6 +553,7 @@ export const AGENC_COORDINATION_PROGRAM_ADDRESS =
 export enum AgencCoordinationAccount {
   AgentRegistration,
   AgentStats,
+  AgentVerification,
   AuthorityRateLimit,
   BidMarketplaceConfig,
   BidderMarketState,
@@ -606,6 +619,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.AgentStats;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([128, 155, 95, 241, 66, 207, 166, 59]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.AgentVerification;
   }
   if (
     containsBytes(
@@ -1079,6 +1103,7 @@ export enum AgencCoordinationInstruction {
   RateHire,
   RateSkill,
   ReclaimCompletionBond,
+  RecordAgentVerification,
   RecordListingModeration,
   RecordTaskModeration,
   RegisterAgent,
@@ -1088,6 +1113,7 @@ export enum AgencCoordinationInstruction {
   RequestChanges,
   ResolveDispute,
   ResolveRejectFrozen,
+  RevokeAgentVerification,
   RevokeDelegation,
   RevokeDisputeResolver,
   RevokeModerationAttestor,
@@ -1641,6 +1667,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([185, 60, 213, 195, 106, 238, 222, 56]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.RecordAgentVerification;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([83, 247, 2, 131, 91, 223, 49, 33]),
       ),
       0,
@@ -1735,6 +1772,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.ResolveRejectFrozen;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([241, 39, 84, 1, 9, 216, 243, 66]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.RevokeAgentVerification;
   }
   if (
     containsBytes(
@@ -2173,6 +2221,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.ReclaimCompletionBond;
     } & ParsedReclaimCompletionBondInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.RecordAgentVerification;
+    } & ParsedRecordAgentVerificationInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.RecordListingModeration;
     } & ParsedRecordListingModerationInstruction<TProgram>)
   | ({
@@ -2199,6 +2250,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.ResolveRejectFrozen;
     } & ParsedResolveRejectFrozenInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.RevokeAgentVerification;
+    } & ParsedRevokeAgentVerificationInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.RevokeDelegation;
     } & ParsedRevokeDelegationInstruction<TProgram>)
@@ -2612,6 +2666,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseReclaimCompletionBondInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.RecordAgentVerification: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.RecordAgentVerification,
+        ...parseRecordAgentVerificationInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.RecordListingModeration: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2673,6 +2734,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ResolveRejectFrozen,
         ...parseResolveRejectFrozenInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.RevokeAgentVerification: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.RevokeAgentVerification,
+        ...parseRevokeAgentVerificationInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.RevokeDelegation: {
@@ -2880,6 +2948,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<AgentRegistrationArgs, AgentRegistration>;
   agentStats: ReturnType<typeof getAgentStatsCodec> &
     SelfFetchFunctions<AgentStatsArgs, AgentStats>;
+  agentVerification: ReturnType<typeof getAgentVerificationCodec> &
+    SelfFetchFunctions<AgentVerificationArgs, AgentVerification>;
   authorityRateLimit: ReturnType<typeof getAuthorityRateLimitCodec> &
     SelfFetchFunctions<AuthorityRateLimitArgs, AuthorityRateLimit>;
   bidMarketplaceConfig: ReturnType<typeof getBidMarketplaceConfigCodec> &
@@ -3145,6 +3215,10 @@ export type AgencCoordinationPluginInstructions = {
     input: ReclaimCompletionBondAsyncInput,
   ) => ReturnType<typeof getReclaimCompletionBondInstructionAsync> &
     SelfPlanAndSendFunctions;
+  recordAgentVerification: (
+    input: RecordAgentVerificationAsyncInput,
+  ) => ReturnType<typeof getRecordAgentVerificationInstructionAsync> &
+    SelfPlanAndSendFunctions;
   recordListingModeration: (
     input: RecordListingModerationAsyncInput,
   ) => ReturnType<typeof getRecordListingModerationInstructionAsync> &
@@ -3180,6 +3254,10 @@ export type AgencCoordinationPluginInstructions = {
   resolveRejectFrozen: (
     input: ResolveRejectFrozenAsyncInput,
   ) => ReturnType<typeof getResolveRejectFrozenInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  revokeAgentVerification: (
+    input: RevokeAgentVerificationAsyncInput,
+  ) => ReturnType<typeof getRevokeAgentVerificationInstructionAsync> &
     SelfPlanAndSendFunctions;
   revokeDelegation: (
     input: RevokeDelegationInput,
@@ -3322,6 +3400,7 @@ export type AgencCoordinationPluginPdas = {
   ratingAccount: typeof findRatingAccountPda;
   rateSkillPurchaseRecord: typeof findRateSkillPurchaseRecordPda;
   reclaimCompletionBondCompletionBond: typeof findReclaimCompletionBondCompletionBondPda;
+  agentVerification: typeof findAgentVerificationPda;
   listingModeration: typeof findListingModerationPda;
   recordListingModerationModerationAttestor: typeof findRecordListingModerationModerationAttestorPda;
   taskModeration: typeof findTaskModerationPda;
@@ -3357,6 +3436,10 @@ export function agencCoordinationProgram() {
             getAgentRegistrationCodec(),
           ),
           agentStats: addSelfFetchFunctions(client, getAgentStatsCodec()),
+          agentVerification: addSelfFetchFunctions(
+            client,
+            getAgentVerificationCodec(),
+          ),
           authorityRateLimit: addSelfFetchFunctions(
             client,
             getAuthorityRateLimitCodec(),
@@ -3707,6 +3790,11 @@ export function agencCoordinationProgram() {
               client,
               getReclaimCompletionBondInstructionAsync(input),
             ),
+          recordAgentVerification: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getRecordAgentVerificationInstructionAsync(input),
+            ),
           recordListingModeration: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -3751,6 +3839,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getResolveRejectFrozenInstructionAsync(input),
+            ),
+          revokeAgentVerification: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getRevokeAgentVerificationInstructionAsync(input),
             ),
           revokeDelegation: (input) =>
             addSelfPlanAndSendFunctions(
@@ -3921,6 +4014,7 @@ export function agencCoordinationProgram() {
           rateSkillPurchaseRecord: findRateSkillPurchaseRecordPda,
           reclaimCompletionBondCompletionBond:
             findReclaimCompletionBondCompletionBondPda,
+          agentVerification: findAgentVerificationPda,
           listingModeration: findListingModerationPda,
           recordListingModerationModerationAttestor:
             findRecordListingModerationModerationAttestorPda,

@@ -110,6 +110,8 @@ pub mod rate_skill;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod reclaim_completion_bond;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod record_agent_verification;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod record_listing_moderation;
 pub mod record_task_moderation;
 pub mod register_agent;
@@ -126,6 +128,8 @@ pub mod request_changes;
 pub mod resolve_dispute;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod revoke_delegation;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod revoke_agent_verification;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod revoke_dispute_resolver;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -269,6 +273,9 @@ pub use rate_skill::*;
 pub use reclaim_completion_bond::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use record_agent_verification::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use record_listing_moderation::*;
 #[allow(ambiguous_glob_reexports)]
 pub use record_task_moderation::*;
@@ -291,6 +298,9 @@ pub use resolve_dispute::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use revoke_delegation::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use revoke_agent_verification::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use revoke_dispute_resolver::*;

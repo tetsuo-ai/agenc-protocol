@@ -11,6 +11,8 @@ export * from "./agentSuspended";
 export * from "./agentTrackRecordUpdated";
 export * from "./agentUnsuspended";
 export * from "./agentUpdated";
+export * from "./agentVerificationRevoked";
+export * from "./agentVerified";
 export * from "./bidAccepted";
 export * from "./bidBookInitialized";
 export * from "./bidCancelled";
