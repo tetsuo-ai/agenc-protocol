@@ -54,6 +54,16 @@ getrandom = { version = "=0.2.17", default-features = false, features = ["custom
 # root — see the cargo metadata check), and its [profile] is honored.
 [profile.release]
 overflow-checks = true
+# Size optimization for the on-chain .so. Program size = permanent rent
+# (~6960 lamports/byte), so shrinking the binary directly cuts deploy/upgrade
+# cost. These are codegen-only: source semantics are unchanged and the
+# overflow-checks money-safety layer above stays on. Verified behavior-identical
+# against the full gate (Rust unit + litesvm + compute-unit budgets). Keep these
+# in the committed profile so solana-verify reproducible builds match the
+# deployed bytecode.
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
 
 # Single-member Cargo workspace rooted at this crate. The ONLY reason this empty
 # [workspace] table exists is to host [workspace.metadata.cli] below: solana-verify (the
