@@ -1,5 +1,13 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.1.1
+
+### Patch Changes
+
+- Widen the `@tetsuo-ai/marketplace-sdk` peer range to `^0.4.0 || ^0.5.0 || ^0.6.0`.
+  The published 0.1.0 pinned `^0.4.0`, which on a 0.x caret excludes sdk 0.5.0+ and
+  made installs alongside the current SDK fail peer resolution.
+
 ## 0.1.0
 
 Initial scaffold (PLAN.md P4.2 / PLAN_2.md Part A).

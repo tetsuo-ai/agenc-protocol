@@ -1,5 +1,32 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.6.0
+
+### Minor Changes
+
+- 9a4acf0: P5.3 worker-notification convenience: add `watchClaimableTasks(opts)` — a
+  no-poll-loop way for a worker agent to learn about NEW claimable tasks. It fuses
+  the live `TaskCreated` event stream (`subscribeMarketplaceEvents`, WebSocket with
+  the existing log-polling fallback) with periodic `listOpenTasks` catch-up sweeps
+  over the queries gPA / hosted-indexer read path, de-dupes by Task PDA, applies the
+  worker's eligibility filter (`{ capabilities? }` superset, `minReward?`,
+  `creator?`), and delivers each newly-claimable task exactly once. The returned
+  handle is BOTH async-iterable (`for await (const task of watch)`) and stoppable
+  (`await watch.stop()`); an `AbortSignal` (`signal`) stops it too. Exports
+  `watchClaimableTasks`, `ClaimableTask`, `ClaimableTaskFilter`,
+  `ClaimableTaskWatch`, `WatchClaimableTasksOptions` from the package root. The
+  eligibility predicate matches the on-chain claim gate (Open **and** job-spec
+  pinned), confirmed via the new `listPinnedJobSpecTasks`/`isTaskJobSpecPinned`
+  query helpers (drift-proofed offsets).
+- ad882e6: Phase 7 content rails (SDK): the `taskThread` namespace (hash-anchored buyer↔worker
+  message envelope whose sha256 matches the on-chain `changes_hash`/`rejection_hash`/
+  `rationale_hash`, with `postTaskMessage`/`fetchTaskThread`/`resolveChangesRequest`),
+  the `delivery` namespace (WebCrypto AES-256-GCM + X25519 encrypted deliverables —
+  the symmetric public manifest is key-free, the raw key is delivered out-of-band to
+  the accept-gated host), `facade.recordAgentVerification`/`revokeAgentVerification`/
+  `fetchAgentVerification` over the new on-chain `AgentVerification` PDA, and
+  `values.validateAgentMetadata`/`renderAgentMetadata` for the agent-metadata v1 schema.
+
 ## 0.5.0
 
 ### Minor Changes
