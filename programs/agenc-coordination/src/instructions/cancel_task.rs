@@ -63,8 +63,12 @@ pub struct CancelTask<'info> {
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
     #[cfg(feature = "spl-token-rewards")]
     /// Token escrow ATA holding reward tokens (optional)
+    // Boxed: an unboxed `Account<TokenAccount>` here puts the full deserialized
+    // token-account struct on the stack and saturates the 4KB SBF frame of the
+    // full-surface `cancel_task` trampoline (15 "overwrites values in the frame"
+    // warnings). Box moves it to the heap; matches `creator_agent`/`agent_stats`.
     #[account(mut)]
-    pub token_escrow_ata: Option<Account<'info, TokenAccount>>,
+    pub token_escrow_ata: Option<Box<Account<'info, TokenAccount>>>,
 
     #[cfg(feature = "spl-token-rewards")]
     /// Creator's token account to receive refund (optional)
@@ -74,7 +78,8 @@ pub struct CancelTask<'info> {
 
     #[cfg(feature = "spl-token-rewards")]
     /// SPL token mint (optional, must match task.reward_mint)
-    pub reward_mint: Option<Account<'info, Mint>>,
+    // Boxed for the same SBF stack-frame reason as `token_escrow_ata` above.
+    pub reward_mint: Option<Box<Account<'info, Mint>>>,
 
     #[cfg(feature = "spl-token-rewards")]
     /// SPL Token program (optional, required for token tasks)
@@ -287,7 +292,7 @@ fn process_cancel_task_impl<'info>(
 
         let token_escrow = accounts
             .token_escrow_ata
-            .as_mut()
+            .as_deref_mut()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let creator_ta = accounts
             .creator_token_account
@@ -295,7 +300,7 @@ fn process_cancel_task_impl<'info>(
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let mint = accounts
             .reward_mint
-            .as_ref()
+            .as_deref()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let token_program = accounts
             .token_program
@@ -487,7 +492,7 @@ fn process_cancel_task_impl<'info>(
     if is_token_task {
         let token_escrow = accounts
             .token_escrow_ata
-            .as_mut()
+            .as_deref_mut()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
         let token_program = accounts
             .token_program
