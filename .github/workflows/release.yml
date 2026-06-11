@@ -97,19 +97,19 @@ jobs:
             exit 1
           fi
 
-      # --- Gate: SDK / MCP (on-chain e2e needs the compiled program) ---
+      # --- Gate: SDK / MCP / react (on-chain e2e needs the compiled program) ---
       - name: Setup Rust (e2e)
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v')
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Solana platform tools (e2e)
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v')
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
         run: |
           sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Build program for e2e
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v')
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
         run: cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
 
       - name: SDK gate (drift, typecheck, tests incl. e2e, build, examples)
@@ -130,11 +130,12 @@ jobs:
         working-directory: packages/sdk-ts
         run: npm run build
 
-      # --- Gate: react ---
+      # --- Gate: react (signers e2e boots the litesvm sandbox -> needs the .so) ---
       - name: React gate (typecheck, tests, build)
         if: startsWith(github.ref_name, 'react-v')
         working-directory: packages/marketplace-react
         run: |
+          node ../sdk-ts/scripts/sync-testing-so.mjs
           npm run typecheck
           npm test
           npm run build
