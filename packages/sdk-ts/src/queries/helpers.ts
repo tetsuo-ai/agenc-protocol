@@ -18,6 +18,7 @@ import {
   TASK_BID_DISCRIMINATOR,
   TASK_CLAIM_DISCRIMINATOR,
   TASK_DISCRIMINATOR,
+  TASK_JOB_SPEC_DISCRIMINATOR,
   ListingState,
   TaskStatus,
   getHireRecordDecoder,
@@ -25,6 +26,7 @@ import {
   getTaskBidDecoder,
   getTaskClaimDecoder,
   getTaskDecoder,
+  getTaskJobSpecDecoder,
   type HireRecord,
   type ServiceListing,
   type Task,
@@ -38,6 +40,7 @@ import {
   TASK_BID_TASK_OFFSET,
   TASK_CLAIM_WORKER_OFFSET,
   TASK_CREATOR_OFFSET,
+  TASK_JOB_SPEC_TASK_OFFSET,
   TASK_STATUS_OFFSET,
 } from "./offsets.js";
 import {
@@ -278,6 +281,88 @@ export async function listOpenTasks(
     tasks = tasks.filter(({ account }) => account.rewardAmount >= min);
   }
   return tasks;
+}
+
+/** True iff a job-spec hash has at least one non-zero byte. */
+function isNonZeroHash(hash: { length: number; [index: number]: number }): boolean {
+  for (let i = 0; i < hash.length; i += 1) {
+    if (hash[i] !== 0) return true;
+  }
+  return false;
+}
+
+/**
+ * List the `TaskJobSpec` pointers that are genuinely PINNED — i.e. the exact
+ * on-chain precondition `claim_task_with_job_spec` enforces.
+ *
+ * The program gates a claim on TWO things (see
+ * `programs/agenc-coordination/src/instructions/claim_task.rs`): (1) the
+ * `["task_job_spec", task]` PDA must EXIST (it is taken as a plain
+ * `Account<TaskJobSpec>`; absent ⇒ Anchor `AccountNotInitialized` / 3012), and
+ * (2) `validate_job_spec_pointer` requires `job_spec_hash` to have at least one
+ * non-zero byte. This helper mirrors both: it gPA-fetches every `TaskJobSpec`
+ * account (discriminator filter) and keeps only those whose `jobSpecHash` is
+ * non-zero, returning the set of `task` PDAs that are actually claimable.
+ *
+ * A task being `TaskStatus.Open` is NOT sufficient for a claim to land — a task
+ * is minted Open by `create_task` BEFORE any job spec exists (`set_task_job_spec`
+ * is a separate, later, moderation-gated tx). Use this set to intersect with
+ * {@link listOpenTasks} so you only surface tasks a worker can actually claim.
+ *
+ * @param source - A kit `Rpc<GetProgramAccountsApi>` or a
+ * {@link ProgramAccountsTransport} (e.g. the Phase-3 hosted indexer client).
+ * @returns A `Set<Address>` of Task PDAs that have a pinned job spec.
+ */
+export async function listPinnedJobSpecTasks(
+  source: ProgramAccountsSource,
+): Promise<Set<Address>> {
+  const decoder = getTaskJobSpecDecoder();
+  const specs = await fetchDecoded(
+    source,
+    [discriminatorFilter(TASK_JOB_SPEC_DISCRIMINATOR)],
+    (d) => decoder.decode(d),
+  );
+  const pinned = new Set<Address>();
+  for (const { account } of specs) {
+    if (isNonZeroHash(account.jobSpecHash)) pinned.add(account.task);
+  }
+  return pinned;
+}
+
+/**
+ * Check whether a SINGLE task has a pinned job spec — the exact on-chain
+ * precondition `claim_task_with_job_spec` enforces (see
+ * {@link listPinnedJobSpecTasks} for the full rationale).
+ *
+ * Server-side memcmp on `TaskJobSpec.task` narrows the fetch to the one PDA, so
+ * this is a cheap targeted lookup (used by the event path, where only a single
+ * task is in hand). Returns `true` iff the pointer exists AND its `jobSpecHash`
+ * is non-zero.
+ *
+ * @param source - A kit `Rpc<GetProgramAccountsApi>` or a
+ * {@link ProgramAccountsTransport}.
+ * @param task - The Task PDA to check.
+ * @returns `true` iff the task's job spec is pinned (claimable).
+ */
+export async function isTaskJobSpecPinned(
+  source: ProgramAccountsSource,
+  task: Address,
+): Promise<boolean> {
+  const decoder = getTaskJobSpecDecoder();
+  const specs = await fetchDecoded(
+    source,
+    [
+      discriminatorFilter(TASK_JOB_SPEC_DISCRIMINATOR),
+      {
+        memcmp: {
+          offset: TASK_JOB_SPEC_TASK_OFFSET,
+          bytes: addressBytes(task),
+        },
+      },
+    ],
+    (d) => decoder.decode(d),
+  );
+  return specs.some(({ account }) => isNonZeroHash(account.jobSpecHash));
 }
 
 /**
