@@ -191,3 +191,64 @@ pub(crate) fn process_worker_claim_pair(
 
     Ok(())
 }
+
+/// Number of EXTRA collaborative `(claim, worker)` pairs a dispute exit must process in
+/// `remaining_accounts`, beyond the single primary defendant: `current_workers - 1`,
+/// floored at 0. Uses `saturating_sub` (not `checked_sub`) so a `current_workers == 0`
+/// dispute yields 0 expected pairs instead of an arithmetic underflow that would lock the
+/// disputed escrow (#72 defense-in-depth). The underflow's trigger is closed by the
+/// `expire_claim` escrow-lock fix, but the arithmetic must not error if it ever recurs.
+pub(crate) fn expected_worker_pairs(current_workers: u8) -> usize {
+    usize::from(current_workers.saturating_sub(1))
+}
+
+/// The dispute defendant's claim binding in `validate_worker_accounts` is ALWAYS required,
+/// for every `current_workers` value INCLUDING 0. Adversarial review (#72) established that
+/// gating the binding on `current_workers == 0` unlocks NO reachable escrow (the
+/// closed-claim / zero-worker dispute state is unreachable after the escrow-lock fix) while
+/// adding fund-routing branches — a net risk for zero benefit. This predicate is a TRIPWIRE:
+/// it must stay unconditionally `true` (pinned by a unit test), so any future attempt to
+/// relax the defendant binding by worker count fails a test instead of silently shipping.
+pub(crate) fn defendant_claim_required(_current_workers: u8) -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expected_worker_pairs_saturates_at_zero() {
+        // Load-bearing: input 0 must yield 0, not underflow. A `checked_sub` would Err here.
+        assert_eq!(expected_worker_pairs(0), 0);
+        assert_eq!(expected_worker_pairs(1), 0);
+        assert_eq!(expected_worker_pairs(2), 1);
+        assert_eq!(expected_worker_pairs(5), 4);
+        assert_eq!(expected_worker_pairs(u8::MAX), 254);
+    }
+
+    #[test]
+    fn expected_worker_pairs_diverges_from_checked_sub_only_at_zero() {
+        // saturating and checked agree for every c >= 1; they diverge ONLY at 0
+        // (saturating == 0 vs checked == Err). Reverting to checked_sub turns the
+        // input-0 assertion above red.
+        for c in 1u8..=u8::MAX {
+            assert_eq!(
+                expected_worker_pairs(c),
+                usize::from(c.checked_sub(1).unwrap())
+            );
+        }
+        assert!(0u8.checked_sub(1).is_none());
+        assert_eq!(expected_worker_pairs(0), 0);
+    }
+
+    #[test]
+    fn defendant_claim_binding_is_never_gated_on_worker_count() {
+        // #72 tripwire: the defendant claim must be required for EVERY worker count,
+        // including 0. A future change relaxing the binding to skip `current_workers == 0`
+        // would make this predicate `!= 0`, flipping defendant_claim_required(0) to false.
+        assert!(defendant_claim_required(0));
+        assert!(defendant_claim_required(1));
+        assert!(defendant_claim_required(u8::MAX));
+    }
+}

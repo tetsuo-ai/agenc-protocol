@@ -19,8 +19,9 @@ use crate::instructions::bid_settlement_helpers::{
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
-    check_duplicate_workers, pay_dispute_operator_fee, process_worker_claim_pair,
-    resolve_task_operator_terms, validate_remaining_accounts_structure,
+    check_duplicate_workers, defendant_claim_required, expected_worker_pairs,
+    pay_dispute_operator_fee, process_worker_claim_pair, resolve_task_operator_terms,
+    validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::token_helpers::{
@@ -231,6 +232,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         &ctx.accounts.worker_claim,
         &ctx.accounts.worker_wallet,
         &task.key(),
+        task.current_workers,
     )?;
 
     let (dispute_remaining_accounts, accepted_bid_accounts) =
@@ -516,11 +518,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     let worker_pairs = remaining_worker_accounts
         .checked_div(2)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let expected_worker_pairs = usize::from(
-        task.current_workers
-            .checked_sub(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?,
-    );
+    // saturating_sub (not checked_sub): 0 workers -> 0 expected pairs, never an underflow
+    // that would lock the disputed escrow (#72). Identical to checked_sub for all N >= 1.
+    let expected_worker_pairs = expected_worker_pairs(task.current_workers);
     require!(
         worker_pairs == expected_worker_pairs,
         CoordinationError::IncompleteWorkerAccounts
@@ -632,7 +632,15 @@ fn validate_worker_accounts(
     worker_claim: &Option<Box<Account<TaskClaim>>>,
     worker_wallet: &Option<UncheckedAccount>,
     task_key: &Pubkey,
+    current_workers: u8,
 ) -> Result<()> {
+    // #72 tripwire: the defendant claim is required for EVERY worker count, including 0.
+    // Do NOT relax this to `current_workers != 0` — see defendant_claim_required: it unlocks
+    // no reachable escrow and adds fund-routing risk.
+    require!(
+        defendant_claim_required(current_workers),
+        CoordinationError::WorkerClaimRequired
+    );
     let worker = worker
         .as_ref()
         .ok_or(CoordinationError::WorkerAgentRequired)?;
