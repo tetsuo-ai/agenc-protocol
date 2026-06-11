@@ -20,6 +20,8 @@
 //! rather than directly, so the ambiguity doesn't affect usage.
 
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod agent_stats_helpers;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod bid_settlement_helpers;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod bond_helpers;
@@ -46,6 +48,8 @@ pub mod apply_dispute_slash;
 pub mod apply_initiator_slash;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod assign_dispute_resolver;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod assign_moderation_attestor;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod auto_accept_task_result;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -100,6 +104,8 @@ pub mod post_to_feed;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod purchase_skill;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod rate_hire;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod rate_skill;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod reclaim_completion_bond;
@@ -122,6 +128,8 @@ pub mod resolve_dispute;
 pub mod revoke_delegation;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod revoke_dispute_resolver;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod revoke_moderation_attestor;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod set_service_listing_state;
 pub mod set_task_job_spec;
@@ -148,8 +156,8 @@ pub mod update_zk_image_id;
 pub mod upvote_post;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod validate_task_result;
-#[cfg(not(feature = "mainnet-canary"))]
-pub mod vote_dispute;
+// P6.3: `vote_dispute` (and the arbiter vote/quorum machinery) retired — disputes are
+// decided by an assigned resolver (the dispute-resolver roster), not a vote tally.
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod vote_proposal;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -168,6 +176,9 @@ pub use apply_initiator_slash::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use assign_dispute_resolver::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use assign_moderation_attestor::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use auto_accept_task_result::*;
@@ -250,6 +261,9 @@ pub use post_to_feed::*;
 pub use purchase_skill::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use rate_hire::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use rate_skill::*;
 #[cfg(not(feature = "mainnet-canary"))]
 pub use reclaim_completion_bond::*;
@@ -280,6 +294,9 @@ pub use revoke_delegation::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use revoke_dispute_resolver::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use revoke_moderation_attestor::*;
 #[cfg(not(feature = "mainnet-canary"))]
 pub use set_service_listing_state::*;
 #[allow(ambiguous_glob_reexports)]
@@ -322,9 +339,7 @@ pub use upvote_post::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use validate_task_result::*;
-#[cfg(not(feature = "mainnet-canary"))]
-#[allow(ambiguous_glob_reexports)]
-pub use vote_dispute::*;
+// P6.3: `vote_dispute` re-export removed alongside the instruction.
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use vote_proposal::*;

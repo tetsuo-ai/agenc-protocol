@@ -39,7 +39,6 @@ import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findProtocolConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const MIGRATE_TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
@@ -66,7 +65,7 @@ export type MigrateTaskInstruction<
   InstructionWithAccounts<
     [
       TAccountProtocolConfig extends string
-        ? WritableAccount<TAccountProtocolConfig>
+        ? ReadonlyAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
       TAccountTask extends string
         ? WritableAccount<TAccountTask>
@@ -120,104 +119,6 @@ export function getMigrateTaskInstructionDataCodec(): FixedSizeCodec<
   );
 }
 
-export type MigrateTaskAsyncInput<
-  TAccountProtocolConfig extends string = string,
-  TAccountTask extends string = string,
-  TAccountPayer extends string = string,
-  TAccountAuthority extends string = string,
-  TAccountSystemProgram extends string = string,
-> = {
-  protocolConfig?: Address<TAccountProtocolConfig>;
-  /**
-   * try_deserialize). MUST be raw — a typed `Account<Task>` would reject the 382B
-   * pre-migration account before the handler runs, making migration impossible.
-   */
-  task: Address<TAccountTask>;
-  /** Funds the rent top-up for the +50-byte growth. */
-  payer: TransactionSigner<TAccountPayer>;
-  authority: TransactionSigner<TAccountAuthority>;
-  systemProgram?: Address<TAccountSystemProgram>;
-  dryRun: MigrateTaskInstructionDataArgs["dryRun"];
-};
-
-export async function getMigrateTaskInstructionAsync<
-  TAccountProtocolConfig extends string,
-  TAccountTask extends string,
-  TAccountPayer extends string,
-  TAccountAuthority extends string,
-  TAccountSystemProgram extends string,
-  TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
->(
-  input: MigrateTaskAsyncInput<
-    TAccountProtocolConfig,
-    TAccountTask,
-    TAccountPayer,
-    TAccountAuthority,
-    TAccountSystemProgram
-  >,
-  config?: { programAddress?: TProgramAddress },
-): Promise<
-  MigrateTaskInstruction<
-    TProgramAddress,
-    TAccountProtocolConfig,
-    TAccountTask,
-    TAccountPayer,
-    TAccountAuthority,
-    TAccountSystemProgram
-  >
-> {
-  // Program address.
-  const programAddress =
-    config?.programAddress ?? AGENC_COORDINATION_PROGRAM_ADDRESS;
-
-  // Original accounts.
-  const originalAccounts = {
-    protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
-    task: { value: input.task ?? null, isWritable: true },
-    payer: { value: input.payer ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
-    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
-  };
-  const accounts = originalAccounts as Record<
-    keyof typeof originalAccounts,
-    ResolvedInstructionAccount
-  >;
-
-  // Original args.
-  const args = { ...input };
-
-  // Resolve default values.
-  if (!accounts.protocolConfig.value) {
-    accounts.protocolConfig.value = await findProtocolConfigPda();
-  }
-  if (!accounts.systemProgram.value) {
-    accounts.systemProgram.value =
-      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
-  }
-
-  const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
-  return Object.freeze({
-    accounts: [
-      getAccountMeta("protocolConfig", accounts.protocolConfig),
-      getAccountMeta("task", accounts.task),
-      getAccountMeta("payer", accounts.payer),
-      getAccountMeta("authority", accounts.authority),
-      getAccountMeta("systemProgram", accounts.systemProgram),
-    ],
-    data: getMigrateTaskInstructionDataEncoder().encode(
-      args as MigrateTaskInstructionDataArgs,
-    ),
-    programAddress,
-  } as MigrateTaskInstruction<
-    TProgramAddress,
-    TAccountProtocolConfig,
-    TAccountTask,
-    TAccountPayer,
-    TAccountAuthority,
-    TAccountSystemProgram
-  >);
-}
-
 export type MigrateTaskInput<
   TAccountProtocolConfig extends string = string,
   TAccountTask extends string = string,
@@ -225,13 +126,24 @@ export type MigrateTaskInput<
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
+  /**
+   * PDA, and a real ProtocolConfig via a size-tolerant try_deserialize). MUST be raw
+   * — a typed `Account<ProtocolConfig>` would reject the 349B PRE-`migrate_protocol`
+   * config (the struct is now 351B) before the handler runs, hard-coupling the task
+   * sweep to `migrate_protocol` having already grown the config. The size-tolerant
+   * hand-decode in the handler reads the multisig gate from BOTH the 349B and 351B
+   * layouts, so the two migrations are order-independent. Mirrors `MigrateProtocol`.
+   */
   protocolConfig: Address<TAccountProtocolConfig>;
   /**
    * try_deserialize). MUST be raw — a typed `Account<Task>` would reject the 382B
    * pre-migration account before the handler runs, making migration impossible.
    */
   task: Address<TAccountTask>;
-  /** Funds the rent top-up for the +50-byte growth. */
+  /**
+   * Funds the rent top-up for the growth (up to +84 bytes from a 382B legacy task,
+   * or +34 from a 432B Batch-2 task).
+   */
   payer: TransactionSigner<TAccountPayer>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -268,7 +180,7 @@ export function getMigrateTaskInstruction<
 
   // Original accounts.
   const originalAccounts = {
-    protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     task: { value: input.task ?? null, isWritable: true },
     payer: { value: input.payer ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
@@ -317,13 +229,24 @@ export type ParsedMigrateTaskInstruction<
 > = {
   programAddress: Address<TProgram>;
   accounts: {
+    /**
+     * PDA, and a real ProtocolConfig via a size-tolerant try_deserialize). MUST be raw
+     * — a typed `Account<ProtocolConfig>` would reject the 349B PRE-`migrate_protocol`
+     * config (the struct is now 351B) before the handler runs, hard-coupling the task
+     * sweep to `migrate_protocol` having already grown the config. The size-tolerant
+     * hand-decode in the handler reads the multisig gate from BOTH the 349B and 351B
+     * layouts, so the two migrations are order-independent. Mirrors `MigrateProtocol`.
+     */
     protocolConfig: TAccountMetas[0];
     /**
      * try_deserialize). MUST be raw — a typed `Account<Task>` would reject the 382B
      * pre-migration account before the handler runs, making migration impossible.
      */
     task: TAccountMetas[1];
-    /** Funds the rent top-up for the +50-byte growth. */
+    /**
+     * Funds the rent top-up for the growth (up to +84 bytes from a 382B legacy task,
+     * or +34 from a 432B Batch-2 task).
+     */
     payer: TAccountMetas[2];
     authority: TAccountMetas[3];
     systemProgram: TAccountMetas[4];

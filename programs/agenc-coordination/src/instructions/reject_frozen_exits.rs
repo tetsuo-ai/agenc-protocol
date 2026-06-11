@@ -168,7 +168,8 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
             Some(ctx.accounts.task_submission.result_data),
             &clock,
             None,
-            None,
+            None, // operator leg: reject-frozen partial payout is the plain 2-way SOL split
+            None, // referrer leg: same
         )?;
 
         ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
@@ -370,7 +371,8 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         Some(ctx.accounts.task_submission.result_data),
         &clock,
         None,
-        None,
+        None, // operator leg: reject-frozen partial payout is the plain 2-way SOL split
+        None, // referrer leg: same
     )?;
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;

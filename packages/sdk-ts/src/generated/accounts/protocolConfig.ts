@@ -131,6 +131,23 @@ export type ProtocolConfig = {
    * are always `Pubkey::default()`.
    */
   multisigOwners: Array<Address>;
+  /**
+   * Deployed instruction-surface revision stamp.
+   *
+   * APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte
+   * pre-P6.5 prefix (the live mainnet config account) stays valid. The live
+   * account is migrated up to the new size by `migrate_protocol` (realloc +
+   * zero-init), which lands this at `0` = "surface not yet stamped". An operator
+   * then sets the real revision via `update_launch_controls` (the existing
+   * multisig-gated config-update authority path).
+   *
+   * Semantics:
+   * - `0`  → surface unstamped (treat as the conservative canary surface;
+   * clients should fall back to capability probing).
+   * - `>0` → the operator-declared surface revision; the SDK maps it to a typed
+   * capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface).
+   */
+  surfaceRevision: number;
 };
 
 export type ProtocolConfigArgs = {
@@ -206,6 +223,23 @@ export type ProtocolConfigArgs = {
    * are always `Pubkey::default()`.
    */
   multisigOwners: Array<Address>;
+  /**
+   * Deployed instruction-surface revision stamp.
+   *
+   * APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte
+   * pre-P6.5 prefix (the live mainnet config account) stays valid. The live
+   * account is migrated up to the new size by `migrate_protocol` (realloc +
+   * zero-init), which lands this at `0` = "surface not yet stamped". An operator
+   * then sets the real revision via `update_launch_controls` (the existing
+   * multisig-gated config-update authority path).
+   *
+   * Semantics:
+   * - `0`  → surface unstamped (treat as the conservative canary surface;
+   * clients should fall back to capability probing).
+   * - `>0` → the operator-declared surface revision; the SDK maps it to a typed
+   * capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface).
+   */
+  surfaceRevision: number;
 };
 
 /** Gets the encoder for {@link ProtocolConfigArgs} account data. */
@@ -241,6 +275,7 @@ export function getProtocolConfigEncoder(): FixedSizeEncoder<ProtocolConfigArgs>
       ["protocolPaused", getBooleanEncoder()],
       ["disabledTaskTypeMask", getU8Encoder()],
       ["multisigOwners", getArrayEncoder(getAddressEncoder(), { size: 5 })],
+      ["surfaceRevision", getU16Encoder()],
     ]),
     (value) => ({ ...value, discriminator: PROTOCOL_CONFIG_DISCRIMINATOR }),
   );
@@ -278,6 +313,7 @@ export function getProtocolConfigDecoder(): FixedSizeDecoder<ProtocolConfig> {
     ["protocolPaused", getBooleanDecoder()],
     ["disabledTaskTypeMask", getU8Decoder()],
     ["multisigOwners", getArrayDecoder(getAddressDecoder(), { size: 5 })],
+    ["surfaceRevision", getU16Decoder()],
   ]);
 }
 
@@ -351,5 +387,5 @@ export async function fetchAllMaybeProtocolConfig(
 }
 
 export function getProtocolConfigSize(): number {
-  return 349;
+  return 351;
 }

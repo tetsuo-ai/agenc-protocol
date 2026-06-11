@@ -258,6 +258,23 @@ pub fn handler(
     config.min_supported_version = MIN_SUPPORTED_VERSION;
     config.protocol_paused = false;
     config.disabled_task_type_mask = 0;
+    // P6.5: stamp the deployed surface this binary actually exposes.
+    // - Full build  -> the complete 80-ix surface is live: stamp SURFACE_REVISION_FULL
+    //   so a fresh dev/devnet/localnet deploy advertises `listings: true` without a
+    //   manual `update_launch_controls` step.
+    // - Canary build -> only the restricted 25-ix surface is live: stamp 0
+    //   (unstamped/conservative) so a fresh canary cluster never claims the full
+    //   surface. The live mainnet canary config already exists and is NOT re-init'd
+    //   here; it is brought forward by `migrate_protocol` (surface_revision = 0) and
+    //   stamped by an operator if/when the full surface is actually deployed.
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        config.surface_revision = ProtocolConfig::SURFACE_REVISION_FULL;
+    }
+    #[cfg(feature = "mainnet-canary")]
+    {
+        config.surface_revision = 0;
+    }
     // Fix #497: Explicitly zero all slots before populating to ensure no data leakage.
     config.multisig_owners = [Pubkey::default(); ProtocolConfig::MAX_MULTISIG_OWNERS];
     for (index, owner) in multisig_owners.iter().enumerate() {

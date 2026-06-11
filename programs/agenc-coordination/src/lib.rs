@@ -112,6 +112,8 @@ pub mod agenc_coordination {
         constraint_hash: Option<[u8; 32]>,
         min_reputation: u16,
         reward_mint: Option<Pubkey>,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::create_task::handler(
             ctx,
@@ -125,6 +127,8 @@ pub mod agenc_coordination {
             constraint_hash,
             min_reputation,
             reward_mint,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -554,15 +558,11 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Vote on a dispute resolution.
-    /// Arbiters must be registered agents with arbitration capability.
-    #[cfg(not(feature = "mainnet-canary"))]
-    pub fn vote_dispute(ctx: Context<VoteDispute>, approve: bool) -> Result<()> {
-        instructions::vote_dispute::handler(ctx, approve)
-    }
+    // P6.3: `vote_dispute` retired. The arbiter vote/quorum model no longer gates
+    // resolution — an assigned dispute resolver (the dispute-resolver roster below)
+    // decides directly. Removing the instruction also drops its `DisputeVote` /
+    // `AuthorityDisputeVote` PDAs and the `DisputeVoteCast` event.
 
-    /// Execute the resolved dispute outcome.
-    /// Requires sufficient votes to meet threshold.
     /// Assign a wallet to the dispute-resolver roster (authority-only). The assigned
     /// wallet may then call `resolve_dispute` directly — no vote tally, no quorum.
     #[cfg(not(feature = "mainnet-canary"))]
@@ -580,15 +580,42 @@ pub mod agenc_coordination {
         instructions::revoke_dispute_resolver::handler(ctx)
     }
 
+    /// Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The
+    /// assigned wallet may then record moderation attestations
+    /// (`record_task_moderation` / `record_listing_moderation`) in addition to the single
+    /// global moderation authority. Registry MECHANISM only — the neutrality model is a
+    /// separate [HUMAN] decision (`docs/MODERATION_NEUTRALITY.md`).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn assign_moderation_attestor(
+        ctx: Context<AssignModerationAttestor>,
+        attestor: Pubkey,
+    ) -> Result<()> {
+        instructions::assign_moderation_attestor::handler(ctx, attestor)
+    }
+
+    /// Remove a wallet from the moderation-attestor roster (authority-only, P6.8), closing
+    /// its assignment PDA. The revoked wallet can no longer record attestations.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn revoke_moderation_attestor(ctx: Context<RevokeModerationAttestor>) -> Result<()> {
+        instructions::revoke_moderation_attestor::handler(ctx)
+    }
+
     /// Resolve a dispute. The signer must be the protocol authority OR an assigned
     /// dispute resolver. `approve` upholds the initiator's requested resolution_type;
     /// `!approve` refunds the creator. No vote tally or quorum is consulted.
+    ///
+    /// P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a
+    /// 32-byte content hash of the off-chain rationale) and a bounded `rationale_uri`.
+    /// Both are persisted on the dispute alongside the deciding resolver, and the hash
+    /// + resolver are emitted in `DisputeResolved`.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn resolve_dispute<'info>(
         ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>,
         approve: bool,
+        rationale_hash: [u8; 32],
+        rationale_uri: String,
     ) -> Result<()> {
-        instructions::resolve_dispute::handler(ctx, approve)
+        instructions::resolve_dispute::handler(ctx, approve, rationale_hash, rationale_uri)
     }
 
     /// Apply slashing to a worker after losing a dispute.
@@ -732,12 +759,18 @@ pub mod agenc_coordination {
         ctx: Context<UpdateLaunchControls>,
         protocol_paused: bool,
         disabled_task_type_mask: u8,
+        surface_revision: u16,
     ) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
             CoordinationError::MultisigNotEnoughSigners
         );
-        instructions::update_launch_controls::handler(ctx, protocol_paused, disabled_task_type_mask)
+        instructions::update_launch_controls::handler(
+            ctx,
+            protocol_paused,
+            disabled_task_type_mask,
+            surface_revision,
+        )
     }
 
     /// Migrate protocol to a new version (multisig gated).
@@ -753,9 +786,10 @@ pub mod agenc_coordination {
         instructions::migrate::handler(ctx, target_version)
     }
 
-    /// Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig
-    /// gated, VERSION-UNGATED (must run while version == 1, before the version
-    /// bump). `dry_run` validates without mutating. Idempotent / re-runnable.
+    /// Migrate one Task account to the P6.2 layout (382B or 432B -> 466B; appends the
+    /// operator + referrer fee legs). Multisig gated, VERSION-UNGATED (must run while
+    /// version == 1, before the version bump). `dry_run` validates without mutating.
+    /// Idempotent / re-runnable.
     pub fn migrate_task(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
         instructions::migrate::migrate_task_handler(ctx, dry_run)
     }
@@ -967,8 +1001,17 @@ pub mod agenc_coordination {
         task_id: [u8; 32],
         expected_price: u64,
         expected_version: u64,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
-        instructions::hire_from_listing::handler(ctx, task_id, expected_price, expected_version)
+        instructions::hire_from_listing::handler(
+            ctx,
+            task_id,
+            expected_price,
+            expected_version,
+            referrer,
+            referrer_fee_bps,
+        )
     }
 
     /// Hire a provider from a standing service listing as a human buyer with NO
@@ -976,12 +1019,15 @@ pub mod agenc_coordination {
     /// listing's operator-fee leg (the embedding site's cut), and pins
     /// ValidationMode::CreatorReview so the human reviews the work before payout.
     #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hire_from_listing_humanless(
         ctx: Context<HireFromListingHumanless>,
         task_id: [u8; 32],
         expected_price: u64,
         expected_version: u64,
         review_window_secs: i64,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::hire_from_listing_humanless::handler(
             ctx,
@@ -989,6 +1035,8 @@ pub mod agenc_coordination {
             expected_price,
             expected_version,
             review_window_secs,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -1031,6 +1079,8 @@ pub mod agenc_coordination {
         deadline: i64,
         min_reputation: u16,
         review_window_secs: i64,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::create_task_humanless::handler(
             ctx,
@@ -1041,6 +1091,8 @@ pub mod agenc_coordination {
             deadline,
             min_reputation,
             review_window_secs,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -1174,6 +1226,21 @@ pub mod agenc_coordination {
     pub fn revoke_delegation(ctx: Context<RevokeDelegation>) -> Result<()> {
         instructions::revoke_delegation::handler(ctx)
     }
+
+    /// Rate a completed listing hire (P6.1). The task's recorded buyer
+    /// (`task.creator`) scores the delivered work once the task is terminally
+    /// `Completed`; one rating per hire is enforced by the init-once
+    /// `["hire_rating", task]` PDA. Folds the score into the source listing's
+    /// `total_rating`/`rating_count` aggregate and emits `ListingRated`.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn rate_hire(
+        ctx: Context<RateHire>,
+        score: u8,
+        review_hash: Option<[u8; 32]>,
+        review_uri: String,
+    ) -> Result<()> {
+        instructions::rate_hire::handler(ctx, score, review_hash, review_uri)
+    }
 }
 
 #[cfg(feature = "mainnet-canary")]
@@ -1241,6 +1308,8 @@ pub mod agenc_coordination {
         constraint_hash: Option<[u8; 32]>,
         min_reputation: u16,
         reward_mint: Option<Pubkey>,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::create_task::handler(
             ctx,
@@ -1254,6 +1323,8 @@ pub mod agenc_coordination {
             constraint_hash,
             min_reputation,
             reward_mint,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -1443,17 +1514,23 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Update emergency launch controls.
+    /// Update emergency launch controls and stamp the deployed surface revision.
     pub fn update_launch_controls(
         ctx: Context<UpdateLaunchControls>,
         protocol_paused: bool,
         disabled_task_type_mask: u8,
+        surface_revision: u16,
     ) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
             CoordinationError::MultisigNotEnoughSigners
         );
-        instructions::update_launch_controls::handler(ctx, protocol_paused, disabled_task_type_mask)
+        instructions::update_launch_controls::handler(
+            ctx,
+            protocol_paused,
+            disabled_task_type_mask,
+            surface_revision,
+        )
     }
 
     /// Migrate protocol to a new version.

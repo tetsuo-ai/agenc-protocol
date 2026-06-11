@@ -62,6 +62,7 @@ export type RecordTaskModerationInstruction<
   TAccountTask extends string | AccountMeta<string> = string,
   TAccountTaskModeration extends string | AccountMeta<string> = string,
   TAccountModerator extends string | AccountMeta<string> = string,
+  TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -82,6 +83,9 @@ export type RecordTaskModerationInstruction<
         ? WritableSignerAccount<TAccountModerator> &
             AccountSignerMeta<TAccountModerator>
         : TAccountModerator,
+      TAccountModerationAttestor extends string
+        ? ReadonlyAccount<TAccountModerationAttestor>
+        : TAccountModerationAttestor,
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
@@ -157,12 +161,29 @@ export type RecordTaskModerationAsyncInput<
   TAccountTask extends string = string,
   TAccountTaskModeration extends string = string,
   TAccountModerator extends string = string,
+  TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   task: Address<TAccountTask>;
   taskModeration?: Address<TAccountTaskModeration>;
+  /**
+   * The recording signer. Authorization is checked in the handler (NOT as an account
+   * constraint here) so the registered-attestor OR global-authority branch can be
+   * evaluated. In the canary build there is no attestor account, so the handler falls
+   * back to the global-authority-only check — the canary surface stays frozen.
+   */
   moderator: TransactionSigner<TAccountModerator>;
+  /**
+   * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
+   * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
+   * attestor to record. Bound to `["moderation_attestor", moderator]` — Anchor enforces
+   * the canonical PDA, so a forged or mismatched entry fails account resolution; a
+   * REVOKED attestor's PDA is closed and fails to load (cannot attest). Full-surface
+   * only — gated so the frozen canary account list for `record_task_moderation` is
+   * unchanged.
+   */
+  moderationAttestor?: Address<TAccountModerationAttestor>;
   systemProgram?: Address<TAccountSystemProgram>;
   jobSpecHash: RecordTaskModerationInstructionDataArgs["jobSpecHash"];
   status: RecordTaskModerationInstructionDataArgs["status"];
@@ -178,6 +199,7 @@ export async function getRecordTaskModerationInstructionAsync<
   TAccountTask extends string,
   TAccountTaskModeration extends string,
   TAccountModerator extends string,
+  TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -186,6 +208,7 @@ export async function getRecordTaskModerationInstructionAsync<
     TAccountTask,
     TAccountTaskModeration,
     TAccountModerator,
+    TAccountModerationAttestor,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -196,6 +219,7 @@ export async function getRecordTaskModerationInstructionAsync<
     TAccountTask,
     TAccountTaskModeration,
     TAccountModerator,
+    TAccountModerationAttestor,
     TAccountSystemProgram
   >
 > {
@@ -212,6 +236,10 @@ export async function getRecordTaskModerationInstructionAsync<
     task: { value: input.task ?? null, isWritable: false },
     taskModeration: { value: input.taskModeration ?? null, isWritable: true },
     moderator: { value: input.moderator ?? null, isWritable: true },
+    moderationAttestor: {
+      value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -250,6 +278,7 @@ export async function getRecordTaskModerationInstructionAsync<
       getAccountMeta("task", accounts.task),
       getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderator", accounts.moderator),
+      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRecordTaskModerationInstructionDataEncoder().encode(
@@ -262,6 +291,7 @@ export async function getRecordTaskModerationInstructionAsync<
     TAccountTask,
     TAccountTaskModeration,
     TAccountModerator,
+    TAccountModerationAttestor,
     TAccountSystemProgram
   >);
 }
@@ -271,12 +301,29 @@ export type RecordTaskModerationInput<
   TAccountTask extends string = string,
   TAccountTaskModeration extends string = string,
   TAccountModerator extends string = string,
+  TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   task: Address<TAccountTask>;
   taskModeration: Address<TAccountTaskModeration>;
+  /**
+   * The recording signer. Authorization is checked in the handler (NOT as an account
+   * constraint here) so the registered-attestor OR global-authority branch can be
+   * evaluated. In the canary build there is no attestor account, so the handler falls
+   * back to the global-authority-only check — the canary surface stays frozen.
+   */
   moderator: TransactionSigner<TAccountModerator>;
+  /**
+   * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
+   * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
+   * attestor to record. Bound to `["moderation_attestor", moderator]` — Anchor enforces
+   * the canonical PDA, so a forged or mismatched entry fails account resolution; a
+   * REVOKED attestor's PDA is closed and fails to load (cannot attest). Full-surface
+   * only — gated so the frozen canary account list for `record_task_moderation` is
+   * unchanged.
+   */
+  moderationAttestor?: Address<TAccountModerationAttestor>;
   systemProgram?: Address<TAccountSystemProgram>;
   jobSpecHash: RecordTaskModerationInstructionDataArgs["jobSpecHash"];
   status: RecordTaskModerationInstructionDataArgs["status"];
@@ -292,6 +339,7 @@ export function getRecordTaskModerationInstruction<
   TAccountTask extends string,
   TAccountTaskModeration extends string,
   TAccountModerator extends string,
+  TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -300,6 +348,7 @@ export function getRecordTaskModerationInstruction<
     TAccountTask,
     TAccountTaskModeration,
     TAccountModerator,
+    TAccountModerationAttestor,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -309,6 +358,7 @@ export function getRecordTaskModerationInstruction<
   TAccountTask,
   TAccountTaskModeration,
   TAccountModerator,
+  TAccountModerationAttestor,
   TAccountSystemProgram
 > {
   // Program address.
@@ -324,6 +374,10 @@ export function getRecordTaskModerationInstruction<
     task: { value: input.task ?? null, isWritable: false },
     taskModeration: { value: input.taskModeration ?? null, isWritable: true },
     moderator: { value: input.moderator ?? null, isWritable: true },
+    moderationAttestor: {
+      value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -347,6 +401,7 @@ export function getRecordTaskModerationInstruction<
       getAccountMeta("task", accounts.task),
       getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderator", accounts.moderator),
+      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRecordTaskModerationInstructionDataEncoder().encode(
@@ -359,6 +414,7 @@ export function getRecordTaskModerationInstruction<
     TAccountTask,
     TAccountTaskModeration,
     TAccountModerator,
+    TAccountModerationAttestor,
     TAccountSystemProgram
   >);
 }
@@ -372,8 +428,24 @@ export type ParsedRecordTaskModerationInstruction<
     moderationConfig: TAccountMetas[0];
     task: TAccountMetas[1];
     taskModeration: TAccountMetas[2];
+    /**
+     * The recording signer. Authorization is checked in the handler (NOT as an account
+     * constraint here) so the registered-attestor OR global-authority branch can be
+     * evaluated. In the canary build there is no attestor account, so the handler falls
+     * back to the global-authority-only check — the canary surface stays frozen.
+     */
     moderator: TAccountMetas[3];
-    systemProgram: TAccountMetas[4];
+    /**
+     * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
+     * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
+     * attestor to record. Bound to `["moderation_attestor", moderator]` — Anchor enforces
+     * the canonical PDA, so a forged or mismatched entry fails account resolution; a
+     * REVOKED attestor's PDA is closed and fails to load (cannot attest). Full-surface
+     * only — gated so the frozen canary account list for `record_task_moderation` is
+     * unchanged.
+     */
+    moderationAttestor?: TAccountMetas[4] | undefined;
+    systemProgram: TAccountMetas[5];
   };
   data: RecordTaskModerationInstructionData;
 };
@@ -386,12 +458,12 @@ export function parseRecordTaskModerationInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRecordTaskModerationInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 5) {
+  if (instruction.accounts.length < 6) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 5,
+        expectedAccountMetas: 6,
       },
     );
   }
@@ -401,6 +473,12 @@ export function parseRecordTaskModerationInstruction<
     accountIndex += 1;
     return accountMeta;
   };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
+  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
@@ -408,6 +486,7 @@ export function parseRecordTaskModerationInstruction<
       task: getNextAccount(),
       taskModeration: getNextAccount(),
       moderator: getNextAccount(),
+      moderationAttestor: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
     },
     data: getRecordTaskModerationInstructionDataDecoder().decode(

@@ -11,8 +11,8 @@ use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition}
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
-    OperatorLeg,
+    build_referrer_leg, calculate_fee_with_reputation, execute_completion_rewards,
+    validate_task_dependency, OperatorLeg,
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
@@ -117,6 +117,11 @@ pub struct AcceptTaskResult<'info> {
     /// operator fee leg in SOL.
     #[account(mut)]
     pub operator: Option<UncheckedAccount<'info>>,
+    /// CHECK: referrer payee — validated == the task's resolved referrer (P6.2 §4
+    /// 4-way split). Required only when the task carries a non-zero referrer fee;
+    /// receives the referrer fee leg in SOL.
+    #[account(mut)]
+    pub referrer: Option<UncheckedAccount<'info>>,
 
     // === Batch 3 completion bonds (optional; refunded on accept) ===
     /// CHECK: creator completion bond PDA; refunded to the creator on accept.
@@ -303,11 +308,15 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     // ["hire", task] record), so the leg can't be dodged; the accounts are optional so a
     // non-hired CreatorReview task (task.operator == default) settles unchanged with None.
     let accept_task_key = ctx.accounts.task.key();
-    let (operator_pubkey, operator_fee_bps_resolved) =
-        if ctx.accounts.task.operator != Pubkey::default() {
+    let (operator_pubkey, operator_fee_bps_resolved, referrer_pubkey, referrer_fee_bps_resolved) =
+        if ctx.accounts.task.operator != Pubkey::default()
+            || ctx.accounts.task.referrer != Pubkey::default()
+        {
             (
                 ctx.accounts.task.operator,
                 ctx.accounts.task.operator_fee_bps,
+                ctx.accounts.task.referrer,
+                ctx.accounts.task.referrer_fee_bps,
             )
         } else if let Some(hr) = ctx.accounts.hire_record.as_ref() {
             if hr.owner == &crate::ID {
@@ -320,12 +329,17 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
                     hire.task == accept_task_key,
                     CoordinationError::InvalidHireRecord
                 );
-                (hire.operator, hire.operator_fee_bps)
+                (
+                    hire.operator,
+                    hire.operator_fee_bps,
+                    hire.referrer,
+                    hire.referrer_fee_bps,
+                )
             } else {
-                (Pubkey::default(), 0)
+                (Pubkey::default(), 0, Pubkey::default(), 0)
             }
         } else {
-            (Pubkey::default(), 0)
+            (Pubkey::default(), 0, Pubkey::default(), 0)
         };
     let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
         let op = ctx
@@ -344,6 +358,11 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     } else {
         None
     };
+    let referrer_leg = build_referrer_leg(
+        referrer_pubkey,
+        referrer_fee_bps_resolved,
+        ctx.accounts.referrer.as_ref().map(|r| r.as_ref()),
+    )?;
 
     execute_completion_rewards(
         &mut ctx.accounts.task,
@@ -360,6 +379,7 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         &clock,
         token_accounts,
         operator_leg,
+        referrer_leg,
     )?;
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;

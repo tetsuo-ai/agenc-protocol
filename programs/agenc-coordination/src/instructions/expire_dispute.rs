@@ -13,15 +13,14 @@
 //! - Some votes but insufficient quorum: Creator gets refund (dispute was contested)
 
 use crate::errors::CoordinationError;
-use crate::events::{ArbiterVotesCleanedUp, DisputeExpired};
+use crate::events::DisputeExpired;
 use crate::instructions::bid_settlement_helpers::{
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
-    check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
-    process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
-    validate_remaining_accounts_structure,
+    check_duplicate_workers, pay_dispute_operator_fee, process_worker_claim_pair,
+    resolve_task_operator_terms, validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::token_helpers::{
@@ -502,32 +501,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     worker.disputes_as_defendant = worker.disputes_as_defendant.saturating_sub(1);
     let defendant_worker_key = worker.key();
 
-    // Decrement active_dispute_votes for each arbiter who voted (fix #328)
-    //
-    // remaining_accounts format (fix #333):
-    // - First: (vote, arbiter) pairs for total_voters
-    // - Then: optional (claim, worker) pairs for additional workers on collaborative tasks
+    // P6.3: the arbiter vote/quorum model is retired. A dispute never records a voter,
+    // so there are NO (vote, arbiter) pairs to clean up and the `ArbiterVotesCleanedUp`
+    // event is removed. `remaining_accounts` now carry ONLY the optional collaborative
+    // (claim, worker) pairs; `validate_remaining_accounts_structure` asserts
+    // `total_voters == 0` and pair-alignment.
     let arbiter_accounts =
         validate_remaining_accounts_structure(dispute_remaining_accounts, dispute.total_voters)?;
-    check_duplicate_arbiters(dispute_remaining_accounts, arbiter_accounts)?;
-
-    for i in (0..arbiter_accounts).step_by(2) {
-        let arbiter_index = i
-            .checked_add(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        process_arbiter_vote_pair(
-            &dispute_remaining_accounts[i],
-            &dispute_remaining_accounts[arbiter_index],
-            &dispute.key(),
-            &crate::ID,
-        )?;
-    }
-
-    // Emit event for arbiter vote cleanup (fix #572)
-    emit!(ArbiterVotesCleanedUp {
-        dispute_id: dispute.dispute_id,
-        arbiter_count: dispute.total_voters,
-    });
 
     let remaining_worker_accounts = dispute_remaining_accounts
         .len()

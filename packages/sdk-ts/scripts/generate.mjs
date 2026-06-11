@@ -5,7 +5,7 @@ import { readFileSync, rmSync, cpSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { createFromRoot } from "codama";
+import { createFromRoot, updateInstructionsVisitor } from "codama";
 import { rootNodeFromAnchor } from "@codama/nodes-from-anchor";
 import * as renderers from "@codama/renderers-js";
 
@@ -43,6 +43,49 @@ if (typeof renderVisitor !== "function") {
 // We only want the client modules, flattened directly under our src/generated/.
 const tmp = mkdtempSync(path.join(tmpdir(), "codama-"));
 const codama = createFromRoot(rootNodeFromAnchor(idl));
+
+// cancelTask.agentStats is the only AgentStats handler whose PDA is seeded on an
+// OPTIONAL account (`creator_agent`, which the creator may omit). Codama's resolver
+// refuses to auto-derive a PDA whose seed references an optional account
+// (CANNOT_USE_OPTIONAL_ACCOUNT_AS_PDA_SEED_VALUE), so we strip the auto-derivation
+// for THIS account only and require the caller to pass the address explicitly.
+//
+// This does NOT weaken validation: the Anchor program still pins
+// `agent_stats = ["agent_stats", creator_agent]` via its `seeds`/`bump` constraint
+// on-chain, so a wrong key is rejected by the program regardless of what the client
+// passes. The facade re-derives the canonical PDA (findAgentStatsPda) and supplies it,
+// preserving lazy init-on-first-write. The other four AgentStats handlers seed on a
+// non-optional account/field and are auto-derived by codama unchanged.
+codama.update(
+  updateInstructionsVisitor({
+    cancelTask: {
+      accounts: {
+        agentStats: { defaultValue: null },
+      },
+    },
+    // record_*_moderation.moderation_attestor (P6.8) is an OPTIONAL roster account whose
+    // on-chain `["moderation_attestor", moderator]` PDA exists ONLY when a deputy attestor
+    // is registered. The default path (the global moderation authority records directly)
+    // has NO such account, so auto-deriving it makes the async builder pass a non-existent
+    // address that the program rejects (AccountNotInitialized). Strip the auto-derivation
+    // so an omitted attestor renders as the program-ID placeholder — Anchor's `Option`
+    // convention reads that as `None` and runs the global-authority branch. The Anchor
+    // program still pins the canonical PDA + `attestor == moderator` when a deputy DOES
+    // pass one, so the deputy path stays fully validated; the caller (or the facade) just
+    // supplies the address explicitly for that branch.
+    recordTaskModeration: {
+      accounts: {
+        moderationAttestor: { defaultValue: null },
+      },
+    },
+    recordListingModeration: {
+      accounts: {
+        moderationAttestor: { defaultValue: null },
+      },
+    },
+  }),
+);
+
 await codama.accept(renderVisitor(tmp));
 const inner = path.join(tmp, "src", "generated");
 rmSync(OUT, { recursive: true, force: true });

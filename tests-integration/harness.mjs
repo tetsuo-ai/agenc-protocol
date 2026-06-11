@@ -133,6 +133,10 @@ export function injectProtocolConfig(svm, admin) {
     protocol_paused: false,
     disabled_task_type_mask: 0,
     multisig_owners: Array(5).fill(PublicKey.default),
+    // P6.5: a fresh full-surface deploy advertises the full surface (1). The
+    // migrate_protocol realloc test below builds a legacy (pre-surface_revision)
+    // buffer explicitly, so this default only affects already-migrated configs.
+    surface_revision: 1,
   };
   return coder.accounts
     .encode("ProtocolConfig", cfg)
@@ -165,6 +169,15 @@ export async function setProtocolPaused(svm, paused) {
     executable: false,
     rentEpoch: 0,
   });
+}
+
+/// Read `surface_revision` off the live ProtocolConfig (P6.5). Returns the raw u16.
+export function getSurfaceRevision(svm) {
+  const [protocolPda] = pda([enc("protocol")]);
+  const acct = svm.getAccount(protocolPda);
+  if (!acct) throw new Error("ProtocolConfig not present — call injectProtocolConfig first");
+  const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+  return cfg.surface_revision;
 }
 
 /// Set min_arbiter_stake on the live ProtocolConfig (so arbiter votes carry weight).
@@ -343,7 +356,9 @@ export async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilit
 }
 
 /// Build (but don't send) a hire_from_listing instruction for `buyer`.
-export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null } = {}) {
+/// P6.2: pass `referrer` (PublicKey) + `referrerFeeBps` to attach the demand-side
+/// referral leg; both default to no-leg (null / 0).
+export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null, referrer = null, referrerFeeBps = 0 } = {}) {
   const signer = asProvider ? w.provider : w.buyer;
   const agent = asProvider ? w.providerAgent : w.buyerAgent;
   const prog = asProvider ? w.providerProg : w.buyerProg;
@@ -353,7 +368,7 @@ export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProv
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [authorityRateLimit] = pda([enc("authority_rate_limit"), signer.publicKey.toBuffer()]);
   const ix = await prog.methods
-    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1))
+    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps)
     .accounts({
       task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration,

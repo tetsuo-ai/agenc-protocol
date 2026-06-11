@@ -11,8 +11,10 @@
 // emitting wrong codecs):
 //   - every `idl.events[]` name has a matching struct entry in `idl.types[]`
 //   - event struct fields use ONLY primitives (u8..u128, i8..i128, bool), pubkey,
-//     string, fixed arrays { array: [inner, N] }, and { option: inner }
-//     (NO nested defined types, NO vecs)
+//     string, fixed arrays { array: [inner, N] }, { option: inner }, and
+//     { defined: { name } } references to FIELDLESS (C-style) enums — which reuse
+//     the Codama-generated getXDecoder() from ../types (NO data-carrying variants,
+//     NO vecs)
 //
 // Output is deterministic (events sorted by name, fixed formatting, no timestamps),
 // so `npm run sdk:drift` (regenerate + `git diff src/generated`) covers event codecs.
@@ -80,9 +82,15 @@ const PRIMITIVES = {
 
 /**
  * Maps one IDL field type to TypeScript type + @solana/kit decoder expression.
- * Records required imports on `imports` ({ values: Set, types: Set }).
+ * Records required @solana/kit imports on `imports` ({ values: Set, types: Set }).
+ *
+ * `typesByName` is the IDL `types[]` lookup; it is only consulted for `{ defined }`
+ * references, and only fieldless (C-style) enums are supported — those round-trip
+ * through the Codama-generated `getXDecoder()` in `../types`, recorded on
+ * `definedImports` so the event file imports the canonical generated codec rather
+ * than re-deriving it (single source of truth, drift-safe).
  */
-function mapType(idlType, imports, context) {
+function mapType(idlType, imports, context, typesByName, definedImports) {
   if (typeof idlType === "string") {
     const prim = PRIMITIVES[idlType];
     if (prim) {
@@ -120,7 +128,7 @@ function mapType(idlType, imports, context) {
           decoderExpr: `fixDecoderSize(getBytesDecoder(), ${size})`,
         };
       }
-      const innerMapped = mapType(inner, imports, context);
+      const innerMapped = mapType(inner, imports, context, typesByName, definedImports);
       imports.values.add("getArrayDecoder");
       return {
         tsType: `Array<${innerMapped.tsType}>`,
@@ -128,7 +136,7 @@ function mapType(idlType, imports, context) {
       };
     }
     if (idlType.option !== undefined) {
-      const innerMapped = mapType(idlType.option, imports, context);
+      const innerMapped = mapType(idlType.option, imports, context, typesByName, definedImports);
       imports.values.add("getOptionDecoder");
       imports.types.add("Option");
       return {
@@ -136,10 +144,42 @@ function mapType(idlType, imports, context) {
         decoderExpr: `getOptionDecoder(${innerMapped.decoderExpr})`,
       };
     }
+    if (idlType.defined && typeof idlType.defined.name === "string") {
+      const definedName = idlType.defined.name;
+      const definedType = typesByName?.get(definedName);
+      if (!definedType || definedType.type?.kind !== "enum") {
+        throw new Error(
+          `Unsupported defined event field type in ${context}: "${definedName}" ` +
+            "(generate-events.mjs only resolves defined references to fieldless enums)",
+        );
+      }
+      // Only fieldless (C-style / scalar) enum variants round-trip through the
+      // Codama-generated getEnumDecoder. A data-carrying variant would need the
+      // full discriminated-union codec — reject it loudly instead of emitting a
+      // wrong codec.
+      const variants = definedType.type.variants ?? [];
+      const hasFields = variants.some(
+        (v) => v.fields !== undefined && v.fields !== null,
+      );
+      if (hasFields) {
+        throw new Error(
+          `Unsupported defined event field type in ${context}: "${definedName}" ` +
+            "has data-carrying variants (only fieldless enums are supported)",
+        );
+      }
+      // Reuse the canonical Codama-generated codec from ../types so the event
+      // payload decodes identically to the rest of the SDK (no drift).
+      definedImports.values.add(`get${definedName}Decoder`);
+      definedImports.types.add(definedName);
+      return {
+        tsType: definedName,
+        decoderExpr: `get${definedName}Decoder()`,
+      };
+    }
   }
   throw new Error(
     `Unsupported event field type in ${context}: ${JSON.stringify(idlType)} ` +
-      "(generate-events.mjs only supports primitives, pubkey, string, fixed arrays, and options)",
+      "(generate-events.mjs only supports primitives, pubkey, string, fixed arrays, options, and fieldless defined enums)",
   );
 }
 
@@ -161,14 +201,28 @@ function renderImports(imports) {
   return `import {\n${names.map((n) => `  ${n},`).join("\n")}\n} from "@solana/kit";`;
 }
 
+/**
+ * Renders the `../types` import block for Codama-generated defined-type codecs
+ * referenced by an event (returns "" when none are used).
+ */
+function renderDefinedImports(definedImports) {
+  if (definedImports.values.size === 0 && definedImports.types.size === 0) return "";
+  const names = [
+    ...[...definedImports.values].sort(),
+    ...[...definedImports.types].sort().map((t) => `type ${t}`),
+  ];
+  return `\nimport {\n${names.map((n) => `  ${n},`).join("\n")}\n} from "../types";`;
+}
+
 /** Renders src/generated/events/<camelName>.ts for one event. */
-function renderEventFile(event) {
+function renderEventFile(event, typesByName) {
   const { name, discriminator, docs, fields } = event;
   const imports = { values: new Set(["getStructDecoder"]), types: new Set(["Decoder", "ReadonlyUint8Array"]) };
+  const definedImports = { values: new Set(), types: new Set() };
   const mappedFields = fields.map((f) => ({
     name: fieldCamelCase(f.name),
     docs: f.docs ?? [],
-    ...mapType(f.type, imports, `${name}.${f.name}`),
+    ...mapType(f.type, imports, `${name}.${f.name}`, typesByName, definedImports),
   }));
 
   const typeFields = mappedFields
@@ -180,7 +234,7 @@ function renderEventFile(event) {
 
   return `${HEADER}
 
-${renderImports(imports)}
+${renderImports(imports)}${renderDefinedImports(definedImports)}
 
 /** 8-byte Anchor event discriminator for \`${name}\` (sha256("event:${name}")[0..8]). */
 export const ${constCase(name)}_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
@@ -328,7 +382,10 @@ export async function generateEvents() {
   rmSync(EVENTS_OUT, { recursive: true, force: true });
   mkdirSync(EVENTS_OUT, { recursive: true });
   for (const event of events) {
-    writeFileSync(path.join(EVENTS_OUT, `${camelCase(event.name)}.ts`), renderEventFile(event));
+    writeFileSync(
+      path.join(EVENTS_OUT, `${camelCase(event.name)}.ts`),
+      renderEventFile(event, typesByName),
+    );
   }
   writeFileSync(path.join(EVENTS_OUT, "agencEvent.ts"), renderUnionFile(events));
   writeFileSync(path.join(EVENTS_OUT, "index.ts"), renderBarrel(events));

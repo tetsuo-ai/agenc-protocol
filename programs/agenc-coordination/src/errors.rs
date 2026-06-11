@@ -892,4 +892,48 @@ pub enum CoordinationError {
     TaskFrozenCannotDispute,
     #[msg("RejectFrozen review is single-worker (Exclusive) only")]
     RejectFrozenSingleWorkerOnly,
+
+    // === Batch 4 (P6.1): rate_hire ===
+    #[msg("Rating score must be in the range 1..=5")]
+    InvalidRatingScore,
+    #[msg("Only a completed hired task can be rated")]
+    TaskNotCompletedForRating,
+    #[msg("Only the buyer (task creator) may rate this hire")]
+    RatingNotBuyer,
+    #[msg("Review URI exceeds the maximum allowed length")]
+    ReviewUriTooLong,
+
+    // === Batch 4 (P6.8): moderation attestor registry ===
+    #[msg("Invalid moderation attestor: pubkey must be non-zero")]
+    InvalidModerationAttestor,
+    #[msg("Signer is neither the moderation authority nor a registered attestor")]
+    UnauthorizedModerationAttestor,
+    #[msg("Supplied moderation attestor entry does not match the signing moderator")]
+    ModerationAttestorMismatch,
+
+    // === Batch 4 (P6.4): accountable dispute rulings ===
+    #[msg("Dispute ruling rationale URI exceeds the maximum allowed length")]
+    RationaleUriTooLong,
+
+    // === Batch 4 (P6.5): surface-versioning migration ===
+    #[msg("ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)")]
+    ConfigNotMigratable,
+
+    #[msg("Account is not the canonical PDA for this instruction")]
+    InvalidPda,
+
+    #[msg("Surface revision value is not a recognized surface")]
+    InvalidSurfaceRevision,
+
+    // === Batch 4 (P6.2): demand-side referral leg ===
+    #[msg("Referrer fee in basis points exceeds the maximum allowed")]
+    ReferrerFeeTooHigh,
+    #[msg("Combined protocol + operator + referrer fees leave the worker below the floor")]
+    CombinedFeeAboveCap,
+    #[msg("Referrer payee account is missing for a task that carries a referrer fee")]
+    MissingReferrerAccount,
+    #[msg("Referrer payee account does not match the snapshotted referrer")]
+    InvalidReferrerAccount,
+    #[msg("Referrer must not be the task creator (no self-deal)")]
+    ReferrerIsCreator,
 }

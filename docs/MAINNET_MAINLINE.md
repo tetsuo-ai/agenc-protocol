@@ -36,6 +36,12 @@ Before or during any future mainnet upgrade:
 2. Confirm `main` contains the exact program source tree being deployed.
 3. Refresh this file if the live scope or rollout rules changed.
 4. Keep committed artifacts and downstream protocol consumers aligned.
+5. Publish/upgrade the **on-chain IDL per cluster** (`anchor idl init` first time,
+   `anchor idl upgrade` thereafter) so the deployed IDL is fetchable truth — for the
+   mainnet canary cluster publish the 25-instruction
+   `target/idl/agenc_coordination.canary.json`, never the full IDL. See
+   [./VERSIONS.md](./VERSIONS.md) for the full surface-versioning release runbook
+   (config/task migration choreography + `surface_revision` stamping).
 
 ## Why This Exists
 

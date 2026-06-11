@@ -149,6 +149,8 @@ export type CreateTaskInstructionData = {
   constraintHash: Option<ReadonlyUint8Array>;
   minReputation: number;
   rewardMint: Option<Address>;
+  referrer: Option<Address>;
+  referrerFeeBps: number;
 };
 
 export type CreateTaskInstructionDataArgs = {
@@ -162,6 +164,8 @@ export type CreateTaskInstructionDataArgs = {
   constraintHash: OptionOrNullable<ReadonlyUint8Array>;
   minReputation: number;
   rewardMint: OptionOrNullable<Address>;
+  referrer: OptionOrNullable<Address>;
+  referrerFeeBps: number;
 };
 
 export function getCreateTaskInstructionDataEncoder(): Encoder<CreateTaskInstructionDataArgs> {
@@ -181,6 +185,8 @@ export function getCreateTaskInstructionDataEncoder(): Encoder<CreateTaskInstruc
       ],
       ["minReputation", getU16Encoder()],
       ["rewardMint", getOptionEncoder(getAddressEncoder())],
+      ["referrer", getOptionEncoder(getAddressEncoder())],
+      ["referrerFeeBps", getU16Encoder()],
     ]),
     (value) => ({ ...value, discriminator: CREATE_TASK_DISCRIMINATOR }),
   );
@@ -199,6 +205,8 @@ export function getCreateTaskInstructionDataDecoder(): Decoder<CreateTaskInstruc
     ["constraintHash", getOptionDecoder(fixDecoderSize(getBytesDecoder(), 32))],
     ["minReputation", getU16Decoder()],
     ["rewardMint", getOptionDecoder(getAddressDecoder())],
+    ["referrer", getOptionDecoder(getAddressDecoder())],
+    ["referrerFeeBps", getU16Decoder()],
   ]);
 }
 
@@ -265,6 +273,8 @@ export type CreateTaskAsyncInput<
   constraintHash: CreateTaskInstructionDataArgs["constraintHash"];
   minReputation: CreateTaskInstructionDataArgs["minReputation"];
   rewardMintArg: CreateTaskInstructionDataArgs["rewardMint"];
+  referrer: CreateTaskInstructionDataArgs["referrer"];
+  referrerFeeBps: CreateTaskInstructionDataArgs["referrerFeeBps"];
 };
 
 export async function getCreateTaskInstructionAsync<
@@ -488,6 +498,8 @@ export type CreateTaskInput<
   constraintHash: CreateTaskInstructionDataArgs["constraintHash"];
   minReputation: CreateTaskInstructionDataArgs["minReputation"];
   rewardMintArg: CreateTaskInstructionDataArgs["rewardMint"];
+  referrer: CreateTaskInstructionDataArgs["referrer"];
+  referrerFeeBps: CreateTaskInstructionDataArgs["referrerFeeBps"];
 };
 
 export function getCreateTaskInstruction<

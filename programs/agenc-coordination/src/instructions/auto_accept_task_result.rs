@@ -9,8 +9,8 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
-    OperatorLeg,
+    build_referrer_leg, calculate_fee_with_reputation, execute_completion_rewards,
+    validate_task_dependency, OperatorLeg,
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
@@ -112,6 +112,11 @@ pub struct AutoAcceptTaskResult<'info> {
     /// when the task carries a non-zero operator fee; receives the operator leg (SOL).
     #[account(mut)]
     pub operator: Option<UncheckedAccount<'info>>,
+    /// CHECK: referrer payee — validated == the task's resolved referrer (P6.2 §4
+    /// 4-way split). Required only when the task carries a non-zero referrer fee;
+    /// receives the referrer leg (SOL).
+    #[account(mut)]
+    pub referrer: Option<UncheckedAccount<'info>>,
 
     // === Batch 3 completion bonds (optional; refunded on auto-accept) ===
     /// CHECK: creator completion bond PDA; refunded on auto-accept. Validated by helper.
@@ -283,11 +288,15 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
     // hired task whose human buyer ghosts past the review window still pays the operator leg.
     // Optional accounts: a non-hired task (task.operator == default) settles unchanged with None.
     let auto_accept_task_key = ctx.accounts.task.key();
-    let (operator_pubkey, operator_fee_bps_resolved) =
-        if ctx.accounts.task.operator != Pubkey::default() {
+    let (operator_pubkey, operator_fee_bps_resolved, referrer_pubkey, referrer_fee_bps_resolved) =
+        if ctx.accounts.task.operator != Pubkey::default()
+            || ctx.accounts.task.referrer != Pubkey::default()
+        {
             (
                 ctx.accounts.task.operator,
                 ctx.accounts.task.operator_fee_bps,
+                ctx.accounts.task.referrer,
+                ctx.accounts.task.referrer_fee_bps,
             )
         } else if let Some(hr) = ctx.accounts.hire_record.as_ref() {
             if hr.owner == &crate::ID {
@@ -300,12 +309,17 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
                     hire.task == auto_accept_task_key,
                     CoordinationError::InvalidHireRecord
                 );
-                (hire.operator, hire.operator_fee_bps)
+                (
+                    hire.operator,
+                    hire.operator_fee_bps,
+                    hire.referrer,
+                    hire.referrer_fee_bps,
+                )
             } else {
-                (Pubkey::default(), 0)
+                (Pubkey::default(), 0, Pubkey::default(), 0)
             }
         } else {
-            (Pubkey::default(), 0)
+            (Pubkey::default(), 0, Pubkey::default(), 0)
         };
     let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
         let op = ctx
@@ -324,6 +338,11 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
     } else {
         None
     };
+    let referrer_leg = build_referrer_leg(
+        referrer_pubkey,
+        referrer_fee_bps_resolved,
+        ctx.accounts.referrer.as_ref().map(|r| r.as_ref()),
+    )?;
 
     execute_completion_rewards(
         &mut ctx.accounts.task,
@@ -340,6 +359,7 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         &clock,
         token_accounts,
         operator_leg,
+        referrer_leg,
     )?;
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;

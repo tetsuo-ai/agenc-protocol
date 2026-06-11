@@ -10,12 +10,18 @@ import {
   combineCodec,
   fixDecoderSize,
   fixEncoderSize,
+  getAddressDecoder,
+  getAddressEncoder,
   getBytesDecoder,
   getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
+  getOptionDecoder,
+  getOptionEncoder,
   getStructDecoder,
   getStructEncoder,
+  getU16Decoder,
+  getU16Encoder,
   getU64Decoder,
   getU64Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -24,12 +30,14 @@ import {
   type AccountMeta,
   type AccountSignerMeta,
   type Address,
-  type FixedSizeCodec,
-  type FixedSizeDecoder,
-  type FixedSizeEncoder,
+  type Codec,
+  type Decoder,
+  type Encoder,
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
+  type Option,
+  type OptionOrNullable,
   type ReadonlyAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
@@ -125,6 +133,8 @@ export type HireFromListingHumanlessInstructionData = {
   expectedPrice: bigint;
   expectedVersion: bigint;
   reviewWindowSecs: bigint;
+  referrer: Option<Address>;
+  referrerFeeBps: number;
 };
 
 export type HireFromListingHumanlessInstructionDataArgs = {
@@ -132,9 +142,11 @@ export type HireFromListingHumanlessInstructionDataArgs = {
   expectedPrice: number | bigint;
   expectedVersion: number | bigint;
   reviewWindowSecs: number | bigint;
+  referrer: OptionOrNullable<Address>;
+  referrerFeeBps: number;
 };
 
-export function getHireFromListingHumanlessInstructionDataEncoder(): FixedSizeEncoder<HireFromListingHumanlessInstructionDataArgs> {
+export function getHireFromListingHumanlessInstructionDataEncoder(): Encoder<HireFromListingHumanlessInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
@@ -142,6 +154,8 @@ export function getHireFromListingHumanlessInstructionDataEncoder(): FixedSizeEn
       ["expectedPrice", getU64Encoder()],
       ["expectedVersion", getU64Encoder()],
       ["reviewWindowSecs", getI64Encoder()],
+      ["referrer", getOptionEncoder(getAddressEncoder())],
+      ["referrerFeeBps", getU16Encoder()],
     ]),
     (value) => ({
       ...value,
@@ -150,17 +164,19 @@ export function getHireFromListingHumanlessInstructionDataEncoder(): FixedSizeEn
   );
 }
 
-export function getHireFromListingHumanlessInstructionDataDecoder(): FixedSizeDecoder<HireFromListingHumanlessInstructionData> {
+export function getHireFromListingHumanlessInstructionDataDecoder(): Decoder<HireFromListingHumanlessInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["taskId", fixDecoderSize(getBytesDecoder(), 32)],
     ["expectedPrice", getU64Decoder()],
     ["expectedVersion", getU64Decoder()],
     ["reviewWindowSecs", getI64Decoder()],
+    ["referrer", getOptionDecoder(getAddressDecoder())],
+    ["referrerFeeBps", getU16Decoder()],
   ]);
 }
 
-export function getHireFromListingHumanlessInstructionDataCodec(): FixedSizeCodec<
+export function getHireFromListingHumanlessInstructionDataCodec(): Codec<
   HireFromListingHumanlessInstructionDataArgs,
   HireFromListingHumanlessInstructionData
 > {
@@ -211,6 +227,8 @@ export type HireFromListingHumanlessAsyncInput<
   expectedPrice: HireFromListingHumanlessInstructionDataArgs["expectedPrice"];
   expectedVersion: HireFromListingHumanlessInstructionDataArgs["expectedVersion"];
   reviewWindowSecs: HireFromListingHumanlessInstructionDataArgs["reviewWindowSecs"];
+  referrer: HireFromListingHumanlessInstructionDataArgs["referrer"];
+  referrerFeeBps: HireFromListingHumanlessInstructionDataArgs["referrerFeeBps"];
 };
 
 export async function getHireFromListingHumanlessInstructionAsync<
@@ -425,6 +443,8 @@ export type HireFromListingHumanlessInput<
   expectedPrice: HireFromListingHumanlessInstructionDataArgs["expectedPrice"];
   expectedVersion: HireFromListingHumanlessInstructionDataArgs["expectedVersion"];
   reviewWindowSecs: HireFromListingHumanlessInstructionDataArgs["reviewWindowSecs"];
+  referrer: HireFromListingHumanlessInstructionDataArgs["referrer"];
+  referrerFeeBps: HireFromListingHumanlessInstructionDataArgs["referrerFeeBps"];
 };
 
 export function getHireFromListingHumanlessInstruction<

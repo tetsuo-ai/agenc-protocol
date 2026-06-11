@@ -336,11 +336,14 @@ describe("governance facade — governance + protocol config", () => {
   });
 
   it("updateLaunchControls: program, account order, data round-trip", async () => {
+    // P6.5: updateLaunchControls now takes a `surfaceRevision: u16` arg (the
+    // authority can re-stamp the deployed surface revision).
     const ix = await updateLaunchControls({
       protocolConfig: A.protocolConfig,
       authority,
       protocolPaused: true,
       disabledTaskTypeMask: 6,
+      surfaceRevision: 1,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -353,6 +356,7 @@ describe("governance facade — governance + protocol config", () => {
       getUpdateLaunchControlsInstructionDataDecoder().decode(ix.data);
     expect(decoded.protocolPaused).toBe(true);
     expect(decoded.disabledTaskTypeMask).toBe(6);
+    expect(decoded.surfaceRevision).toBe(1);
   });
 
   it("initializeProtocol: program, account order, data round-trip", async () => {
@@ -457,9 +461,13 @@ describe("governance facade — migrations", () => {
     expect(decoded.dryRun).toBe(true);
   });
 
-  it("migrateProtocol: program, account order, data round-trip", async () => {
-    const ix = await migrateProtocol({
+  it("migrateProtocol: program, account order, data round-trip", () => {
+    // P6.5: migrate_protocol now reallocs the ProtocolConfig (raw UncheckedAccount)
+    // and funds the +2-byte growth, so its accounts are
+    // [protocolConfig, payer, authority, systemProgram] and the builder is sync.
+    const ix = migrateProtocol({
       protocolConfig: A.protocolConfig,
+      payer,
       authority,
       targetVersion: 2,
     });
@@ -467,7 +475,9 @@ describe("governance facade — migrations", () => {
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(ix.accounts.map((a) => a.address)).toEqual([
       A.protocolConfig,
+      payer.address,
       authority.address,
+      SYSTEM_PROGRAM,
     ]);
 
     const decoded = getMigrateProtocolInstructionDataDecoder().decode(ix.data);

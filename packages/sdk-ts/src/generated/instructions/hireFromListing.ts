@@ -10,10 +10,16 @@ import {
   combineCodec,
   fixDecoderSize,
   fixEncoderSize,
+  getAddressDecoder,
+  getAddressEncoder,
   getBytesDecoder,
   getBytesEncoder,
+  getOptionDecoder,
+  getOptionEncoder,
   getStructDecoder,
   getStructEncoder,
+  getU16Decoder,
+  getU16Encoder,
   getU64Decoder,
   getU64Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -22,12 +28,14 @@ import {
   type AccountMeta,
   type AccountSignerMeta,
   type Address,
-  type FixedSizeCodec,
-  type FixedSizeDecoder,
-  type FixedSizeEncoder,
+  type Codec,
+  type Decoder,
+  type Encoder,
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
+  type Option,
+  type OptionOrNullable,
   type ReadonlyAccount,
   type ReadonlySignerAccount,
   type ReadonlyUint8Array,
@@ -127,36 +135,44 @@ export type HireFromListingInstructionData = {
   taskId: ReadonlyUint8Array;
   expectedPrice: bigint;
   expectedVersion: bigint;
+  referrer: Option<Address>;
+  referrerFeeBps: number;
 };
 
 export type HireFromListingInstructionDataArgs = {
   taskId: ReadonlyUint8Array;
   expectedPrice: number | bigint;
   expectedVersion: number | bigint;
+  referrer: OptionOrNullable<Address>;
+  referrerFeeBps: number;
 };
 
-export function getHireFromListingInstructionDataEncoder(): FixedSizeEncoder<HireFromListingInstructionDataArgs> {
+export function getHireFromListingInstructionDataEncoder(): Encoder<HireFromListingInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
       ["expectedPrice", getU64Encoder()],
       ["expectedVersion", getU64Encoder()],
+      ["referrer", getOptionEncoder(getAddressEncoder())],
+      ["referrerFeeBps", getU16Encoder()],
     ]),
     (value) => ({ ...value, discriminator: HIRE_FROM_LISTING_DISCRIMINATOR }),
   );
 }
 
-export function getHireFromListingInstructionDataDecoder(): FixedSizeDecoder<HireFromListingInstructionData> {
+export function getHireFromListingInstructionDataDecoder(): Decoder<HireFromListingInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["taskId", fixDecoderSize(getBytesDecoder(), 32)],
     ["expectedPrice", getU64Decoder()],
     ["expectedVersion", getU64Decoder()],
+    ["referrer", getOptionDecoder(getAddressDecoder())],
+    ["referrerFeeBps", getU16Decoder()],
   ]);
 }
 
-export function getHireFromListingInstructionDataCodec(): FixedSizeCodec<
+export function getHireFromListingInstructionDataCodec(): Codec<
   HireFromListingInstructionDataArgs,
   HireFromListingInstructionData
 > {
@@ -219,6 +235,8 @@ export type HireFromListingAsyncInput<
   taskId: HireFromListingInstructionDataArgs["taskId"];
   expectedPrice: HireFromListingInstructionDataArgs["expectedPrice"];
   expectedVersion: HireFromListingInstructionDataArgs["expectedVersion"];
+  referrer: HireFromListingInstructionDataArgs["referrer"];
+  referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
 };
 
 export async function getHireFromListingInstructionAsync<
@@ -439,6 +457,8 @@ export type HireFromListingInput<
   taskId: HireFromListingInstructionDataArgs["taskId"];
   expectedPrice: HireFromListingInstructionDataArgs["expectedPrice"];
   expectedVersion: HireFromListingInstructionDataArgs["expectedVersion"];
+  referrer: HireFromListingInstructionDataArgs["referrer"];
+  referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
 };
 
 export function getHireFromListingInstruction<

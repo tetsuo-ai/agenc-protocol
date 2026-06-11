@@ -20,6 +20,14 @@ import {
 
 const DEFAULT_ADDR = address("11111111111111111111111111111111");
 
+/**
+ * `surface_revision` value the program stamps on a full deploy (mirrors the
+ * on-chain `ProtocolConfig::SURFACE_REVISION_FULL`). The litesvm suites run the
+ * FULL-surface `.so`, so the injected config must read as full-surface — not the
+ * conservative canary `0`.
+ */
+const SURFACE_REVISION_FULL = 1;
+
 function writeAccount(
   svm: LiteSVM,
   pda: Address,
@@ -86,6 +94,7 @@ export async function seedProtocolConfig(
     minSupportedVersion: 1,
     protocolPaused: false,
     disabledTaskTypeMask: 0,
+    surfaceRevision: SURFACE_REVISION_FULL,
     multisigOwners: [
       DEFAULT_ADDR,
       DEFAULT_ADDR,

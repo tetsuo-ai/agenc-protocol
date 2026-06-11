@@ -22,6 +22,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{ServiceListingHired, TaskCreated};
+use crate::instructions::completion_helpers::resolve_referrer_snapshot;
 use crate::instructions::constants::MIN_SKILL_PRICE;
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
@@ -274,6 +275,8 @@ pub fn handler(
     task_id: [u8; 32],
     expected_price: u64,
     expected_version: u64,
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
 ) -> Result<()> {
     let clock = Clock::get()?;
     let config = ctx.accounts.protocol_config.as_ref();
@@ -379,14 +382,31 @@ pub fn handler(
     // 3-way split from the Task (the HireRecord stays the fallback for tasks hired
     // before the Batch-2 redeploy / the 149 migrated tasks). A creator that is also
     // the operator could self-deal the operator leg, so reject that here.
-    if listing_operator != Pubkey::default() {
+    let stamped_operator_fee_bps = if listing_operator != Pubkey::default() {
         require!(
             listing_operator != creator_key,
             CoordinationError::OperatorIsCreator
         );
         task.operator = listing_operator;
         task.operator_fee_bps = listing_operator_fee_bps;
-    }
+        listing_operator_fee_bps
+    } else {
+        0
+    };
+
+    // P6.2 demand-side referral leg: the buyer supplies the embedder who brought them
+    // (referrer + bps). Validated against the per-leg + combined caps and the
+    // no-self-deal guard at creation, then snapshotted onto the Task (read by the
+    // 4-way settlement split; HireRecord carries the fallback copy below).
+    let (referrer_key, referrer_bps) = resolve_referrer_snapshot(
+        referrer,
+        referrer_fee_bps,
+        protocol_fee_bps,
+        stamped_operator_fee_bps,
+        creator_key,
+    )?;
+    task.referrer = referrer_key;
+    task.referrer_fee_bps = referrer_bps;
     let task_key = task.key();
 
     let escrow = ctx.accounts.escrow.as_mut();
@@ -433,6 +453,8 @@ pub fn handler(
     hire_record.operator_fee_bps = listing_operator_fee_bps;
     hire_record.bump = ctx.bumps.hire_record;
     hire_record._reserved = [0u8; 32];
+    hire_record.referrer = referrer_key;
+    hire_record.referrer_fee_bps = referrer_bps;
 
     // Emit TaskCreated so the hired task is indistinguishable to existing
     // indexers/flows, plus a hire event linking listing -> task.

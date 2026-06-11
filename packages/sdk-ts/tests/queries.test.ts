@@ -122,6 +122,9 @@ function taskFixtureArgs(overrides: Partial<TaskArgs> = {}): TaskArgs {
     operator: DEFAULT_ADDR,
     operatorFeeBps: 0,
     reserved: new Uint8Array(16),
+    // P6.2: no-referrer default (Pubkey::default()), fee 0 — the no-leg case.
+    referrer: DEFAULT_ADDR,
+    referrerFeeBps: 0,
     ...overrides,
   };
 }
@@ -237,6 +240,9 @@ describe("queries offsets are drift-proofed against the generated encoders", () 
         operatorFeeBps: 0,
         bump: 248,
         reserved: new Uint8Array(32),
+        // P6.2: no-referrer default (Pubkey::default()), fee 0.
+        referrer: DEFAULT_ADDR,
+        referrerFeeBps: 0,
       }),
     );
     expect(decodeAddressAt(data, HIRE_RECORD_TASK_OFFSET)).toBe(

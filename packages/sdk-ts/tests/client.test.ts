@@ -29,6 +29,7 @@ import {
   getSetComputeUnitPriceInstruction,
   isBlockhashExpiredError,
   toAgencError,
+  withReferrerDefault,
   type RpcTransportRpc,
   type SignedTransaction,
   type Transport,
@@ -747,5 +748,43 @@ describe("custom program error hex-prefix parsing", () => {
     expect(
       extractCustomProgramErrorCode(new Error("custom program error: 6001")),
     ).toBe(6001);
+  });
+});
+
+describe("withReferrerDefault (P6.2 demand-side referral default)", () => {
+  const REF = address("11111111111111111111111111111112");
+  const OTHER = address("11111111111111111111111111111113");
+
+  it("injects the configured referrer + bps when the input has none", () => {
+    const merged = withReferrerDefault(
+      { taskId: "t" },
+      { address: REF, feeBps: 500 },
+    ) as Record<string, unknown>;
+    expect(merged.referrer).toBe(REF);
+    expect(merged.referrerFeeBps).toBe(500);
+    expect(merged.taskId).toBe("t");
+  });
+
+  it("does NOT override an explicit per-call referrer (explicit value wins)", () => {
+    const merged = withReferrerDefault(
+      { taskId: "t", referrer: OTHER, referrerFeeBps: 100 },
+      { address: REF, feeBps: 500 },
+    ) as Record<string, unknown>;
+    expect(merged.referrer).toBe(OTHER);
+    expect(merged.referrerFeeBps).toBe(100);
+  });
+
+  it("treats an explicit referrer: null as an opt-out (default not applied)", () => {
+    const merged = withReferrerDefault(
+      { taskId: "t", referrer: null },
+      { address: REF, feeBps: 500 },
+    ) as Record<string, unknown>;
+    expect(merged.referrer).toBeNull();
+    expect(merged.referrerFeeBps).toBeUndefined();
+  });
+
+  it("returns the input unchanged when no default referrer is configured", () => {
+    const input = { taskId: "t" };
+    expect(withReferrerDefault(input, undefined)).toBe(input);
   });
 });

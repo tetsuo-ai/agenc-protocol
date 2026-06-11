@@ -19,5 +19,6 @@ export * from "./submissionStatus";
 export * from "./taskBidState";
 export * from "./taskStatus";
 export * from "./taskType";
+export * from "./trackRecordCounter";
 export * from "./validationMode";
 export * from "./weightedScoreWeights";

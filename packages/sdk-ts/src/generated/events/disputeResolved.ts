@@ -6,11 +6,13 @@
 
 import {
   fixDecoderSize,
+  getAddressDecoder,
   getBytesDecoder,
   getI64Decoder,
   getStructDecoder,
   getU64Decoder,
   getU8Decoder,
+  type Address,
   type Decoder,
   type ReadonlyUint8Array,
 } from "@solana/kit";
@@ -23,23 +25,32 @@ export const DISPUTE_RESOLVED_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint
 /**
  * Emitted when a dispute is resolved
  * 
- * The `outcome` field distinguishes between different resolution paths:
- * - 0 = Rejected (approved=false with actual votes cast)
- * - 1 = Approved (approved=true with votes meeting threshold)
- * - 2 = NoVoteDefault (no votes cast, defaulted to rejection - fix #425)
+ * The `outcome` field reflects the assigned resolver's binary ruling (P6.3 — the
+ * arbiter vote/quorum model is retired):
+ * - 0 = Rejected (the resolver passed `approve = false` — creator refunded)
+ * - 1 = Approved (the resolver passed `approve = true` — initiator's resolution upheld)
  * 
- * The NoVoteDefault outcome indicates arbiter apathy rather than active rejection.
- * This allows consumers to distinguish between "arbiters rejected this" vs
- * "no arbiters participated, so it defaulted to rejection".
+ * `votes_for`/`votes_against` are DEPRECATED: they are no longer a vote tally. P6.3
+ * reuses them as a 1-bit ruling record ((1,0)=approved, (0,1)=rejected) so the
+ * permissionless slash finalizers can read the decision; the fields are emitted as-is.
  */
 export type DisputeResolvedEventData = {
   disputeId: ReadonlyUint8Array;
   resolutionType: number;
-  /** Resolution outcome: 0=Rejected, 1=Approved, 2=NoVoteDefault */
+  /** Resolution outcome: 0=Rejected, 1=Approved (P6.3: no more NoVoteDefault path). */
   outcome: number;
+  /** DEPRECATED (P6.3): ruling bit, not a vote tally — 1 when approved else 0. */
   votesFor: bigint;
+  /** DEPRECATED (P6.3): ruling bit, not a vote tally — 1 when rejected else 0. */
   votesAgainst: bigint;
   timestamp: bigint;
+  /**
+   * P6.4 accountable rulings: the wallet that decided this dispute (the protocol
+   * authority OR the assigned resolver who signed `resolve_dispute`).
+   */
+  resolvedBy: Address;
+  /** P6.4: 32-byte content hash of the off-chain ruling rationale. */
+  rationaleHash: ReadonlyUint8Array;
 };
 
 /**
@@ -54,5 +65,7 @@ export function getDisputeResolvedEventDecoder(): Decoder<DisputeResolvedEventDa
     ["votesFor", getU64Decoder()],
     ["votesAgainst", getU64Decoder()],
     ["timestamp", getI64Decoder()],
+    ["resolvedBy", getAddressDecoder()],
+    ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
   ]);
 }

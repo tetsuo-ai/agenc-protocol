@@ -54,7 +54,7 @@ async function setupAttestedTask(w, { attestor, reward = 2_000_000 } = {}) {
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "attested:create_task");
 
@@ -75,7 +75,7 @@ async function setupAttestedTask(w, { attestor, reward = 2_000_000 } = {}) {
       const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
       expectOk(send(w.svm, await modProg.methods
         .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-        .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+        .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
         .instruction(), [w.modAuth]), "attested:task-mod");
       expectOk(send(w.svm, await w.buyerProg.methods
         .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/attest")

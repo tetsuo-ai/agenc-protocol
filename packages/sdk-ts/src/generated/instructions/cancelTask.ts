@@ -64,6 +64,8 @@ export type CancelTaskInstruction<
   TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerBondAuthority extends string | AccountMeta<string> = string,
+  TAccountCreatorAgent extends string | AccountMeta<string> = string,
+  TAccountAgentStats extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -106,6 +108,12 @@ export type CancelTaskInstruction<
       TAccountWorkerBondAuthority extends string
         ? WritableAccount<TAccountWorkerBondAuthority>
         : TAccountWorkerBondAuthority,
+      TAccountCreatorAgent extends string
+        ? ReadonlyAccount<TAccountCreatorAgent>
+        : TAccountCreatorAgent,
+      TAccountAgentStats extends string
+        ? WritableAccount<TAccountAgentStats>
+        : TAccountAgentStats,
       ...TRemainingAccounts,
     ]
   >;
@@ -150,6 +158,8 @@ export type CancelTaskAsyncInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountWorkerBondAuthority extends string = string,
+  TAccountCreatorAgent extends string = string,
+  TAccountAgentStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   /** cancellation can surface protocol-specific errors before Anchor account loading. */
@@ -170,6 +180,20 @@ export type CancelTaskAsyncInput<
   /** worker bond is present (an InProgress past-deadline cancel). */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   workerBondAuthority?: Address<TAccountWorkerBondAuthority>;
+  /**
+   * OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
+   * track-record aggregate. Constrained to `authority` so a caller can only attribute
+   * the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together
+   * with `agent_stats`. Full-surface only — gated so the frozen canary account list for
+   * `cancel_task` is unchanged.
+   */
+  creatorAgent?: Address<TAccountCreatorAgent>;
+  /**
+   * OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with
+   * `creator_agent`), a cancel bumps `total_cancelled`. Bound to
+   * `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only.
+   */
+  agentStats?: Address<TAccountAgentStats>;
 };
 
 export async function getCancelTaskInstructionAsync<
@@ -185,6 +209,8 @@ export async function getCancelTaskInstructionAsync<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountWorkerBondAuthority extends string,
+  TAccountCreatorAgent extends string,
+  TAccountAgentStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelTaskAsyncInput<
@@ -199,7 +225,9 @@ export async function getCancelTaskInstructionAsync<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountWorkerBondAuthority
+    TAccountWorkerBondAuthority,
+    TAccountCreatorAgent,
+    TAccountAgentStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -216,7 +244,9 @@ export async function getCancelTaskInstructionAsync<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountWorkerBondAuthority
+    TAccountWorkerBondAuthority,
+    TAccountCreatorAgent,
+    TAccountAgentStats
   >
 > {
   // Program address.
@@ -249,6 +279,8 @@ export async function getCancelTaskInstructionAsync<
       value: input.workerBondAuthority ?? null,
       isWritable: true,
     },
+    creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
+    agentStats: { value: input.agentStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -291,6 +323,8 @@ export async function getCancelTaskInstructionAsync<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("workerBondAuthority", accounts.workerBondAuthority),
+      getAccountMeta("creatorAgent", accounts.creatorAgent),
+      getAccountMeta("agentStats", accounts.agentStats),
     ],
     data: getCancelTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -307,7 +341,9 @@ export async function getCancelTaskInstructionAsync<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountWorkerBondAuthority
+    TAccountWorkerBondAuthority,
+    TAccountCreatorAgent,
+    TAccountAgentStats
   >);
 }
 
@@ -324,6 +360,8 @@ export type CancelTaskInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountWorkerBondAuthority extends string = string,
+  TAccountCreatorAgent extends string = string,
+  TAccountAgentStats extends string = string,
 > = {
   task: Address<TAccountTask>;
   /** cancellation can surface protocol-specific errors before Anchor account loading. */
@@ -344,6 +382,20 @@ export type CancelTaskInput<
   /** worker bond is present (an InProgress past-deadline cancel). */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   workerBondAuthority?: Address<TAccountWorkerBondAuthority>;
+  /**
+   * OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
+   * track-record aggregate. Constrained to `authority` so a caller can only attribute
+   * the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together
+   * with `agent_stats`. Full-surface only — gated so the frozen canary account list for
+   * `cancel_task` is unchanged.
+   */
+  creatorAgent?: Address<TAccountCreatorAgent>;
+  /**
+   * OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with
+   * `creator_agent`), a cancel bumps `total_cancelled`. Bound to
+   * `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only.
+   */
+  agentStats?: Address<TAccountAgentStats>;
 };
 
 export function getCancelTaskInstruction<
@@ -359,6 +411,8 @@ export function getCancelTaskInstruction<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountWorkerBondAuthority extends string,
+  TAccountCreatorAgent extends string,
+  TAccountAgentStats extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelTaskInput<
@@ -373,7 +427,9 @@ export function getCancelTaskInstruction<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountWorkerBondAuthority
+    TAccountWorkerBondAuthority,
+    TAccountCreatorAgent,
+    TAccountAgentStats
   >,
   config?: { programAddress?: TProgramAddress },
 ): CancelTaskInstruction<
@@ -389,7 +445,9 @@ export function getCancelTaskInstruction<
   TAccountTokenProgram,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
-  TAccountWorkerBondAuthority
+  TAccountWorkerBondAuthority,
+  TAccountCreatorAgent,
+  TAccountAgentStats
 > {
   // Program address.
   const programAddress =
@@ -421,6 +479,8 @@ export function getCancelTaskInstruction<
       value: input.workerBondAuthority ?? null,
       isWritable: true,
     },
+    creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
+    agentStats: { value: input.agentStats ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -452,6 +512,8 @@ export function getCancelTaskInstruction<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("workerBondAuthority", accounts.workerBondAuthority),
+      getAccountMeta("creatorAgent", accounts.creatorAgent),
+      getAccountMeta("agentStats", accounts.agentStats),
     ],
     data: getCancelTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -468,7 +530,9 @@ export function getCancelTaskInstruction<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountWorkerBondAuthority
+    TAccountWorkerBondAuthority,
+    TAccountCreatorAgent,
+    TAccountAgentStats
   >);
 }
 
@@ -497,6 +561,20 @@ export type ParsedCancelTaskInstruction<
     /** worker bond is present (an InProgress past-deadline cancel). */
     workerCompletionBond?: TAccountMetas[10] | undefined;
     workerBondAuthority?: TAccountMetas[11] | undefined;
+    /**
+     * OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
+     * track-record aggregate. Constrained to `authority` so a caller can only attribute
+     * the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together
+     * with `agent_stats`. Full-surface only — gated so the frozen canary account list for
+     * `cancel_task` is unchanged.
+     */
+    creatorAgent?: TAccountMetas[12] | undefined;
+    /**
+     * OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with
+     * `creator_agent`), a cancel bumps `total_cancelled`. Bound to
+     * `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only.
+     */
+    agentStats?: TAccountMetas[13] | undefined;
   };
   data: CancelTaskInstructionData;
 };
@@ -509,12 +587,12 @@ export function parseCancelTaskInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCancelTaskInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 12) {
+  if (instruction.accounts.length < 14) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 12,
+        expectedAccountMetas: 14,
       },
     );
   }
@@ -545,6 +623,8 @@ export function parseCancelTaskInstruction<
       creatorCompletionBond: getNextOptionalAccount(),
       workerCompletionBond: getNextOptionalAccount(),
       workerBondAuthority: getNextOptionalAccount(),
+      creatorAgent: getNextOptionalAccount(),
+      agentStats: getNextOptionalAccount(),
     },
     data: getCancelTaskInstructionDataDecoder().decode(instruction.data),
   };

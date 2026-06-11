@@ -18,6 +18,7 @@ import {
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
   signTransactionMessageWithSigners,
+  type Address,
   type Commitment,
   type Instruction,
   type TransactionSigner,
@@ -132,6 +133,24 @@ export type MarketplaceClientConfig = MarketplaceClientConnectionConfig & {
   computeUnitPrice?: bigint | number;
   /** Blockhash-expiry retry bound. Defaults to 3. */
   maxRetries?: number;
+  /**
+   * P6.2 demand-side referral default. When set, EVERY hire/create this client
+   * builds (`hireFromListing`, `hireFromListingHumanless`, `createTask`,
+   * `createTaskHumanless`) carries this referrer wallet + bps unless the per-call
+   * input overrides `referrer`/`referrerFeeBps`. This is what an embedder sets once
+   * at construction so the on-chain §4 4-way split credits them on every job their
+   * site originates — the wiring behind the Phase 4 marketplace-react `useHire`.
+   *
+   * `referrerFeeBps` must satisfy the on-chain caps (referrer ≤ 2000 bps, and
+   * protocol + operator + referrer ≤ 4000 bps) or the transaction is rejected
+   * on-chain (`ReferrerFeeTooHigh` / `CombinedFeeAboveCap`).
+   */
+  referrer?: {
+    /** The embedder's payee wallet (base58 `Address`). */
+    address: Address;
+    /** The referral fee in basis points (e.g. 500 = 5%). */
+    feeBps: number;
+  };
 };
 
 /** Input type of a facade instruction builder. */
@@ -230,11 +249,8 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.initiateDispute>,
     options?: SendOptions,
   ): Promise<SendResult>;
-  /** Build (facade.voteDispute) and send a vote_dispute transaction (advisory-only). */
-  voteDispute(
-    input: FacadeInput<typeof facade.voteDispute>,
-    options?: SendOptions,
-  ): Promise<SendResult>;
+  // P6.3: `voteDispute` removed — the arbiter vote/quorum model is retired; disputes are
+  // decided by an assigned resolver via `resolveDispute` (+ `assignDisputeResolver`).
   /** Build (facade.resolveDispute) and send a resolve_dispute transaction. */
   resolveDispute(
     input: FacadeInput<typeof facade.resolveDispute>,
@@ -280,6 +296,28 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.revokeDisputeResolver>,
     options?: SendOptions,
   ): Promise<SendResult>;
+}
+
+/**
+ * Merge a client-level `referrer` default (P6.2) into a hire/create facade input.
+ *
+ * The default is applied ONLY when the caller did not pass an explicit `referrer`
+ * (the property is absent or `undefined`); any explicit value — including an
+ * explicit `referrer: null` to opt out — wins. Returns the input unchanged when no
+ * default is configured. Pure + exported for unit testing.
+ */
+export function withReferrerDefault<TInput>(
+  input: TInput,
+  defaultReferrer: MarketplaceClientConfig["referrer"],
+): TInput {
+  if (!defaultReferrer) return input;
+  const record = input as Record<string, unknown>;
+  if (record.referrer !== undefined) return input;
+  return {
+    ...record,
+    referrer: defaultReferrer.address,
+    referrerFeeBps: defaultReferrer.feeBps,
+  } as TInput;
 }
 
 function resolveTransport(config: MarketplaceClientConfig): Transport {
@@ -345,6 +383,7 @@ export function createMarketplaceClient(
     config.computeUnitLimit ?? DEFAULT_COMPUTE_UNIT_LIMIT;
   const defaultComputeUnitPrice = config.computeUnitPrice;
   const defaultMaxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const defaultReferrer = config.referrer;
 
   function computeBudgetInstructions(options?: SendOptions): Instruction[] {
     if (options?.computeBudget === false) return [];
@@ -452,19 +491,36 @@ export function createMarketplaceClient(
     return async (input, options) => send([await build(input)], options);
   }
 
+  /**
+   * Like {@link viaFacade} but injects the client's configured `referrer` default
+   * (P6.2) into the hire/create input when the caller did not pass an explicit
+   * `referrer`. The on-chain handler validates the caps, so this only sets the
+   * default; an explicit per-call `referrer: null` (or any value) wins.
+   */
+  function viaFacadeWithReferral<TInput>(
+    build: (input: TInput) => Promise<Instruction>,
+  ): (input: TInput, options?: SendOptions) => Promise<SendResult> {
+    return async (input, options) => {
+      const merged = withReferrerDefault(input, defaultReferrer);
+      return send([await build(merged)], options);
+    };
+  }
+
   return {
     signer,
     transport,
     send,
     registerAgent: viaFacade(facade.registerAgent),
     createServiceListing: viaFacade(facade.createServiceListing),
-    hireFromListing: viaFacade(facade.hireFromListing),
+    // P6.2: hires carry the client's configured `referrer` default unless the
+    // per-call input overrides it (the embedder's wallet+bps on every job).
+    hireFromListing: viaFacadeWithReferral(facade.hireFromListing),
     claimTaskWithJobSpec: viaFacade(facade.claimTaskWithJobSpec),
     submitTaskResult: viaFacade(facade.submitTaskResult),
     acceptTaskResult: viaFacade(facade.acceptTaskResult),
     postCompletionBond: viaFacade(facade.postCompletionBond),
     initiateDispute: viaFacade(facade.initiateDispute),
-    voteDispute: viaFacade(facade.voteDispute),
+    // P6.3: `voteDispute` removed (vote/quorum model retired).
     resolveDispute: viaFacade(facade.resolveDispute),
     expireDispute: viaFacade(facade.expireDispute),
     cancelDispute: viaFacade(facade.cancelDispute),

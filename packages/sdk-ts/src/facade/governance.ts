@@ -28,8 +28,8 @@ import {
   getInitializeZkConfigInstructionAsync,
   getUpdateZkImageIdInstructionAsync,
   // migrations
-  getMigrateTaskInstructionAsync,
-  getMigrateProtocolInstructionAsync,
+  getMigrateTaskInstruction,
+  getMigrateProtocolInstruction,
   // PDA helpers (re-exported for convenience)
   findProposalPda,
   findVoteProposalVotePda,
@@ -52,8 +52,8 @@ import {
   type InitializeProtocolAsyncInput,
   type InitializeZkConfigAsyncInput,
   type UpdateZkImageIdAsyncInput,
-  type MigrateTaskAsyncInput,
-  type MigrateProtocolAsyncInput,
+  type MigrateTaskInput,
+  type MigrateProtocolInput,
 } from "../generated/index.js";
 
 export {
@@ -191,14 +191,27 @@ export async function updateZkImageId(input: UpdateZkImageIdAsyncInput) {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a migrate_task instruction. protocolConfig defaults to its PDA. `task`
- * is the raw (pre-migration) task account; `payer` funds the rent top-up.
+ * Build a migrate_task instruction. `protocolConfig` is the raw (pre-migration)
+ * `ProtocolConfig` account — supply it explicitly via {@link findProtocolConfigPda}
+ * (a typed `Account<ProtocolConfig>` would reject the 349B pre-`migrate_protocol`
+ * config before the handler runs, so the account is an `UncheckedAccount` and the
+ * generated client no longer auto-resolves its PDA). `task` is the raw
+ * (pre-migration) task account; `payer` funds the rent top-up. This makes
+ * `migrate_task` order-independent vs `migrate_protocol`.
  */
-export async function migrateTask(input: MigrateTaskAsyncInput) {
-  return getMigrateTaskInstructionAsync(input);
+export function migrateTask(input: MigrateTaskInput) {
+  return getMigrateTaskInstruction(input);
 }
 
-/** Build a migrate_protocol instruction. protocolConfig defaults to its PDA. */
-export async function migrateProtocol(input: MigrateProtocolAsyncInput) {
-  return getMigrateProtocolInstructionAsync(input);
+/**
+ * Build a migrate_protocol instruction (P6.5 surface-versioning realloc). Sync in
+ * the generated client: `migrate_protocol` takes the raw (pre-migration)
+ * `ProtocolConfig` account directly — a typed `Account<ProtocolConfig>` would
+ * reject the 349B pre-migration layout before the handler runs — so the caller
+ * supplies `protocolConfig` (use {@link findProtocolConfigPda}); `payer` funds the
+ * +2-byte rent top-up. The appended `surface_revision` is zero-initialized by the
+ * handler, not passed as an arg.
+ */
+export function migrateProtocol(input: MigrateProtocolInput) {
+  return getMigrateProtocolInstruction(input);
 }

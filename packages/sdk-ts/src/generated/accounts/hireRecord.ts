@@ -61,6 +61,15 @@ export type HireRecord = {
   bump: number;
   /** Reserved for future hire metadata. */
   reserved: ReadonlyUint8Array;
+  /**
+   * Referrer (embedder) payee snapshot for the §4 4-way split
+   * (`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have
+   * NO live mainnet accounts (`hire_from_listing` is full-module only), so this is
+   * a fresh-init size bump — no realloc migration needed for HireRecord.
+   */
+  referrer: Address;
+  /** Referrer fee in basis points, snapshotted at hire time. */
+  referrerFeeBps: number;
 };
 
 export type HireRecordArgs = {
@@ -76,6 +85,15 @@ export type HireRecordArgs = {
   bump: number;
   /** Reserved for future hire metadata. */
   reserved: ReadonlyUint8Array;
+  /**
+   * Referrer (embedder) payee snapshot for the §4 4-way split
+   * (`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have
+   * NO live mainnet accounts (`hire_from_listing` is full-module only), so this is
+   * a fresh-init size bump — no realloc migration needed for HireRecord.
+   */
+  referrer: Address;
+  /** Referrer fee in basis points, snapshotted at hire time. */
+  referrerFeeBps: number;
 };
 
 /** Gets the encoder for {@link HireRecordArgs} account data. */
@@ -89,6 +107,8 @@ export function getHireRecordEncoder(): FixedSizeEncoder<HireRecordArgs> {
       ["operatorFeeBps", getU16Encoder()],
       ["bump", getU8Encoder()],
       ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["referrer", getAddressEncoder()],
+      ["referrerFeeBps", getU16Encoder()],
     ]),
     (value) => ({ ...value, discriminator: HIRE_RECORD_DISCRIMINATOR }),
   );
@@ -104,6 +124,8 @@ export function getHireRecordDecoder(): FixedSizeDecoder<HireRecord> {
     ["operatorFeeBps", getU16Decoder()],
     ["bump", getU8Decoder()],
     ["reserved", fixDecoderSize(getBytesDecoder(), 32)],
+    ["referrer", getAddressDecoder()],
+    ["referrerFeeBps", getU16Decoder()],
   ]);
 }
 
@@ -169,5 +191,5 @@ export async function fetchAllMaybeHireRecord(
 }
 
 export function getHireRecordSize(): number {
-  return 139;
+  return 173;
 }

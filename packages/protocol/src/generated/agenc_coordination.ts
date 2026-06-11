@@ -484,6 +484,15 @@ export type AgencCoordination = {
           "optional": true
         },
         {
+          "name": "referrer",
+          "docs": [
+            "4-way split). Required only when the task carries a non-zero referrer fee;",
+            "receives the referrer fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "creatorCompletionBond",
           "docs": [
             "Validated by settle_completion_bond (owner/PDA/task/role/party)."
@@ -842,8 +851,6 @@ export type AgencCoordination = {
     {
       "name": "assignDisputeResolver",
       "docs": [
-        "Execute the resolved dispute outcome.",
-        "Requires sufficient votes to meet threshold.",
         "Assign a wallet to the dispute-resolver roster (authority-only). The assigned",
         "wallet may then call `resolve_dispute` directly — no vote tally, no quorum."
       ],
@@ -930,6 +937,115 @@ export type AgencCoordination = {
       "args": [
         {
           "name": "resolver",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "assignModerationAttestor",
+      "docs": [
+        "Assign a wallet to the moderation-attestor roster (authority-only, P6.8). The",
+        "assigned wallet may then record moderation attestations",
+        "(`record_task_moderation` / `record_listing_moderation`) in addition to the single",
+        "global moderation authority. Registry MECHANISM only — the neutrality model is a",
+        "separate [HUMAN] decision (`docs/MODERATION_NEUTRALITY.md`)."
+      ],
+      "discriminator": [
+        236,
+        52,
+        254,
+        148,
+        54,
+        97,
+        130,
+        25
+      ],
+      "accounts": [
+        {
+          "name": "moderationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "attestor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Must be the moderation authority that owns the moderation config (the roster is",
+            "authority-managed, exactly like the dispute-resolver roster)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "attestor",
           "type": "pubkey"
         }
       ]
@@ -1157,6 +1273,15 @@ export type AgencCoordination = {
           "name": "operator",
           "docs": [
             "when the task carries a non-zero operator fee; receives the operator leg (SOL)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "referrer",
+          "docs": [
+            "4-way split). Required only when the task carries a non-zero referrer fee;",
+            "receives the referrer leg (SOL)."
           ],
           "writable": true,
           "optional": true
@@ -1661,6 +1786,70 @@ export type AgencCoordination = {
           "name": "workerBondAuthority",
           "writable": true,
           "optional": true
+        },
+        {
+          "name": "creatorAgent",
+          "docs": [
+            "OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the",
+            "track-record aggregate. Constrained to `authority` so a caller can only attribute",
+            "the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together",
+            "with `agent_stats`. Full-surface only — gated so the frozen canary account list for",
+            "`cancel_task` is unchanged."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "agentStats",
+          "docs": [
+            "OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with",
+            "`creator_agent`), a cancel bumps `total_cancelled`. Bound to",
+            "`[\"agent_stats\", creator_agent]`, created lazily on first write. Telemetry only."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creatorAgent"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -2382,6 +2571,15 @@ export type AgencCoordination = {
           "docs": [
             "Required only when a live hire carries a non-zero operator fee. Receives the",
             "operator fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "referrer",
+          "docs": [
+            "snapshotted referrer (P6.2 §4 4-way split). Required only when the task carries",
+            "a non-zero referrer fee. Receives the referrer fee leg in SOL."
           ],
           "writable": true,
           "optional": true
@@ -4289,6 +4487,16 @@ export type AgencCoordination = {
           "type": {
             "option": "pubkey"
           }
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -4505,6 +4713,16 @@ export type AgencCoordination = {
         {
           "name": "reviewWindowSecs",
           "type": "i64"
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -5195,6 +5413,41 @@ export type AgencCoordination = {
           "name": "bondCreator",
           "writable": true,
           "optional": true
+        },
+        {
+          "name": "agentStats",
+          "docs": [
+            "OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a",
+            "no-show expiry bumps `claims_expired`. Created lazily on first write, bound to",
+            "`[\"agent_stats\", worker]`. Full-surface only — gated so the frozen canary account",
+            "list for `expire_claim` is unchanged. Paid by the (permissionless) caller."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
         },
         {
           "name": "systemProgram",
@@ -5997,6 +6250,16 @@ export type AgencCoordination = {
         {
           "name": "expectedVersion",
           "type": "u64"
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -6339,6 +6602,16 @@ export type AgencCoordination = {
         {
           "name": "reviewWindowSecs",
           "type": "i64"
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -7111,28 +7384,28 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "protocolConfig",
+          "docs": [
+            "`[\"protocol\"]` PDA, size, and a real ProtocolConfig via try_deserialize). MUST",
+            "be raw — a typed `Account<ProtocolConfig>` would reject the 349B pre-migration",
+            "account before the handler runs, making migration impossible."
+          ],
+          "writable": true
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Funds the rent top-up for the +2-byte growth."
+          ],
           "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "signer": true
         },
         {
           "name": "authority",
           "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -7145,9 +7418,10 @@ export type AgencCoordination = {
     {
       "name": "migrateTask",
       "docs": [
-        "Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig",
-        "gated, VERSION-UNGATED (must run while version == 1, before the version",
-        "bump). `dry_run` validates without mutating. Idempotent / re-runnable."
+        "Migrate one Task account to the P6.2 layout (382B or 432B -> 466B; appends the",
+        "operator + referrer fee legs). Multisig gated, VERSION-UNGATED (must run while",
+        "version == 1, before the version bump). `dry_run` validates without mutating.",
+        "Idempotent / re-runnable."
       ],
       "discriminator": [
         114,
@@ -7162,24 +7436,14 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "protocolConfig",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "docs": [
+            "PDA, and a real ProtocolConfig via a size-tolerant try_deserialize). MUST be raw",
+            "— a typed `Account<ProtocolConfig>` would reject the 349B PRE-`migrate_protocol`",
+            "config (the struct is now 351B) before the handler runs, hard-coupling the task",
+            "sweep to `migrate_protocol` having already grown the config. The size-tolerant",
+            "hand-decode in the handler reads the multisig gate from BOTH the 349B and 351B",
+            "layouts, so the two migrations are order-independent. Mirrors `MigrateProtocol`."
+          ]
         },
         {
           "name": "task",
@@ -7192,7 +7456,8 @@ export type AgencCoordination = {
         {
           "name": "payer",
           "docs": [
-            "Funds the rent top-up for the +50-byte growth."
+            "Funds the rent top-up for the growth (up to +84 bytes from a 382B legacy task,",
+            "or +34 from a 432B Batch-2 task)."
           ],
           "writable": true,
           "signer": true
@@ -7663,6 +7928,210 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "rateHire",
+      "docs": [
+        "Rate a completed listing hire (P6.1). The task's recorded buyer",
+        "(`task.creator`) scores the delivered work once the task is terminally",
+        "`Completed`; one rating per hire is enforced by the init-once",
+        "`[\"hire_rating\", task]` PDA. Folds the score into the source listing's",
+        "`total_rating`/`rating_count` aggregate and emits `ListingRated`."
+      ],
+      "discriminator": [
+        31,
+        201,
+        148,
+        116,
+        69,
+        243,
+        201,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "docs": [
+            "The hired task being rated. Must be terminal `Completed` and its `creator`",
+            "(the recorded buyer) must equal the signer (checked in the handler)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "Links the task to its source listing (PDA `[\"hire\", task]`). Its existence",
+            "proves this task was minted by a listing hire; `listing` here must match",
+            "`hire_record.listing`."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "listing",
+          "docs": [
+            "Source service listing whose rating aggregate is updated. Bound by its own",
+            "canonical seeds AND matched to the hire record so it cannot be substituted."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  101,
+                  114,
+                  118,
+                  105,
+                  99,
+                  101,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "listing.provider_agent",
+                "account": "serviceListing"
+              },
+              {
+                "kind": "account",
+                "path": "listing.listing_id",
+                "account": "serviceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hireRating",
+          "docs": [
+            "One-rating-per-hire: `init` makes a second `rate_hire` on the same task fail."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101,
+                  95,
+                  114,
+                  97,
+                  116,
+                  105,
+                  110,
+                  103
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "buyer",
+          "docs": [
+            "The buyer recorded on the task (`task.creator`). Must sign and pay rent.",
+            "Buyer-equality is enforced in the handler against `task.creator`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "score",
+          "type": "u8"
+        },
+        {
+          "name": "reviewHash",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        },
+        {
+          "name": "reviewUri",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "rateSkill",
       "docs": [
         "Rate a skill (1-5, reputation-weighted).",
@@ -8071,10 +8540,55 @@ export type AgencCoordination = {
         {
           "name": "moderator",
           "docs": [
-            "Must be the configured moderation authority."
+            "The recording signer. Authorization (global moderation authority OR a registered",
+            "attestor) is checked in the handler, not as an account constraint here."
           ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and",
+            "`moderator == moderation_attestor.attestor`), authorizes a non-global-authority",
+            "attestor to record. Bound to `[\"moderation_attestor\", moderator]` — Anchor enforces",
+            "the canonical PDA, so a forged/mismatched entry fails account resolution, and a",
+            "REVOKED attestor's PDA is closed and fails to load (cannot attest). This instruction",
+            "is full-surface only, so this field carries no canary-surface implications."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "moderator"
+              }
+            ]
+          }
         },
         {
           "name": "systemProgram",
@@ -8236,8 +8750,59 @@ export type AgencCoordination = {
         },
         {
           "name": "moderator",
+          "docs": [
+            "The recording signer. Authorization is checked in the handler (NOT as an account",
+            "constraint here) so the registered-attestor OR global-authority branch can be",
+            "evaluated. In the canary build there is no attestor account, so the handler falls",
+            "back to the global-authority-only check — the canary surface stays frozen."
+          ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and",
+            "`moderator == moderation_attestor.attestor`), authorizes a non-global-authority",
+            "attestor to record. Bound to `[\"moderation_attestor\", moderator]` — Anchor enforces",
+            "the canonical PDA, so a forged or mismatched entry fails account resolution; a",
+            "REVOKED attestor's PDA is closed and fails to load (cannot attest). Full-surface",
+            "only — gated so the frozen canary account list for `record_task_moderation` is",
+            "unchanged."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "moderator"
+              }
+            ]
+          }
         },
         {
           "name": "systemProgram",
@@ -8701,6 +9266,50 @@ export type AgencCoordination = {
           "name": "creator",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "agentStats",
+          "docs": [
+            "OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this",
+            "freeze-rejection bumps `tasks_rejected`. Bound to `[\"agent_stats\", claim.worker]`",
+            "(the claim's worker is the worker AgentRegistration PDA), created lazily on first",
+            "write. Telemetry only — never gates the freeze above."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim.worker",
+                "account": "taskClaim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "docs": [
+            "Required only when `agent_stats` is supplied (for `init_if_needed`)."
+          ],
+          "optional": true,
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -8900,6 +9509,49 @@ export type AgencCoordination = {
         {
           "name": "workerAuthority",
           "writable": true
+        },
+        {
+          "name": "agentStats",
+          "docs": [
+            "OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this",
+            "rejection bumps `tasks_rejected`. Created lazily on first write (`init_if_needed`),",
+            "bound to the canonical `[\"agent_stats\", worker]` PDA. Full-surface only — gated so",
+            "the frozen canary account list for `reject_task_result` is unchanged."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "docs": [
+            "Required only when `agent_stats` is supplied (for `init_if_needed`)."
+          ],
+          "optional": true,
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -9092,7 +9744,12 @@ export type AgencCoordination = {
       "docs": [
         "Resolve a dispute. The signer must be the protocol authority OR an assigned",
         "dispute resolver. `approve` upholds the initiator's requested resolution_type;",
-        "`!approve` refunds the creator. No vote tally or quorum is consulted."
+        "`!approve` refunds the creator. No vote tally or quorum is consulted.",
+        "",
+        "P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a",
+        "32-byte content hash of the off-chain rationale) and a bounded `rationale_uri`.",
+        "Both are persisted on the dispute alongside the deciding resolver, and the hash",
+        "+ resolver are emitted in `DisputeResolved`."
       ],
       "discriminator": [
         231,
@@ -9206,8 +9863,10 @@ export type AgencCoordination = {
           "docs": [
             "The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver",
             "roster. The OR is enforced in the handler against `resolver_assignment` below — a",
-            "plain account constraint cannot express \"this key OR that account exists\"."
+            "plain account constraint cannot express \"this key OR that account exists\".",
+            "`mut` so it can pay rent for the optional `agent_stats` init (P6.6)."
           ],
+          "writable": true,
           "signer": true
         },
         {
@@ -9218,8 +9877,13 @@ export type AgencCoordination = {
             "the protocol authority; when present it must be a program-owned `DisputeResolver`",
             "whose `resolver` equals the signer (enforced in the handler). Only the authority-",
             "gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,",
-            "so the canonical [\"dispute_resolver\", signer] PDA is enforced transitively."
+            "so the canonical [\"dispute_resolver\", signer] PDA is enforced transitively.",
+            "",
+            "`mut` (P6.4): when an assigned resolver decides the dispute, their case counters",
+            "(`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol",
+            "authority resolving directly passes `None` (no per-resolver counter to bump)."
           ],
+          "writable": true,
           "optional": true
         },
         {
@@ -9266,6 +9930,43 @@ export type AgencCoordination = {
           ],
           "writable": true,
           "optional": true
+        },
+        {
+          "name": "agentStats",
+          "docs": [
+            "OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied,",
+            "resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was",
+            "slashed). Bound to `[\"agent_stats\", dispute.defendant]` (the handler validates",
+            "`worker.key() == dispute.defendant`), created lazily on first write. The",
+            "`disputes_lost` counter is the SDK slash-history signal. Telemetry only."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute.defendant",
+                "account": "dispute"
+              }
+            ]
+          }
         },
         {
           "name": "workerWallet",
@@ -9378,6 +10079,19 @@ export type AgencCoordination = {
         {
           "name": "approve",
           "type": "bool"
+        },
+        {
+          "name": "rationaleHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "rationaleUri",
+          "type": "string"
         }
       ]
     },
@@ -9813,6 +10527,104 @@ export type AgencCoordination = {
           "name": "authority",
           "docs": [
             "Must be the protocol authority (the roster is authority-managed)."
+          ],
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "revokeModerationAttestor",
+      "docs": [
+        "Remove a wallet from the moderation-attestor roster (authority-only, P6.8), closing",
+        "its assignment PDA. The revoked wallet can no longer record attestations."
+      ],
+      "discriminator": [
+        192,
+        141,
+        245,
+        60,
+        48,
+        104,
+        165,
+        105
+      ],
+      "accounts": [
+        {
+          "name": "moderationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA",
+            "is enforced; `close = authority` returns the rent to the moderation authority."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "moderation_attestor.attestor",
+                "account": "moderationAttestor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Must be the moderation authority that owns the moderation config."
           ],
           "writable": true,
           "signer": true
@@ -10945,6 +11757,10 @@ export type AgencCoordination = {
         {
           "name": "disabledTaskTypeMask",
           "type": "u8"
+        },
+        {
+          "name": "surfaceRevision",
+          "type": "u16"
         }
       ]
     },
@@ -12182,266 +12998,6 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "voteDispute",
-      "docs": [
-        "Vote on a dispute resolution.",
-        "Arbiters must be registered agents with arbitration capability."
-      ],
-      "discriminator": [
-        23,
-        190,
-        211,
-        170,
-        65,
-        223,
-        4,
-        243
-      ],
-      "accounts": [
-        {
-          "name": "dispute",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  105,
-                  115,
-                  112,
-                  117,
-                  116,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "dispute.dispute_id",
-                "account": "dispute"
-              }
-            ]
-          }
-        },
-        {
-          "name": "task",
-          "docs": [
-            "Task account for arbiter party validation (fix #461)"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  97,
-                  115,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task.creator",
-                "account": "task"
-              },
-              {
-                "kind": "account",
-                "path": "task.task_id",
-                "account": "task"
-              }
-            ]
-          },
-          "relations": [
-            "dispute"
-          ]
-        },
-        {
-          "name": "workerClaim",
-          "docs": [
-            "Optional: Worker's claim on the task (for arbiter party validation, fix #461)",
-            "If provided, validates arbiter is not the worker"
-          ],
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  108,
-                  97,
-                  105,
-                  109
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task"
-              },
-              {
-                "kind": "account",
-                "path": "worker_claim.worker",
-                "account": "taskClaim"
-              }
-            ]
-          }
-        },
-        {
-          "name": "defendantAgent",
-          "docs": [
-            "Optional: Defendant's agent registration (for authority-level participant check, fix #824)",
-            "If provided, validates arbiter's authority is not the defendant worker's authority.",
-            "Must match the dispute's defendant field."
-          ],
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  103,
-                  101,
-                  110,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "defendant_agent.agent_id",
-                "account": "agentRegistration"
-              }
-            ]
-          }
-        },
-        {
-          "name": "vote",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  111,
-                  116,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "dispute"
-              },
-              {
-                "kind": "account",
-                "path": "arbiter"
-              }
-            ]
-          }
-        },
-        {
-          "name": "authorityVote",
-          "docs": [
-            "Authority-level vote tracking to prevent Sybil attacks (fix #101)",
-            "One authority can only vote once per dispute, regardless of how many agents they control"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  117,
-                  116,
-                  104,
-                  111,
-                  114,
-                  105,
-                  116,
-                  121,
-                  95,
-                  118,
-                  111,
-                  116,
-                  101
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "dispute"
-              },
-              {
-                "kind": "account",
-                "path": "authority"
-              }
-            ]
-          }
-        },
-        {
-          "name": "arbiter",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  103,
-                  101,
-                  110,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "arbiter.agent_id",
-                "account": "agentRegistration"
-              }
-            ]
-          }
-        },
-        {
-          "name": "protocolConfig",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "authority",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "arbiter"
-          ]
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "approve",
-          "type": "bool"
-        }
-      ]
-    },
-    {
       "name": "voteProposal",
       "docs": [
         "Vote on a governance proposal.",
@@ -12672,16 +13228,16 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "authorityDisputeVote",
+      "name": "agentStats",
       "discriminator": [
-        194,
-        81,
-        47,
-        196,
-        187,
-        81,
-        110,
-        137
+        43,
+        192,
+        26,
+        112,
+        162,
+        176,
+        77,
+        164
       ]
     },
     {
@@ -12789,19 +13345,6 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "disputeVote",
-      "discriminator": [
-        166,
-        202,
-        140,
-        76,
-        65,
-        35,
-        254,
-        149
-      ]
-    },
-    {
       "name": "feedPost",
       "discriminator": [
         228,
@@ -12854,6 +13397,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "hireRating",
+      "discriminator": [
+        250,
+        116,
+        242,
+        149,
+        241,
+        55,
+        164,
+        63
+      ]
+    },
+    {
       "name": "hireRecord",
       "discriminator": [
         104,
@@ -12877,6 +13433,19 @@ export type AgencCoordination = {
         143,
         215,
         24
+      ]
+    },
+    {
+      "name": "moderationAttestor",
+      "discriminator": [
+        52,
+        62,
+        194,
+        121,
+        157,
+        169,
+        40,
+        178
       ]
     },
     {
@@ -13207,6 +13776,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "agentTrackRecordUpdated",
+      "discriminator": [
+        145,
+        32,
+        166,
+        83,
+        3,
+        162,
+        237,
+        142
+      ]
+    },
+    {
       "name": "agentUnsuspended",
       "discriminator": [
         26,
@@ -13230,19 +13812,6 @@ export type AgencCoordination = {
         250,
         210,
         166
-      ]
-    },
-    {
-      "name": "arbiterVotesCleanedUp",
-      "discriminator": [
-        50,
-        95,
-        231,
-        24,
-        238,
-        79,
-        179,
-        220
       ]
     },
     {
@@ -13519,19 +14088,6 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "disputeVoteCast",
-      "discriminator": [
-        193,
-        34,
-        94,
-        69,
-        4,
-        179,
-        143,
-        87
-      ]
-    },
-    {
       "name": "governanceInitialized",
       "discriminator": [
         41,
@@ -13584,6 +14140,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "listingRated",
+      "discriminator": [
+        177,
+        231,
+        150,
+        200,
+        14,
+        103,
+        122,
+        151
+      ]
+    },
+    {
       "name": "migrationCompleted",
       "discriminator": [
         223,
@@ -13594,6 +14163,32 @@ export type AgencCoordination = {
         249,
         6,
         241
+      ]
+    },
+    {
+      "name": "moderationAttestorAssigned",
+      "discriminator": [
+        86,
+        38,
+        30,
+        111,
+        174,
+        160,
+        24,
+        173
+      ]
+    },
+    {
+      "name": "moderationAttestorRevoked",
+      "discriminator": [
+        70,
+        8,
+        149,
+        215,
+        27,
+        239,
+        16,
+        186
       ]
     },
     {
@@ -13688,6 +14283,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "protocolConfigMigrated",
+      "discriminator": [
+        30,
+        232,
+        133,
+        208,
+        55,
+        91,
+        175,
+        0
+      ]
+    },
+    {
       "name": "protocolFeeUpdated",
       "discriminator": [
         172,
@@ -13750,6 +14358,19 @@ export type AgencCoordination = {
         25,
         219,
         10
+      ]
+    },
+    {
+      "name": "referrerFeePaid",
+      "discriminator": [
+        127,
+        186,
+        248,
+        231,
+        123,
+        86,
+        255,
+        130
       ]
     },
     {
@@ -15674,6 +16295,86 @@ export type AgencCoordination = {
       "code": 6287,
       "name": "rejectFrozenSingleWorkerOnly",
       "msg": "RejectFrozen review is single-worker (Exclusive) only"
+    },
+    {
+      "code": 6288,
+      "name": "invalidRatingScore",
+      "msg": "Rating score must be in the range 1..=5"
+    },
+    {
+      "code": 6289,
+      "name": "taskNotCompletedForRating",
+      "msg": "Only a completed hired task can be rated"
+    },
+    {
+      "code": 6290,
+      "name": "ratingNotBuyer",
+      "msg": "Only the buyer (task creator) may rate this hire"
+    },
+    {
+      "code": 6291,
+      "name": "reviewUriTooLong",
+      "msg": "Review URI exceeds the maximum allowed length"
+    },
+    {
+      "code": 6292,
+      "name": "invalidModerationAttestor",
+      "msg": "Invalid moderation attestor: pubkey must be non-zero"
+    },
+    {
+      "code": 6293,
+      "name": "unauthorizedModerationAttestor",
+      "msg": "Signer is neither the moderation authority nor a registered attestor"
+    },
+    {
+      "code": 6294,
+      "name": "moderationAttestorMismatch",
+      "msg": "Supplied moderation attestor entry does not match the signing moderator"
+    },
+    {
+      "code": 6295,
+      "name": "rationaleUriTooLong",
+      "msg": "Dispute ruling rationale URI exceeds the maximum allowed length"
+    },
+    {
+      "code": 6296,
+      "name": "configNotMigratable",
+      "msg": "ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)"
+    },
+    {
+      "code": 6297,
+      "name": "invalidPda",
+      "msg": "Account is not the canonical PDA for this instruction"
+    },
+    {
+      "code": 6298,
+      "name": "invalidSurfaceRevision",
+      "msg": "Surface revision value is not a recognized surface"
+    },
+    {
+      "code": 6299,
+      "name": "referrerFeeTooHigh",
+      "msg": "Referrer fee in basis points exceeds the maximum allowed"
+    },
+    {
+      "code": 6300,
+      "name": "combinedFeeAboveCap",
+      "msg": "Combined protocol + operator + referrer fees leave the worker below the floor"
+    },
+    {
+      "code": 6301,
+      "name": "missingReferrerAccount",
+      "msg": "Referrer payee account is missing for a task that carries a referrer fee"
+    },
+    {
+      "code": 6302,
+      "name": "invalidReferrerAccount",
+      "msg": "Referrer payee account does not match the snapshotted referrer"
+    },
+    {
+      "code": 6303,
+      "name": "referrerIsCreator",
+      "msg": "Referrer must not be the task creator (no self-deal)"
     }
   ],
   "types": [
@@ -15909,14 +16610,16 @@ export type AgencCoordination = {
           {
             "name": "activeDisputeVotes",
             "docs": [
-              "Active dispute votes pending resolution"
+              "DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing",
+              "increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a",
+              "permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable."
             ],
             "type": "u8"
           },
           {
             "name": "lastVoteTimestamp",
             "docs": [
-              "Timestamp of last dispute vote"
+              "DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore."
             ],
             "type": "i64"
           },
@@ -15945,6 +16648,104 @@ export type AgencCoordination = {
               "array": [
                 "u8",
                 4
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "agentStats",
+      "docs": [
+        "Negative / non-success track-record counters for an agent (P6.6).",
+        "",
+        "`AgentRegistration` only tracks success-side stats (`tasks_completed`,",
+        "`total_earned`) and has just FOUR reserved bytes, so the negative counters",
+        "(rejections, dispute outcomes, expirations, cancellations) do NOT fit there.",
+        "Rather than a size-extending migration of every live mainnet agent account,",
+        "these live in a SEPARATE aggregate PDA `[\"agent_stats\", agent]` that is created",
+        "lazily on first write (`init_if_needed`), keyed on the agent's",
+        "`AgentRegistration` PDA. No `AgentRegistration` layout change / migration is",
+        "introduced.",
+        "",
+        "These are reputation TELEMETRY, not a money-path account: they are never read to",
+        "gate settlement, so the incrementing accounts are passed OPTIONALLY in the",
+        "full-surface handlers (`reject_task_result`, `reject_and_freeze`, `expire_claim`,",
+        "`resolve_dispute`, `cancel_task`). The counted party (worker / creator) is not the",
+        "signer that decides whether the account is supplied, so it cannot self-omit.",
+        "",
+        "PDA seeds: [\"agent_stats\", agent]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "docs": [
+              "The `AgentRegistration` PDA these counters belong to (also the seed)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "tasksRejected",
+            "docs": [
+              "Times one of this agent's submissions was rejected for re-work",
+              "(`reject_task_result`) or frozen for review (`reject_and_freeze`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "disputesWon",
+            "docs": [
+              "Disputes resolved in this agent's favor as the defendant worker."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "disputesLost",
+            "docs": [
+              "Disputes resolved against this agent as the defendant worker (a loss; the",
+              "slash-history signal)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "claimsExpired",
+            "docs": [
+              "Claims by this agent that expired (no-show / abandoned) via `expire_claim`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "totalCancelled",
+            "docs": [
+              "Tasks created by this agent (as the creator/buyer) that were cancelled."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lastUpdated",
+            "docs": [
+              "Last time any counter was updated (unix timestamp)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future track-record counters. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
               ]
             }
           }
@@ -15997,6 +16798,55 @@ export type AgencCoordination = {
           {
             "name": "authority",
             "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "agentTrackRecordUpdated",
+      "docs": [
+        "Emitted whenever a track-record counter on `AgentStats` is incremented (P6.6).",
+        "`new_value` is the post-increment counter so indexers can build a slash/outcome",
+        "history from the event stream alone (feeds the SDK `getAgentTrackRecord`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "docs": [
+              "The `AgentRegistration` PDA whose track record changed."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "agentStats",
+            "docs": [
+              "The `AgentStats` PDA that was written."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "counter",
+            "docs": [
+              "Which counter was incremented."
+            ],
+            "type": {
+              "defined": {
+                "name": "trackRecordCounter"
+              }
+            }
+          },
+          {
+            "name": "newValue",
+            "docs": [
+              "The counter's value AFTER this increment."
+            ],
+            "type": "u64"
           },
           {
             "name": "timestamp",
@@ -16061,78 +16911,6 @@ export type AgencCoordination = {
           {
             "name": "timestamp",
             "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "arbiterVotesCleanedUp",
-      "docs": [
-        "Emitted when arbiter votes are cleaned up during dispute expiration"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "disputeId",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "arbiterCount",
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
-      "name": "authorityDisputeVote",
-      "docs": [
-        "Authority-level vote record to prevent Sybil attacks",
-        "One authority can only vote once per dispute, regardless of how many agents they control",
-        "PDA seeds: [\"authority_vote\", dispute, authority]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "dispute",
-            "docs": [
-              "Dispute being voted on"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "authority",
-            "docs": [
-              "Authority (wallet) that voted"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "votingAgent",
-            "docs": [
-              "The agent used to cast this vote"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "votedAt",
-            "docs": [
-              "Vote timestamp"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "bump",
-            "docs": [
-              "Bump seed"
-            ],
-            "type": "u8"
           }
         ]
       }
@@ -17169,29 +17947,36 @@ export type AgencCoordination = {
           {
             "name": "votesFor",
             "docs": [
-              "Votes for approval"
+              "DEPRECATED (P6.3): arbiter vote tally retired. `vote_dispute` no longer exists,",
+              "so no path increments these from voting. `resolve_dispute` now repurposes this",
+              "pair as a 1-bit RULING RECORD so the permissionless `apply_dispute_slash` /",
+              "`apply_initiator_slash` finalizers can read the resolver's approve/reject decision",
+              "without a vote tally: a resolution writes `votes_for = 1, votes_against = 0` when",
+              "the resolver APPROVED and `votes_for = 0, votes_against = 1` when REJECTED. The",
+              "fields are NOT shrunk (a layout change would be a hazard); they are reinterpreted."
             ],
             "type": "u64"
           },
           {
             "name": "votesAgainst",
             "docs": [
-              "Votes against"
+              "DEPRECATED (P6.3): see `votes_for`. Reused as the reject side of the ruling bit."
             ],
             "type": "u64"
           },
           {
             "name": "totalVoters",
             "docs": [
-              "Total arbiters who voted (max 255 due to u8)",
-              "Note: Increase to u16 if more arbiters needed"
+              "DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no",
+              "voter is ever recorded. Retained (not shrunk) to keep the account layout stable."
             ],
             "type": "u8"
           },
           {
             "name": "votingDeadline",
             "docs": [
-              "Voting deadline - after this, no new votes accepted",
+              "DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides",
+              "directly with no voting-period wait. Still stamped at initiation for back-compat.",
               "voting_deadline = created_at + voting_period"
             ],
             "type": "i64"
@@ -17247,6 +18032,45 @@ export type AgencCoordination = {
               "The defendant worker's agent PDA (fix #827)",
               "Binds slashing target at dispute initiation to prevent slashing wrong worker",
               "on collaborative tasks with multiple claimants."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rationaleHash",
+            "docs": [
+              "P6.4 (accountable rulings) — APPENDED fields. The resolver MUST attach a",
+              "reasoned ruling: a 32-byte content hash of the off-chain rationale plus a",
+              "bounded pointer to it, and the deciding resolver's pubkey. All three are",
+              "zero/empty on a dispute that has not been resolved through `resolve_dispute`",
+              "(e.g. an expired dispute), which is a valid \"no ruling recorded\" state.",
+              "",
+              "LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,",
+              "but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary",
+              "surface (the 25-instruction allowlist contains no dispute instructions), so",
+              "ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface",
+              "this is treated as append-only (any pre-existing dispute prefix stays valid;",
+              "the new fields read back as zero/empty). See `test_dispute_size_p64_append`."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rationaleUri",
+            "docs": [
+              "Bounded off-chain pointer to the ruling rationale (e.g. `agenc://ruling/...`).",
+              "Empty string = no URI (the hash may still carry the rationale)."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "resolvedBy",
+            "docs": [
+              "The wallet that decided this dispute (the protocol authority OR the assigned",
+              "resolver who signed `resolve_dispute`). Default pubkey until resolved."
             ],
             "type": "pubkey"
           }
@@ -17394,14 +18218,14 @@ export type AgencCoordination = {
       "docs": [
         "Emitted when a dispute is resolved",
         "",
-        "The `outcome` field distinguishes between different resolution paths:",
-        "- 0 = Rejected (approved=false with actual votes cast)",
-        "- 1 = Approved (approved=true with votes meeting threshold)",
-        "- 2 = NoVoteDefault (no votes cast, defaulted to rejection - fix #425)",
+        "The `outcome` field reflects the assigned resolver's binary ruling (P6.3 — the",
+        "arbiter vote/quorum model is retired):",
+        "- 0 = Rejected (the resolver passed `approve = false` — creator refunded)",
+        "- 1 = Approved (the resolver passed `approve = true` — initiator's resolution upheld)",
         "",
-        "The NoVoteDefault outcome indicates arbiter apathy rather than active rejection.",
-        "This allows consumers to distinguish between \"arbiters rejected this\" vs",
-        "\"no arbiters participated, so it defaulted to rejection\"."
+        "`votes_for`/`votes_against` are DEPRECATED: they are no longer a vote tally. P6.3",
+        "reuses them as a 1-bit ruling record ((1,0)=approved, (0,1)=rejected) so the",
+        "permissionless slash finalizers can read the decision; the fields are emitted as-is."
       ],
       "type": {
         "kind": "struct",
@@ -17422,21 +18246,47 @@ export type AgencCoordination = {
           {
             "name": "outcome",
             "docs": [
-              "Resolution outcome: 0=Rejected, 1=Approved, 2=NoVoteDefault"
+              "Resolution outcome: 0=Rejected, 1=Approved (P6.3: no more NoVoteDefault path)."
             ],
             "type": "u8"
           },
           {
             "name": "votesFor",
+            "docs": [
+              "DEPRECATED (P6.3): ruling bit, not a vote tally — 1 when approved else 0."
+            ],
             "type": "u64"
           },
           {
             "name": "votesAgainst",
+            "docs": [
+              "DEPRECATED (P6.3): ruling bit, not a vote tally — 1 when rejected else 0."
+            ],
             "type": "u64"
           },
           {
             "name": "timestamp",
             "type": "i64"
+          },
+          {
+            "name": "resolvedBy",
+            "docs": [
+              "P6.4 accountable rulings: the wallet that decided this dispute (the protocol",
+              "authority OR the assigned resolver who signed `resolve_dispute`)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rationaleHash",
+            "docs": [
+              "P6.4: 32-byte content hash of the off-chain ruling rationale."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }
@@ -17484,6 +18334,31 @@ export type AgencCoordination = {
             "type": "u8"
           },
           {
+            "name": "resolvedCount",
+            "docs": [
+              "Disputes this resolver has decided through `resolve_dispute`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "overturnedCount",
+            "docs": [
+              "Rulings later vacated/overturned. Has no on-chain incrementer yet: the",
+              "challenge-window mechanism that would bump it (`execute_resolution` settling a",
+              "pending outcome unless vacated) is the design-doc-only P6.4 step (3),",
+              "`docs/DISPUTE_CHALLENGE_WINDOW.md`, gated `[HUMAN: approve before build]`. The",
+              "field is reserved now so adding that mechanism later needs NO layout change."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lastResolvedAt",
+            "docs": [
+              "Unix timestamp this resolver last decided a dispute (0 = never)."
+            ],
+            "type": "i64"
+          },
+          {
             "name": "reserved",
             "docs": [
               "Reserved for future metadata. MUST stay zeroed."
@@ -17491,7 +18366,7 @@ export type AgencCoordination = {
             "type": {
               "array": [
                 "u8",
-                32
+                8
               ]
             }
           }
@@ -17566,100 +18441,6 @@ export type AgencCoordination = {
           },
           {
             "name": "cancelled"
-          }
-        ]
-      }
-    },
-    {
-      "name": "disputeVote",
-      "docs": [
-        "Vote record for dispute",
-        "PDA seeds: [\"vote\", dispute, voter]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "dispute",
-            "docs": [
-              "Dispute being voted on"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "voter",
-            "docs": [
-              "Voter (arbiter)"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "approved",
-            "docs": [
-              "Vote (true = approve, false = reject)"
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "votedAt",
-            "docs": [
-              "Vote timestamp"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "stakeAtVote",
-            "docs": [
-              "Arbiter's stake at the time of voting (for weighted resolution)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "bump",
-            "docs": [
-              "Bump seed"
-            ],
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
-      "name": "disputeVoteCast",
-      "docs": [
-        "Emitted when a vote is cast on a dispute"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "disputeId",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "voter",
-            "type": "pubkey"
-          },
-          {
-            "name": "approved",
-            "type": "bool"
-          },
-          {
-            "name": "votesFor",
-            "type": "u64"
-          },
-          {
-            "name": "votesAgainst",
-            "type": "u64"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
           }
         ]
       }
@@ -18034,6 +18815,106 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "hireRating",
+      "docs": [
+        "One-shot buyer rating of a completed listing hire (P6.1).",
+        "",
+        "Init-once on PDA `[\"hire_rating\", task]` so exactly ONE rating can ever be",
+        "recorded per hired task — re-rating the same task fails at account `init`",
+        "(the PDA already exists), which is the on-chain double-rate guard. The account",
+        "is keyed solely on `task`, so its existence is the dedupe key regardless of who",
+        "holds the buyer/listing accounts at call time.",
+        "",
+        "Written by `rate_hire`. The rating is authored by the task's recorded buyer",
+        "(`task.creator`, which `hire_from_listing` constrains to equal the funding",
+        "authority), and only after the task reaches the terminal `Completed` state, so",
+        "a buyer can only rate work they paid for and that actually finished.",
+        "",
+        "PDA seeds: [\"hire_rating\", task]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "The completed hired task this rating is for (also the dedupe seed)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "listing",
+            "docs": [
+              "Source service listing whose aggregate was updated by this rating."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "docs": [
+              "The buyer (task creator) that authored the rating."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "score",
+            "docs": [
+              "Score in [1, 5]."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reviewHash",
+            "docs": [
+              "Optional off-chain review content hash (`None` = no written review)."
+            ],
+            "type": {
+              "option": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          },
+          {
+            "name": "reviewUri",
+            "docs": [
+              "Optional bounded pointer to the off-chain review (e.g. agenc://review/...).",
+              "Empty string = no URI."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "ratedAt",
+            "docs": [
+              "When the rating was recorded."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future rating metadata. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "hireRecord",
       "docs": [
         "Links a one-shot hire to its source `ServiceListing`.",
@@ -18094,6 +18975,23 @@ export type AgencCoordination = {
                 32
               ]
             }
+          },
+          {
+            "name": "referrer",
+            "docs": [
+              "Referrer (embedder) payee snapshot for the §4 4-way split",
+              "(`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have",
+              "NO live mainnet accounts (`hire_from_listing` is full-module only), so this is",
+              "a fresh-init size bump — no realloc migration needed for HireRecord."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "referrerFeeBps",
+            "docs": [
+              "Referrer fee in basis points, snapshotted at hire time."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -18302,6 +19200,72 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "listingRated",
+      "docs": [
+        "Emitted when a buyer rates a completed listing hire (P6.1). Carries the new",
+        "listing aggregate so indexers can recompute the average without re-reading the",
+        "account. The provider-agent rating aggregate is deferred to P6.6's `AgentStats`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "docs": [
+              "Service listing whose aggregate was updated."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "task",
+            "docs": [
+              "The hired task that was rated."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "providerAgent",
+            "docs": [
+              "Provider agent of the listing."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "docs": [
+              "The buyer (task creator) that authored the rating."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "score",
+            "docs": [
+              "Score in [1, 5]."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "newTotalRating",
+            "docs": [
+              "`listing.total_rating` after this rating."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "newRatingCount",
+            "docs": [
+              "`listing.rating_count` after this rating."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "listingState",
       "docs": [
         "Lifecycle state of a service listing."
@@ -18365,6 +19329,117 @@ export type AgencCoordination = {
           },
           {
             "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "moderationAttestor",
+      "docs": [
+        "Roster entry authorizing a third-party / per-integrator moderation attestor (P6.8).",
+        "",
+        "Mirrors `DisputeResolver`: the protocol authority designates wallets that may record",
+        "moderation attestations (`record_task_moderation` / `record_listing_moderation`) in",
+        "addition to the single global `ModerationConfig.moderation_authority`. The PDA's mere",
+        "existence authorizes its `attestor`; revoking closes the PDA, after which that wallet",
+        "can no longer attest (the closed account fails to load). Re-assigning an already-listed",
+        "attestor fails at `init` (the PDA already exists), the desired \"already assigned\" signal.",
+        "",
+        "NOTE: this is the registry MECHANISM only. The neutrality question (whether an",
+        "authority-curated roster is the right trust model, vs. a moderation-optional tier or",
+        "per-integrator attestor choice) is a deliberate, separate [HUMAN] decision documented in",
+        "`docs/MODERATION_NEUTRALITY.md`. This struct deliberately builds none of those options.",
+        "",
+        "PDA seeds: [\"moderation_attestor\", attestor]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "attestor",
+            "docs": [
+              "The wallet authorized to record moderation attestations."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "assignedBy",
+            "docs": [
+              "The protocol authority that assigned this attestor (audit trail)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "assignedAt",
+            "docs": [
+              "Unix timestamp the assignment was created."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future metadata. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "moderationAttestorAssigned",
+      "docs": [
+        "Emitted when the protocol authority assigns a wallet to the moderation-attestor roster (P6.8)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "attestor",
+            "type": "pubkey"
+          },
+          {
+            "name": "assignedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "moderationAttestorRevoked",
+      "docs": [
+        "Emitted when the protocol authority revokes a wallet from the moderation-attestor roster (P6.8)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "attestor",
+            "type": "pubkey"
+          },
+          {
+            "name": "revokedBy",
             "type": "pubkey"
           },
           {
@@ -19219,6 +20294,58 @@ export type AgencCoordination = {
                 5
               ]
             }
+          },
+          {
+            "name": "surfaceRevision",
+            "docs": [
+              "Deployed instruction-surface revision stamp.",
+              "",
+              "APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte",
+              "pre-P6.5 prefix (the live mainnet config account) stays valid. The live",
+              "account is migrated up to the new size by `migrate_protocol` (realloc +",
+              "zero-init), which lands this at `0` = \"surface not yet stamped\". An operator",
+              "then sets the real revision via `update_launch_controls` (the existing",
+              "multisig-gated config-update authority path).",
+              "",
+              "Semantics:",
+              "- `0`  → surface unstamped (treat as the conservative canary surface;",
+              "clients should fall back to capability probing).",
+              "- `>0` → the operator-declared surface revision; the SDK maps it to a typed",
+              "capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface)."
+            ],
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "protocolConfigMigrated",
+      "docs": [
+        "Emitted when the ProtocolConfig account is reallocated to the P6.5",
+        "surface-versioning layout (349B -> 351B, zero-init `surface_revision`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "config",
+            "type": "pubkey"
+          },
+          {
+            "name": "fromSize",
+            "type": "u32"
+          },
+          {
+            "name": "toSize",
+            "type": "u32"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -19442,6 +20569,44 @@ export type AgencCoordination = {
           {
             "name": "updatedBy",
             "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "referrerFeePaid",
+      "docs": [
+        "Emitted when a referrer (demand-side embedder) fee leg is paid out of a",
+        "settlement (spec §4 4-way split, P6.2). Only emitted when the referrer leg is",
+        "non-zero."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "taskId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "referrer",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "referrerFeeBps",
+            "type": "u16"
           },
           {
             "name": "timestamp",
@@ -20994,6 +22159,25 @@ export type AgencCoordination = {
                 16
               ]
             }
+          },
+          {
+            "name": "referrer",
+            "docs": [
+              "Referrer (embedder who brought the buyer) payee for the §4 4-way split.",
+              "`Pubkey::default()` means no referrer leg (the common case). Snapshotted from",
+              "the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields",
+              "exceed the 16B `_reserved`, so this is a size-extending migration of the 149",
+              "live tasks (see `migrate_task`)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "referrerFeeBps",
+            "docs": [
+              "Referrer fee in basis points, snapshotted at hire/create time. 0 = no referrer",
+              "leg. Combined with protocol + operator, capped so the worker keeps ≥60%."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -22610,6 +23794,34 @@ export type AgencCoordination = {
                 5
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "trackRecordCounter",
+      "docs": [
+        "Which negative / non-success track-record counter was bumped (P6.6). Keeps the",
+        "`AgentTrackRecordUpdated` event self-describing for indexers without re-reading",
+        "the `AgentStats` account."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "tasksRejected"
+          },
+          {
+            "name": "disputesWon"
+          },
+          {
+            "name": "disputesLost"
+          },
+          {
+            "name": "claimsExpired"
+          },
+          {
+            "name": "totalCancelled"
           }
         ]
       }

@@ -28,16 +28,17 @@ import {
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
+  type ReadonlyAccount,
   type ReadonlySignerAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
+  type WritableSignerAccount,
 } from "@solana/kit";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findProtocolConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const MIGRATE_PROTOCOL_DISCRIMINATOR: ReadonlyUint8Array =
@@ -52,7 +53,10 @@ export function getMigrateProtocolDiscriminatorBytes(): ReadonlyUint8Array {
 export type MigrateProtocolInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
+  TAccountPayer extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
+  TAccountSystemProgram extends string | AccountMeta<string> =
+    "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -61,10 +65,17 @@ export type MigrateProtocolInstruction<
       TAccountProtocolConfig extends string
         ? WritableAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
+      TAccountPayer extends string
+        ? WritableSignerAccount<TAccountPayer> &
+            AccountSignerMeta<TAccountPayer>
+        : TAccountPayer,
       TAccountAuthority extends string
         ? ReadonlySignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
+      TAccountSystemProgram extends string
+        ? ReadonlyAccount<TAccountSystemProgram>
+        : TAccountSystemProgram,
       ...TRemainingAccounts,
     ]
   >;
@@ -103,28 +114,45 @@ export function getMigrateProtocolInstructionDataCodec(): FixedSizeCodec<
   );
 }
 
-export type MigrateProtocolAsyncInput<
+export type MigrateProtocolInput<
   TAccountProtocolConfig extends string = string,
+  TAccountPayer extends string = string,
   TAccountAuthority extends string = string,
+  TAccountSystemProgram extends string = string,
 > = {
-  protocolConfig?: Address<TAccountProtocolConfig>;
+  /**
+   * `["protocol"]` PDA, size, and a real ProtocolConfig via try_deserialize). MUST
+   * be raw — a typed `Account<ProtocolConfig>` would reject the 349B pre-migration
+   * account before the handler runs, making migration impossible.
+   */
+  protocolConfig: Address<TAccountProtocolConfig>;
+  /** Funds the rent top-up for the +2-byte growth. */
+  payer: TransactionSigner<TAccountPayer>;
   authority: TransactionSigner<TAccountAuthority>;
+  systemProgram?: Address<TAccountSystemProgram>;
   targetVersion: MigrateProtocolInstructionDataArgs["targetVersion"];
 };
 
-export async function getMigrateProtocolInstructionAsync<
+export function getMigrateProtocolInstruction<
   TAccountProtocolConfig extends string,
+  TAccountPayer extends string,
   TAccountAuthority extends string,
+  TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
-  input: MigrateProtocolAsyncInput<TAccountProtocolConfig, TAccountAuthority>,
-  config?: { programAddress?: TProgramAddress },
-): Promise<
-  MigrateProtocolInstruction<
-    TProgramAddress,
+  input: MigrateProtocolInput<
     TAccountProtocolConfig,
-    TAccountAuthority
-  >
+    TAccountPayer,
+    TAccountAuthority,
+    TAccountSystemProgram
+  >,
+  config?: { programAddress?: TProgramAddress },
+): MigrateProtocolInstruction<
+  TProgramAddress,
+  TAccountProtocolConfig,
+  TAccountPayer,
+  TAccountAuthority,
+  TAccountSystemProgram
 > {
   // Program address.
   const programAddress =
@@ -133,7 +161,9 @@ export async function getMigrateProtocolInstructionAsync<
   // Original accounts.
   const originalAccounts = {
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
+    payer: { value: input.payer ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
+    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -144,15 +174,18 @@ export async function getMigrateProtocolInstructionAsync<
   const args = { ...input };
 
   // Resolve default values.
-  if (!accounts.protocolConfig.value) {
-    accounts.protocolConfig.value = await findProtocolConfigPda();
+  if (!accounts.systemProgram.value) {
+    accounts.systemProgram.value =
+      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
     accounts: [
       getAccountMeta("protocolConfig", accounts.protocolConfig),
+      getAccountMeta("payer", accounts.payer),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getMigrateProtocolInstructionDataEncoder().encode(
       args as MigrateProtocolInstructionDataArgs,
@@ -161,62 +194,9 @@ export async function getMigrateProtocolInstructionAsync<
   } as MigrateProtocolInstruction<
     TProgramAddress,
     TAccountProtocolConfig,
-    TAccountAuthority
-  >);
-}
-
-export type MigrateProtocolInput<
-  TAccountProtocolConfig extends string = string,
-  TAccountAuthority extends string = string,
-> = {
-  protocolConfig: Address<TAccountProtocolConfig>;
-  authority: TransactionSigner<TAccountAuthority>;
-  targetVersion: MigrateProtocolInstructionDataArgs["targetVersion"];
-};
-
-export function getMigrateProtocolInstruction<
-  TAccountProtocolConfig extends string,
-  TAccountAuthority extends string,
-  TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
->(
-  input: MigrateProtocolInput<TAccountProtocolConfig, TAccountAuthority>,
-  config?: { programAddress?: TProgramAddress },
-): MigrateProtocolInstruction<
-  TProgramAddress,
-  TAccountProtocolConfig,
-  TAccountAuthority
-> {
-  // Program address.
-  const programAddress =
-    config?.programAddress ?? AGENC_COORDINATION_PROGRAM_ADDRESS;
-
-  // Original accounts.
-  const originalAccounts = {
-    protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
-    authority: { value: input.authority ?? null, isWritable: false },
-  };
-  const accounts = originalAccounts as Record<
-    keyof typeof originalAccounts,
-    ResolvedInstructionAccount
-  >;
-
-  // Original args.
-  const args = { ...input };
-
-  const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
-  return Object.freeze({
-    accounts: [
-      getAccountMeta("protocolConfig", accounts.protocolConfig),
-      getAccountMeta("authority", accounts.authority),
-    ],
-    data: getMigrateProtocolInstructionDataEncoder().encode(
-      args as MigrateProtocolInstructionDataArgs,
-    ),
-    programAddress,
-  } as MigrateProtocolInstruction<
-    TProgramAddress,
-    TAccountProtocolConfig,
-    TAccountAuthority
+    TAccountPayer,
+    TAccountAuthority,
+    TAccountSystemProgram
   >);
 }
 
@@ -226,8 +206,16 @@ export type ParsedMigrateProtocolInstruction<
 > = {
   programAddress: Address<TProgram>;
   accounts: {
+    /**
+     * `["protocol"]` PDA, size, and a real ProtocolConfig via try_deserialize). MUST
+     * be raw — a typed `Account<ProtocolConfig>` would reject the 349B pre-migration
+     * account before the handler runs, making migration impossible.
+     */
     protocolConfig: TAccountMetas[0];
-    authority: TAccountMetas[1];
+    /** Funds the rent top-up for the +2-byte growth. */
+    payer: TAccountMetas[1];
+    authority: TAccountMetas[2];
+    systemProgram: TAccountMetas[3];
   };
   data: MigrateProtocolInstructionData;
 };
@@ -240,12 +228,12 @@ export function parseMigrateProtocolInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedMigrateProtocolInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 2) {
+  if (instruction.accounts.length < 4) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 2,
+        expectedAccountMetas: 4,
       },
     );
   }
@@ -257,7 +245,12 @@ export function parseMigrateProtocolInstruction<
   };
   return {
     programAddress: instruction.programAddress,
-    accounts: { protocolConfig: getNextAccount(), authority: getNextAccount() },
+    accounts: {
+      protocolConfig: getNextAccount(),
+      payer: getNextAccount(),
+      authority: getNextAccount(),
+      systemProgram: getNextAccount(),
+    },
     data: getMigrateProtocolInstructionDataDecoder().decode(instruction.data),
   };
 }

@@ -14,6 +14,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskCreated;
+use crate::instructions::completion_helpers::resolve_referrer_snapshot;
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use crate::instructions::task_init_helpers::{
@@ -85,6 +86,7 @@ pub struct CreateTaskHumanless<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn handler(
     ctx: Context<CreateTaskHumanless>,
     task_id: [u8; 32],
@@ -94,6 +96,8 @@ pub fn handler(
     deadline: i64,
     min_reputation: u16,
     review_window_secs: i64,
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
 ) -> Result<()> {
     // v1: single-worker Exclusive, SOL-only.
     validate_task_params(
@@ -152,6 +156,17 @@ pub fn handler(
     // (without this, is_manual_validation_task is false and submit_task_result rejects
     // with TaskValidationConfigRequired — the task could be created but never settled).
     task.constraint_hash = MANUAL_VALIDATION_SENTINEL;
+
+    // P6.2 demand-side referral leg (no operator leg on a direct humanless create).
+    let (referrer_key, referrer_bps) = resolve_referrer_snapshot(
+        referrer,
+        referrer_fee_bps,
+        protocol_fee_bps,
+        0,
+        creator_key,
+    )?;
+    task.referrer = referrer_key;
+    task.referrer_fee_bps = referrer_bps;
     let task_key = task.key();
 
     let escrow = ctx.accounts.escrow.as_mut();

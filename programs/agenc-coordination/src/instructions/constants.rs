@@ -10,11 +10,23 @@ pub const MAX_PROTOCOL_FEE_BPS: u16 = 2000;
 /// Carried on a ServiceListing in Batch 1; enforced at settlement in Batch 2.
 pub const MAX_OPERATOR_FEE_BPS: u16 = 2000;
 
+/// Maximum referrer (demand-side embedder) fee in basis points (20% = 2000 bps),
+/// per-leg ceiling for the P6.2 4-way split. The COMBINED cap below is the binding
+/// money-safety invariant; this is a per-leg sanity bound (defense in depth).
+pub const MAX_REFERRER_FEE_BPS: u16 = 2000;
+
+/// Maximum COMBINED protocol + operator + referrer fee in basis points
+/// (40% = 4000 bps) for the P6.2 4-way split. Enforced at settlement
+/// (`calculate_combined_fees`) so the worker ALWAYS keeps ≥ `WORKER_FLOOR_BPS`
+/// (60%). This is the binding invariant — `4000 + WORKER_FLOOR_BPS == 10000`.
+pub const MAX_COMBINED_FEE_BPS: u16 = 4000;
+
 /// Minimum share of a settlement the worker must always keep (60% = 6000 bps),
 /// per spec §4. With protocol ≤20% (MAX_PROTOCOL_FEE_BPS) + operator ≤20%
 /// (MAX_OPERATOR_FEE_BPS), the worker is left exactly ≥60% at the caps, so this
 /// floor is the *binding* invariant at maximum fees — enforced + tested at
-/// settlement (`calculate_operator_fee`), not merely emergent.
+/// settlement (`calculate_operator_fee` / `calculate_combined_fees`), not merely
+/// emergent.
 pub const WORKER_FLOOR_BPS: u16 = 6000;
 
 /// Base for percentage calculations (100 = 100%)
@@ -58,11 +70,9 @@ pub const REPUTATION_DECAY_MIN: u16 = 1000;
 /// Minimum number of voters required for dispute resolution
 pub const MIN_VOTERS_FOR_RESOLUTION: usize = 3;
 
-/// Hard cap on dispute voters to keep resolve/expire account fan-out bounded.
-///
-/// Both `resolve_dispute` and `expire_dispute` require `(vote, arbiter)` account
-/// pairs for each recorded voter in `remaining_accounts`. Capping voters avoids
-/// creating disputes that cannot be resolved within practical transaction limits.
+/// DEPRECATED (P6.3): the arbiter vote/quorum model is retired — `vote_dispute` no
+/// longer exists, so a dispute never records a voter and resolve/expire no longer take
+/// `(vote, arbiter)` pairs. This cap is unreferenced; retained only for API stability.
 pub const MAX_DISPUTE_VOTERS: u8 = 20;
 
 // ============================================================================

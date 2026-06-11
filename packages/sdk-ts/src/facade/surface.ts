@@ -1,0 +1,221 @@
+// Facade: P6.5 surface-versioning contract.
+//
+// One program ID serves the restricted 25-instruction canary surface on mainnet and
+// the full ~80-instruction surface on dev/devnet. `getDeployedSurface` lets a client
+// ask, against a live RPC, WHICH surface a given cluster actually exposes — so the
+// facade/client can fail-closed (throw `SurfaceNotDeployedError`) before building a
+// transaction that calls an instruction the deployed program does not have.
+//
+// CRITICAL TOLERANCE REQUIREMENT (do not "simplify" away):
+// The single live mainnet `ProtocolConfig` account is the PRE-P6.5 layout (349 bytes,
+// no `surface_revision`). The generated `getProtocolConfigDecoder()` is a FIXED-size
+// decoder for the new 351-byte layout and THROWS on the 349-byte account. So this
+// module never feeds the old account through the generated codec — it reads the raw
+// bytes and decodes `surface_revision` by hand, treating an account shorter than the
+// new layout (or a missing account) as `surface_revision = 0` (= "unstamped /
+// conservative"). On an old-layout mainnet account this returns `listings: false`
+// WITHOUT throwing.
+import {
+  fetchEncodedAccount,
+  getU16Decoder,
+  type Address,
+} from "@solana/kit";
+import { findProtocolConfigPda } from "../generated/index.js";
+
+/**
+ * Byte offset of the appended `surface_revision: u16` in the P6.5 `ProtocolConfig`
+ * layout. The pre-P6.5 account is exactly {@link OLD_PROTOCOL_CONFIG_SIZE} bytes, and
+ * `surface_revision` is the only field appended after it — so it lives at bytes
+ * `[OLD_PROTOCOL_CONFIG_SIZE, NEW_PROTOCOL_CONFIG_SIZE)`.
+ */
+export const SURFACE_REVISION_OFFSET = 349;
+
+/** On-chain byte size of the pre-P6.5 `ProtocolConfig` (no `surface_revision`). */
+export const OLD_PROTOCOL_CONFIG_SIZE = 349;
+
+/** On-chain byte size of the P6.5 `ProtocolConfig` (with `surface_revision: u16`). */
+export const NEW_PROTOCOL_CONFIG_SIZE = 351;
+
+/**
+ * `surface_revision` value meaning "the full (~80-instruction) surface is live".
+ * Mirrors the on-chain `ProtocolConfig::SURFACE_REVISION_FULL`. `0` means the surface
+ * is unstamped — treated as the conservative canary surface.
+ */
+export const SURFACE_REVISION_FULL = 1;
+
+/**
+ * A typed capability set describing which instruction families a deployed cluster
+ * actually exposes. Conservative-by-default: an unstamped / old-layout account yields
+ * every capability `false`.
+ */
+export type CapabilitySet = {
+  /** The raw on-chain `surface_revision` (0 = unstamped/canary). */
+  readonly surfaceRevision: number;
+  /** Whether the program advertises the full surface (`surface_revision >= 1`). */
+  readonly fullSurface: boolean;
+  /** Service listings + hire-from-listing instructions (full surface only). */
+  readonly listings: boolean;
+  /** Dispute lifecycle instructions (full surface only). */
+  readonly disputes: boolean;
+  /** Completion-bond instructions (full surface only). */
+  readonly bonds: boolean;
+  /** Demand-side referral-fee snapshotting (full surface only). */
+  readonly referrals: boolean;
+  /** Governance proposal/vote instructions (full surface only). */
+  readonly governance: boolean;
+  /** Skill registry instructions (full surface only). */
+  readonly skills: boolean;
+  /** Reputation staking/delegation instructions (full surface only). */
+  readonly reputation: boolean;
+  /** On-chain bid-marketplace instructions (full surface only). */
+  readonly bids: boolean;
+};
+
+/** The conservative capability set: the canary / unstamped / old-layout surface. */
+function canarySurface(surfaceRevision: number): CapabilitySet {
+  return {
+    surfaceRevision,
+    fullSurface: false,
+    listings: false,
+    disputes: false,
+    bonds: false,
+    referrals: false,
+    governance: false,
+    skills: false,
+    reputation: false,
+    bids: false,
+  };
+}
+
+/** The full capability set. */
+function fullSurface(surfaceRevision: number): CapabilitySet {
+  return {
+    surfaceRevision,
+    fullSurface: true,
+    listings: true,
+    disputes: true,
+    bonds: true,
+    referrals: true,
+    governance: true,
+    skills: true,
+    reputation: true,
+    bids: true,
+  };
+}
+
+/**
+ * Map a raw `surface_revision` to a typed {@link CapabilitySet}. `SURFACE_REVISION_FULL`
+ * (or any higher known value) → full surface; anything else (including `0` = unstamped)
+ * → the conservative canary surface.
+ *
+ * @param surfaceRevision - the raw on-chain u16.
+ */
+export function capabilitiesForRevision(surfaceRevision: number): CapabilitySet {
+  return surfaceRevision >= SURFACE_REVISION_FULL
+    ? fullSurface(surfaceRevision)
+    : canarySurface(surfaceRevision);
+}
+
+/**
+ * Read `surface_revision` out of a raw `ProtocolConfig` account buffer, tolerating the
+ * pre-P6.5 (349-byte) layout. Returns `0` when the buffer is too short to contain the
+ * appended field (the old layout) — NEVER throws on a short buffer.
+ *
+ * Exported (and pure) so it can be unit-tested with a hand-built old-size buffer.
+ *
+ * @param data - the raw account data bytes.
+ */
+export function readSurfaceRevision(data: Uint8Array): number {
+  // Old layout (or any buffer that does not reach the appended u16): unstamped.
+  if (data.length < SURFACE_REVISION_OFFSET + 2) {
+    return 0;
+  }
+  return getU16Decoder().decode(data, SURFACE_REVISION_OFFSET);
+}
+
+/**
+ * Query a live RPC for the deployed instruction surface of the agenc-coordination
+ * program on that cluster.
+ *
+ * Tolerates EVERY pre-migration shape without throwing:
+ * - the account is the OLD 349-byte layout (today's mainnet) → `surface_revision = 0`
+ *   → returns the conservative surface (`listings: false`);
+ * - the account does not exist at all (mis-pointed RPC / wrong program) →
+ *   `surface_revision = 0` → conservative surface;
+ * - the account is the new 351-byte layout with `surface_revision` stamped → the
+ *   corresponding capability set (full surface when stamped to
+ *   {@link SURFACE_REVISION_FULL}).
+ *
+ * @param rpc - a `@solana/kit` RPC (anything `fetchEncodedAccount` accepts).
+ * @param options - optional `programAddress` override (defaults to the canonical
+ * agenc-coordination program), used to derive the `ProtocolConfig` PDA.
+ * @returns the typed {@link CapabilitySet} for the cluster behind `rpc`.
+ *
+ * @example
+ * ```ts
+ * const surface = await getDeployedSurface(rpc);
+ * if (!surface.listings) {
+ *   // hire-from-listing is not live on this cluster; do not build that tx.
+ * }
+ * ```
+ */
+export async function getDeployedSurface(
+  rpc: Parameters<typeof fetchEncodedAccount>[0],
+  options: { programAddress?: Address } = {},
+): Promise<CapabilitySet> {
+  const [protocolConfigPda] = await findProtocolConfigPda(
+    options.programAddress ? { programAddress: options.programAddress } : {},
+  );
+  const account = await fetchEncodedAccount(rpc, protocolConfigPda);
+  // A missing account is treated conservatively (NOT an error): a client probing an
+  // un-initialized or wrong cluster should fail-closed, not crash.
+  const revision = account.exists ? readSurfaceRevision(account.data) : 0;
+  return capabilitiesForRevision(revision);
+}
+
+/**
+ * Thrown by facade/client methods that need a capability the deployed surface does not
+ * expose. Carries the missing capability name and the cluster's {@link CapabilitySet}
+ * so callers can branch / surface an actionable message instead of letting a raw
+ * "instruction not found" transaction failure bubble up.
+ */
+export class SurfaceNotDeployedError extends Error {
+  /** The capability the caller required (e.g. `"listings"`). */
+  readonly capability: keyof CapabilitySet;
+  /** The full deployed capability set at the time of the check. */
+  readonly surface: CapabilitySet;
+
+  /**
+   * @param capability - the required capability that is not deployed.
+   * @param surface - the deployed capability set.
+   */
+  constructor(capability: keyof CapabilitySet, surface: CapabilitySet) {
+    super(
+      `Capability "${String(capability)}" is not deployed on this cluster ` +
+        `(surface_revision=${surface.surfaceRevision}). The agenc-coordination ` +
+        `program here exposes only the conservative canary surface; this ` +
+        `instruction family is not available.`,
+    );
+    this.name = "SurfaceNotDeployedError";
+    this.capability = capability;
+    this.surface = surface;
+  }
+}
+
+/**
+ * Assert that a specific boolean capability is live on the deployed surface, throwing
+ * {@link SurfaceNotDeployedError} early if it is not. Facade/client methods that build
+ * a full-surface-only instruction call this first so they fail-closed against an
+ * old-layout / canary cluster with a clear, structured error.
+ *
+ * @param surface - a {@link CapabilitySet} (typically from {@link getDeployedSurface}).
+ * @param capability - the boolean capability to require.
+ */
+export function assertCapability(
+  surface: CapabilitySet,
+  capability: Exclude<keyof CapabilitySet, "surfaceRevision">,
+): void {
+  if (surface[capability] !== true) {
+    throw new SurfaceNotDeployedError(capability, surface);
+  }
+}

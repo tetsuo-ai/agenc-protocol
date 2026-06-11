@@ -61,6 +61,9 @@ export type RejectAndFreezeInstruction<
   TAccountTaskSubmission extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
+  TAccountAgentStats extends string | AccountMeta<string> = string,
+  TAccountSystemProgram extends string | AccountMeta<string> =
+    "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -85,6 +88,12 @@ export type RejectAndFreezeInstruction<
         ? WritableSignerAccount<TAccountCreator> &
             AccountSignerMeta<TAccountCreator>
         : TAccountCreator,
+      TAccountAgentStats extends string
+        ? WritableAccount<TAccountAgentStats>
+        : TAccountAgentStats,
+      TAccountSystemProgram extends string
+        ? ReadonlyAccount<TAccountSystemProgram>
+        : TAccountSystemProgram,
       ...TRemainingAccounts,
     ]
   >;
@@ -132,6 +141,8 @@ export type RejectAndFreezeAsyncInput<
   TAccountTaskSubmission extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountCreator extends string = string,
+  TAccountAgentStats extends string = string,
+  TAccountSystemProgram extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -139,6 +150,15 @@ export type RejectAndFreezeAsyncInput<
   taskSubmission?: Address<TAccountTaskSubmission>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   creator: TransactionSigner<TAccountCreator>;
+  /**
+   * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this
+   * freeze-rejection bumps `tasks_rejected`. Bound to `["agent_stats", claim.worker]`
+   * (the claim's worker is the worker AgentRegistration PDA), created lazily on first
+   * write. Telemetry only — never gates the freeze above.
+   */
+  agentStats?: Address<TAccountAgentStats>;
+  /** Required only when `agent_stats` is supplied (for `init_if_needed`). */
+  systemProgram?: Address<TAccountSystemProgram>;
   rejectionHash: RejectAndFreezeInstructionDataArgs["rejectionHash"];
 };
 
@@ -149,6 +169,8 @@ export async function getRejectAndFreezeInstructionAsync<
   TAccountTaskSubmission extends string,
   TAccountProtocolConfig extends string,
   TAccountCreator extends string,
+  TAccountAgentStats extends string,
+  TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RejectAndFreezeAsyncInput<
@@ -157,7 +179,9 @@ export async function getRejectAndFreezeInstructionAsync<
     TAccountTaskValidationConfig,
     TAccountTaskSubmission,
     TAccountProtocolConfig,
-    TAccountCreator
+    TAccountCreator,
+    TAccountAgentStats,
+    TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -168,7 +192,9 @@ export async function getRejectAndFreezeInstructionAsync<
     TAccountTaskValidationConfig,
     TAccountTaskSubmission,
     TAccountProtocolConfig,
-    TAccountCreator
+    TAccountCreator,
+    TAccountAgentStats,
+    TAccountSystemProgram
   >
 > {
   // Program address.
@@ -186,6 +212,8 @@ export async function getRejectAndFreezeInstructionAsync<
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     creator: { value: input.creator ?? null, isWritable: true },
+    agentStats: { value: input.agentStats ?? null, isWritable: true },
+    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -215,6 +243,10 @@ export async function getRejectAndFreezeInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.systemProgram.value) {
+    accounts.systemProgram.value =
+      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -225,6 +257,8 @@ export async function getRejectAndFreezeInstructionAsync<
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("creator", accounts.creator),
+      getAccountMeta("agentStats", accounts.agentStats),
+      getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRejectAndFreezeInstructionDataEncoder().encode(
       args as RejectAndFreezeInstructionDataArgs,
@@ -237,7 +271,9 @@ export async function getRejectAndFreezeInstructionAsync<
     TAccountTaskValidationConfig,
     TAccountTaskSubmission,
     TAccountProtocolConfig,
-    TAccountCreator
+    TAccountCreator,
+    TAccountAgentStats,
+    TAccountSystemProgram
   >);
 }
 
@@ -248,6 +284,8 @@ export type RejectAndFreezeInput<
   TAccountTaskSubmission extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountCreator extends string = string,
+  TAccountAgentStats extends string = string,
+  TAccountSystemProgram extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -255,6 +293,15 @@ export type RejectAndFreezeInput<
   taskSubmission: Address<TAccountTaskSubmission>;
   protocolConfig: Address<TAccountProtocolConfig>;
   creator: TransactionSigner<TAccountCreator>;
+  /**
+   * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this
+   * freeze-rejection bumps `tasks_rejected`. Bound to `["agent_stats", claim.worker]`
+   * (the claim's worker is the worker AgentRegistration PDA), created lazily on first
+   * write. Telemetry only — never gates the freeze above.
+   */
+  agentStats?: Address<TAccountAgentStats>;
+  /** Required only when `agent_stats` is supplied (for `init_if_needed`). */
+  systemProgram?: Address<TAccountSystemProgram>;
   rejectionHash: RejectAndFreezeInstructionDataArgs["rejectionHash"];
 };
 
@@ -265,6 +312,8 @@ export function getRejectAndFreezeInstruction<
   TAccountTaskSubmission extends string,
   TAccountProtocolConfig extends string,
   TAccountCreator extends string,
+  TAccountAgentStats extends string,
+  TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RejectAndFreezeInput<
@@ -273,7 +322,9 @@ export function getRejectAndFreezeInstruction<
     TAccountTaskValidationConfig,
     TAccountTaskSubmission,
     TAccountProtocolConfig,
-    TAccountCreator
+    TAccountCreator,
+    TAccountAgentStats,
+    TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
 ): RejectAndFreezeInstruction<
@@ -283,7 +334,9 @@ export function getRejectAndFreezeInstruction<
   TAccountTaskValidationConfig,
   TAccountTaskSubmission,
   TAccountProtocolConfig,
-  TAccountCreator
+  TAccountCreator,
+  TAccountAgentStats,
+  TAccountSystemProgram
 > {
   // Program address.
   const programAddress =
@@ -300,6 +353,8 @@ export function getRejectAndFreezeInstruction<
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     creator: { value: input.creator ?? null, isWritable: true },
+    agentStats: { value: input.agentStats ?? null, isWritable: true },
+    systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -308,6 +363,12 @@ export function getRejectAndFreezeInstruction<
 
   // Original args.
   const args = { ...input };
+
+  // Resolve default values.
+  if (!accounts.systemProgram.value) {
+    accounts.systemProgram.value =
+      "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -318,6 +379,8 @@ export function getRejectAndFreezeInstruction<
       getAccountMeta("taskSubmission", accounts.taskSubmission),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("creator", accounts.creator),
+      getAccountMeta("agentStats", accounts.agentStats),
+      getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRejectAndFreezeInstructionDataEncoder().encode(
       args as RejectAndFreezeInstructionDataArgs,
@@ -330,7 +393,9 @@ export function getRejectAndFreezeInstruction<
     TAccountTaskValidationConfig,
     TAccountTaskSubmission,
     TAccountProtocolConfig,
-    TAccountCreator
+    TAccountCreator,
+    TAccountAgentStats,
+    TAccountSystemProgram
   >);
 }
 
@@ -346,6 +411,15 @@ export type ParsedRejectAndFreezeInstruction<
     taskSubmission: TAccountMetas[3];
     protocolConfig: TAccountMetas[4];
     creator: TAccountMetas[5];
+    /**
+     * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this
+     * freeze-rejection bumps `tasks_rejected`. Bound to `["agent_stats", claim.worker]`
+     * (the claim's worker is the worker AgentRegistration PDA), created lazily on first
+     * write. Telemetry only — never gates the freeze above.
+     */
+    agentStats?: TAccountMetas[6] | undefined;
+    /** Required only when `agent_stats` is supplied (for `init_if_needed`). */
+    systemProgram?: TAccountMetas[7] | undefined;
   };
   data: RejectAndFreezeInstructionData;
 };
@@ -358,12 +432,12 @@ export function parseRejectAndFreezeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRejectAndFreezeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 6) {
+  if (instruction.accounts.length < 8) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 6,
+        expectedAccountMetas: 8,
       },
     );
   }
@@ -372,6 +446,12 @@ export function parseRejectAndFreezeInstruction<
     const accountMeta = (instruction.accounts as TAccountMetas)[accountIndex]!;
     accountIndex += 1;
     return accountMeta;
+  };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
   };
   return {
     programAddress: instruction.programAddress,
@@ -382,6 +462,8 @@ export function parseRejectAndFreezeInstruction<
       taskSubmission: getNextAccount(),
       protocolConfig: getNextAccount(),
       creator: getNextAccount(),
+      agentStats: getNextOptionalAccount(),
+      systemProgram: getNextOptionalAccount(),
     },
     data: getRejectAndFreezeInstructionDataDecoder().decode(instruction.data),
   };

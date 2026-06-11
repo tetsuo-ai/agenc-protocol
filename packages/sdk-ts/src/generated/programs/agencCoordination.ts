@@ -35,7 +35,7 @@ import {
 } from "@solana/program-client-core";
 import {
   getAgentRegistrationCodec,
-  getAuthorityDisputeVoteCodec,
+  getAgentStatsCodec,
   getAuthorityRateLimitCodec,
   getBidderMarketStateCodec,
   getBidMarketplaceConfigCodec,
@@ -44,13 +44,14 @@ import {
   getCoordinationStateCodec,
   getDisputeCodec,
   getDisputeResolverCodec,
-  getDisputeVoteCodec,
   getFeedPostCodec,
   getFeedVoteCodec,
   getGovernanceConfigCodec,
   getGovernanceVoteCodec,
+  getHireRatingCodec,
   getHireRecordCodec,
   getListingModerationCodec,
+  getModerationAttestorCodec,
   getModerationConfigCodec,
   getNullifierSpendCodec,
   getProposalCodec,
@@ -75,8 +76,8 @@ import {
   getZkConfigCodec,
   type AgentRegistration,
   type AgentRegistrationArgs,
-  type AuthorityDisputeVote,
-  type AuthorityDisputeVoteArgs,
+  type AgentStats,
+  type AgentStatsArgs,
   type AuthorityRateLimit,
   type AuthorityRateLimitArgs,
   type BidderMarketState,
@@ -93,8 +94,6 @@ import {
   type DisputeArgs,
   type DisputeResolver,
   type DisputeResolverArgs,
-  type DisputeVote,
-  type DisputeVoteArgs,
   type FeedPost,
   type FeedPostArgs,
   type FeedVote,
@@ -103,10 +102,14 @@ import {
   type GovernanceConfigArgs,
   type GovernanceVote,
   type GovernanceVoteArgs,
+  type HireRating,
+  type HireRatingArgs,
   type HireRecord,
   type HireRecordArgs,
   type ListingModeration,
   type ListingModerationArgs,
+  type ModerationAttestor,
+  type ModerationAttestorArgs,
   type ModerationConfig,
   type ModerationConfigArgs,
   type NullifierSpend,
@@ -158,6 +161,7 @@ import {
   getApplyDisputeSlashInstructionAsync,
   getApplyInitiatorSlashInstructionAsync,
   getAssignDisputeResolverInstructionAsync,
+  getAssignModerationAttestorInstructionAsync,
   getAutoAcceptTaskResultInstructionAsync,
   getCancelBidInstructionAsync,
   getCancelDisputeInstructionAsync,
@@ -191,11 +195,12 @@ import {
   getInitializeProtocolInstructionAsync,
   getInitializeZkConfigInstructionAsync,
   getInitiateDisputeInstructionAsync,
-  getMigrateProtocolInstructionAsync,
-  getMigrateTaskInstructionAsync,
+  getMigrateProtocolInstruction,
+  getMigrateTaskInstruction,
   getPostCompletionBondInstructionAsync,
   getPostToFeedInstructionAsync,
   getPurchaseSkillInstructionAsync,
+  getRateHireInstructionAsync,
   getRateSkillInstructionAsync,
   getReclaimCompletionBondInstructionAsync,
   getRecordListingModerationInstructionAsync,
@@ -209,6 +214,7 @@ import {
   getResolveRejectFrozenInstructionAsync,
   getRevokeDelegationInstruction,
   getRevokeDisputeResolverInstructionAsync,
+  getRevokeModerationAttestorInstructionAsync,
   getSetServiceListingStateInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
   getStakeReputationInstructionAsync,
@@ -230,7 +236,6 @@ import {
   getUpdateZkImageIdInstructionAsync,
   getUpvotePostInstructionAsync,
   getValidateTaskResultInstructionAsync,
-  getVoteDisputeInstructionAsync,
   getVoteProposalInstructionAsync,
   getWithdrawReputationStakeInstructionAsync,
   parseAcceptBidInstruction,
@@ -238,6 +243,7 @@ import {
   parseApplyDisputeSlashInstruction,
   parseApplyInitiatorSlashInstruction,
   parseAssignDisputeResolverInstruction,
+  parseAssignModerationAttestorInstruction,
   parseAutoAcceptTaskResultInstruction,
   parseCancelBidInstruction,
   parseCancelDisputeInstruction,
@@ -276,6 +282,7 @@ import {
   parsePostCompletionBondInstruction,
   parsePostToFeedInstruction,
   parsePurchaseSkillInstruction,
+  parseRateHireInstruction,
   parseRateSkillInstruction,
   parseReclaimCompletionBondInstruction,
   parseRecordListingModerationInstruction,
@@ -289,6 +296,7 @@ import {
   parseResolveRejectFrozenInstruction,
   parseRevokeDelegationInstruction,
   parseRevokeDisputeResolverInstruction,
+  parseRevokeModerationAttestorInstruction,
   parseSetServiceListingStateInstruction,
   parseSetTaskJobSpecInstruction,
   parseStakeReputationInstruction,
@@ -310,7 +318,6 @@ import {
   parseUpdateZkImageIdInstruction,
   parseUpvotePostInstruction,
   parseValidateTaskResultInstruction,
-  parseVoteDisputeInstruction,
   parseVoteProposalInstruction,
   parseWithdrawReputationStakeInstruction,
   type AcceptBidAsyncInput,
@@ -318,6 +325,7 @@ import {
   type ApplyDisputeSlashAsyncInput,
   type ApplyInitiatorSlashAsyncInput,
   type AssignDisputeResolverAsyncInput,
+  type AssignModerationAttestorAsyncInput,
   type AutoAcceptTaskResultAsyncInput,
   type CancelBidAsyncInput,
   type CancelDisputeAsyncInput,
@@ -351,13 +359,14 @@ import {
   type InitializeProtocolAsyncInput,
   type InitializeZkConfigAsyncInput,
   type InitiateDisputeAsyncInput,
-  type MigrateProtocolAsyncInput,
-  type MigrateTaskAsyncInput,
+  type MigrateProtocolInput,
+  type MigrateTaskInput,
   type ParsedAcceptBidInstruction,
   type ParsedAcceptTaskResultInstruction,
   type ParsedApplyDisputeSlashInstruction,
   type ParsedApplyInitiatorSlashInstruction,
   type ParsedAssignDisputeResolverInstruction,
+  type ParsedAssignModerationAttestorInstruction,
   type ParsedAutoAcceptTaskResultInstruction,
   type ParsedCancelBidInstruction,
   type ParsedCancelDisputeInstruction,
@@ -396,6 +405,7 @@ import {
   type ParsedPostCompletionBondInstruction,
   type ParsedPostToFeedInstruction,
   type ParsedPurchaseSkillInstruction,
+  type ParsedRateHireInstruction,
   type ParsedRateSkillInstruction,
   type ParsedReclaimCompletionBondInstruction,
   type ParsedRecordListingModerationInstruction,
@@ -409,6 +419,7 @@ import {
   type ParsedResolveRejectFrozenInstruction,
   type ParsedRevokeDelegationInstruction,
   type ParsedRevokeDisputeResolverInstruction,
+  type ParsedRevokeModerationAttestorInstruction,
   type ParsedSetServiceListingStateInstruction,
   type ParsedSetTaskJobSpecInstruction,
   type ParsedStakeReputationInstruction,
@@ -430,12 +441,12 @@ import {
   type ParsedUpdateZkImageIdInstruction,
   type ParsedUpvotePostInstruction,
   type ParsedValidateTaskResultInstruction,
-  type ParsedVoteDisputeInstruction,
   type ParsedVoteProposalInstruction,
   type ParsedWithdrawReputationStakeInstruction,
   type PostCompletionBondAsyncInput,
   type PostToFeedAsyncInput,
   type PurchaseSkillAsyncInput,
+  type RateHireAsyncInput,
   type RateSkillAsyncInput,
   type ReclaimCompletionBondAsyncInput,
   type RecordListingModerationAsyncInput,
@@ -449,6 +460,7 @@ import {
   type ResolveRejectFrozenAsyncInput,
   type RevokeDelegationInput,
   type RevokeDisputeResolverAsyncInput,
+  type RevokeModerationAttestorAsyncInput,
   type SetServiceListingStateAsyncInput,
   type SetTaskJobSpecAsyncInput,
   type StakeReputationAsyncInput,
@@ -470,15 +482,14 @@ import {
   type UpdateZkImageIdAsyncInput,
   type UpvotePostAsyncInput,
   type ValidateTaskResultAsyncInput,
-  type VoteDisputeAsyncInput,
   type VoteProposalAsyncInput,
   type WithdrawReputationStakeAsyncInput,
 } from "../instructions";
 import {
   findAcceptTaskResultClaimPda,
   findAgentPda,
+  findAgentStatsPda,
   findAuthorityRateLimitPda,
-  findAuthorityVotePda,
   findBidBookPda,
   findBidderMarketStatePda,
   findBidMarketplacePda,
@@ -491,11 +502,14 @@ import {
   findDisputePda,
   findDisputeResolverPda,
   findEscrowPda,
+  findExpireClaimAgentStatsPda,
   findGovernanceConfigPda,
+  findHireRatingPda,
   findHireRecordPda,
   findInitiatorClaimPda,
   findListingModerationPda,
   findListingPda,
+  findModerationAttestorPda,
   findModerationConfigPda,
   findPostPda,
   findProposalPda,
@@ -504,6 +518,7 @@ import {
   findRateSkillPurchaseRecordPda,
   findRatingAccountPda,
   findReclaimCompletionBondCompletionBondPda,
+  findRecordListingModerationModerationAttestorPda,
   findReputationStakePda,
   findSkillPda,
   findStatePda,
@@ -514,7 +529,6 @@ import {
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
   findTaskValidationVotePda,
-  findVoteDisputeVotePda,
   findVotePda,
   findVoteProposalVotePda,
   findWorkerCompletionBondPda,
@@ -526,7 +540,7 @@ export const AGENC_COORDINATION_PROGRAM_ADDRESS =
 
 export enum AgencCoordinationAccount {
   AgentRegistration,
-  AuthorityDisputeVote,
+  AgentStats,
   AuthorityRateLimit,
   BidMarketplaceConfig,
   BidderMarketState,
@@ -535,13 +549,14 @@ export enum AgencCoordinationAccount {
   CoordinationState,
   Dispute,
   DisputeResolver,
-  DisputeVote,
   FeedPost,
   FeedVote,
   GovernanceConfig,
   GovernanceVote,
+  HireRating,
   HireRecord,
   ListingModeration,
+  ModerationAttestor,
   ModerationConfig,
   NullifierSpend,
   Proposal,
@@ -585,12 +600,12 @@ export function identifyAgencCoordinationAccount(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([194, 81, 47, 196, 187, 81, 110, 137]),
+        new Uint8Array([43, 192, 26, 112, 162, 176, 77, 164]),
       ),
       0,
     )
   ) {
-    return AgencCoordinationAccount.AuthorityDisputeVote;
+    return AgencCoordinationAccount.AgentStats;
   }
   if (
     containsBytes(
@@ -684,17 +699,6 @@ export function identifyAgencCoordinationAccount(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([166, 202, 140, 76, 65, 35, 254, 149]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationAccount.DisputeVote;
-  }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([228, 215, 236, 73, 246, 181, 191, 228]),
       ),
       0,
@@ -739,6 +743,17 @@ export function identifyAgencCoordinationAccount(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([250, 116, 242, 149, 241, 55, 164, 63]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.HireRating;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([104, 101, 55, 188, 219, 31, 76, 113]),
       ),
       0,
@@ -756,6 +771,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.ListingModeration;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([52, 62, 194, 121, 157, 169, 40, 178]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.ModerationAttestor;
   }
   if (
     containsBytes(
@@ -1011,6 +1037,7 @@ export enum AgencCoordinationInstruction {
   ApplyDisputeSlash,
   ApplyInitiatorSlash,
   AssignDisputeResolver,
+  AssignModerationAttestor,
   AutoAcceptTaskResult,
   CancelBid,
   CancelDispute,
@@ -1049,6 +1076,7 @@ export enum AgencCoordinationInstruction {
   PostCompletionBond,
   PostToFeed,
   PurchaseSkill,
+  RateHire,
   RateSkill,
   ReclaimCompletionBond,
   RecordListingModeration,
@@ -1062,6 +1090,7 @@ export enum AgencCoordinationInstruction {
   ResolveRejectFrozen,
   RevokeDelegation,
   RevokeDisputeResolver,
+  RevokeModerationAttestor,
   SetServiceListingState,
   SetTaskJobSpec,
   StakeReputation,
@@ -1083,7 +1112,6 @@ export enum AgencCoordinationInstruction {
   UpdateZkImageId,
   UpvotePost,
   ValidateTaskResult,
-  VoteDispute,
   VoteProposal,
   WithdrawReputationStake,
 }
@@ -1146,6 +1174,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.AssignDisputeResolver;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([236, 52, 254, 148, 54, 97, 130, 25]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.AssignModerationAttestor;
   }
   if (
     containsBytes(
@@ -1569,6 +1608,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([31, 201, 148, 116, 69, 243, 201, 90]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.RateHire;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([44, 124, 30, 253, 90, 244, 174, 75]),
       ),
       0,
@@ -1707,6 +1757,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.RevokeDisputeResolver;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([192, 141, 245, 60, 48, 104, 165, 105]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.RevokeModerationAttestor;
   }
   if (
     containsBytes(
@@ -1943,17 +2004,6 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([23, 190, 211, 170, 65, 223, 4, 243]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationInstruction.VoteDispute;
-  }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([247, 104, 114, 240, 237, 41, 200, 36]),
       ),
       0,
@@ -1996,6 +2046,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.AssignDisputeResolver;
     } & ParsedAssignDisputeResolverInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.AssignModerationAttestor;
+    } & ParsedAssignModerationAttestorInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.AutoAcceptTaskResult;
     } & ParsedAutoAcceptTaskResultInstruction<TProgram>)
@@ -2111,6 +2164,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.PurchaseSkill;
     } & ParsedPurchaseSkillInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.RateHire;
+    } & ParsedRateHireInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.RateSkill;
     } & ParsedRateSkillInstruction<TProgram>)
   | ({
@@ -2149,6 +2205,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.RevokeDisputeResolver;
     } & ParsedRevokeDisputeResolverInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.RevokeModerationAttestor;
+    } & ParsedRevokeModerationAttestorInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.SetServiceListingState;
     } & ParsedSetServiceListingStateInstruction<TProgram>)
@@ -2213,9 +2272,6 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.ValidateTaskResult;
     } & ParsedValidateTaskResultInstruction<TProgram>)
   | ({
-      instructionType: AgencCoordinationInstruction.VoteDispute;
-    } & ParsedVoteDisputeInstruction<TProgram>)
-  | ({
       instructionType: AgencCoordinationInstruction.VoteProposal;
     } & ParsedVoteProposalInstruction<TProgram>)
   | ({
@@ -2260,6 +2316,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.AssignDisputeResolver,
         ...parseAssignDisputeResolverInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.AssignModerationAttestor: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.AssignModerationAttestor,
+        ...parseAssignModerationAttestorInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.AutoAcceptTaskResult: {
@@ -2528,6 +2591,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parsePurchaseSkillInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.RateHire: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.RateHire,
+        ...parseRateHireInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.RateSkill: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2617,6 +2687,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.RevokeDisputeResolver,
         ...parseRevokeDisputeResolverInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.RevokeModerationAttestor: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.RevokeModerationAttestor,
+        ...parseRevokeModerationAttestorInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.SetServiceListingState: {
@@ -2767,13 +2844,6 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseValidateTaskResultInstruction(instruction),
       };
     }
-    case AgencCoordinationInstruction.VoteDispute: {
-      assertIsInstructionWithAccounts(instruction);
-      return {
-        instructionType: AgencCoordinationInstruction.VoteDispute,
-        ...parseVoteDisputeInstruction(instruction),
-      };
-    }
     case AgencCoordinationInstruction.VoteProposal: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2808,8 +2878,8 @@ export type AgencCoordinationPlugin = {
 export type AgencCoordinationPluginAccounts = {
   agentRegistration: ReturnType<typeof getAgentRegistrationCodec> &
     SelfFetchFunctions<AgentRegistrationArgs, AgentRegistration>;
-  authorityDisputeVote: ReturnType<typeof getAuthorityDisputeVoteCodec> &
-    SelfFetchFunctions<AuthorityDisputeVoteArgs, AuthorityDisputeVote>;
+  agentStats: ReturnType<typeof getAgentStatsCodec> &
+    SelfFetchFunctions<AgentStatsArgs, AgentStats>;
   authorityRateLimit: ReturnType<typeof getAuthorityRateLimitCodec> &
     SelfFetchFunctions<AuthorityRateLimitArgs, AuthorityRateLimit>;
   bidMarketplaceConfig: ReturnType<typeof getBidMarketplaceConfigCodec> &
@@ -2826,8 +2896,6 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<DisputeArgs, Dispute>;
   disputeResolver: ReturnType<typeof getDisputeResolverCodec> &
     SelfFetchFunctions<DisputeResolverArgs, DisputeResolver>;
-  disputeVote: ReturnType<typeof getDisputeVoteCodec> &
-    SelfFetchFunctions<DisputeVoteArgs, DisputeVote>;
   feedPost: ReturnType<typeof getFeedPostCodec> &
     SelfFetchFunctions<FeedPostArgs, FeedPost>;
   feedVote: ReturnType<typeof getFeedVoteCodec> &
@@ -2836,10 +2904,14 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<GovernanceConfigArgs, GovernanceConfig>;
   governanceVote: ReturnType<typeof getGovernanceVoteCodec> &
     SelfFetchFunctions<GovernanceVoteArgs, GovernanceVote>;
+  hireRating: ReturnType<typeof getHireRatingCodec> &
+    SelfFetchFunctions<HireRatingArgs, HireRating>;
   hireRecord: ReturnType<typeof getHireRecordCodec> &
     SelfFetchFunctions<HireRecordArgs, HireRecord>;
   listingModeration: ReturnType<typeof getListingModerationCodec> &
     SelfFetchFunctions<ListingModerationArgs, ListingModeration>;
+  moderationAttestor: ReturnType<typeof getModerationAttestorCodec> &
+    SelfFetchFunctions<ModerationAttestorArgs, ModerationAttestor>;
   moderationConfig: ReturnType<typeof getModerationConfigCodec> &
     SelfFetchFunctions<ModerationConfigArgs, ModerationConfig>;
   nullifierSpend: ReturnType<typeof getNullifierSpendCodec> &
@@ -2905,6 +2977,10 @@ export type AgencCoordinationPluginInstructions = {
   assignDisputeResolver: (
     input: AssignDisputeResolverAsyncInput,
   ) => ReturnType<typeof getAssignDisputeResolverInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  assignModerationAttestor: (
+    input: AssignModerationAttestorAsyncInput,
+  ) => ReturnType<typeof getAssignModerationAttestorInstructionAsync> &
     SelfPlanAndSendFunctions;
   autoAcceptTaskResult: (
     input: AutoAcceptTaskResultAsyncInput,
@@ -3039,13 +3115,12 @@ export type AgencCoordinationPluginInstructions = {
   ) => ReturnType<typeof getInitiateDisputeInstructionAsync> &
     SelfPlanAndSendFunctions;
   migrateProtocol: (
-    input: MigrateProtocolAsyncInput,
-  ) => ReturnType<typeof getMigrateProtocolInstructionAsync> &
+    input: MakeOptional<MigrateProtocolInput, "payer">,
+  ) => ReturnType<typeof getMigrateProtocolInstruction> &
     SelfPlanAndSendFunctions;
   migrateTask: (
-    input: MakeOptional<MigrateTaskAsyncInput, "payer">,
-  ) => ReturnType<typeof getMigrateTaskInstructionAsync> &
-    SelfPlanAndSendFunctions;
+    input: MakeOptional<MigrateTaskInput, "payer">,
+  ) => ReturnType<typeof getMigrateTaskInstruction> & SelfPlanAndSendFunctions;
   postCompletionBond: (
     input: PostCompletionBondAsyncInput,
   ) => ReturnType<typeof getPostCompletionBondInstructionAsync> &
@@ -3057,6 +3132,10 @@ export type AgencCoordinationPluginInstructions = {
   purchaseSkill: (
     input: PurchaseSkillAsyncInput,
   ) => ReturnType<typeof getPurchaseSkillInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  rateHire: (
+    input: RateHireAsyncInput,
+  ) => ReturnType<typeof getRateHireInstructionAsync> &
     SelfPlanAndSendFunctions;
   rateSkill: (
     input: RateSkillAsyncInput,
@@ -3109,6 +3188,10 @@ export type AgencCoordinationPluginInstructions = {
   revokeDisputeResolver: (
     input: RevokeDisputeResolverAsyncInput,
   ) => ReturnType<typeof getRevokeDisputeResolverInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  revokeModerationAttestor: (
+    input: RevokeModerationAttestorAsyncInput,
+  ) => ReturnType<typeof getRevokeModerationAttestorInstructionAsync> &
     SelfPlanAndSendFunctions;
   setServiceListingState: (
     input: SetServiceListingStateAsyncInput,
@@ -3193,10 +3276,6 @@ export type AgencCoordinationPluginInstructions = {
     input: ValidateTaskResultAsyncInput,
   ) => ReturnType<typeof getValidateTaskResultInstructionAsync> &
     SelfPlanAndSendFunctions;
-  voteDispute: (
-    input: VoteDisputeAsyncInput,
-  ) => ReturnType<typeof getVoteDisputeInstructionAsync> &
-    SelfPlanAndSendFunctions;
   voteProposal: (
     input: VoteProposalAsyncInput,
   ) => ReturnType<typeof getVoteProposalInstructionAsync> &
@@ -3219,9 +3298,11 @@ export type AgencCoordinationPluginPdas = {
   taskValidationConfig: typeof findTaskValidationConfigPda;
   taskSubmission: typeof findTaskSubmissionPda;
   disputeResolver: typeof findDisputeResolverPda;
+  moderationConfig: typeof findModerationConfigPda;
+  moderationAttestor: typeof findModerationAttestorPda;
+  agentStats: typeof findAgentStatsPda;
   hireRecord: typeof findHireRecordPda;
   zkConfig: typeof findZkConfigPda;
-  moderationConfig: typeof findModerationConfigPda;
   taskAttestorConfig: typeof findTaskAttestorConfigPda;
   bidMarketplace: typeof findBidMarketplacePda;
   task: typeof findTaskPda;
@@ -3231,15 +3312,18 @@ export type AgencCoordinationPluginPdas = {
   listing: typeof findListingPda;
   createTaskHumanlessAuthorityRateLimit: typeof findCreateTaskHumanlessAuthorityRateLimitPda;
   delegation: typeof findDelegationPda;
+  expireClaimAgentStats: typeof findExpireClaimAgentStatsPda;
   dispute: typeof findDisputePda;
   initiatorClaim: typeof findInitiatorClaimPda;
   completionBond: typeof findCompletionBondPda;
   post: typeof findPostPda;
   purchaseRecord: typeof findPurchaseRecordPda;
+  hireRating: typeof findHireRatingPda;
   ratingAccount: typeof findRatingAccountPda;
   rateSkillPurchaseRecord: typeof findRateSkillPurchaseRecordPda;
   reclaimCompletionBondCompletionBond: typeof findReclaimCompletionBondCompletionBondPda;
   listingModeration: typeof findListingModerationPda;
+  recordListingModerationModerationAttestor: typeof findRecordListingModerationModerationAttestorPda;
   taskModeration: typeof findTaskModerationPda;
   agent: typeof findAgentPda;
   skill: typeof findSkillPda;
@@ -3249,8 +3333,6 @@ export type AgencCoordinationPluginPdas = {
   state: typeof findStatePda;
   vote: typeof findVotePda;
   taskValidationVote: typeof findTaskValidationVotePda;
-  voteDisputeVote: typeof findVoteDisputeVotePda;
-  authorityVote: typeof findAuthorityVotePda;
   voteProposalVote: typeof findVoteProposalVotePda;
 };
 
@@ -3274,10 +3356,7 @@ export function agencCoordinationProgram() {
             client,
             getAgentRegistrationCodec(),
           ),
-          authorityDisputeVote: addSelfFetchFunctions(
-            client,
-            getAuthorityDisputeVoteCodec(),
-          ),
+          agentStats: addSelfFetchFunctions(client, getAgentStatsCodec()),
           authorityRateLimit: addSelfFetchFunctions(
             client,
             getAuthorityRateLimitCodec(),
@@ -3304,7 +3383,6 @@ export function agencCoordinationProgram() {
             client,
             getDisputeResolverCodec(),
           ),
-          disputeVote: addSelfFetchFunctions(client, getDisputeVoteCodec()),
           feedPost: addSelfFetchFunctions(client, getFeedPostCodec()),
           feedVote: addSelfFetchFunctions(client, getFeedVoteCodec()),
           governanceConfig: addSelfFetchFunctions(
@@ -3315,10 +3393,15 @@ export function agencCoordinationProgram() {
             client,
             getGovernanceVoteCodec(),
           ),
+          hireRating: addSelfFetchFunctions(client, getHireRatingCodec()),
           hireRecord: addSelfFetchFunctions(client, getHireRecordCodec()),
           listingModeration: addSelfFetchFunctions(
             client,
             getListingModerationCodec(),
+          ),
+          moderationAttestor: addSelfFetchFunctions(
+            client,
+            getModerationAttestorCodec(),
           ),
           moderationConfig: addSelfFetchFunctions(
             client,
@@ -3407,6 +3490,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getAssignDisputeResolverInstructionAsync(input),
+            ),
+          assignModerationAttestor: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getAssignModerationAttestorInstructionAsync(input),
             ),
           autoAcceptTaskResult: (input) =>
             addSelfPlanAndSendFunctions(
@@ -3576,12 +3664,15 @@ export function agencCoordinationProgram() {
           migrateProtocol: (input) =>
             addSelfPlanAndSendFunctions(
               client,
-              getMigrateProtocolInstructionAsync(input),
+              getMigrateProtocolInstruction({
+                ...input,
+                payer: input.payer ?? client.payer,
+              }),
             ),
           migrateTask: (input) =>
             addSelfPlanAndSendFunctions(
               client,
-              getMigrateTaskInstructionAsync({
+              getMigrateTaskInstruction({
                 ...input,
                 payer: input.payer ?? client.payer,
               }),
@@ -3600,6 +3691,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getPurchaseSkillInstructionAsync(input),
+            ),
+          rateHire: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getRateHireInstructionAsync(input),
             ),
           rateSkill: (input) =>
             addSelfPlanAndSendFunctions(
@@ -3665,6 +3761,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getRevokeDisputeResolverInstructionAsync(input),
+            ),
+          revokeModerationAttestor: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getRevokeModerationAttestorInstructionAsync(input),
             ),
           setServiceListingState: (input) =>
             addSelfPlanAndSendFunctions(
@@ -3771,11 +3872,6 @@ export function agencCoordinationProgram() {
               client,
               getValidateTaskResultInstructionAsync(input),
             ),
-          voteDispute: (input) =>
-            addSelfPlanAndSendFunctions(
-              client,
-              getVoteDisputeInstructionAsync(input),
-            ),
           voteProposal: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -3799,9 +3895,11 @@ export function agencCoordinationProgram() {
           taskValidationConfig: findTaskValidationConfigPda,
           taskSubmission: findTaskSubmissionPda,
           disputeResolver: findDisputeResolverPda,
+          moderationConfig: findModerationConfigPda,
+          moderationAttestor: findModerationAttestorPda,
+          agentStats: findAgentStatsPda,
           hireRecord: findHireRecordPda,
           zkConfig: findZkConfigPda,
-          moderationConfig: findModerationConfigPda,
           taskAttestorConfig: findTaskAttestorConfigPda,
           bidMarketplace: findBidMarketplacePda,
           task: findTaskPda,
@@ -3812,16 +3910,20 @@ export function agencCoordinationProgram() {
           createTaskHumanlessAuthorityRateLimit:
             findCreateTaskHumanlessAuthorityRateLimitPda,
           delegation: findDelegationPda,
+          expireClaimAgentStats: findExpireClaimAgentStatsPda,
           dispute: findDisputePda,
           initiatorClaim: findInitiatorClaimPda,
           completionBond: findCompletionBondPda,
           post: findPostPda,
           purchaseRecord: findPurchaseRecordPda,
+          hireRating: findHireRatingPda,
           ratingAccount: findRatingAccountPda,
           rateSkillPurchaseRecord: findRateSkillPurchaseRecordPda,
           reclaimCompletionBondCompletionBond:
             findReclaimCompletionBondCompletionBondPda,
           listingModeration: findListingModerationPda,
+          recordListingModerationModerationAttestor:
+            findRecordListingModerationModerationAttestorPda,
           taskModeration: findTaskModerationPda,
           agent: findAgentPda,
           skill: findSkillPda,
@@ -3831,8 +3933,6 @@ export function agencCoordinationProgram() {
           state: findStatePda,
           vote: findVotePda,
           taskValidationVote: findTaskValidationVotePda,
-          voteDisputeVote: findVoteDisputeVotePda,
-          authorityVote: findAuthorityVotePda,
           voteProposalVote: findVoteProposalVotePda,
         },
       },

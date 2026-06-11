@@ -87,6 +87,9 @@ export async function seedProtocolConfig(
     minSupportedVersion: 1,
     protocolPaused: false,
     disabledTaskTypeMask: 0,
+    // P6.5: the e2e suite runs the FULL-surface .so, so the injected config must
+    // read as full-surface (SURFACE_REVISION_FULL = 1), not the canary 0.
+    surfaceRevision: 1,
     multisigOwners: [DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR],
   });
   svm.setAccount({
