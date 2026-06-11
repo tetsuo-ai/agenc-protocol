@@ -3,6 +3,7 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
+use crate::events::RateLimitsUpdated;
 use crate::state::ProtocolConfig;
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 
@@ -106,6 +107,20 @@ pub fn handler(
     config.dispute_initiation_cooldown = dispute_initiation_cooldown;
     config.max_disputes_per_24h = max_disputes_per_24h;
     config.min_stake_for_dispute = min_stake_for_dispute;
+
+    // Emit the purpose-built RateLimitsUpdated event (was declared in events.rs but never
+    // emitted anywhere — audit). Without it, off-chain indexers/monitors cannot observe
+    // multisig changes to these anti-spam / dispute-stake-floor safety parameters, unlike
+    // every sibling config updater (update_protocol_fee -> ProtocolFeeUpdated, etc.).
+    emit!(RateLimitsUpdated {
+        task_creation_cooldown,
+        max_tasks_per_24h,
+        dispute_initiation_cooldown,
+        max_disputes_per_24h,
+        min_stake_for_dispute,
+        updated_by: ctx.accounts.authority.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+    });
 
     Ok(())
 }

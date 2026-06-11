@@ -14,6 +14,7 @@ use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition}
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards,
 };
+use crate::instructions::task_validation_helpers::release_claim_slot;
 use crate::state::{
     AgentRegistration, CompletionBond, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
     TaskEscrow, TaskStatus, TaskSubmission,
@@ -203,6 +204,19 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
     } else {
         // Rejection upheld: refund the creator the full escrow; the worker forfeits.
         ctx.accounts.task.status = TaskStatus::Cancelled;
+
+        // Release the worker's claim slot. The approve branch gets this via
+        // execute_completion_rewards (update_task_state + update_worker_state); the
+        // uphold branch settles manually, so without this call task.current_workers
+        // stays > 0 (permanently unclosable task — close_task requires 0) and
+        // worker.active_tasks stays inflated (blocks future claims at MAX_ACTIVE_TASKS
+        // and blocks deregister_agent, which requires active_tasks == 0, locking the
+        // worker's registration stake). Mirrors reject_task_result / resolve_dispute.
+        release_claim_slot(
+            &mut ctx.accounts.task,
+            &mut ctx.accounts.worker,
+            clock.unix_timestamp,
+        )?;
 
         // Rejection upheld: forfeit the worker bond to treasury, refund the creator bond.
         settle_completion_bond(

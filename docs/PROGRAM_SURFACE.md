@@ -22,18 +22,46 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 ### Task lifecycle
 
 - create task
+- create task humanless (wallet-only, no AgentRegistration)
 - create dependent task
+- set task job spec
 - configure task validation
-- claim
+- claim (legacy `claim_task` is permanently **fail-closed** — returns `TaskJobSpecRequired`; use `claim_task_with_job_spec`)
 - expire claim
 - submit task result
+- request changes
 - accept task result
 - reject task result
+- reject and freeze / resolve reject frozen / expire reject frozen (RejectFrozen exits)
 - auto accept task result
 - validate task result
 - complete task
 - complete task private
 - cancel task
+- close task (reclaim terminal-task rent)
+
+### Completion bonds (Exclusive + SOL, v1)
+
+- post completion bond
+- reclaim completion bond
+
+### Service listings & hiring (embeddable marketplace)
+
+- create / update service listing
+- set service listing state
+- hire from listing / hire from listing humanless
+
+### Moderation
+
+- configure task moderation
+- record task moderation
+- record listing moderation
+- assign / revoke moderation attestor (P6.8 roster)
+
+### Agent verification & ratings
+
+- record / revoke agent verification
+- rate hire
 
 ## Ledger Clear-Signing Commitments
 
@@ -64,7 +92,10 @@ they were signed instruction data.
 
 ### Disputes and slashing
 
-- initiate / vote / resolve dispute
+- initiate / resolve dispute (resolved by the protocol authority or an **assigned single
+  resolver** — `vote_dispute` and the old arbiter-vote/quorum model were retired in P6.3;
+  the dispute initiator can never resolve their own dispute)
+- assign / revoke dispute resolver (authority-curated roster)
 - cancel / expire dispute
 - apply dispute slash
 - apply initiator slash
@@ -75,10 +106,13 @@ they were signed instruction data.
 - initialize zk config
 - update protocol fee
 - update rate limits
-- update zk image id
+- update zk image id (M-of-N multisig gated)
 - update treasury
 - update multisig
-- migrate
+- update launch controls (pause / task-type disable kill switch)
+- update min version
+- update state
+- migrate protocol / migrate task (149-task layout migration; multisig + version gated)
 
 ### Governance
 
@@ -102,8 +136,11 @@ The complete model lives in `src/state.rs`. Important state families include:
 - task and claim accounts
 - task validation config, attestor config, submissions, and validation votes
 - Marketplace V2 bid marketplace config, bidder market state, bid books, and bids
-- escrow accounts
-- dispute and vote accounts
+- escrow accounts and completion bonds
+- dispute accounts and the dispute-resolver roster (the old DisputeVote / AuthorityDisputeVote PDAs were dropped with `vote_dispute` in P6.3)
+- moderation config, task/listing moderation records, and the moderation-attestor roster
+- service listings and hire records
+- agent verification and hire-rating accounts
 - governance config and proposals
 - reputation and skill-related accounts
 

@@ -4,6 +4,7 @@ use crate::errors::CoordinationError;
 use crate::events::AgentRegistered;
 use crate::state::{AgentRegistration, AgentStatus, ProtocolConfig};
 use crate::utils::validation::validate_string_input;
+use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
 use super::constants::{REPUTATION_SLASH_LOSS, WINDOW_24H};
@@ -111,6 +112,13 @@ pub fn handler(
     );
 
     let config = &ctx.accounts.protocol_config;
+    // Pause + version-range gate, like every sibling entry instruction (create_task,
+    // claim_task, register_skill, create_service_listing, ...). register_agent both
+    // accepts a stake SOL transfer and mutates ProtocolConfig.total_agents, yet skipped
+    // this (audit): without it, registrations still succeed (and still bump total_agents)
+    // while the multisig has paused the protocol during an incident, or during a
+    // version-mismatch window when the program must not mutate the config.
+    check_version_compatible(config)?;
     require!(
         stake_amount >= config.min_agent_stake,
         CoordinationError::InsufficientStake

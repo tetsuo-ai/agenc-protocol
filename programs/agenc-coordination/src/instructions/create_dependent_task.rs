@@ -3,8 +3,8 @@
 use crate::errors::CoordinationError;
 use crate::events::DependentTaskCreated;
 use crate::state::{
-    AgentRegistration, AuthorityRateLimit, DependencyType, ProtocolConfig, Task, TaskEscrow,
-    TaskStatus,
+    AgentRegistration, AgentStatus, AuthorityRateLimit, DependencyType, ProtocolConfig, Task,
+    TaskEscrow, TaskStatus,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -16,7 +16,7 @@ use super::launch_controls::require_task_type_index_enabled;
 use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use super::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_bid_task_mode,
-    validate_deadline, validate_task_params,
+    validate_deadline, validate_description_is_content_hash, validate_task_params,
 };
 use super::token_helpers::ensure_token_escrow_ata;
 
@@ -131,6 +131,9 @@ pub fn handler(
         task_type,
         min_reputation,
     )?;
+    // Zero-trust content gate (audit): description must be a 32-byte content commitment
+    // with a zero tail — no readable un-moderated prose smuggled on-chain.
+    validate_description_is_content_hash(&description)?;
     validate_bid_task_mode(task_type, max_workers, reward_mint)?;
     // Validate parent task belongs to same creator (#520)
     require!(
@@ -152,6 +155,12 @@ pub fn handler(
     validate_deadline(deadline, &clock, false)?;
 
     let creator_agent = ctx.accounts.creator_agent.as_ref();
+    // A suspended creator agent must not be able to post funded tasks (matches
+    // create_task; suspend_agent is the protocol authority's misconduct kill switch).
+    require!(
+        creator_agent.status == AgentStatus::Active,
+        CoordinationError::AgentNotActive
+    );
     let authority_rate_limit = ctx.accounts.authority_rate_limit.as_mut();
 
     // Check wallet-scoped rate limits to prevent multi-agent bypasses under one authority.

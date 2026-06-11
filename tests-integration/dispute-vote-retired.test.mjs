@@ -139,6 +139,7 @@ async function applyDisputeSlashIx(w, r) {
     .applyDisputeSlash()
     .accounts({
       dispute: r.dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent,
+      workerAuthority: w.provider.publicKey,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey,
       escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
     })

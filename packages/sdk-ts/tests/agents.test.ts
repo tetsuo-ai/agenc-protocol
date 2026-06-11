@@ -105,14 +105,18 @@ describe("deregisterAgent (facade)", () => {
     const ix = await deregisterAgent({ agent, authority });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // Accounts: agent, protocolConfig (auto-derived PDA), authority.
+    // Accounts: agent, protocolConfig (auto-derived PDA), reputationStake (auto-derived
+    // PDA — audit: stake must be withdrawn before deregister), authority.
     const addrs = ix.accounts.map((a) => a.address);
-    expect(addrs).toHaveLength(3);
+    expect(addrs).toHaveLength(4);
     expect(addrs[0]).toBe(agent);
-    expect(addrs[2]).toBe(authority.address);
-    // protocolConfig is a derived PDA distinct from the supplied accounts.
+    expect(addrs[3]).toBe(authority.address);
+    // protocolConfig and reputationStake are derived PDAs distinct from the supplied accounts.
     expect(addrs[1]).not.toBe(agent);
     expect(addrs[1]).not.toBe(authority.address);
+    expect(addrs[2]).not.toBe(agent);
+    expect(addrs[2]).not.toBe(authority.address);
+    expect(addrs[2]).not.toBe(addrs[1]);
 
     // Data is just the discriminator; it must round-trip through the decoder.
     const decoded = getDeregisterAgentInstructionDataDecoder().decode(ix.data);

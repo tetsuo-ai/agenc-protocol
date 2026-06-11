@@ -19,7 +19,7 @@ use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
-    validate_task_params,
+    validate_description_is_content_hash, validate_task_params,
 };
 use crate::instructions::task_validation_helpers::validate_review_window_for_mode;
 use crate::state::{
@@ -108,6 +108,9 @@ pub fn handler(
         TaskType::Exclusive as u8,
         min_reputation,
     )?;
+    // Zero-trust content gate (audit): description must be a 32-byte content commitment
+    // with a zero tail — no readable un-moderated prose smuggled on-chain.
+    validate_description_is_content_hash(&description)?;
     require!(reward_amount > 0, CoordinationError::InvalidReward);
     // Forced CreatorReview ⇒ the review window must be valid for that mode.
     validate_review_window_for_mode(ValidationMode::CreatorReview, review_window_secs)?;

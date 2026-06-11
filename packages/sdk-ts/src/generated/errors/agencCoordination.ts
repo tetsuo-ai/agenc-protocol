@@ -222,7 +222,7 @@ export const AGENC_COORDINATION_ERROR__NOT_ARBITER = 0x17d5; // 6101
 export const AGENC_COORDINATION_ERROR__INSUFFICIENT_VOTES = 0x17d6; // 6102
 /** DisputeAlreadyResolved: Dispute has already been resolved */
 export const AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED = 0x17d7; // 6103
-/** UnauthorizedResolver: Only protocol authority or dispute initiator can resolve disputes */
+/** UnauthorizedResolver: Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator */
 export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER = 0x17d8; // 6104
 /** InvalidDisputeResolver: Invalid dispute resolver: pubkey must be non-zero */
 export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER = 0x17d9; // 6105
@@ -626,6 +626,10 @@ export const AGENC_COORDINATION_ERROR__REFERRER_IS_CREATOR = 0x189f; // 6303
 export const AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN = 0x18a0; // 6304
 /** InvalidAgentVerificationMethod: Unknown agent-verification method (expected TxtRecord or WellKnown) */
 export const AGENC_COORDINATION_ERROR__INVALID_AGENT_VERIFICATION_METHOD = 0x18a1; // 6305
+/** ReputationStakeNotWithdrawn: Reputation stake must be fully withdrawn before the agent can be deregistered */
+export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN = 0x18a2; // 6306
+/** ProviderAgentNotActive: Provider agent must be Active for this listing operation */
+export const AGENC_COORDINATION_ERROR__PROVIDER_AGENT_NOT_ACTIVE = 0x18a3; // 6307
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -828,6 +832,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__PROTOCOL_CONFIG_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__PROTOCOL_NOT_INITIALIZED
   | typeof AGENC_COORDINATION_ERROR__PROTOCOL_PAUSED
+  | typeof AGENC_COORDINATION_ERROR__PROVIDER_AGENT_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__RATE_LIMIT_BELOW_MINIMUM
   | typeof AGENC_COORDINATION_ERROR__RATE_LIMIT_EXCEEDED
   | typeof AGENC_COORDINATION_ERROR__RATE_LIMIT_TOO_HIGH
@@ -846,6 +851,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_LOCKED
+  | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN
   | typeof AGENC_COORDINATION_ERROR__REVIEW_URI_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__REVIEW_WINDOW_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL
@@ -1140,6 +1146,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__PROTOCOL_CONFIG_REQUIRED]: `Protocol config account required: suspending an agent requires the protocol config PDA in remaining_accounts`,
     [AGENC_COORDINATION_ERROR__PROTOCOL_NOT_INITIALIZED]: `Protocol is not initialized`,
     [AGENC_COORDINATION_ERROR__PROTOCOL_PAUSED]: `Protocol is paused by multisig launch controls`,
+    [AGENC_COORDINATION_ERROR__PROVIDER_AGENT_NOT_ACTIVE]: `Provider agent must be Active for this listing operation`,
     [AGENC_COORDINATION_ERROR__RATE_LIMIT_BELOW_MINIMUM]: `Rate limit value below protocol minimum`,
     [AGENC_COORDINATION_ERROR__RATE_LIMIT_EXCEEDED]: `Rate limit exceeded: maximum actions per 24h window reached`,
     [AGENC_COORDINATION_ERROR__RATE_LIMIT_TOO_HIGH]: `Rate limit value exceeds maximum allowed (1000)`,
@@ -1158,6 +1165,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW]: `Reputation stake amount must be greater than zero`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE]: `Reputation stake has insufficient balance for withdrawal`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_LOCKED]: `Reputation stake is locked: withdrawal before cooldown`,
+    [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN]: `Reputation stake must be fully withdrawn before the agent can be deregistered`,
     [AGENC_COORDINATION_ERROR__REVIEW_URI_TOO_LONG]: `Review URI exceeds the maximum allowed length`,
     [AGENC_COORDINATION_ERROR__REVIEW_WINDOW_NOT_ELAPSED]: `Review window has not elapsed yet`,
     [AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL]: `Reward too small: worker must receive at least 1 lamport`,
@@ -1224,7 +1232,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_CREATOR]: `Parent task does not belong to the same creator`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_ATTESTOR]: `Signer is neither the moderation authority nor a registered attestor`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY]: `Only protocol authority can perform this action`,
-    [AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER]: `Only protocol authority or dispute initiator can resolve disputes`,
+    [AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER]: `Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_REVIEW_DECISION]: `Caller is not authorized to make this review decision`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_TASK_ACTION]: `Only the task creator can perform this action`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_TASK_MODERATOR]: `Only the configured moderation authority can record moderation decisions`,

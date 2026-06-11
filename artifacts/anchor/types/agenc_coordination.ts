@@ -605,6 +605,14 @@ export type AgencCoordination = {
         },
         {
           "name": "workerClaim",
+          "docs": [
+            "The losing worker's claim. resolve_dispute deliberately DEFERS closing this when a",
+            "slash is pending (fix #838) so this finalizer can re-validate it; this instruction",
+            "is the designated finalizer, so it closes the claim and returns its rent to the",
+            "worker authority (audit: previously left read-only, permanently stranding the rent",
+            "the non-slash path returns)."
+          ],
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -651,6 +659,13 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "workerAuthority",
+          "docs": [
+            "against worker_agent.authority so the rent cannot be redirected."
+          ],
+          "writable": true
         },
         {
           "name": "protocolConfig",
@@ -4873,6 +4888,47 @@ export type AgencCoordination = {
                   111,
                   108
                 ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "reputationStake",
+          "docs": [
+            "The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit",
+            "it to dodge the \"stake must be withdrawn first\" guard (audit). For an agent that",
+            "never staked this is an empty system-owned PDA (the handler treats it as zero",
+            "stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve",
+            "`slash_count` history — so the agent must withdraw its stake before deregistering;",
+            "otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the",
+            "`agent_id` becomes re-registerable by anyone, withdrawable by a new owner."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  112,
+                  117,
+                  116,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  115,
+                  116,
+                  97,
+                  107,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "agent"
               }
             ]
           }
@@ -9370,6 +9426,7 @@ export type AgencCoordination = {
         },
         {
           "name": "taskValidationConfig",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -12848,10 +12905,7 @@ export type AgencCoordination = {
         },
         {
           "name": "authority",
-          "signer": true,
-          "relations": [
-            "protocolConfig"
-          ]
+          "signer": true
         }
       ],
       "args": [
@@ -15746,7 +15800,7 @@ export type AgencCoordination = {
     {
       "code": 6104,
       "name": "unauthorizedResolver",
-      "msg": "Only protocol authority or dispute initiator can resolve disputes"
+      "msg": "Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator"
     },
     {
       "code": 6105,
@@ -16752,6 +16806,16 @@ export type AgencCoordination = {
       "code": 6305,
       "name": "invalidAgentVerificationMethod",
       "msg": "Unknown agent-verification method (expected TxtRecord or WellKnown)"
+    },
+    {
+      "code": 6306,
+      "name": "reputationStakeNotWithdrawn",
+      "msg": "Reputation stake must be fully withdrawn before the agent can be deregistered"
+    },
+    {
+      "code": 6307,
+      "name": "providerAgentNotActive",
+      "msg": "Provider agent must be Active for this listing operation"
     }
   ],
   "types": [

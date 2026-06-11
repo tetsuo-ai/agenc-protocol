@@ -102,12 +102,26 @@ record that decision here before proceeding.
    task; verify count migrated == 149. A task left un-migrated stays unreadable
    by typed clients.
 
-4. **Stamp `surface_revision` LAST** via `update_launch_controls` with
-   `SURFACE_REVISION_FULL`. This flips `getDeployedSurface(rpc)` to advertise the
-   full capability set. Doing this before steps 2–3 complete would advertise
-   features over not-yet-migrated state.
+4. **Initialize the new full-surface config accounts BEFORE advertising them**
+   (audit gap — these have no canary counterpart, so they do not exist on mainnet
+   today, and the bid-flow / private-completion instructions fail
+   `AccountNotInitialized` until they are created):
+   - `initialize_bid_marketplace` (creates `BidMarketplaceConfig`) — required before
+     any `create_bid` / `accept_bid` / `expire_bid`.
+   - `initialize_zk_config` with the **audited mainnet image ID** (creates `ZkConfig`)
+     — required before `complete_task_private`. Do NOT reuse a devnet/test image ID
+     (see the zkVM image-provenance flag in the audit report). `update_zk_image_id` is
+     now M-of-N multisig gated.
+   - Verify `ModerationConfig` (`configure_task_moderation`) reflects the intended
+     mainnet moderation authority.
+   - `initialize_bid_book` is per-task and is created on demand by creators, not here.
 
-5. **Publish the on-chain IDL** for the mainnet cluster to match the now-live
+5. **Stamp `surface_revision` LAST** via `update_launch_controls` with
+   `SURFACE_REVISION_FULL`. This flips `getDeployedSurface(rpc)` to advertise the
+   full capability set. Doing this before steps 2–4 complete would advertise
+   features over not-yet-migrated or not-yet-initialized state.
+
+6. **Publish the on-chain IDL** for the mainnet cluster to match the now-live
    full surface (`anchor idl upgrade` against the full IDL — NOT the 25-instruction
    canary IDL). See `MAINNET_MAINLINE.md` step 5.
 
@@ -151,6 +165,7 @@ program. The rehearsal extends that to the full 149-task sweep choreography.
 ## 6. Post-rollout
 
 - [ ] All 149 tasks readable via typed `Account<Task>`.
+- [ ] `BidMarketplaceConfig` + `ZkConfig` initialized; `ModerationConfig` authority verified (step 4).
 - [ ] `getDeployedSurface(rpc)` reports the full capability set.
 - [ ] Mainnet IDL published and fetchable matches the full surface.
 - [ ] `MAINNET_MAINLINE.md` "Current Mainnet Deployment" updated (scope = full surface).

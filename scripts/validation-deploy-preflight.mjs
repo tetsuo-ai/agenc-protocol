@@ -11,7 +11,11 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const knownSharedProgramId = "6UcJzbTEemBz3aY5wK5qKHGMD7bdRsmR4smND29gB2ab";
+// The canonical shared program ID (declare_id!, Anchor.toml localnet/devnet/mainnet, and
+// every committed artifact). Previously hardcoded to a stale value (6UcJ...) that no
+// longer matched anything, so the "don't deploy a throwaway validation build over the
+// shared program" guard below could never fire (audit). Keep in sync with declare_id!.
+const knownSharedProgramId = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK";
 const libRsPath = path.join(rootDir, "programs", "agenc-coordination", "src", "lib.rs");
 const anchorTomlPath = path.join(rootDir, "Anchor.toml");
 const sharedGeneratedIdlPath = path.join(

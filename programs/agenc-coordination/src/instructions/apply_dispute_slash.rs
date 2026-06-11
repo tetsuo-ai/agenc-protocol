@@ -40,7 +40,14 @@ pub struct ApplyDisputeSlash<'info> {
     )]
     pub task: Box<Account<'info, Task>>,
 
+    /// The losing worker's claim. resolve_dispute deliberately DEFERS closing this when a
+    /// slash is pending (fix #838) so this finalizer can re-validate it; this instruction
+    /// is the designated finalizer, so it closes the claim and returns its rent to the
+    /// worker authority (audit: previously left read-only, permanently stranding the rent
+    /// the non-slash path returns).
     #[account(
+        mut,
+        close = worker_authority,
         seeds = [b"claim", task.key().as_ref(), worker_claim.worker.as_ref()],
         bump = worker_claim.bump,
         constraint = worker_claim.task == task.key() @ CoordinationError::NotClaimed
@@ -53,6 +60,14 @@ pub struct ApplyDisputeSlash<'info> {
         bump = worker_agent.bump
     )]
     pub worker_agent: Box<Account<'info, AgentRegistration>>,
+
+    /// CHECK: the losing worker's authority — receives the closed claim's rent. Validated
+    /// against worker_agent.authority so the rent cannot be redirected.
+    #[account(
+        mut,
+        constraint = worker_authority.key() == worker_agent.authority @ CoordinationError::UnauthorizedAgent
+    )]
+    pub worker_authority: UncheckedAccount<'info>,
 
     #[account(
         seeds = [b"protocol"],

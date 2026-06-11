@@ -324,7 +324,7 @@ pub enum CoordinationError {
     #[msg("Dispute has already been resolved")]
     DisputeAlreadyResolved,
 
-    #[msg("Only protocol authority or dispute initiator can resolve disputes")]
+    #[msg("Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator")]
     UnauthorizedResolver,
 
     #[msg("Invalid dispute resolver: pubkey must be non-zero")]
@@ -942,4 +942,11 @@ pub enum CoordinationError {
     InvalidVerifiedDomain,
     #[msg("Unknown agent-verification method (expected TxtRecord or WellKnown)")]
     InvalidAgentVerificationMethod,
+
+    // === Pre-mainnet audit fixes (appended; appending preserves all earlier
+    //     Anchor error discriminants — never reorder/delete existing variants) ===
+    #[msg("Reputation stake must be fully withdrawn before the agent can be deregistered")]
+    ReputationStakeNotWithdrawn,
+    #[msg("Provider agent must be Active for this listing operation")]
+    ProviderAgentNotActive,
 }

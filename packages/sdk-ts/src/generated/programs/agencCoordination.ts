@@ -3390,6 +3390,7 @@ export type AgencCoordinationPluginPdas = {
   listing: typeof findListingPda;
   createTaskHumanlessAuthorityRateLimit: typeof findCreateTaskHumanlessAuthorityRateLimitPda;
   delegation: typeof findDelegationPda;
+  reputationStake: typeof findReputationStakePda;
   expireClaimAgentStats: typeof findExpireClaimAgentStatsPda;
   dispute: typeof findDisputePda;
   initiatorClaim: typeof findInitiatorClaimPda;
@@ -3408,7 +3409,6 @@ export type AgencCoordinationPluginPdas = {
   skill: typeof findSkillPda;
   creatorCompletionBond: typeof findCreatorCompletionBondPda;
   workerCompletionBond: typeof findWorkerCompletionBondPda;
-  reputationStake: typeof findReputationStakePda;
   state: typeof findStatePda;
   vote: typeof findVotePda;
   taskValidationVote: typeof findTaskValidationVotePda;
@@ -4003,6 +4003,7 @@ export function agencCoordinationProgram() {
           createTaskHumanlessAuthorityRateLimit:
             findCreateTaskHumanlessAuthorityRateLimitPda,
           delegation: findDelegationPda,
+          reputationStake: findReputationStakePda,
           expireClaimAgentStats: findExpireClaimAgentStatsPda,
           dispute: findDisputePda,
           initiatorClaim: findInitiatorClaimPda,
@@ -4023,7 +4024,6 @@ export function agencCoordinationProgram() {
           skill: findSkillPda,
           creatorCompletionBond: findCreatorCompletionBondPda,
           workerCompletionBond: findWorkerCompletionBondPda,
-          reputationStake: findReputationStakePda,
           state: findStatePda,
           vote: findVotePda,
           taskValidationVote: findTaskValidationVotePda,

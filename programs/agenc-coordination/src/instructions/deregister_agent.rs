@@ -3,7 +3,7 @@
 use crate::errors::CoordinationError;
 use crate::events::AgentDeregistered;
 use crate::instructions::slash_helpers::SLASH_WINDOW;
-use crate::state::{AgentRegistration, ProtocolConfig};
+use crate::state::{AgentRegistration, ProtocolConfig, ReputationStake};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -25,6 +25,20 @@ pub struct DeregisterAgent<'info> {
     )]
     pub protocol_config: Account<'info, ProtocolConfig>,
 
+    /// The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit
+    /// it to dodge the "stake must be withdrawn first" guard (audit). For an agent that
+    /// never staked this is an empty system-owned PDA (the handler treats it as zero
+    /// stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve
+    /// `slash_count` history — so the agent must withdraw its stake before deregistering;
+    /// otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the
+    /// `agent_id` becomes re-registerable by anyone, withdrawable by a new owner.
+    /// CHECK: address fixed by seeds; existence/contents validated in the handler.
+    #[account(
+        seeds = [b"reputation_stake", agent.key().as_ref()],
+        bump
+    )]
+    pub reputation_stake: UncheckedAccount<'info>,
+
     #[account(mut)]
     pub authority: Signer<'info>,
 }
@@ -38,6 +52,28 @@ pub fn handler(ctx: Context<DeregisterAgent>) -> Result<()> {
         agent.active_tasks == 0,
         CoordinationError::AgentHasActiveTasks
     );
+
+    // The reputation stake must be fully withdrawn first. The ReputationStake PDA is
+    // seeded on the agent PDA and is deliberately never closed (it preserves slash
+    // history), so if the agent is deregistered with a live stake the SOL is stranded —
+    // and worse, because agent_id becomes re-registerable by anyone, a new owner of the
+    // same agent_id could withdraw it (the withdraw path only checks has_one on the
+    // re-created agent). Block deregistration until staked_amount == 0. An agent that
+    // never staked has an empty system-owned PDA here, which is treated as zero.
+    {
+        let stake_info = ctx.accounts.reputation_stake.to_account_info();
+        if stake_info.owner == &crate::ID {
+            let data = stake_info.try_borrow_data()?;
+            // Tombstoned/closed PDAs deserialize to nothing meaningful; a live stake
+            // account decodes and exposes staked_amount.
+            if let Ok(stake) = ReputationStake::try_deserialize(&mut &data[..]) {
+                require!(
+                    stake.staked_amount == 0,
+                    CoordinationError::ReputationStakeNotWithdrawn
+                );
+            }
+        }
+    }
 
     // If defendant disputes are still tracked, only allow deregistration after the
     // slash window anchored to the agent's latest activity has elapsed.

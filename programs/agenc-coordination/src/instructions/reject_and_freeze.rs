@@ -11,7 +11,8 @@ use crate::errors::CoordinationError;
 use crate::events::TaskRejectFrozen;
 use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::task_validation_helpers::{
-    ensure_validation_config, ensure_validation_mode, is_manual_validation_task,
+    decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
+    is_manual_validation_task,
 };
 use crate::state::{
     AgentStats, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
@@ -38,6 +39,7 @@ pub struct RejectAndFreeze<'info> {
     pub claim: Box<Account<'info, TaskClaim>>,
 
     #[account(
+        mut,
         seeds = [b"task_validation", task.key().as_ref()],
         bump = task_validation_config.bump
     )]
@@ -136,6 +138,13 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
     submission.rejected_at = clock.unix_timestamp;
     submission.rejection_hash = rejection_hash;
     submission.review_deadline_at = review_deadline_at;
+
+    // Moving the submission out of Submitted must decrement the per-task pending counter,
+    // exactly like every sibling that leaves Submitted (accept/auto_accept/reject/
+    // request_changes/validate_task_result). reject_and_freeze skipped it (audit), so
+    // TaskValidationConfig.pending_submission_count permanently overstated live submissions
+    // by 1 after any freeze, breaking the "pending == #Submitted" invariant.
+    decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
 
     let task = &mut ctx.accounts.task;
     task.status = TaskStatus::RejectFrozen;

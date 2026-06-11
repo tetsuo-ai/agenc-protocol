@@ -94,7 +94,7 @@ Sanity-check the artifact you are about to ship:
 
 ```bash
 stat -c %s programs/agenc-coordination/target/deploy/agenc_coordination.so   # 2,811,288 bytes as of 2026-06-09
-node -p "JSON.parse(require('fs').readFileSync('target/idl/agenc_coordination.json','utf8')).instructions.length"  # 80
+node -p "JSON.parse(require('fs').readFileSync('target/idl/agenc_coordination.json','utf8')).instructions.length"  # 84 (full module; canary build = 25)
 ```
 
 Do **NOT** run `npm run canary:build` between building and deploying — it overwrites the
@@ -302,9 +302,9 @@ moderation — that is the intended sandbox shape.
 # 1. Program: fresh slot, Data Length >= 2,811,288
 solana program show "$PROGRAM_ID" --url devnet
 
-# 2. IDL: fetchable, 80 instructions
+# 2. IDL: fetchable, 84 instructions (full module; canary build = 25)
 anchor idl fetch "$PROGRAM_ID" --provider.cluster devnet -o /tmp/devnet-idl.json
-node -p "JSON.parse(require('fs').readFileSync('/tmp/devnet-idl.json','utf8')).instructions.length"   # expect 80
+node -p "JSON.parse(require('fs').readFileSync('/tmp/devnet-idl.json','utf8')).instructions.length"   # expect 84
 
 # 3. SDK one-liner against devnet — the step-4a snippet; expect ProtocolConfig + ModerationConfig both present
 ```

@@ -264,7 +264,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         creatorAgent,
         taskId,
         requiredCapabilities: 1n,
-        description: new Uint8Array(64).fill(104),
+        description: new Uint8Array(64).fill(104, 0, 32),
         rewardAmount: reward,
         maxWorkers: 1,
         deadline: now + 3600n,

@@ -359,16 +359,20 @@ test("initialize_zk_config: protocol authority inits the trusted image; non-auth
 });
 
 // ---------------------------------------------------------------------------
-// update_zk_image_id (has_one = authority on protocol_config; mutates zk_config)
+// update_zk_image_id (M-of-N multisig gated — audit: the active ZK image ID is the
+// money-critical root of trust for complete_task_private escrow settlement, so it must
+// not be rotatable by a single authority key, matching update_treasury / fee controls)
 // ---------------------------------------------------------------------------
 
-test("update_zk_image_id: protocol authority rotates the image; non-authority rejected", async () => {
+test("update_zk_image_id: 2-of-2 multisig rotates the image; single signer rejected", async () => {
   const w = await freshWorld();
+  const { signerMetas, signers } = twoOfTwoMultisig(w);
+  await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
   const [zkPda] = pda([enc("zk_config")]);
   const firstImage = id32();
   const secondImage = id32();
 
-  // Init the ZK config first (single authority signer == protocol authority).
+  // Init the ZK config first (initialize_zk_config is single-authority gated).
   expectOk(
     send(w.svm, await makeProgram(w.admin).methods
       .initializeZkConfig(arr(firstImage))
@@ -380,23 +384,26 @@ test("update_zk_image_id: protocol authority rotates the image; non-authority re
     "init zk config for rotation",
   );
 
-  const rotateIx = (signerKp, image) => makeProgram(signerKp).methods
+  const rotateIx = (metas, image) => makeProgram(w.admin).methods
     .updateZkImageId(arr(image))
     .accounts({
-      protocolConfig: w.protocolPda, zkConfig: zkPda, authority: signerKp.publicKey,
+      protocolConfig: w.protocolPda, zkConfig: zkPda, authority: w.admin.publicKey,
     })
+    .remainingAccounts(metas)
     .instruction();
 
-  // NEGATIVE: a non-authority signer cannot rotate the image.
+  // NEGATIVE (revert-sensitive): a single signer cannot pass the 2-of-2 gate. Before the
+  // audit fix this used has_one/single-key auth and one signer succeeded; drop the
+  // require_multisig_threshold call and this stops failing.
   expectFail(
-    send(w.svm, await rotateIx(w.buyer, secondImage), [w.buyer]),
-    "UnauthorizedProtocolAuthority",
-    "update_zk_image_id non-authority rejected",
+    send(w.svm, await rotateIx([signerMetas[0]], secondImage), [w.admin]),
+    "MultisigNotEnoughSigners",
+    "update_zk_image_id single signer rejected",
   );
 
-  // POSITIVE: the protocol authority rotates to a new image id.
+  // POSITIVE: the full M-of-N multisig rotates to a new image id.
   w.svm.expireBlockhash();
-  expectOk(send(w.svm, await rotateIx(w.admin, secondImage), [w.admin]), "update_zk_image_id ok");
+  expectOk(send(w.svm, await rotateIx(signerMetas, secondImage), signers), "update_zk_image_id ok");
   const zk = decode(w.svm, "ZkConfig", zkPda);
   assert.ok(Buffer.from(zk.active_image_id).equals(secondImage), "active_image_id rotated");
   assert.ok(!Buffer.from(zk.active_image_id).equals(firstImage), "image actually changed");
