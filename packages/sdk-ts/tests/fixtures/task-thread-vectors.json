@@ -1,0 +1,49 @@
+{
+  "description": "Cross-implementation known-answer vectors pinning the task-thread envelope canonicalization (json-stable-v1) and its sha256 digest. `canonical` is the EXACT canonical-JSON string the SDK canonicalEnvelopeJson() produces for `envelope`; `expectedHex` is the lowercase-hex sha256 over those UTF-8 bytes — the on-chain changes_hash / rejection_hash / rationale_hash. The SDK task-thread test and the storefront task-thread test BOTH import canonicalEnvelopeJson/envelopeHash from @tetsuo-ai/marketplace-sdk and assert these SAME values, so any future canonicalization drift in either repo (Unicode handling, undefined-dropping, number/array formatting) fails loudly instead of silently diverging.",
+  "source": {
+    "tool": "@tetsuo-ai/marketplace-sdk task-thread canonicalEnvelopeJson/envelopeHash",
+    "generated": "2026-06-11",
+    "note": "Generated locally (no network, no wallet) from the SDK's own canonicalizer; cross-checked against an independent node:crypto sha256 over the same canonical bytes."
+  },
+  "vectors": [
+    {
+      "name": "tricky-nested-nonascii-undefined-drop",
+      "note": "Top-level keys and nested attachment keys are out of sorted order (canonicalization MUST sort them); non-ASCII + emoji + escaped quotes/angle-brackets in the body (NOT Unicode-normalized); a two-element attachments array; a large ts. Test harnesses MUST also inject an extra `undefined`-valued property before hashing to prove json-stable-v1 drops it without changing the digest.",
+      "envelope": {
+        "ts": 4102444800,
+        "v": 1,
+        "role": "worker",
+        "taskPda": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+        "parentHash": "abababababababababababababababababababababababababababababababab",
+        "body": "Café — naïve façade · 日本語 · emoji 🚀 · \"quotes\" & <tags>",
+        "attachments": [
+          {
+            "hash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "uri": "agenc://artifact/sha256/zeta"
+          },
+          {
+            "uri": "https://example.test/a.pdf",
+            "hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+          }
+        ]
+      },
+      "canonical": "{\"attachments\":[{\"hash\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"uri\":\"agenc://artifact/sha256/zeta\"},{\"hash\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"uri\":\"https://example.test/a.pdf\"}],\"body\":\"Café — naïve façade · 日本語 · emoji 🚀 · \\\"quotes\\\" & <tags>\",\"parentHash\":\"abababababababababababababababababababababababababababababababab\",\"role\":\"worker\",\"taskPda\":\"HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK\",\"ts\":4102444800,\"v\":1}",
+      "expectedHex": "cd03435f1d2f5d2ec7ff7b0636aa5b6a0fe04b89dfe69469cd2314e464471a00"
+    },
+    {
+      "name": "minimal-first-message-empty-attachments",
+      "note": "First message in a thread: parentHash null, empty body, empty attachments array, small ts.",
+      "envelope": {
+        "v": 1,
+        "taskPda": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+        "parentHash": null,
+        "role": "buyer",
+        "body": "",
+        "attachments": [],
+        "ts": 1
+      },
+      "canonical": "{\"attachments\":[],\"body\":\"\",\"parentHash\":null,\"role\":\"buyer\",\"taskPda\":\"HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK\",\"ts\":1,\"v\":1}",
+      "expectedHex": "e7c36febc1b70ebcb0e53a560423080cc1000bd71ab7a8fa3ece2e69a95df17b"
+    }
+  ]
+}

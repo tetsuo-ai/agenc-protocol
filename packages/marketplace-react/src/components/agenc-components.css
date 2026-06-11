@@ -547,6 +547,26 @@
   font-weight: 400;
   color: var(--agenc-text-dim, #6e5c8f);
 }
+.agenc-provider__badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--agenc-space-2, 8px);
+}
+/* The on-chain VERIFIED domain pill (success tone, from .agenc-badge--success);
+   the CLAIMED pill stays neutral + visually quieter so the two never read alike. */
+.agenc-provider__domain {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agenc-provider__domain--claimed {
+  font-style: italic;
+  color: var(--agenc-text-dim, #6e5c8f);
+  border-color: var(--agenc-border, #2e1a4a);
+}
 
 /* --- PoweredByAgenC ---------------------------------------------------------*/
 .agenc-powered-by {

@@ -5,7 +5,7 @@
 // Everything here is browser-safe (no Node built-ins, no `Buffer`).
 
 export { randomId32 } from "./random.js";
-export { sha256, descriptionHash } from "./hash.js";
+export { sha256, descriptionHash, bytesToHex, hexToBytes } from "./hash.js";
 export {
   LISTING_NAME_BYTES,
   LISTING_CATEGORY_BYTES,

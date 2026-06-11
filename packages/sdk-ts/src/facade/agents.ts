@@ -21,6 +21,11 @@ import {
   findAgentStatsPda as findAgentStatsPdaGenerated,
   fetchMaybeAgentStats,
   fetchMaybeAgentRegistration,
+  // P7.3(3): on-chain agent verification (the AgentVerification PDA recorded by
+  // a trusted attestor — the TRUST signal, distinct from the self-claimed
+  // operatorDomain). The PDA is seeded `["agent_verification", agent]`.
+  findAgentVerificationPda,
+  fetchMaybeAgentVerification,
   type AgentStats,
   type RegisterAgentAsyncInput,
   type DeregisterAgentAsyncInput,
@@ -100,6 +105,87 @@ export async function unsuspendAgent(input: UnsuspendAgentAsyncInput) {
 }
 
 // ===========================================================================
+// P7.3(3) — on-chain agent verification reader (fetchAgentVerification)
+// ===========================================================================
+
+/**
+ * The decoded result of {@link fetchAgentVerification}. `verified` is the TRUST
+ * signal — an on-chain `AgentVerification` recorded by a trusted attestor that
+ * is not revoked and not expired. This is distinct from (and stronger than) the
+ * self-claimed `operatorDomain` on the agent metadata: a UI should surface
+ * `domain` as a VERIFIED badge only when `verified` is true.
+ */
+export type AgentVerificationResult =
+  | {
+      /** True: the AgentVerification PDA exists, is not revoked, and is not expired. */
+      verified: true;
+      /** The verified operator domain (lowercased ASCII DNS name). */
+      domain: string;
+      /** Proof method (`agent_verification_method::*`; 0 = TXT record, 1 = .well-known). */
+      method: number;
+      /** The attestor/authority that recorded the verification. */
+      verifiedBy: Address;
+      /** Unix timestamp the verification was recorded. */
+      verifiedAt: bigint;
+      /** Expiry Unix timestamp; `0n` = no expiry. */
+      expiresAt: bigint;
+      /** Always false in the `verified: true` branch (kept for a stable shape). */
+      revoked: false;
+    }
+  | {
+      /**
+       * False: no AgentVerification PDA, or it is revoked / expired. `reason`
+       * distinguishes the cases for callers that care.
+       */
+      verified: false;
+      /** Why it is unverified: no record, revoked, or expired. */
+      reason: "absent" | "revoked" | "expired";
+    };
+
+/**
+ * Read an agent's on-chain verification status (P7.3(3)). Fetches the
+ * `["agent_verification", agent]` PDA via the regenerated decoder and reports
+ * `verified = account exists AND !revoked AND (expiresAt == 0 || now < expiresAt)`.
+ *
+ * Use this — not the self-claimed `operatorDomain` — as the trust signal when
+ * surfacing a provider as "verified".
+ *
+ * @param rpc - a `@solana/kit` RPC (anything `fetchEncodedAccount` accepts).
+ * @param agentPda - the agent's `AgentRegistration` PDA.
+ * @param options - optional `nowSeconds` override (defaults to wall-clock) for
+ *   deterministic expiry evaluation in tests.
+ */
+export async function fetchAgentVerification(
+  rpc: Parameters<typeof fetchMaybeAgentVerification>[0],
+  agentPda: Address,
+  options: { nowSeconds?: bigint } = {},
+): Promise<AgentVerificationResult> {
+  const [verificationPda] = await findAgentVerificationPda({ agent: agentPda });
+  const maybe = await fetchMaybeAgentVerification(rpc, verificationPda);
+  if (!maybe.exists) {
+    return { verified: false, reason: "absent" };
+  }
+  const v = maybe.data;
+  if (v.revoked) {
+    return { verified: false, reason: "revoked" };
+  }
+  const now =
+    options.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
+  if (v.expiresAt !== 0n && now >= v.expiresAt) {
+    return { verified: false, reason: "expired" };
+  }
+  return {
+    verified: true,
+    domain: v.verifiedDomain,
+    method: v.method,
+    verifiedBy: v.verifiedBy,
+    verifiedAt: v.verifiedAt,
+    expiresAt: v.expiresAt,
+    revoked: false,
+  };
+}
+
+// ===========================================================================
 // P6.6 — track-record reader (getAgentTrackRecord)
 // ===========================================================================
 
@@ -170,6 +256,18 @@ export type AgentTrackRecord = {
    * a presence summary; a precise ordering needs the indexed event stream.)
    */
   recentOutcomes: TrackRecordOutcome[];
+  /**
+   * P7.3(3) — TRUE when the agent has a live on-chain `AgentVerification`
+   * (exists, not revoked, not expired). The trust signal to surface, distinct
+   * from the self-claimed operator domain.
+   */
+  verified: boolean;
+  /**
+   * The on-chain VERIFIED operator domain when {@link AgentTrackRecord.verified}
+   * is true; `null` otherwise. A UI shows this as a verified-domain badge — it
+   * is the attestor-proven domain, not the self-claimed `operatorDomain`.
+   */
+  verifiedDomain: string | null;
 };
 
 /** Options for {@link getAgentTrackRecord}. */
@@ -179,6 +277,11 @@ export type GetAgentTrackRecordOptions = {
    * the on-chain `disputes_lost` count is always returned regardless.
    */
   slashEvents?: SlashEvent[];
+  /**
+   * P7.3(3): override the wall-clock used to evaluate verification expiry
+   * (`expiresAt`). Defaults to `Date.now()`; pass for deterministic tests.
+   */
+  nowSeconds?: bigint;
 };
 
 /** Coerce a u64 `bigint` counter to a JS `number` ratio numerator/denominator safely. */
@@ -203,9 +306,11 @@ export async function getAgentTrackRecord(
 ): Promise<AgentTrackRecord> {
   const [agentStatsPda] = await findAgentStatsPda({ agent: agentPda });
 
-  const [maybeReg, maybeStats] = await Promise.all([
+  const [maybeReg, maybeStats, verification] = await Promise.all([
     fetchMaybeAgentRegistration(rpc, agentPda),
     fetchMaybeAgentStats(rpc, agentStatsPda),
+    // P7.3(3): fold in the on-chain verification trust signal.
+    fetchAgentVerification(rpc, agentPda, options.nowSeconds === undefined ? {} : { nowSeconds: options.nowSeconds }),
   ]);
 
   const tasksCompleted = maybeReg.exists ? maybeReg.data.tasksCompleted : 0n;
@@ -261,5 +366,7 @@ export async function getAgentTrackRecord(
       totalCancelled: stats.totalCancelled,
     },
     recentOutcomes,
+    verified: verification.verified,
+    verifiedDomain: verification.verified ? verification.domain : null,
   };
 }
