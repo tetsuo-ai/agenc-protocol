@@ -40,6 +40,7 @@ import {
 import {
   findAcceptTaskResultClaimPda,
   findEscrowPda,
+  findExpireClaimAgentStatsPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
@@ -69,6 +70,7 @@ export type ExpireClaimInstruction<
   TAccountRentRecipient extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountBondCreator extends string | AccountMeta<string> = string,
+  TAccountAgentStats extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -110,6 +112,9 @@ export type ExpireClaimInstruction<
       TAccountBondCreator extends string
         ? WritableAccount<TAccountBondCreator>
         : TAccountBondCreator,
+      TAccountAgentStats extends string
+        ? WritableAccount<TAccountAgentStats>
+        : TAccountAgentStats,
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
@@ -156,6 +161,7 @@ export type ExpireClaimAsyncInput<
   TAccountRentRecipient extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountBondCreator extends string = string,
+  TAccountAgentStats extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   /** Caller who triggers the expiration - receives cleanup reward */
@@ -174,6 +180,13 @@ export type ExpireClaimAsyncInput<
    */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   bondCreator?: Address<TAccountBondCreator>;
+  /**
+   * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
+   * no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
+   * `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
+   * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+   */
+  agentStats?: Address<TAccountAgentStats>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
 
@@ -189,6 +202,7 @@ export async function getExpireClaimInstructionAsync<
   TAccountRentRecipient extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountBondCreator extends string,
+  TAccountAgentStats extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -204,6 +218,7 @@ export async function getExpireClaimInstructionAsync<
     TAccountRentRecipient,
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
+    TAccountAgentStats,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -221,6 +236,7 @@ export async function getExpireClaimInstructionAsync<
     TAccountRentRecipient,
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
+    TAccountAgentStats,
     TAccountSystemProgram
   >
 > {
@@ -247,6 +263,7 @@ export async function getExpireClaimInstructionAsync<
       isWritable: true,
     },
     bondCreator: { value: input.bondCreator ?? null, isWritable: true },
+    agentStats: { value: input.agentStats ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -294,6 +311,14 @@ export async function getExpireClaimInstructionAsync<
       ),
     });
   }
+  if (!accounts.agentStats.value) {
+    accounts.agentStats.value = await findExpireClaimAgentStatsPda({
+      worker: getAddressFromResolvedInstructionAccount(
+        "worker",
+        accounts.worker.value,
+      ),
+    });
+  }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
@@ -313,6 +338,7 @@ export async function getExpireClaimInstructionAsync<
       getAccountMeta("rentRecipient", accounts.rentRecipient),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondCreator", accounts.bondCreator),
+      getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getExpireClaimInstructionDataEncoder().encode({}),
@@ -330,6 +356,7 @@ export async function getExpireClaimInstructionAsync<
     TAccountRentRecipient,
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
+    TAccountAgentStats,
     TAccountSystemProgram
   >);
 }
@@ -346,6 +373,7 @@ export type ExpireClaimInput<
   TAccountRentRecipient extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountBondCreator extends string = string,
+  TAccountAgentStats extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   /** Caller who triggers the expiration - receives cleanup reward */
@@ -364,6 +392,13 @@ export type ExpireClaimInput<
    */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   bondCreator?: Address<TAccountBondCreator>;
+  /**
+   * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
+   * no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
+   * `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
+   * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+   */
+  agentStats?: Address<TAccountAgentStats>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
 
@@ -379,6 +414,7 @@ export function getExpireClaimInstruction<
   TAccountRentRecipient extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountBondCreator extends string,
+  TAccountAgentStats extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -394,6 +430,7 @@ export function getExpireClaimInstruction<
     TAccountRentRecipient,
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
+    TAccountAgentStats,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -410,6 +447,7 @@ export function getExpireClaimInstruction<
   TAccountRentRecipient,
   TAccountWorkerCompletionBond,
   TAccountBondCreator,
+  TAccountAgentStats,
   TAccountSystemProgram
 > {
   // Program address.
@@ -435,6 +473,7 @@ export function getExpireClaimInstruction<
       isWritable: true,
     },
     bondCreator: { value: input.bondCreator ?? null, isWritable: true },
+    agentStats: { value: input.agentStats ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -462,6 +501,7 @@ export function getExpireClaimInstruction<
       getAccountMeta("rentRecipient", accounts.rentRecipient),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondCreator", accounts.bondCreator),
+      getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getExpireClaimInstructionDataEncoder().encode({}),
@@ -479,6 +519,7 @@ export function getExpireClaimInstruction<
     TAccountRentRecipient,
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
+    TAccountAgentStats,
     TAccountSystemProgram
   >);
 }
@@ -505,7 +546,14 @@ export type ParsedExpireClaimInstruction<
      */
     workerCompletionBond?: TAccountMetas[9] | undefined;
     bondCreator?: TAccountMetas[10] | undefined;
-    systemProgram: TAccountMetas[11];
+    /**
+     * OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
+     * no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
+     * `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
+     * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+     */
+    agentStats?: TAccountMetas[11] | undefined;
+    systemProgram: TAccountMetas[12];
   };
   data: ExpireClaimInstructionData;
 };
@@ -518,12 +566,12 @@ export function parseExpireClaimInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedExpireClaimInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 12) {
+  if (instruction.accounts.length < 13) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 12,
+        expectedAccountMetas: 13,
       },
     );
   }
@@ -553,6 +601,7 @@ export function parseExpireClaimInstruction<
       rentRecipient: getNextAccount(),
       workerCompletionBond: getNextOptionalAccount(),
       bondCreator: getNextOptionalAccount(),
+      agentStats: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
     },
     data: getExpireClaimInstructionDataDecoder().decode(instruction.data),

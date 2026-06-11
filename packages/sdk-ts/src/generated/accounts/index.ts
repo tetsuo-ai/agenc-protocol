@@ -7,7 +7,7 @@
  */
 
 export * from "./agentRegistration";
-export * from "./authorityDisputeVote";
+export * from "./agentStats";
 export * from "./authorityRateLimit";
 export * from "./bidderMarketState";
 export * from "./bidMarketplaceConfig";
@@ -16,13 +16,14 @@ export * from "./completionBond";
 export * from "./coordinationState";
 export * from "./dispute";
 export * from "./disputeResolver";
-export * from "./disputeVote";
 export * from "./feedPost";
 export * from "./feedVote";
 export * from "./governanceConfig";
 export * from "./governanceVote";
+export * from "./hireRating";
 export * from "./hireRecord";
 export * from "./listingModeration";
+export * from "./moderationAttestor";
 export * from "./moderationConfig";
 export * from "./nullifierSpend";
 export * from "./proposal";

@@ -118,9 +118,13 @@ export type AgentRegistration = {
   disputeCount24h: number;
   /** Start of current rate limit window (unix timestamp) */
   rateLimitWindowStart: bigint;
-  /** Active dispute votes pending resolution */
+  /**
+   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing
+   * increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a
+   * permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable.
+   */
   activeDisputeVotes: number;
-  /** Timestamp of last dispute vote */
+  /** DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore. */
   lastVoteTimestamp: bigint;
   /** Timestamp of last state update */
   lastStateUpdate: bigint;
@@ -187,9 +191,13 @@ export type AgentRegistrationArgs = {
   disputeCount24h: number;
   /** Start of current rate limit window (unix timestamp) */
   rateLimitWindowStart: number | bigint;
-  /** Active dispute votes pending resolution */
+  /**
+   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing
+   * increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a
+   * permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable.
+   */
   activeDisputeVotes: number;
-  /** Timestamp of last dispute vote */
+  /** DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore. */
   lastVoteTimestamp: number | bigint;
   /** Timestamp of last state update */
   lastStateUpdate: number | bigint;

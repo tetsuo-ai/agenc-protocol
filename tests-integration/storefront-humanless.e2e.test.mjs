@@ -31,7 +31,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
   const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
   expectOk(send(w.svm, await modProg.methods
     .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "store:listing-mod");
 
   // 2) the human (no agent) hires the listing directly — SOL escrow, CreatorReview pinned.
@@ -67,7 +67,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
 
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "store:task-mod");
 
   expectOk(send(w.svm, await humanProg.methods

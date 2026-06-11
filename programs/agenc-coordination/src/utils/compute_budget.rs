@@ -54,7 +54,8 @@ pub const RECOMMENDED_CU_CANCEL_TASK: u32 = 40_000;
 /// Initiate dispute: PDA init + stake check + rate limit check (~30k measured)
 pub const RECOMMENDED_CU_INITIATE_DISPUTE: u32 = 50_000;
 
-/// Vote on dispute: PDA init + authority check + vote tally (~20k measured)
+/// DEPRECATED (P6.3): `vote_dispute` retired (arbiter vote/quorum model removed).
+/// Unreferenced; retained only for API stability.
 pub const RECOMMENDED_CU_VOTE_DISPUTE: u32 = 30_000;
 
 /// Resolve dispute: vote counting + reward transfer + state updates (~45k measured)

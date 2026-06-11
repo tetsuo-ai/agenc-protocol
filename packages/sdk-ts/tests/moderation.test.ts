@@ -90,6 +90,10 @@ describe("recordTaskModeration (generated instruction)", () => {
       task,
       taskModeration,
       moderator.address,
+      // P6.8: optional moderation-attestor roster account. Omitted here, so the
+      // generated builder fills it with the program ID placeholder (codama's
+      // optionalAccountStrategy: "programId").
+      AGENC_COORDINATION_PROGRAM_ADDRESS,
       SYSTEM_PROGRAM,
     ]);
 
@@ -142,6 +146,9 @@ describe("recordListingModeration (generated instruction)", () => {
       listing,
       listingModeration,
       moderator.address,
+      // P6.8: optional moderation-attestor roster account (omitted -> program ID
+      // placeholder, codama's optionalAccountStrategy: "programId").
+      AGENC_COORDINATION_PROGRAM_ADDRESS,
       SYSTEM_PROGRAM,
     ]);
 

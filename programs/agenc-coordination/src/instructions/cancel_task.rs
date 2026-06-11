@@ -19,6 +19,10 @@ use crate::state::CompletionBond;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::TaskType;
 use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::AgentStats;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 #[cfg(feature = "spl-token-rewards")]
@@ -91,6 +95,39 @@ pub struct CancelTask<'info> {
     #[cfg(not(feature = "mainnet-canary"))]
     #[account(mut)]
     pub worker_bond_authority: Option<UncheckedAccount<'info>>,
+
+    /// OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
+    /// track-record aggregate. Constrained to `authority` so a caller can only attribute
+    /// the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together
+    /// with `agent_stats`. Full-surface only — gated so the frozen canary account list for
+    /// `cancel_task` is unchanged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        seeds = [b"agent", creator_agent.agent_id.as_ref()],
+        bump = creator_agent.bump,
+        constraint = creator_agent.authority == authority.key() @ CoordinationError::UnauthorizedAgent
+    )]
+    pub creator_agent: Option<Box<Account<'info, AgentRegistration>>>,
+
+    /// OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with
+    /// `creator_agent`), a cancel bumps `total_cancelled`. Bound to
+    /// `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = AgentStats::SIZE,
+        seeds = [
+            b"agent_stats",
+            creator_agent
+                .as_ref()
+                .map(|a| a.key())
+                .unwrap_or(crate::ID)
+                .as_ref()
+        ],
+        bump
+    )]
+    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
 }
 
 pub fn process_cancel_task<'info>(
@@ -100,7 +137,34 @@ pub fn process_cancel_task<'info>(
         ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedTaskAction
     );
-    process_cancel_task_impl(ctx.accounts, ctx.remaining_accounts)
+    process_cancel_task_impl(ctx.accounts, ctx.remaining_accounts)?;
+
+    // P6.6: fold a successful cancel into the creator agent's `total_cancelled` track
+    // record (no-op when the optional `creator_agent` / `agent_stats` accounts are not
+    // supplied). Done in the wrapper because it needs `ctx.bumps`. Telemetry only — runs
+    // only after the cancel above succeeded.
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        // `agent_stats` is keyed on `creator_agent`; the two must be supplied together.
+        // Reject `agent_stats` without `creator_agent` so we never write a mis-keyed PDA.
+        require!(
+            ctx.accounts.agent_stats.is_none() || ctx.accounts.creator_agent.is_some(),
+            CoordinationError::UnauthorizedAgent
+        );
+        if let Some(creator_agent) = ctx.accounts.creator_agent.as_ref() {
+            let creator_agent_key = creator_agent.key();
+            let now = Clock::get()?.unix_timestamp;
+            apply_track_record(
+                &mut ctx.accounts.agent_stats,
+                creator_agent_key,
+                ctx.bumps.agent_stats,
+                Counter::TotalCancelled,
+                now,
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn load_task_escrow<'info>(

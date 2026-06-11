@@ -126,11 +126,14 @@ function buildTaskCreatedBlob({
 }
 
 describe("generated event discriminator table", () => {
-  it("has a decoder entry for every event in the IDL (all 82)", () => {
+  it("has a decoder entry for every event in the IDL (all 84)", () => {
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf8")) as {
       events: { name: string; discriminator: number[] }[];
     };
-    expect(idl.events.length).toBe(82);
+    // P6 surface: 82 -> 84 (+AgentTrackRecordUpdated [P6.6], +ListingRated [P6.1],
+    // +ModerationAttestorAssigned/Revoked [P6.8]; -ArbiterVotesCleanedUp,
+    // -DisputeVoteCast from the P6.3 vote_dispute retirement).
+    expect(idl.events.length).toBe(84);
     expect(Object.keys(AGENC_EVENT_DECODERS).length).toBe(idl.events.length);
     for (const event of idl.events) {
       const entry = AGENC_EVENT_DECODERS[hex(event.discriminator)];

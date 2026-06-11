@@ -19,6 +19,10 @@ import {
   type AgentSuspendedEventData,
 } from "./agentSuspended";
 import {
+  getAgentTrackRecordUpdatedEventDecoder,
+  type AgentTrackRecordUpdatedEventData,
+} from "./agentTrackRecordUpdated";
+import {
   getAgentUnsuspendedEventDecoder,
   type AgentUnsuspendedEventData,
 } from "./agentUnsuspended";
@@ -26,10 +30,6 @@ import {
   getAgentUpdatedEventDecoder,
   type AgentUpdatedEventData,
 } from "./agentUpdated";
-import {
-  getArbiterVotesCleanedUpEventDecoder,
-  type ArbiterVotesCleanedUpEventData,
-} from "./arbiterVotesCleanedUp";
 import {
   getBidAcceptedEventDecoder,
   type BidAcceptedEventData,
@@ -115,10 +115,6 @@ import {
   type DisputeResolverRevokedEventData,
 } from "./disputeResolverRevoked";
 import {
-  getDisputeVoteCastEventDecoder,
-  type DisputeVoteCastEventData,
-} from "./disputeVoteCast";
-import {
   getGovernanceInitializedEventDecoder,
   type GovernanceInitializedEventData,
 } from "./governanceInitialized";
@@ -135,9 +131,21 @@ import {
   type ListingModerationRecordedEventData,
 } from "./listingModerationRecorded";
 import {
+  getListingRatedEventDecoder,
+  type ListingRatedEventData,
+} from "./listingRated";
+import {
   getMigrationCompletedEventDecoder,
   type MigrationCompletedEventData,
 } from "./migrationCompleted";
+import {
+  getModerationAttestorAssignedEventDecoder,
+  type ModerationAttestorAssignedEventData,
+} from "./moderationAttestorAssigned";
+import {
+  getModerationAttestorRevokedEventDecoder,
+  type ModerationAttestorRevokedEventData,
+} from "./moderationAttestorRevoked";
 import {
   getMultisigUpdatedEventDecoder,
   type MultisigUpdatedEventData,
@@ -350,9 +358,9 @@ export type AgencEvent =
   | { eventName: "AgentDeregistered"; data: AgentDeregisteredEventData }
   | { eventName: "AgentRegistered"; data: AgentRegisteredEventData }
   | { eventName: "AgentSuspended"; data: AgentSuspendedEventData }
+  | { eventName: "AgentTrackRecordUpdated"; data: AgentTrackRecordUpdatedEventData }
   | { eventName: "AgentUnsuspended"; data: AgentUnsuspendedEventData }
   | { eventName: "AgentUpdated"; data: AgentUpdatedEventData }
-  | { eventName: "ArbiterVotesCleanedUp"; data: ArbiterVotesCleanedUpEventData }
   | { eventName: "BidAccepted"; data: BidAcceptedEventData }
   | { eventName: "BidBookInitialized"; data: BidBookInitializedEventData }
   | { eventName: "BidCancelled"; data: BidCancelledEventData }
@@ -374,12 +382,14 @@ export type AgencEvent =
   | { eventName: "DisputeResolved"; data: DisputeResolvedEventData }
   | { eventName: "DisputeResolverAssigned"; data: DisputeResolverAssignedEventData }
   | { eventName: "DisputeResolverRevoked"; data: DisputeResolverRevokedEventData }
-  | { eventName: "DisputeVoteCast"; data: DisputeVoteCastEventData }
   | { eventName: "GovernanceInitialized"; data: GovernanceInitializedEventData }
   | { eventName: "GovernanceVoteCast"; data: GovernanceVoteCastEventData }
   | { eventName: "LaunchControlsUpdated"; data: LaunchControlsUpdatedEventData }
   | { eventName: "ListingModerationRecorded"; data: ListingModerationRecordedEventData }
+  | { eventName: "ListingRated"; data: ListingRatedEventData }
   | { eventName: "MigrationCompleted"; data: MigrationCompletedEventData }
+  | { eventName: "ModerationAttestorAssigned"; data: ModerationAttestorAssignedEventData }
+  | { eventName: "ModerationAttestorRevoked"; data: ModerationAttestorRevokedEventData }
   | { eventName: "MultisigUpdated"; data: MultisigUpdatedEventData }
   | { eventName: "OperatorFeePaid"; data: OperatorFeePaidEventData }
   | { eventName: "PostCreated"; data: PostCreatedEventData }
@@ -471,6 +481,13 @@ export const AGENC_EVENT_DECODERS: {
       data: getAgentSuspendedEventDecoder().decode(payload),
     }),
   },
+  "9120a65303a2ed8e": {
+    eventName: "AgentTrackRecordUpdated",
+    decode: (payload) => ({
+      eventName: "AgentTrackRecordUpdated",
+      data: getAgentTrackRecordUpdatedEventDecoder().decode(payload),
+    }),
+  },
   "1a721ec7eb5b86ff": {
     eventName: "AgentUnsuspended",
     decode: (payload) => ({
@@ -483,13 +500,6 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "AgentUpdated",
       data: getAgentUpdatedEventDecoder().decode(payload),
-    }),
-  },
-  "325fe718ee4fb3dc": {
-    eventName: "ArbiterVotesCleanedUp",
-    decode: (payload) => ({
-      eventName: "ArbiterVotesCleanedUp",
-      data: getArbiterVotesCleanedUpEventDecoder().decode(payload),
     }),
   },
   "138c24afc30537c1": {
@@ -639,13 +649,6 @@ export const AGENC_EVENT_DECODERS: {
       data: getDisputeResolverRevokedEventDecoder().decode(payload),
     }),
   },
-  "c1225e4504b38f57": {
-    eventName: "DisputeVoteCast",
-    decode: (payload) => ({
-      eventName: "DisputeVoteCast",
-      data: getDisputeVoteCastEventDecoder().decode(payload),
-    }),
-  },
   "29bb671a2a2c1e0f": {
     eventName: "GovernanceInitialized",
     decode: (payload) => ({
@@ -674,11 +677,32 @@ export const AGENC_EVENT_DECODERS: {
       data: getListingModerationRecordedEventDecoder().decode(payload),
     }),
   },
+  "b1e796c80e677a97": {
+    eventName: "ListingRated",
+    decode: (payload) => ({
+      eventName: "ListingRated",
+      data: getListingRatedEventDecoder().decode(payload),
+    }),
+  },
   "df2d7bc06af906f1": {
     eventName: "MigrationCompleted",
     decode: (payload) => ({
       eventName: "MigrationCompleted",
       data: getMigrationCompletedEventDecoder().decode(payload),
+    }),
+  },
+  "56261e6faea018ad": {
+    eventName: "ModerationAttestorAssigned",
+    decode: (payload) => ({
+      eventName: "ModerationAttestorAssigned",
+      data: getModerationAttestorAssignedEventDecoder().decode(payload),
+    }),
+  },
+  "460895d71bef10ba": {
+    eventName: "ModerationAttestorRevoked",
+    decode: (payload) => ({
+      eventName: "ModerationAttestorRevoked",
+      data: getModerationAttestorRevokedEventDecoder().decode(payload),
     }),
   },
   "f2ce253b7ac5d248": {

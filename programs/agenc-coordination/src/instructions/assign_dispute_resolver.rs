@@ -53,7 +53,12 @@ pub fn handler(ctx: Context<AssignDisputeResolver>, resolver: Pubkey) -> Result<
     entry.assigned_by = ctx.accounts.authority.key();
     entry.assigned_at = clock.unix_timestamp;
     entry.bump = ctx.bumps.dispute_resolver;
-    entry._reserved = [0u8; 32];
+    // P6.4 case counters start at zero; the challenge-window-coupled `overturned_count`
+    // has no incrementer yet (design-doc only).
+    entry.resolved_count = 0;
+    entry.overturned_count = 0;
+    entry.last_resolved_at = 0;
+    entry._reserved = [0u8; 8];
 
     emit!(DisputeResolverAssigned {
         resolver,

@@ -7,6 +7,8 @@
  */
 
 import {
+  addDecoderSizePrefix,
+  addEncoderSizePrefix,
   assertAccountExists,
   assertAccountsExist,
   combineCodec,
@@ -25,19 +27,23 @@ import {
   getI64Encoder,
   getStructDecoder,
   getStructEncoder,
+  getU32Decoder,
+  getU32Encoder,
   getU64Decoder,
   getU64Encoder,
   getU8Decoder,
   getU8Encoder,
+  getUtf8Decoder,
+  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
+  type Codec,
+  type Decoder,
   type EncodedAccount,
+  type Encoder,
   type FetchAccountConfig,
   type FetchAccountsConfig,
-  type FixedSizeCodec,
-  type FixedSizeDecoder,
-  type FixedSizeEncoder,
   type MaybeAccount,
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
@@ -81,17 +87,26 @@ export type Dispute = {
   createdAt: bigint;
   /** Resolution timestamp */
   resolvedAt: bigint;
-  /** Votes for approval */
+  /**
+   * DEPRECATED (P6.3): arbiter vote tally retired. `vote_dispute` no longer exists,
+   * so no path increments these from voting. `resolve_dispute` now repurposes this
+   * pair as a 1-bit RULING RECORD so the permissionless `apply_dispute_slash` /
+   * `apply_initiator_slash` finalizers can read the resolver's approve/reject decision
+   * without a vote tally: a resolution writes `votes_for = 1, votes_against = 0` when
+   * the resolver APPROVED and `votes_for = 0, votes_against = 1` when REJECTED. The
+   * fields are NOT shrunk (a layout change would be a hazard); they are reinterpreted.
+   */
   votesFor: bigint;
-  /** Votes against */
+  /** DEPRECATED (P6.3): see `votes_for`. Reused as the reject side of the ruling bit. */
   votesAgainst: bigint;
   /**
-   * Total arbiters who voted (max 255 due to u8)
-   * Note: Increase to u16 if more arbiters needed
+   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no
+   * voter is ever recorded. Retained (not shrunk) to keep the account layout stable.
    */
   totalVoters: number;
   /**
-   * Voting deadline - after this, no new votes accepted
+   * DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides
+   * directly with no voting-period wait. Still stamped at initiation for back-compat.
    * voting_deadline = created_at + voting_period
    */
   votingDeadline: bigint;
@@ -120,6 +135,31 @@ export type Dispute = {
    * on collaborative tasks with multiple claimants.
    */
   defendant: Address;
+  /**
+   * P6.4 (accountable rulings) — APPENDED fields. The resolver MUST attach a
+   * reasoned ruling: a 32-byte content hash of the off-chain rationale plus a
+   * bounded pointer to it, and the deciding resolver's pubkey. All three are
+   * zero/empty on a dispute that has not been resolved through `resolve_dispute`
+   * (e.g. an expired dispute), which is a valid "no ruling recorded" state.
+   *
+   * LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,
+   * but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary
+   * surface (the 25-instruction allowlist contains no dispute instructions), so
+   * ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface
+   * this is treated as append-only (any pre-existing dispute prefix stays valid;
+   * the new fields read back as zero/empty). See `test_dispute_size_p64_append`.
+   */
+  rationaleHash: ReadonlyUint8Array;
+  /**
+   * Bounded off-chain pointer to the ruling rationale (e.g. `agenc://ruling/...`).
+   * Empty string = no URI (the hash may still carry the rationale).
+   */
+  rationaleUri: string;
+  /**
+   * The wallet that decided this dispute (the protocol authority OR the assigned
+   * resolver who signed `resolve_dispute`). Default pubkey until resolved.
+   */
+  resolvedBy: Address;
 };
 
 export type DisputeArgs = {
@@ -141,17 +181,26 @@ export type DisputeArgs = {
   createdAt: number | bigint;
   /** Resolution timestamp */
   resolvedAt: number | bigint;
-  /** Votes for approval */
+  /**
+   * DEPRECATED (P6.3): arbiter vote tally retired. `vote_dispute` no longer exists,
+   * so no path increments these from voting. `resolve_dispute` now repurposes this
+   * pair as a 1-bit RULING RECORD so the permissionless `apply_dispute_slash` /
+   * `apply_initiator_slash` finalizers can read the resolver's approve/reject decision
+   * without a vote tally: a resolution writes `votes_for = 1, votes_against = 0` when
+   * the resolver APPROVED and `votes_for = 0, votes_against = 1` when REJECTED. The
+   * fields are NOT shrunk (a layout change would be a hazard); they are reinterpreted.
+   */
   votesFor: number | bigint;
-  /** Votes against */
+  /** DEPRECATED (P6.3): see `votes_for`. Reused as the reject side of the ruling bit. */
   votesAgainst: number | bigint;
   /**
-   * Total arbiters who voted (max 255 due to u8)
-   * Note: Increase to u16 if more arbiters needed
+   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no
+   * voter is ever recorded. Retained (not shrunk) to keep the account layout stable.
    */
   totalVoters: number;
   /**
-   * Voting deadline - after this, no new votes accepted
+   * DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides
+   * directly with no voting-period wait. Still stamped at initiation for back-compat.
    * voting_deadline = created_at + voting_period
    */
   votingDeadline: number | bigint;
@@ -180,10 +229,35 @@ export type DisputeArgs = {
    * on collaborative tasks with multiple claimants.
    */
   defendant: Address;
+  /**
+   * P6.4 (accountable rulings) — APPENDED fields. The resolver MUST attach a
+   * reasoned ruling: a 32-byte content hash of the off-chain rationale plus a
+   * bounded pointer to it, and the deciding resolver's pubkey. All three are
+   * zero/empty on a dispute that has not been resolved through `resolve_dispute`
+   * (e.g. an expired dispute), which is a valid "no ruling recorded" state.
+   *
+   * LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,
+   * but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary
+   * surface (the 25-instruction allowlist contains no dispute instructions), so
+   * ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface
+   * this is treated as append-only (any pre-existing dispute prefix stays valid;
+   * the new fields read back as zero/empty). See `test_dispute_size_p64_append`.
+   */
+  rationaleHash: ReadonlyUint8Array;
+  /**
+   * Bounded off-chain pointer to the ruling rationale (e.g. `agenc://ruling/...`).
+   * Empty string = no URI (the hash may still carry the rationale).
+   */
+  rationaleUri: string;
+  /**
+   * The wallet that decided this dispute (the protocol authority OR the assigned
+   * resolver who signed `resolve_dispute`). Default pubkey until resolved.
+   */
+  resolvedBy: Address;
 };
 
 /** Gets the encoder for {@link DisputeArgs} account data. */
-export function getDisputeEncoder(): FixedSizeEncoder<DisputeArgs> {
+export function getDisputeEncoder(): Encoder<DisputeArgs> {
   return transformEncoder(
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
@@ -207,13 +281,16 @@ export function getDisputeEncoder(): FixedSizeEncoder<DisputeArgs> {
       ["initiatedByCreator", getBooleanEncoder()],
       ["bump", getU8Encoder()],
       ["defendant", getAddressEncoder()],
+      ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["rationaleUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      ["resolvedBy", getAddressEncoder()],
     ]),
     (value) => ({ ...value, discriminator: DISPUTE_DISCRIMINATOR }),
   );
 }
 
 /** Gets the decoder for {@link Dispute} account data. */
-export function getDisputeDecoder(): FixedSizeDecoder<Dispute> {
+export function getDisputeDecoder(): Decoder<Dispute> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["disputeId", fixDecoderSize(getBytesDecoder(), 32)],
@@ -236,11 +313,14 @@ export function getDisputeDecoder(): FixedSizeDecoder<Dispute> {
     ["initiatedByCreator", getBooleanDecoder()],
     ["bump", getU8Decoder()],
     ["defendant", getAddressDecoder()],
+    ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
+    ["rationaleUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["resolvedBy", getAddressDecoder()],
   ]);
 }
 
 /** Gets the codec for {@link Dispute} account data. */
-export function getDisputeCodec(): FixedSizeCodec<DisputeArgs, Dispute> {
+export function getDisputeCodec(): Codec<DisputeArgs, Dispute> {
   return combineCodec(getDisputeEncoder(), getDisputeDecoder());
 }
 
@@ -295,8 +375,4 @@ export async function fetchAllMaybeDispute(
 ): Promise<MaybeAccount<Dispute>[]> {
   const maybeAccounts = await fetchEncodedAccounts(rpc, addresses, config);
   return maybeAccounts.map((maybeAccount) => decodeDispute(maybeAccount));
-}
-
-export function getDisputeSize(): number {
-  return 263;
 }

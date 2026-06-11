@@ -272,6 +272,11 @@ export async function main() {
     task,
     authority: buyerAuthority,
     approve: true,
+    // P6.4 accountable rulings: a reasoned ruling is required — `rationaleHash` is a
+    // 32-byte content hash of the off-chain rationale; `rationaleUri` points at it
+    // (empty string is allowed when the hash stands alone).
+    rationaleHash: new Uint8Array(32).fill(7),
+    rationaleUri: "agenc://ruling/sha256/example",
     creator: buyerAuthority.address,
     worker: workerAgent,
     workerWallet: workerAuthority.address,

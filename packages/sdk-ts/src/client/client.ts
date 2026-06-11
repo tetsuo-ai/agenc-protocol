@@ -230,11 +230,8 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.initiateDispute>,
     options?: SendOptions,
   ): Promise<SendResult>;
-  /** Build (facade.voteDispute) and send a vote_dispute transaction (advisory-only). */
-  voteDispute(
-    input: FacadeInput<typeof facade.voteDispute>,
-    options?: SendOptions,
-  ): Promise<SendResult>;
+  // P6.3: `voteDispute` removed — the arbiter vote/quorum model is retired; disputes are
+  // decided by an assigned resolver via `resolveDispute` (+ `assignDisputeResolver`).
   /** Build (facade.resolveDispute) and send a resolve_dispute transaction. */
   resolveDispute(
     input: FacadeInput<typeof facade.resolveDispute>,
@@ -464,7 +461,7 @@ export function createMarketplaceClient(
     acceptTaskResult: viaFacade(facade.acceptTaskResult),
     postCompletionBond: viaFacade(facade.postCompletionBond),
     initiateDispute: viaFacade(facade.initiateDispute),
-    voteDispute: viaFacade(facade.voteDispute),
+    // P6.3: `voteDispute` removed (vote/quorum model retired).
     resolveDispute: viaFacade(facade.resolveDispute),
     expireDispute: viaFacade(facade.expireDispute),
     cancelDispute: viaFacade(facade.cancelDispute),

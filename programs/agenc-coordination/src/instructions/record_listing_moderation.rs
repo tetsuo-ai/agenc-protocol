@@ -12,8 +12,12 @@ use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
 use crate::events::ListingModerationRecorded;
-use crate::instructions::record_task_moderation::validate_record_task_moderation_inputs;
-use crate::state::{ListingModeration, ModerationConfig, ServiceListing, HASH_SIZE};
+use crate::instructions::record_task_moderation::{
+    require_moderation_authorized, validate_record_task_moderation_inputs,
+};
+use crate::state::{
+    ListingModeration, ModerationAttestor, ModerationConfig, ServiceListing, HASH_SIZE,
+};
 
 #[derive(Accounts)]
 #[instruction(job_spec_hash: [u8; HASH_SIZE])]
@@ -36,13 +40,24 @@ pub struct RecordListingModeration<'info> {
     )]
     pub listing_moderation: Account<'info, ListingModeration>,
 
-    /// Must be the configured moderation authority.
-    #[account(
-        mut,
-        constraint = moderator.key() == moderation_config.moderation_authority
-            @ CoordinationError::UnauthorizedTaskModerator
-    )]
+    /// The recording signer. Authorization (global moderation authority OR a registered
+    /// attestor) is checked in the handler, not as an account constraint here.
+    #[account(mut)]
     pub moderator: Signer<'info>,
+
+    /// OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
+    /// `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
+    /// attestor to record. Bound to `["moderation_attestor", moderator]` — Anchor enforces
+    /// the canonical PDA, so a forged/mismatched entry fails account resolution, and a
+    /// REVOKED attestor's PDA is closed and fails to load (cannot attest). This instruction
+    /// is full-surface only, so this field carries no canary-surface implications.
+    #[account(
+        seeds = [b"moderation_attestor", moderator.key().as_ref()],
+        bump = moderation_attestor.bump,
+        constraint = moderation_attestor.attestor == moderator.key()
+            @ CoordinationError::ModerationAttestorMismatch
+    )]
+    pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -58,6 +73,16 @@ pub fn handler(
     scanner_hash: [u8; HASH_SIZE],
     expires_at: i64,
 ) -> Result<()> {
+    // Authorization (P6.8): global moderation authority OR a registered (non-revoked)
+    // attestor. A supplied attestor account is canonical-PDA + `attestor == moderator`
+    // bound by the account constraints above; a revoked attestor's PDA is closed and
+    // fails to load, so it can never reach here as `Some`.
+    require_moderation_authorized(
+        ctx.accounts.moderator.key(),
+        ctx.accounts.moderation_config.moderation_authority,
+        ctx.accounts.moderation_attestor.is_some(),
+    )?;
+
     // Reuse the task-moderation input validator (identical field rules).
     validate_record_task_moderation_inputs(&job_spec_hash, status, risk_score, expires_at)?;
     require!(

@@ -11,13 +11,13 @@ use anchor_lang::prelude::*;
 /// These distinguish how a dispute was resolved, enabling consumers
 /// to differentiate between active rejection and default behavior.
 pub mod dispute_outcome {
-    /// Dispute was actively rejected by arbiters (votes_against >= threshold)
+    /// The assigned resolver ruled to reject (P6.3: `approve = false` — creator refunded).
     pub const REJECTED: u8 = 0;
-    /// Dispute was approved by arbiters (votes_for >= threshold)
+    /// The assigned resolver ruled to approve (P6.3: `approve = true`).
     pub const APPROVED: u8 = 1;
-    /// No votes were cast - defaulted to rejection (arbiter apathy, not active rejection)
-    /// Note: This outcome indicates the dispute was not reviewed, which differs from
-    /// arbiters actively voting to reject. Consumers may want to handle this differently.
+    /// DEPRECATED (P6.3): the arbiter vote/quorum model is retired, so a dispute can no
+    /// longer resolve via "no votes cast → default rejection". `resolve_dispute` only ever
+    /// emits REJECTED/APPROVED now. Retained for API stability; never emitted.
     pub const NO_VOTE_DEFAULT: u8 = 2;
 }
 
@@ -351,16 +351,8 @@ pub struct DisputeInitiated {
     pub timestamp: i64,
 }
 
-/// Emitted when a vote is cast on a dispute
-#[event]
-pub struct DisputeVoteCast {
-    pub dispute_id: [u8; 32],
-    pub voter: Pubkey,
-    pub approved: bool,
-    pub votes_for: u64,
-    pub votes_against: u64,
-    pub timestamp: i64,
-}
+// P6.3: `DisputeVoteCast` removed with `vote_dispute` — the arbiter vote/quorum model
+// is retired (disputes are decided by an assigned resolver, not a tally).
 
 /// Emitted when a dispute is cancelled by its initiator (fix #587)
 #[event]
@@ -373,23 +365,30 @@ pub struct DisputeCancelled {
 
 /// Emitted when a dispute is resolved
 ///
-/// The `outcome` field distinguishes between different resolution paths:
-/// - 0 = Rejected (approved=false with actual votes cast)
-/// - 1 = Approved (approved=true with votes meeting threshold)
-/// - 2 = NoVoteDefault (no votes cast, defaulted to rejection - fix #425)
+/// The `outcome` field reflects the assigned resolver's binary ruling (P6.3 — the
+/// arbiter vote/quorum model is retired):
+/// - 0 = Rejected (the resolver passed `approve = false` — creator refunded)
+/// - 1 = Approved (the resolver passed `approve = true` — initiator's resolution upheld)
 ///
-/// The NoVoteDefault outcome indicates arbiter apathy rather than active rejection.
-/// This allows consumers to distinguish between "arbiters rejected this" vs
-/// "no arbiters participated, so it defaulted to rejection".
+/// `votes_for`/`votes_against` are DEPRECATED: they are no longer a vote tally. P6.3
+/// reuses them as a 1-bit ruling record ((1,0)=approved, (0,1)=rejected) so the
+/// permissionless slash finalizers can read the decision; the fields are emitted as-is.
 #[event]
 pub struct DisputeResolved {
     pub dispute_id: [u8; 32],
     pub resolution_type: u8,
-    /// Resolution outcome: 0=Rejected, 1=Approved, 2=NoVoteDefault
+    /// Resolution outcome: 0=Rejected, 1=Approved (P6.3: no more NoVoteDefault path).
     pub outcome: u8,
+    /// DEPRECATED (P6.3): ruling bit, not a vote tally — 1 when approved else 0.
     pub votes_for: u64,
+    /// DEPRECATED (P6.3): ruling bit, not a vote tally — 1 when rejected else 0.
     pub votes_against: u64,
     pub timestamp: i64,
+    /// P6.4 accountable rulings: the wallet that decided this dispute (the protocol
+    /// authority OR the assigned resolver who signed `resolve_dispute`).
+    pub resolved_by: Pubkey,
+    /// P6.4: 32-byte content hash of the off-chain ruling rationale.
+    pub rationale_hash: [u8; 32],
 }
 
 /// Emitted when the protocol authority assigns a wallet to the dispute-resolver roster.
@@ -404,6 +403,22 @@ pub struct DisputeResolverAssigned {
 #[event]
 pub struct DisputeResolverRevoked {
     pub resolver: Pubkey,
+    pub revoked_by: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when the protocol authority assigns a wallet to the moderation-attestor roster (P6.8).
+#[event]
+pub struct ModerationAttestorAssigned {
+    pub attestor: Pubkey,
+    pub assigned_by: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when the protocol authority revokes a wallet from the moderation-attestor roster (P6.8).
+#[event]
+pub struct ModerationAttestorRevoked {
+    pub attestor: Pubkey,
     pub revoked_by: Pubkey,
     pub timestamp: i64,
 }
@@ -645,12 +660,8 @@ pub struct BondReleased {
     pub timestamp: i64,
 }
 
-/// Emitted when arbiter votes are cleaned up during dispute expiration
-#[event]
-pub struct ArbiterVotesCleanedUp {
-    pub dispute_id: [u8; 32],
-    pub arbiter_count: u8,
-}
+// P6.3: `ArbiterVotesCleanedUp` removed — `expire_dispute` no longer cleans up arbiter
+// vote PDAs (none are ever created after the vote/quorum model was retired).
 
 /// Emitted when rate limit configuration is updated
 #[event]
@@ -927,5 +938,60 @@ pub struct ReputationDelegationRevoked {
     pub delegator: Pubkey,
     pub delegatee: Pubkey,
     pub amount: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted when a buyer rates a completed listing hire (P6.1). Carries the new
+/// listing aggregate so indexers can recompute the average without re-reading the
+/// account. The provider-agent rating aggregate is deferred to P6.6's `AgentStats`.
+#[event]
+pub struct ListingRated {
+    /// Service listing whose aggregate was updated.
+    pub listing: Pubkey,
+    /// The hired task that was rated.
+    pub task: Pubkey,
+    /// Provider agent of the listing.
+    pub provider_agent: Pubkey,
+    /// The buyer (task creator) that authored the rating.
+    pub buyer: Pubkey,
+    /// Score in [1, 5].
+    pub score: u8,
+    /// `listing.total_rating` after this rating.
+    pub new_total_rating: u64,
+    /// `listing.rating_count` after this rating.
+    pub new_rating_count: u32,
+    pub timestamp: i64,
+}
+
+/// Which negative / non-success track-record counter was bumped (P6.6). Keeps the
+/// `AgentTrackRecordUpdated` event self-describing for indexers without re-reading
+/// the `AgentStats` account.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TrackRecordCounter {
+    /// A submission was rejected for re-work or frozen for review.
+    TasksRejected,
+    /// A dispute resolved in the defendant worker's favor.
+    DisputesWon,
+    /// A dispute resolved against the defendant worker (a slash-history loss).
+    DisputesLost,
+    /// A claim expired (no-show / abandoned).
+    ClaimsExpired,
+    /// A created task was cancelled.
+    TotalCancelled,
+}
+
+/// Emitted whenever a track-record counter on `AgentStats` is incremented (P6.6).
+/// `new_value` is the post-increment counter so indexers can build a slash/outcome
+/// history from the event stream alone (feeds the SDK `getAgentTrackRecord`).
+#[event]
+pub struct AgentTrackRecordUpdated {
+    /// The `AgentRegistration` PDA whose track record changed.
+    pub agent: Pubkey,
+    /// The `AgentStats` PDA that was written.
+    pub agent_stats: Pubkey,
+    /// Which counter was incremented.
+    pub counter: TrackRecordCounter,
+    /// The counter's value AFTER this increment.
+    pub new_value: u64,
     pub timestamp: i64,
 }

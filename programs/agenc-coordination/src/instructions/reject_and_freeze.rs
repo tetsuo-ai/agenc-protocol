@@ -12,9 +12,10 @@ use crate::events::TaskRejectFrozen;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, ensure_validation_mode, is_manual_validation_task,
 };
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::state::{
-    ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission, TaskType,
-    TaskValidationConfig, ValidationMode, HASH_SIZE,
+    AgentStats, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
+    TaskType, TaskValidationConfig, ValidationMode, HASH_SIZE,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -59,6 +60,22 @@ pub struct RejectAndFreeze<'info> {
 
     #[account(mut)]
     pub creator: Signer<'info>,
+
+    /// OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this
+    /// freeze-rejection bumps `tasks_rejected`. Bound to `["agent_stats", claim.worker]`
+    /// (the claim's worker is the worker AgentRegistration PDA), created lazily on first
+    /// write. Telemetry only — never gates the freeze above.
+    #[account(
+        init_if_needed,
+        payer = creator,
+        space = AgentStats::SIZE,
+        seeds = [b"agent_stats", claim.worker.as_ref()],
+        bump
+    )]
+    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
+
+    /// Required only when `agent_stats` is supplied (for `init_if_needed`).
+    pub system_program: Option<Program<'info, System>>,
 }
 
 pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -> Result<()> {
@@ -131,6 +148,17 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
         review_deadline_at,
         timestamp: clock.unix_timestamp,
     });
+
+    // P6.6: a freeze-for-review is a rejection — fold it into the worker agent's
+    // `tasks_rejected` track record (no-op when the optional account is absent).
+    let worker_agent_key = ctx.accounts.claim.worker;
+    apply_track_record(
+        &mut ctx.accounts.agent_stats,
+        worker_agent_key,
+        ctx.bumps.agent_stats,
+        Counter::TasksRejected,
+        clock.unix_timestamp,
+    )?;
 
     Ok(())
 }

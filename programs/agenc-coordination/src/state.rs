@@ -37,7 +37,7 @@ pub const MANUAL_VALIDATION_SENTINEL: [u8; HASH_SIZE] = *b"agenc-manual-validati
 /// |  4  | `SENSOR`      | Sensor data collection (IoT, monitoring)         |
 /// |  5  | `ACTUATOR`    | Physical actuation (robotics, hardware control)  |
 /// |  6  | `COORDINATOR` | Task coordination and orchestration              |
-/// |  7  | `ARBITER`     | Dispute resolution voting rights                 |
+/// |  7  | `ARBITER`     | DEPRECATED (P6.3): arbiter voting retired        |
 /// |  8  | `VALIDATOR`   | Result validation and verification               |
 /// |  9  | `AGGREGATOR`  | Data aggregation and summarization               |
 ///
@@ -60,7 +60,10 @@ pub mod capability {
     pub const ACTUATOR: u64 = 1 << 5;
     /// Task coordination and orchestration
     pub const COORDINATOR: u64 = 1 << 6;
-    /// Dispute resolution voting rights
+    /// DEPRECATED (P6.3): formerly granted dispute-voting rights. The arbiter
+    /// vote/quorum model is retired (disputes are decided by an assigned resolver);
+    /// this capability bit is no longer checked by any instruction. Kept for the stable
+    /// capability bit layout.
     pub const ARBITER: u64 = 1 << 7;
     /// Result validation and verification
     pub const VALIDATOR: u64 = 1 << 8;
@@ -522,9 +525,11 @@ pub struct AgentRegistration {
     pub dispute_count_24h: u8,
     /// Start of current rate limit window (unix timestamp)
     pub rate_limit_window_start: i64,
-    /// Active dispute votes pending resolution
+    /// DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing
+    /// increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a
+    /// permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable.
     pub active_dispute_votes: u8,
-    /// Timestamp of last dispute vote
+    /// DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore.
     pub last_vote_timestamp: i64,
     /// Timestamp of last state update
     pub last_state_update: i64,
@@ -1123,14 +1128,21 @@ pub struct Dispute {
     pub created_at: i64,
     /// Resolution timestamp
     pub resolved_at: i64,
-    /// Votes for approval
+    /// DEPRECATED (P6.3): arbiter vote tally retired. `vote_dispute` no longer exists,
+    /// so no path increments these from voting. `resolve_dispute` now repurposes this
+    /// pair as a 1-bit RULING RECORD so the permissionless `apply_dispute_slash` /
+    /// `apply_initiator_slash` finalizers can read the resolver's approve/reject decision
+    /// without a vote tally: a resolution writes `votes_for = 1, votes_against = 0` when
+    /// the resolver APPROVED and `votes_for = 0, votes_against = 1` when REJECTED. The
+    /// fields are NOT shrunk (a layout change would be a hazard); they are reinterpreted.
     pub votes_for: u64,
-    /// Votes against
+    /// DEPRECATED (P6.3): see `votes_for`. Reused as the reject side of the ruling bit.
     pub votes_against: u64,
-    /// Total arbiters who voted (max 255 due to u8)
-    /// Note: Increase to u16 if more arbiters needed
+    /// DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no
+    /// voter is ever recorded. Retained (not shrunk) to keep the account layout stable.
     pub total_voters: u8,
-    /// Voting deadline - after this, no new votes accepted
+    /// DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides
+    /// directly with no voting-period wait. Still stamped at initiation for back-compat.
     /// voting_deadline = created_at + voting_period
     pub voting_deadline: i64,
     /// Dispute expiration - after this, can call expire_dispute
@@ -1152,56 +1164,41 @@ pub struct Dispute {
     /// Binds slashing target at dispute initiation to prevent slashing wrong worker
     /// on collaborative tasks with multiple claimants.
     pub defendant: Pubkey,
+    /// P6.4 (accountable rulings) — APPENDED fields. The resolver MUST attach a
+    /// reasoned ruling: a 32-byte content hash of the off-chain rationale plus a
+    /// bounded pointer to it, and the deciding resolver's pubkey. All three are
+    /// zero/empty on a dispute that has not been resolved through `resolve_dispute`
+    /// (e.g. an expired dispute), which is a valid "no ruling recorded" state.
+    ///
+    /// LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,
+    /// but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary
+    /// surface (the 25-instruction allowlist contains no dispute instructions), so
+    /// ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface
+    /// this is treated as append-only (any pre-existing dispute prefix stays valid;
+    /// the new fields read back as zero/empty). See `test_dispute_size_p64_append`.
+    pub rationale_hash: [u8; 32],
+    /// Bounded off-chain pointer to the ruling rationale (e.g. `agenc://ruling/...`).
+    /// Empty string = no URI (the hash may still carry the rationale).
+    #[max_len(256)]
+    pub rationale_uri: String,
+    /// The wallet that decided this dispute (the protocol authority OR the assigned
+    /// resolver who signed `resolve_dispute`). Default pubkey until resolved.
+    pub resolved_by: Pubkey,
 }
 
 impl Dispute {
-    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // defendant (fix #827)
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // defendant (fix #827) + P6.4 rationale/resolver
+    /// Maximum byte length of `rationale_uri` (matches the `#[max_len(256)]` reserve).
+    pub const MAX_RATIONALE_URI_LEN: usize = 256;
 }
 
-/// Vote record for dispute
-/// PDA seeds: ["vote", dispute, voter]
-#[account]
-#[derive(Default, InitSpace)]
-pub struct DisputeVote {
-    /// Dispute being voted on
-    pub dispute: Pubkey,
-    /// Voter (arbiter)
-    pub voter: Pubkey,
-    /// Vote (true = approve, false = reject)
-    pub approved: bool,
-    /// Vote timestamp
-    pub voted_at: i64,
-    /// Arbiter's stake at the time of voting (for weighted resolution)
-    pub stake_at_vote: u64,
-    /// Bump seed
-    pub bump: u8,
-}
-
-impl DisputeVote {
-    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
-}
-
-/// Authority-level vote record to prevent Sybil attacks
-/// One authority can only vote once per dispute, regardless of how many agents they control
-/// PDA seeds: ["authority_vote", dispute, authority]
-#[account]
-#[derive(Default, InitSpace)]
-pub struct AuthorityDisputeVote {
-    /// Dispute being voted on
-    pub dispute: Pubkey,
-    /// Authority (wallet) that voted
-    pub authority: Pubkey,
-    /// The agent used to cast this vote
-    pub voting_agent: Pubkey,
-    /// Vote timestamp
-    pub voted_at: i64,
-    /// Bump seed
-    pub bump: u8,
-}
-
-impl AuthorityDisputeVote {
-    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
-}
+// P6.3: the `DisputeVote` (["vote", dispute, voter]) and `AuthorityDisputeVote`
+// (["authority_vote", dispute, authority]) PDA account types are RETIRED. They were
+// only ever minted by `vote_dispute` (now removed) and closed by the arbiter-pair
+// cleanup loops in resolve/expire (also removed). Disputes are decided by an assigned
+// resolver, so no vote PDA is ever created. The types are deleted; no existing account
+// layout is changed (disputes are compiled out of the live mainnet canary, so no live
+// mainnet dispute-vote accounts exist to migrate).
 
 /// Task escrow account
 /// PDA seeds: ["escrow", task]
@@ -1713,6 +1710,120 @@ impl HireRecord {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 
+/// One-shot buyer rating of a completed listing hire (P6.1).
+///
+/// Init-once on PDA `["hire_rating", task]` so exactly ONE rating can ever be
+/// recorded per hired task — re-rating the same task fails at account `init`
+/// (the PDA already exists), which is the on-chain double-rate guard. The account
+/// is keyed solely on `task`, so its existence is the dedupe key regardless of who
+/// holds the buyer/listing accounts at call time.
+///
+/// Written by `rate_hire`. The rating is authored by the task's recorded buyer
+/// (`task.creator`, which `hire_from_listing` constrains to equal the funding
+/// authority), and only after the task reaches the terminal `Completed` state, so
+/// a buyer can only rate work they paid for and that actually finished.
+///
+/// PDA seeds: ["hire_rating", task]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct HireRating {
+    /// The completed hired task this rating is for (also the dedupe seed).
+    pub task: Pubkey,
+    /// Source service listing whose aggregate was updated by this rating.
+    pub listing: Pubkey,
+    /// The buyer (task creator) that authored the rating.
+    pub buyer: Pubkey,
+    /// Score in [1, 5].
+    pub score: u8,
+    /// Optional off-chain review content hash (`None` = no written review).
+    pub review_hash: Option<[u8; 32]>,
+    /// Optional bounded pointer to the off-chain review (e.g. agenc://review/...).
+    /// Empty string = no URI.
+    #[max_len(256)]
+    pub review_uri: String,
+    /// When the rating was recorded.
+    pub rated_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future rating metadata. MUST stay zeroed.
+    pub _reserved: [u8; 32],
+}
+
+impl HireRating {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // + 8 discriminator
+    /// Maximum byte length of `review_uri` (matches the `#[max_len(256)]` reserve).
+    pub const MAX_REVIEW_URI_LEN: usize = 256;
+    /// Inclusive minimum rating score.
+    pub const MIN_SCORE: u8 = 1;
+    /// Inclusive maximum rating score.
+    pub const MAX_SCORE: u8 = 5;
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 32]
+    }
+}
+
+/// Negative / non-success track-record counters for an agent (P6.6).
+///
+/// `AgentRegistration` only tracks success-side stats (`tasks_completed`,
+/// `total_earned`) and has just FOUR reserved bytes, so the negative counters
+/// (rejections, dispute outcomes, expirations, cancellations) do NOT fit there.
+/// Rather than a size-extending migration of every live mainnet agent account,
+/// these live in a SEPARATE aggregate PDA `["agent_stats", agent]` that is created
+/// lazily on first write (`init_if_needed`), keyed on the agent's
+/// `AgentRegistration` PDA. No `AgentRegistration` layout change / migration is
+/// introduced.
+///
+/// These are reputation TELEMETRY, not a money-path account: they are never read to
+/// gate settlement, so the incrementing accounts are passed OPTIONALLY in the
+/// full-surface handlers (`reject_task_result`, `reject_and_freeze`, `expire_claim`,
+/// `resolve_dispute`, `cancel_task`). The counted party (worker / creator) is not the
+/// signer that decides whether the account is supplied, so it cannot self-omit.
+///
+/// PDA seeds: ["agent_stats", agent]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct AgentStats {
+    /// The `AgentRegistration` PDA these counters belong to (also the seed).
+    pub agent: Pubkey,
+    /// Times one of this agent's submissions was rejected for re-work
+    /// (`reject_task_result`) or frozen for review (`reject_and_freeze`).
+    pub tasks_rejected: u64,
+    /// Disputes resolved in this agent's favor as the defendant worker.
+    pub disputes_won: u64,
+    /// Disputes resolved against this agent as the defendant worker (a loss; the
+    /// slash-history signal).
+    pub disputes_lost: u64,
+    /// Claims by this agent that expired (no-show / abandoned) via `expire_claim`.
+    pub claims_expired: u64,
+    /// Tasks created by this agent (as the creator/buyer) that were cancelled.
+    pub total_cancelled: u64,
+    /// Last time any counter was updated (unix timestamp).
+    pub last_updated: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future track-record counters. MUST stay zeroed.
+    pub _reserved: [u8; 32],
+}
+
+impl AgentStats {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // + 8 discriminator
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 32]
+    }
+
+    /// Initialize the identity fields on first write (idempotent: only sets the
+    /// agent/bump when the account was freshly created, leaving counters at zero).
+    pub fn init_if_fresh(&mut self, agent: Pubkey, bump: u8) {
+        if self.agent == Pubkey::default() {
+            self.agent = agent;
+            self.bump = bump;
+            self._reserved = [0u8; 32];
+        }
+    }
+}
+
 /// Symmetric 25/25 completion bond (spec §8). Both the creator and the worker post
 /// a bond equal to 25% of the reward into their own PDA; the loser of a dispute
 /// forfeits theirs, the winner is refunded, and a no-show worker's bond is forfeited
@@ -1773,15 +1884,31 @@ pub struct DisputeResolver {
     pub assigned_at: i64,
     /// PDA bump.
     pub bump: u8,
+    // === P6.4 case counters — carved from the former `_reserved: [u8; 32]`. ===
+    // These three scalars (8+8+8 = 24B) + the remaining 8 reserved bytes below total
+    // exactly 32 bytes, so `DisputeResolver::SIZE` is UNCHANGED — this is a pure
+    // value-into-reserved-space write, NOT a layout change and NOT a migration. The
+    // pinned-size test `test_dispute_resolver_size_unchanged` enforces that the new
+    // field set still serializes to the same byte count as the pre-P6.4 reserve.
+    /// Disputes this resolver has decided through `resolve_dispute`.
+    pub resolved_count: u64,
+    /// Rulings later vacated/overturned. Has no on-chain incrementer yet: the
+    /// challenge-window mechanism that would bump it (`execute_resolution` settling a
+    /// pending outcome unless vacated) is the design-doc-only P6.4 step (3),
+    /// `docs/DISPUTE_CHALLENGE_WINDOW.md`, gated `[HUMAN: approve before build]`. The
+    /// field is reserved now so adding that mechanism later needs NO layout change.
+    pub overturned_count: u64,
+    /// Unix timestamp this resolver last decided a dispute (0 = never).
+    pub last_resolved_at: i64,
     /// Reserved for future metadata. MUST stay zeroed.
-    pub _reserved: [u8; 32],
+    pub _reserved: [u8; 8],
 }
 
 impl DisputeResolver {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved == [0u8; 32]
+        self._reserved == [0u8; 8]
     }
 }
 
@@ -1825,6 +1952,44 @@ pub struct ListingModeration {
 
 impl ListingModeration {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+}
+
+/// Roster entry authorizing a third-party / per-integrator moderation attestor (P6.8).
+///
+/// Mirrors `DisputeResolver`: the protocol authority designates wallets that may record
+/// moderation attestations (`record_task_moderation` / `record_listing_moderation`) in
+/// addition to the single global `ModerationConfig.moderation_authority`. The PDA's mere
+/// existence authorizes its `attestor`; revoking closes the PDA, after which that wallet
+/// can no longer attest (the closed account fails to load). Re-assigning an already-listed
+/// attestor fails at `init` (the PDA already exists), the desired "already assigned" signal.
+///
+/// NOTE: this is the registry MECHANISM only. The neutrality question (whether an
+/// authority-curated roster is the right trust model, vs. a moderation-optional tier or
+/// per-integrator attestor choice) is a deliberate, separate [HUMAN] decision documented in
+/// `docs/MODERATION_NEUTRALITY.md`. This struct deliberately builds none of those options.
+///
+/// PDA seeds: ["moderation_attestor", attestor]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct ModerationAttestor {
+    /// The wallet authorized to record moderation attestations.
+    pub attestor: Pubkey,
+    /// The protocol authority that assigned this attestor (audit trail).
+    pub assigned_by: Pubkey,
+    /// Unix timestamp the assignment was created.
+    pub assigned_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future metadata. MUST stay zeroed.
+    pub _reserved: [u8; 32],
+}
+
+impl ModerationAttestor {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 32]
+    }
 }
 
 /// Skill rating record (one per rater per skill)
@@ -2063,15 +2228,46 @@ mod tests {
         test_size_constant!(Dispute);
     }
 
+    /// P6.4: pins the `Dispute` layout APPEND (rationale_hash + rationale_uri +
+    /// resolved_by). This is a layout change, NOT a migration: no live mainnet
+    /// `Dispute` accounts exist (disputes are compiled out of the 25-instruction
+    /// canary surface), so there is nothing to migrate; on devnet it is append-only.
+    /// If a future edit reorders or drops one of the three appended fields, this guard
+    /// fails loudly. The delta is computed from the field reserves themselves so it
+    /// stays correct if `MAX_RATIONALE_URI_LEN` is re-tuned.
     #[test]
-    fn test_dispute_vote_size() {
-        test_size_constant!(DisputeVote);
+    fn test_dispute_size_p64_append() {
+        // The three P6.4 fields: [u8;32] hash + (4-byte len prefix + max_len) String
+        // + Pubkey resolver.
+        let append_delta = 32 + (4 + Dispute::MAX_RATIONALE_URI_LEN) + 32;
+        // Pre-P6.4 Dispute INIT_SPACE was 255 bytes (ending at `defendant: Pubkey`).
+        const OLD_DISPUTE_INIT_SPACE: usize = 255;
+        assert_eq!(
+            <Dispute as anchor_lang::Space>::INIT_SPACE,
+            OLD_DISPUTE_INIT_SPACE + append_delta,
+            "Dispute must equal the pre-P6.4 prefix (255B) + the appended rationale/resolver fields"
+        );
+        assert_eq!(
+            Dispute::MAX_RATIONALE_URI_LEN,
+            256,
+            "rationale_uri reserve must match its #[max_len(256)]"
+        );
     }
 
     #[test]
-    fn test_authority_dispute_vote_size() {
-        test_size_constant!(AuthorityDisputeVote);
+    fn test_dispute_rationale_defaults_are_empty() {
+        let d = Dispute::default();
+        assert_eq!(d.rationale_hash, [0u8; 32], "fresh rationale_hash is zeroed");
+        assert_eq!(d.rationale_uri, "", "fresh rationale_uri is empty");
+        assert_eq!(
+            d.resolved_by,
+            Pubkey::default(),
+            "fresh resolved_by is the default pubkey (unresolved)"
+        );
     }
+
+    // P6.3: `test_dispute_vote_size` / `test_authority_dispute_vote_size` removed with
+    // the `DisputeVote` / `AuthorityDisputeVote` account types (vote machinery retired).
 
     #[test]
     fn test_task_escrow_size() {
@@ -2154,8 +2350,88 @@ mod tests {
     }
 
     #[test]
+    fn test_hire_rating_size() {
+        test_size_constant!(HireRating);
+    }
+
+    #[test]
+    fn test_agent_stats_size() {
+        test_size_constant!(AgentStats);
+    }
+
+    #[test]
+    fn test_agent_stats_init_if_fresh_is_idempotent() {
+        let agent = Pubkey::new_unique();
+        let mut stats = AgentStats::default();
+        // Fresh: identity fields are set, counters stay zero.
+        stats.init_if_fresh(agent, 7);
+        assert_eq!(stats.agent, agent);
+        assert_eq!(stats.bump, 7);
+        assert_eq!(stats.tasks_rejected, 0);
+        assert!(stats.validate_reserved_fields());
+
+        // Already-initialized: a second call must NOT overwrite identity (idempotent).
+        let other = Pubkey::new_unique();
+        stats.tasks_rejected = 3;
+        stats.init_if_fresh(other, 9);
+        assert_eq!(stats.agent, agent, "agent must not be overwritten once set");
+        assert_eq!(stats.bump, 7, "bump must not be overwritten once set");
+        assert_eq!(stats.tasks_rejected, 3, "counters must be preserved");
+    }
+
+    #[test]
     fn test_listing_moderation_size() {
         test_size_constant!(ListingModeration);
+    }
+
+    #[test]
+    fn test_moderation_attestor_size() {
+        test_size_constant!(ModerationAttestor);
+    }
+
+    #[test]
+    fn test_dispute_resolver_size() {
+        test_size_constant!(DisputeResolver);
+    }
+
+    /// P6.4: carving `DisputeResolver`'s former 32 reserved bytes into
+    /// `resolved_count: u64` (8) + `overturned_count: u64` (8) + `last_resolved_at: i64`
+    /// (8) + `_reserved: [u8; 8]` (8) MUST keep the account's serialized size identical
+    /// (8+8+8+8 = 32). This is a value-into-reserved-space write, NOT a layout change
+    /// and NOT a migration. If a future edit changes the field set so the size moves,
+    /// this guard fails before any account is mis-sized.
+    #[test]
+    fn test_dispute_resolver_size_unchanged() {
+        // resolver(32) + assigned_by(32) + assigned_at(8) + bump(1) + the 32 bytes
+        // formerly reserved, now resolved_count(8)+overturned_count(8)
+        // +last_resolved_at(8)+_reserved(8).
+        const EXPECTED_INIT_SPACE: usize = 32 + 32 + 8 + 1 + (8 + 8 + 8 + 8);
+        assert_eq!(
+            <DisputeResolver as anchor_lang::Space>::INIT_SPACE,
+            EXPECTED_INIT_SPACE,
+            "DisputeResolver size must be unchanged after carving the reserved bytes (no migration)"
+        );
+    }
+
+    #[test]
+    fn test_dispute_resolver_counters_default_to_zero() {
+        let entry = DisputeResolver::default();
+        assert_eq!(entry.resolved_count, 0);
+        assert_eq!(entry.overturned_count, 0);
+        assert_eq!(entry.last_resolved_at, 0);
+        assert!(
+            entry.validate_reserved_fields(),
+            "a fresh DisputeResolver must have zeroed reserved bytes"
+        );
+    }
+
+    #[test]
+    fn test_moderation_attestor_reserved_default_is_zeroed() {
+        let entry = ModerationAttestor::default();
+        assert!(
+            entry.validate_reserved_fields(),
+            "a fresh ModerationAttestor must have zeroed reserved bytes"
+        );
     }
 
     #[test]

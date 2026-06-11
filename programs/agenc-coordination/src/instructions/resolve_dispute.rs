@@ -9,19 +9,19 @@ use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition}
 use crate::instructions::completion_helpers::update_protocol_stats;
 use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::dispute_helpers::{
-    check_duplicate_arbiters, check_duplicate_workers, pay_dispute_operator_fee,
-    process_arbiter_vote_pair, process_worker_claim_pair, resolve_task_operator_terms,
-    validate_remaining_accounts_structure,
+    check_duplicate_workers, pay_dispute_operator_fee, process_worker_claim_pair,
+    resolve_task_operator_terms, validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::slash_helpers::calculate_slash_amount;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, CompletionBond, Dispute, DisputeResolver, DisputeStatus, ProtocolConfig,
-    ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
+    AgentRegistration, AgentStats, CompletionBond, Dispute, DisputeResolver, DisputeStatus,
+    ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -44,6 +44,51 @@ fn remaining_account_slice<'info>(
     // SAFETY: same rationale as `remaining_account_info`; the slice elements
     // already carry `'info`, so only the slice reference needs rebinding.
     unsafe { std::mem::transmute(&remaining_accounts[start..end]) }
+}
+
+/// Pure bound check on the ruling `rationale_uri` (P6.4). Empty is allowed (the
+/// 32-byte `rationale_hash` may carry the rationale on its own); anything longer than
+/// the account reserve is rejected. Extracted so the bound is unit-testable and
+/// revert-sensitive independently of account wiring.
+pub(crate) fn validate_rationale_uri(rationale_uri: &str) -> Result<()> {
+    require!(
+        rationale_uri.len() <= Dispute::MAX_RATIONALE_URI_LEN,
+        CoordinationError::RationaleUriTooLong
+    );
+    Ok(())
+}
+
+/// Pure (P6.3): encode the resolver's binary ruling into the `(votes_for, votes_against)`
+/// pair that the slash finalizers read. Returns `(1, 0)` on APPROVE and `(0, 1)` on
+/// REJECT. The arbiter vote/quorum model is retired, so this 1-bit record replaces the
+/// real tally; `apply_dispute_slash` / `apply_initiator_slash` recover the decision via
+/// `calculate_approval_percentage` against `dispute_threshold` (default 50): 100% >= 50
+/// (approved) vs 0% < 50 (rejected). Extracted so the encoding is unit-testable and
+/// revert-sensitive (flip a branch and the slash-direction test goes red).
+pub(crate) fn ruling_vote_bits(approved: bool) -> (u64, u64) {
+    if approved {
+        (1, 0)
+    } else {
+        (0, 1)
+    }
+}
+
+/// Pure, checked bump of an assigned resolver's case counters (P6.4): increments
+/// `resolved_count` and stamps `last_resolved_at`. `overturned_count` is intentionally
+/// untouched here — it is only moved by the (design-doc-only) challenge-window
+/// mechanism. Extracted so the increment is unit-testable and revert-sensitive (drop
+/// the `checked_add` and the overflow test goes red; drop the call site and the
+/// integration assertion `resolved_count == 1` goes red).
+pub(crate) fn bump_resolver_case_counters(
+    resolver_entry: &mut DisputeResolver,
+    now: i64,
+) -> Result<u64> {
+    resolver_entry.resolved_count = resolver_entry
+        .resolved_count
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    resolver_entry.last_resolved_at = now;
+    Ok(resolver_entry.resolved_count)
 }
 
 /// Note: Large accounts use Box<Account<...>> to avoid stack overflow
@@ -82,6 +127,8 @@ pub struct ResolveDispute<'info> {
     /// The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
     /// roster. The OR is enforced in the handler against `resolver_assignment` below — a
     /// plain account constraint cannot express "this key OR that account exists".
+    /// `mut` so it can pay rent for the optional `agent_stats` init (P6.6).
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     /// Optional roster entry proving `authority` is an assigned dispute resolver. A plain
@@ -90,6 +137,11 @@ pub struct ResolveDispute<'info> {
     /// whose `resolver` equals the signer (enforced in the handler). Only the authority-
     /// gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
     /// so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+    ///
+    /// `mut` (P6.4): when an assigned resolver decides the dispute, their case counters
+    /// (`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol
+    /// authority resolving directly passes `None` (no per-resolver counter to bump).
+    #[account(mut)]
     pub resolver_assignment: Option<Box<Account<'info, DisputeResolver>>>,
 
     /// CHECK: Task creator for refund - validated to match task.creator (fix #58)
@@ -113,6 +165,20 @@ pub struct ResolveDispute<'info> {
     /// Worker agent account for the dispute defendant.
     #[account(mut)]
     pub worker: Option<Box<Account<'info, AgentRegistration>>>,
+
+    /// OPTIONAL (P6.6): the defendant worker's track-record aggregate. When supplied,
+    /// resolution bumps `disputes_won` (worker prevailed) or `disputes_lost` (worker was
+    /// slashed). Bound to `["agent_stats", dispute.defendant]` (the handler validates
+    /// `worker.key() == dispute.defendant`), created lazily on first write. The
+    /// `disputes_lost` counter is the SDK slash-history signal. Telemetry only.
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = AgentStats::SIZE,
+        seeds = [b"agent_stats", dispute.defendant.as_ref()],
+        bump
+    )]
+    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
 
     /// CHECK: Worker's wallet for receiving payment
     #[account(mut)]
@@ -182,7 +248,15 @@ pub struct ResolveDispute<'info> {
 pub fn handler<'info>(
     ctx: Context<'_, '_, '_, 'info, ResolveDispute<'info>>,
     approve: bool,
+    rationale_hash: [u8; 32],
+    rationale_uri: String,
 ) -> Result<()> {
+    // P6.4 accountable rulings: a reasoned ruling is REQUIRED. The 32-byte
+    // `rationale_hash` is mandatory by type (always present); the bounded
+    // `rationale_uri` is length-checked here. Both are persisted on the dispute and the
+    // hash + deciding resolver are emitted in `DisputeResolved`.
+    validate_rationale_uri(&rationale_uri)?;
+
     // Authorization: the protocol authority OR an assigned dispute resolver may resolve.
     // This replaced the open staked-arbiter vote + quorum model: a single assigned
     // resolver now decides the outcome directly (see assign_dispute_resolver).
@@ -756,26 +830,31 @@ pub fn handler<'info>(
     }
     let defendant_worker_key = worker.key();
 
-    // Update dispute status - decrement active_dispute_votes for each arbiter
-    //
-    // remaining_accounts format (fix #333):
-    // - First: (vote, arbiter) pairs for total_voters
-    // - Then: optional (claim, worker) pairs for additional workers on collaborative tasks
+    // P6.6: record the dispute OUTCOME for the defendant worker's track record. A
+    // resolution where the worker is slashed (`worker_lost`) is a loss (the SDK
+    // slash-history signal); any other resolution is a win for the defendant. No-op when
+    // the optional `agent_stats` account is absent. Telemetry only — never gates the
+    // settlement above. `defendant_worker_key == dispute.defendant`, so it matches the
+    // PDA seed bound on `agent_stats`.
+    let dispute_outcome_counter = if worker_lost {
+        Counter::DisputesLost
+    } else {
+        Counter::DisputesWon
+    };
+    apply_track_record(
+        &mut ctx.accounts.agent_stats,
+        defendant_worker_key,
+        ctx.bumps.agent_stats,
+        dispute_outcome_counter,
+        clock.unix_timestamp,
+    )?;
+
+    // P6.3: the arbiter vote/quorum model is retired, so there are no (vote, arbiter)
+    // pairs to clean up — `remaining_accounts` carry ONLY the optional collaborative
+    // (claim, worker) pairs. `validate_remaining_accounts_structure` now asserts
+    // `total_voters == 0` and that the remaining accounts come in pairs.
     let arbiter_accounts =
         validate_remaining_accounts_structure(dispute_remaining_accounts, dispute.total_voters)?;
-    check_duplicate_arbiters(dispute_remaining_accounts, arbiter_accounts)?;
-
-    for i in (0..arbiter_accounts).step_by(2) {
-        let arbiter_index = i
-            .checked_add(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        process_arbiter_vote_pair(
-            &dispute_remaining_accounts[i],
-            &dispute_remaining_accounts[arbiter_index],
-            &dispute.key(),
-            &crate::ID,
-        )?;
-    }
 
     let remaining_worker_accounts = dispute_remaining_accounts
         .len()
@@ -815,6 +894,23 @@ pub fn handler<'info>(
 
     dispute.status = DisputeStatus::Resolved;
     dispute.resolved_at = clock.unix_timestamp;
+    // P6.3: record the resolver's binary RULING into the (now-deprecated) vote-tally
+    // fields so the permissionless slash finalizers — `apply_dispute_slash` (worker) and
+    // `apply_initiator_slash` (initiator) — can read the approve/reject decision without
+    // a vote tally. They derive the loser via `calculate_approval_percentage(votes_for,
+    // votes_against)` against `config.dispute_threshold`; writing (1, 0) on APPROVE
+    // yields 100% (>= threshold → approved) and (0, 1) on REJECT yields 0% (< threshold
+    // → rejected), reproducing the exact pre-P6.3 slash decision with no votes cast.
+    // Without this, `calculate_approval_percentage(0, 0)` would error (InsufficientVotes)
+    // and BOTH slash legs would be permanently stranded after the roster rework.
+    let (ruling_for, ruling_against) = ruling_vote_bits(approved);
+    dispute.votes_for = ruling_for;
+    dispute.votes_against = ruling_against;
+    // P6.4 accountable rulings: persist the reasoned ruling + the deciding resolver on
+    // the dispute itself (an immutable, on-chain audit trail of who ruled and why).
+    dispute.rationale_hash = rationale_hash;
+    dispute.rationale_uri = rationale_uri;
+    dispute.resolved_by = signer;
     let distributed_now = remaining_funds
         .checked_sub(token_slash_reserve)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -966,6 +1062,19 @@ pub fn handler<'info>(
         }
     }
 
+    // P6.4 resolver accountability: if an ASSIGNED resolver decided this dispute (the
+    // protocol authority resolving directly passes `resolver_assignment: None`), fold
+    // the case into THAT resolver's track record on the roster PDA. We bump only when
+    // the supplied entry actually belongs to the signing decider — never mis-attribute
+    // a case to an unrelated roster member that a protocol-authority caller happened to
+    // pass. Mismatch is a silent skip (not an error): the counters are telemetry and
+    // must not be able to block a valid settlement. Checked arithmetic throughout.
+    if let Some(resolver_entry) = ctx.accounts.resolver_assignment.as_mut() {
+        if resolver_entry.resolver == signer {
+            bump_resolver_case_counters(resolver_entry.as_mut(), clock.unix_timestamp)?;
+        }
+    }
+
     emit!(DisputeResolved {
         dispute_id: dispute.dispute_id,
         resolution_type: dispute.resolution_type as u8,
@@ -973,6 +1082,8 @@ pub fn handler<'info>(
         votes_for: dispute.votes_for,
         votes_against: dispute.votes_against,
         timestamp: clock.unix_timestamp,
+        resolved_by: signer,
+        rationale_hash,
     });
 
     Ok(())
@@ -1021,4 +1132,129 @@ fn validate_worker_accounts(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // === P6.4 (1): rationale_uri bound (positive + negative) ===
+
+    #[test]
+    fn accepts_empty_and_max_rationale_uri() {
+        // Empty is allowed (the 32-byte hash can carry the rationale alone).
+        assert!(validate_rationale_uri("").is_ok());
+        let max = "a".repeat(Dispute::MAX_RATIONALE_URI_LEN);
+        assert!(
+            validate_rationale_uri(&max).is_ok(),
+            "exactly-max URI must be accepted"
+        );
+    }
+
+    // Revert-sensitive: removing the length `require!` in `validate_rationale_uri`
+    // makes an over-length URI pass — this assertion then goes red.
+    #[test]
+    fn rejects_overlong_rationale_uri() {
+        let over = "a".repeat(Dispute::MAX_RATIONALE_URI_LEN + 1);
+        assert!(validate_rationale_uri(&over).is_err());
+    }
+
+    // === P6.4 (2): resolver case counters ===
+
+    fn fresh_resolver() -> DisputeResolver {
+        let mut r = DisputeResolver::default();
+        r.resolver = Pubkey::new_unique();
+        r
+    }
+
+    // One resolution bumps `resolved_count` by exactly one and stamps `last_resolved_at`.
+    // Revert-sensitive: drop the `checked_add` increment in `bump_resolver_case_counters`
+    // and `resolved_count == 1` goes red; drop the timestamp write and the
+    // `last_resolved_at` assertion goes red.
+    #[test]
+    fn bump_resolver_increments_resolved_count_and_stamps_time() {
+        let mut r = fresh_resolver();
+        let v = bump_resolver_case_counters(&mut r, 1_700_000_123).unwrap();
+        assert_eq!(v, 1, "returns the post-increment count");
+        assert_eq!(r.resolved_count, 1);
+        assert_eq!(r.last_resolved_at, 1_700_000_123);
+    }
+
+    // `overturned_count` has no incrementer here — it is moved only by the
+    // (design-doc-only) challenge-window mechanism. This pins that invariant: resolving
+    // must NEVER move it. Revert-sensitive: if a future edit accidentally bumps
+    // `overturned_count` in `bump_resolver_case_counters`, this goes red.
+    #[test]
+    fn bump_resolver_does_not_touch_overturned_count() {
+        let mut r = fresh_resolver();
+        bump_resolver_case_counters(&mut r, 10).unwrap();
+        assert_eq!(
+            r.overturned_count, 0,
+            "resolving must not move overturned_count (challenge-window only)"
+        );
+    }
+
+    #[test]
+    fn repeated_resolutions_accumulate_resolved_count() {
+        let mut r = fresh_resolver();
+        assert_eq!(bump_resolver_case_counters(&mut r, 1).unwrap(), 1);
+        assert_eq!(bump_resolver_case_counters(&mut r, 2).unwrap(), 2);
+        assert_eq!(bump_resolver_case_counters(&mut r, 3).unwrap(), 3);
+        assert_eq!(r.resolved_count, 3);
+        assert_eq!(r.last_resolved_at, 3);
+    }
+
+    // Overflow guard (negative). Revert-sensitive: swapping `checked_add` for a wrapping
+    // add makes this pass silently — the `is_err` assertion then goes red.
+    #[test]
+    fn bump_resolver_at_max_errors_instead_of_wrapping() {
+        let mut r = fresh_resolver();
+        r.resolved_count = u64::MAX;
+        assert!(bump_resolver_case_counters(&mut r, 1).is_err());
+        // Left untouched on the error path.
+        assert_eq!(r.resolved_count, u64::MAX);
+    }
+
+    // === P6.3 (vote retirement): ruling-bit encoding for the slash finalizers ===
+    use crate::instructions::slash_helpers::calculate_approval_percentage;
+
+    // APPROVE encodes (1, 0); REJECT encodes (0, 1). Revert-sensitive: swap a branch in
+    // `ruling_vote_bits` and these equalities go red.
+    #[test]
+    fn ruling_vote_bits_encode_approve_and_reject() {
+        assert_eq!(ruling_vote_bits(true), (1, 0), "approve -> (votes_for=1, votes_against=0)");
+        assert_eq!(ruling_vote_bits(false), (0, 1), "reject -> (votes_for=0, votes_against=1)");
+    }
+
+    // The ruling bits must reproduce the EXACT slash decision the finalizers compute:
+    // approve -> 100% (>= the default 50% threshold -> approved -> worker slashable);
+    // reject  -> 0%   (<  threshold -> rejected -> worker vindicated).
+    // Revert-sensitive: if `resolve_dispute` ever wrote (0, 0) again, the approved case
+    // would error (InsufficientVotes) and this assertion would go red.
+    #[test]
+    fn ruling_bits_round_trip_through_approval_percentage() {
+        const DEFAULT_THRESHOLD: u64 = 50;
+
+        let (f, a) = ruling_vote_bits(true);
+        let (_total, approval_pct) = calculate_approval_percentage(f, a).unwrap();
+        assert_eq!(approval_pct, 100, "approve ruling reads as 100% approval");
+        assert!(approval_pct >= DEFAULT_THRESHOLD, "approve ruling clears the threshold");
+
+        let (f, a) = ruling_vote_bits(false);
+        let (_total, approval_pct) = calculate_approval_percentage(f, a).unwrap();
+        assert_eq!(approval_pct, 0, "reject ruling reads as 0% approval");
+        assert!(approval_pct < DEFAULT_THRESHOLD, "reject ruling fails the threshold");
+    }
+
+    // Negative pin: a (0, 0) tally — the bug the ruling-bit fix avoids — must error
+    // rather than silently read as "not approved". This is exactly why the ruling bits
+    // are required. Revert-sensitive: drop the `require!(total_votes > 0)` guard in
+    // `calculate_approval_percentage` and this `is_err` goes red.
+    #[test]
+    fn zero_tally_is_an_error_not_a_silent_rejection() {
+        assert!(
+            calculate_approval_percentage(0, 0).is_err(),
+            "a (0,0) tally must error (InsufficientVotes), proving the ruling bits are load-bearing"
+        );
+    }
 }

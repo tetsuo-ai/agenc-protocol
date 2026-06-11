@@ -1,12 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { AccountRole, type Address, type Instruction } from "@solana/kit";
 import {
   facade,
   findAgentPda,
   findTaskPda,
   findClaimPda,
   findDisputePda,
-  findVoteDisputeVotePda,
   getDisputeDecoder,
   getTaskDecoder,
   DisputeStatus,
@@ -16,7 +14,6 @@ import {
   freshSvm,
   seedProtocolConfig,
   seedModerationConfig,
-  seedAgentStake,
   fundedSigner,
   send,
   accountData,
@@ -24,39 +21,32 @@ import {
 
 // REAL on-chain execution of the dispute -> resolve flow against the compiled
 // agenc-coordination program in litesvm, driven entirely by SDK-built (@solana/kit)
-// instructions. This is the PORT of the web3.js/anchor dispute sequence from
-// tests-integration/marketplace.test.mjs (`runHireSettlement` stopBeforeComplete +
-// the "completion bond: resolve_dispute Complete ..." / paused-resolve tests):
+// instructions.
+//
+// P6.3: the arbiter vote/quorum model is RETIRED. `vote_dispute` no longer exists; a
+// dispute is decided by an ASSIGNED RESOLVER on the dispute-resolver roster (or the
+// protocol authority) calling `resolve_dispute` directly — no arbiter registration, no
+// votes, no voting-period wait, and NO (vote, arbiter) remaining accounts. P6.4 also
+// makes a reasoned ruling (`rationaleHash` + `rationaleUri`) REQUIRED on resolve.
 //
 //   reach a claimed InProgress task (the proven hire+claim port, verbatim)
 //     -> worker initiates a COMPLETE dispute        (facade.initiateDispute, resolutionType 1)
-//     -> register 3 ARBITER agents (cap 1<<7) + seed each >= minArbiterStake
-//     -> each arbiter votes approve (true)          (facade.voteDispute)
-//     -> warp the clock past the voting deadline    (svm.setClock)
-//     -> resolve the dispute                         (facade.resolveDispute)
-//          with the (vote PDA, arbiterAgent PDA) pairs appended as REMAINING ACCOUNTS,
-//          mirroring the reference's remainingAccounts ordering exactly.
-//
-// minArbiterStake is seeded to 1_000_000 so arbiter votes carry weight; each arbiter
-// agent is seeded to that stake so the three approvals clear the approval threshold and
-// the Complete resolution fires.
+//     -> the protocol authority assigns a resolver  (facade.assignDisputeResolver)
+//     -> the assigned resolver resolves (approve)    (facade.resolveDispute + rationale)
 //
 // On-chain assertions (REAL decoded state after resolve):
-//   (a) the Dispute account decodes to DisputeStatus.Resolved with votesFor == 3,
+//   (a) the Dispute account decodes to DisputeStatus.Resolved with ZERO voters and the
+//       P6.3 ruling bit (votesFor == 1, votesAgainst == 0 on an APPROVE ruling),
 //   (b) the Task account decodes to TaskStatus.Completed (Complete dispute -> worker wins),
 //   (c) the worker's (provider authority's) lamport balance strictly increased — the
 //       escrow paid out the reward through dispute resolution, not direct completion.
-describe("e2e: dispute -> resolve settles the task on the real program", () => {
-  it("drives initiate -> vote x3 -> resolve (Complete) end-to-end on-chain", async () => {
+describe("e2e: dispute -> roster resolve settles the task on the real program", () => {
+  it("drives initiate -> assign resolver -> resolve (Complete) end-to-end on-chain, no votes", async () => {
     const svm = freshSvm();
 
-    // Admin owns ProtocolConfig (treasury) and ModerationConfig authority. Seed a
-    // non-zero minArbiterStake so arbiter votes carry weight toward the approval gate.
+    // Admin owns ProtocolConfig (treasury) and ModerationConfig authority.
     const admin = await fundedSigner(svm);
-    const MIN_ARBITER_STAKE = 1_000_000n;
-    await seedProtocolConfig(svm, admin.address, {
-      minArbiterStake: MIN_ARBITER_STAKE,
-    });
+    await seedProtocolConfig(svm, admin.address);
 
     // Real, funded signers for each actor (these MUST sign their own instructions).
     const provider = await fundedSigner(svm); // worker wallet
@@ -223,104 +213,66 @@ describe("e2e: dispute -> resolve settles the task on the real program", () => {
       expect(getDisputeDecoder().decode(dBytes!).status).toBe(DisputeStatus.Active);
     }
 
-    // 9) Register 3 distinct ARBITER agents (ARBITER capability = 1<<7 = 128), seed each
-    //    with >= minArbiterStake so its approval vote carries weight, then vote approve.
-    //    resolve_dispute needs the (vote, arbiter) pairs as remaining_accounts, in that
-    //    exact order — mirror the reference.
-    const arbiterRemaining: { address: Address; role: AccountRole }[] = [];
-    for (let i = 0; i < 3; i++) {
-      const arb = await fundedSigner(svm);
-      const arbId = new Uint8Array(32).fill(100 + i);
-      await send(svm, arb, [
-        await facade.registerAgent({
-          authority: arb,
-          agentId: arbId,
-          capabilities: 128n, // ARBITER
-          endpoint: "http://arb.test",
-          metadataUri: null,
-          stakeAmount: 0n,
-        }),
-      ]);
-      const [arbAgent] = await findAgentPda({ agentId: arbId });
-      // Give the arbiter agent vote weight (>= minArbiterStake).
-      seedAgentStake(svm, arbAgent, MIN_ARBITER_STAKE);
+    // 9) The protocol authority assigns a dedicated dispute resolver to the roster. The
+    //    assigned wallet can then resolve directly — no arbiters, no votes.
+    const resolver = await fundedSigner(svm);
+    await send(svm, admin, [
+      await facade.assignDisputeResolver({
+        authority: admin,
+        resolver: resolver.address,
+      }),
+    ]);
+    const [resolverAssignment] = await facade.findDisputeResolverPda({
+      resolver: resolver.address,
+    });
 
-      await send(svm, arb, [
-        await facade.voteDispute({
-          dispute,
-          task,
-          arbiter: arbAgent,
-          authority: arb,
-          approve: true,
-        }),
-      ]);
-
-      // The per-arbiter (vote, arbiter) pair are the resolve remaining accounts. The
-      // Sybil-guard authorityVote PDA is auto-derived inside voteDispute and is NOT a
-      // remaining account (mirrors the reference, which only passes vote + arbiter).
-      const [votePda] = await findVoteDisputeVotePda({ dispute, arbiter: arbAgent });
-      arbiterRemaining.push(
-        { address: votePda, role: AccountRole.WRITABLE },
-        { address: arbAgent, role: AccountRole.WRITABLE },
-      );
-    }
-
-    // Sanity: all three approvals landed before warping the clock. `votesFor` is the
-    // cumulative *vote weight* (derived from each arbiter's staked balance), not a head
-    // count — so assert the head count via totalVoters and that the approval weight is
-    // strictly positive (each staked arbiter contributed weight).
+    // Sanity: the dispute recorded ZERO voters (the vote machinery is gone).
     {
       const dBytes = accountData(svm, dispute);
       const d = getDisputeDecoder().decode(dBytes!);
-      expect(d.totalVoters).toBe(3);
-      expect(d.votesFor).toBeGreaterThan(0n);
-      expect(d.votesAgainst).toBe(0n);
+      expect(d.totalVoters).toBe(0);
     }
-
-    // 10) Warp the clock past the voting deadline (created_at + 86400s voting period)
-    //     but before dispute expiry, so resolve_dispute (not expire) is the valid path.
-    const clk = svm.getClock();
-    clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
-    svm.setClock(clk);
 
     // Snapshot the worker authority balance right before resolution so the delta is
     // attributable to the escrow payout on the Complete resolution (the worker never
-    // signs the resolve tx — admin does — so no fee skews this leg).
+    // signs the resolve tx — the resolver does — so no fee skews this leg).
     const workerBalBefore = svm.getBalance(provider.address) ?? 0n;
 
-    // 11) Admin (protocol authority) resolves the dispute. The facade derives the
-    //     escrow / protocol-config / hire-record and the creator/worker completion-bond
-    //     PDAs; we pass the worker agent + worker wallet so the bond PDA derives. Then we
-    //     APPEND the (vote, arbiter) remaining-account pairs to the kit instruction's
-    //     account list (kit instructions are plain objects).
-    const resolveIx = await facade.resolveDispute({
-      dispute,
-      task,
-      authority: admin,
-      approve: true,
-      creator: buyer.address,
-      workerClaim,
-      worker: providerAgent,
-      workerWallet: provider.address,
-      bondTreasury: admin.address,
-      // creator/worker completion bonds derive from task+creator / task+workerWallet
-    });
-    const resolveWithArbiters: Instruction = {
-      ...resolveIx,
-      accounts: [...(resolveIx.accounts ?? []), ...arbiterRemaining],
-    };
-    await send(svm, admin, [resolveWithArbiters]);
+    // 10) The ASSIGNED resolver resolves the dispute directly — no voting-period wait, no
+    //     remaining accounts. P6.4: a reasoned ruling (rationaleHash + rationaleUri) is
+    //     REQUIRED. The facade derives escrow / protocol-config / hire-record and the
+    //     creator/worker completion-bond PDAs; we pass the resolver's roster assignment so
+    //     its case counters are bumped.
+    await send(svm, resolver, [
+      await facade.resolveDispute({
+        dispute,
+        task,
+        authority: resolver,
+        resolverAssignment,
+        approve: true,
+        rationaleHash: new Uint8Array(32).fill(5),
+        rationaleUri: "agenc://ruling/sha256/complete",
+        creator: buyer.address,
+        workerClaim,
+        worker: providerAgent,
+        workerWallet: provider.address,
+        bondTreasury: admin.address,
+        // creator/worker completion bonds derive from task+creator / task+workerWallet
+      }),
+    ]);
 
     // ---- REAL on-chain assertions ----
 
-    // (a) The Dispute account decodes to Resolved (no longer Active), 3 voters, all
-    //     approving (votesFor weight > 0, no votes against).
+    // (a) The Dispute account decodes to Resolved (no longer Active) with ZERO voters and
+    //     the P6.3 ruling bit set: APPROVE -> votesFor == 1, votesAgainst == 0. (These
+    //     fields are no longer a tally — they are the 1-bit ruling the slash finalizers
+    //     read.)
     const disputeBytes = accountData(svm, dispute);
     expect(disputeBytes).not.toBeNull();
     const decodedDispute = getDisputeDecoder().decode(disputeBytes!);
     expect(decodedDispute.status).toBe(DisputeStatus.Resolved);
-    expect(decodedDispute.totalVoters).toBe(3);
-    expect(decodedDispute.votesFor).toBeGreaterThan(0n);
+    expect(decodedDispute.totalVoters).toBe(0);
+    expect(decodedDispute.votesFor).toBe(1n);
     expect(decodedDispute.votesAgainst).toBe(0n);
 
     // (b) The Task account decodes to Completed: a Complete dispute settled in the

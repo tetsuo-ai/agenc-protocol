@@ -4,6 +4,8 @@ use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
 use crate::events::TaskModerationRecorded;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::ModerationAttestor;
 use crate::state::{
     is_valid_task_moderation_status, ModerationConfig, Task, TaskModeration, HASH_SIZE,
     TASK_MODERATION_RISK_SCORE_MAX,
@@ -33,12 +35,28 @@ pub struct RecordTaskModeration<'info> {
     )]
     pub task_moderation: Account<'info, TaskModeration>,
 
-    #[account(
-        mut,
-        constraint = moderator.key() == moderation_config.moderation_authority
-            @ CoordinationError::UnauthorizedTaskModerator
-    )]
+    /// The recording signer. Authorization is checked in the handler (NOT as an account
+    /// constraint here) so the registered-attestor OR global-authority branch can be
+    /// evaluated. In the canary build there is no attestor account, so the handler falls
+    /// back to the global-authority-only check — the canary surface stays frozen.
+    #[account(mut)]
     pub moderator: Signer<'info>,
+
+    /// OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
+    /// `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
+    /// attestor to record. Bound to `["moderation_attestor", moderator]` — Anchor enforces
+    /// the canonical PDA, so a forged or mismatched entry fails account resolution; a
+    /// REVOKED attestor's PDA is closed and fails to load (cannot attest). Full-surface
+    /// only — gated so the frozen canary account list for `record_task_moderation` is
+    /// unchanged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        seeds = [b"moderation_attestor", moderator.key().as_ref()],
+        bump = moderation_attestor.bump,
+        constraint = moderation_attestor.attestor == moderator.key()
+            @ CoordinationError::ModerationAttestorMismatch
+    )]
+    pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -53,6 +71,20 @@ pub fn handler(
     scanner_hash: [u8; HASH_SIZE],
     expires_at: i64,
 ) -> Result<()> {
+    // Authorization (P6.8): the global moderation authority OR any registered
+    // (non-revoked) attestor. In the canary build there is no attestor account, so
+    // `attestor_supplied` is always false and this collapses to the original
+    // global-authority-only check.
+    #[cfg(not(feature = "mainnet-canary"))]
+    let attestor_supplied = ctx.accounts.moderation_attestor.is_some();
+    #[cfg(feature = "mainnet-canary")]
+    let attestor_supplied = false;
+    require_moderation_authorized(
+        ctx.accounts.moderator.key(),
+        ctx.accounts.moderation_config.moderation_authority,
+        attestor_supplied,
+    )?;
+
     validate_record_task_moderation_inputs(&job_spec_hash, status, risk_score, expires_at)?;
     require!(
         ctx.accounts.moderation_config.enabled,
@@ -123,10 +155,60 @@ pub fn validate_record_task_moderation_inputs(
     Ok(())
 }
 
+/// Authorize a moderation recorder (P6.8). Shared by `record_task_moderation` and
+/// `record_listing_moderation`.
+///
+/// Passes iff EITHER:
+///   - `moderator` is the global `ModerationConfig.moderation_authority`, OR
+///   - a registered, non-revoked attestor entry was supplied (`attestor_supplied`).
+///
+/// `attestor_supplied` is `true` only when the caller passed a `ModerationAttestor` PDA
+/// that Anchor already validated by canonical seeds AND `attestor == moderator` — so this
+/// helper does not re-check that binding; presence is proof of authorization. A revoked
+/// attestor cannot reach this function with `attestor_supplied == true` because its PDA is
+/// closed and fails to load at account resolution.
+pub fn require_moderation_authorized(
+    moderator: Pubkey,
+    moderation_authority: Pubkey,
+    attestor_supplied: bool,
+) -> Result<()> {
+    require!(
+        moderator == moderation_authority || attestor_supplied,
+        CoordinationError::UnauthorizedModerationAttestor
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::task_moderation_status;
+
+    #[test]
+    fn authorizes_global_moderation_authority() {
+        let auth = Pubkey::new_unique();
+        // Global authority, no attestor supplied -> authorized.
+        assert!(require_moderation_authorized(auth, auth, false).is_ok());
+    }
+
+    #[test]
+    fn authorizes_registered_attestor_who_is_not_the_global_authority() {
+        let auth = Pubkey::new_unique();
+        let attestor = Pubkey::new_unique();
+        // Not the global authority, but a registered attestor entry was supplied.
+        assert!(require_moderation_authorized(attestor, auth, true).is_ok());
+    }
+
+    #[test]
+    fn rejects_stranger_without_attestor_entry() {
+        let auth = Pubkey::new_unique();
+        let stranger = Pubkey::new_unique();
+        // Neither the global authority NOR a supplied attestor entry -> rejected. This is
+        // also the revoked-attestor case: once revoked, the PDA is closed, the account
+        // fails to load, so `attestor_supplied` is false here.
+        let err = require_moderation_authorized(stranger, auth, false).unwrap_err();
+        assert_eq!(err, CoordinationError::UnauthorizedModerationAttestor.into());
+    }
 
     #[test]
     fn validates_clean_record_inputs() {

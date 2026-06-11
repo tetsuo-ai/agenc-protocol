@@ -130,10 +130,14 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     let slash_window_open =
         clock.unix_timestamp <= dispute.resolved_at.saturating_add(SLASH_WINDOW);
 
+    // P6.3: `votes_for`/`votes_against` are no longer an arbiter tally — `resolve_dispute`
+    // now writes a 1-bit RULING into them ((1,0)=approved, (0,1)=rejected). The same
+    // `calculate_approval_percentage` against `dispute_threshold` therefore recovers the
+    // resolver's decision exactly: 100% (>= threshold) when approved, 0% when rejected.
     let (_total_votes, approval_pct) =
         calculate_approval_percentage(dispute.votes_for, dispute.votes_against)?;
 
-    // Determine if the dispute was approved (votes_for >= threshold percentage)
+    // Determine if the dispute was approved (ruling bit reads >= threshold percentage)
     let approved = approval_pct >= config.dispute_threshold as u64;
 
     // Determine if the worker lost the dispute and should be slashed:
@@ -142,10 +146,11 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     //   - Split: Partial failure, funds split -> worker lost (slash)
     //   - Complete: Worker vindicated, gets paid -> worker won (no slash)
     // - If dispute is REJECTED (not approved):
-    //   - Arbiters ruled in worker's favor -> worker won (no slash)
+    //   - The resolver ruled in the worker's favor -> worker won (no slash)
     //
     // Fix for issue #136: Previously, rejected disputes incorrectly set worker_lost=true,
-    // causing innocent workers to be slashed even when arbiters ruled in their favor.
+    // causing innocent workers to be slashed even when the dispute was ruled against the
+    // initiator.
     let worker_lost = if approved {
         // Dispute approved: slash worker unless resolution favors them (Complete)
         dispute.resolution_type != ResolutionType::Complete

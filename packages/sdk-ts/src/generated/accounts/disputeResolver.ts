@@ -23,6 +23,8 @@ import {
   getI64Encoder,
   getStructDecoder,
   getStructEncoder,
+  getU64Decoder,
+  getU64Encoder,
   getU8Decoder,
   getU8Encoder,
   transformEncoder,
@@ -58,6 +60,18 @@ export type DisputeResolver = {
   assignedAt: bigint;
   /** PDA bump. */
   bump: number;
+  /** Disputes this resolver has decided through `resolve_dispute`. */
+  resolvedCount: bigint;
+  /**
+   * Rulings later vacated/overturned. Has no on-chain incrementer yet: the
+   * challenge-window mechanism that would bump it (`execute_resolution` settling a
+   * pending outcome unless vacated) is the design-doc-only P6.4 step (3),
+   * `docs/DISPUTE_CHALLENGE_WINDOW.md`, gated `[HUMAN: approve before build]`. The
+   * field is reserved now so adding that mechanism later needs NO layout change.
+   */
+  overturnedCount: bigint;
+  /** Unix timestamp this resolver last decided a dispute (0 = never). */
+  lastResolvedAt: bigint;
   /** Reserved for future metadata. MUST stay zeroed. */
   reserved: ReadonlyUint8Array;
 };
@@ -71,6 +85,18 @@ export type DisputeResolverArgs = {
   assignedAt: number | bigint;
   /** PDA bump. */
   bump: number;
+  /** Disputes this resolver has decided through `resolve_dispute`. */
+  resolvedCount: number | bigint;
+  /**
+   * Rulings later vacated/overturned. Has no on-chain incrementer yet: the
+   * challenge-window mechanism that would bump it (`execute_resolution` settling a
+   * pending outcome unless vacated) is the design-doc-only P6.4 step (3),
+   * `docs/DISPUTE_CHALLENGE_WINDOW.md`, gated `[HUMAN: approve before build]`. The
+   * field is reserved now so adding that mechanism later needs NO layout change.
+   */
+  overturnedCount: number | bigint;
+  /** Unix timestamp this resolver last decided a dispute (0 = never). */
+  lastResolvedAt: number | bigint;
   /** Reserved for future metadata. MUST stay zeroed. */
   reserved: ReadonlyUint8Array;
 };
@@ -84,7 +110,10 @@ export function getDisputeResolverEncoder(): FixedSizeEncoder<DisputeResolverArg
       ["assignedBy", getAddressEncoder()],
       ["assignedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["resolvedCount", getU64Encoder()],
+      ["overturnedCount", getU64Encoder()],
+      ["lastResolvedAt", getI64Encoder()],
+      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
     ]),
     (value) => ({ ...value, discriminator: DISPUTE_RESOLVER_DISCRIMINATOR }),
   );
@@ -98,7 +127,10 @@ export function getDisputeResolverDecoder(): FixedSizeDecoder<DisputeResolver> {
     ["assignedBy", getAddressDecoder()],
     ["assignedAt", getI64Decoder()],
     ["bump", getU8Decoder()],
-    ["reserved", fixDecoderSize(getBytesDecoder(), 32)],
+    ["resolvedCount", getU64Decoder()],
+    ["overturnedCount", getU64Decoder()],
+    ["lastResolvedAt", getI64Decoder()],
+    ["reserved", fixDecoderSize(getBytesDecoder(), 8)],
   ]);
 }
 

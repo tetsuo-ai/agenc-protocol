@@ -3,7 +3,7 @@ import { address, createNoopSigner } from "@solana/kit";
 import {
   // generated sync builders (used as the structural ground truth for account order)
   getInitiateDisputeInstructionDataDecoder,
-  getVoteDisputeInstructionDataDecoder,
+  // P6.3: `getVoteDisputeInstructionDataDecoder` retired with `vote_dispute`.
   getResolveDisputeInstructionDataDecoder,
   getExpireDisputeInstructionDataDecoder,
   getCancelDisputeInstructionDataDecoder,
@@ -39,7 +39,7 @@ const CREATOR = a("BPFLoaderUpgradeab1e11111111111111111111111");
 const WORKER_AGENT = a("Stake11111111111111111111111111111111111111");
 const WORKER_WALLET = a("Vote111111111111111111111111111111111111111");
 const TREASURY = a("SysvarRent111111111111111111111111111111111");
-const ARBITER = a("SysvarC1ock11111111111111111111111111111111");
+// P6.3: the ARBITER placeholder is gone with the retired `voteDispute` structural test.
 const CLAIM = a("SysvarS1otHashes111111111111111111111111111");
 const DISPUTE = a("SysvarStakeHistory1111111111111111111111111");
 const AUTHORITY_ADDR = a("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -83,35 +83,21 @@ describe("disputes facade (structural)", () => {
     expect(Array.from(decoded.evidenceHash)).toEqual(Array.from(evidenceHash));
   });
 
-  it("voteDispute: program, account order, data round-trip", async () => {
-    const ix = await facade.voteDispute({
-      dispute: DISPUTE,
-      task: TASK,
-      arbiter: ARBITER,
-      authority: AUTHORITY,
-      approve: true,
-    });
-
-    expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // dispute, task, workerClaim?, defendantAgent?, vote, authorityVote, arbiter,
-    // protocolConfig, authority, systemProgram
-    const accs = order(ix);
-    expect(accs[0]).toBe(DISPUTE);
-    expect(accs[1]).toBe(TASK);
-    expect(accs).toContain(ARBITER);
-    expect(accs[accs.length - 2]).toBe(AUTHORITY_ADDR);
-    expect(accs[accs.length - 1]).toBe(SYSTEM_PROGRAM);
-
-    const decoded = getVoteDisputeInstructionDataDecoder().decode(ix.data);
-    expect(decoded.approve).toBe(true);
-  });
+  // P6.3: the `voteDispute` structural test is removed — the arbiter vote/quorum model is
+  // retired (`vote_dispute` no longer exists). Disputes are decided by an assigned
+  // resolver via `resolveDispute` (+ `assignDisputeResolver`), covered below.
 
   it("resolveDispute: program, derives + passes both bond PDAs in order, data round-trips", async () => {
+    // P6.4 accountable rulings: rationaleHash (32 bytes) + rationaleUri are now REQUIRED.
+    const rationaleHash = new Uint8Array(32).fill(5);
+    const rationaleUri = "agenc://ruling/sha256/approve";
     const ix = await facade.resolveDispute({
       dispute: DISPUTE,
       task: TASK,
       authority: AUTHORITY,
       approve: true,
+      rationaleHash,
+      rationaleUri,
       creator: CREATOR,
       worker: WORKER_AGENT,
       workerWallet: WORKER_WALLET,
@@ -141,10 +127,11 @@ describe("disputes facade (structural)", () => {
     expect(accs).toContain(creatorBond);
     expect(accs).toContain(workerBond);
 
-    // resolve_dispute carries no args beyond the discriminator.
-    expect(() =>
-      getResolveDisputeInstructionDataDecoder().decode(ix.data),
-    ).not.toThrow();
+    // P6.4: the reasoned ruling (approve + rationaleHash + rationaleUri) round-trips.
+    const decoded = getResolveDisputeInstructionDataDecoder().decode(ix.data);
+    expect(decoded.approve).toBe(true);
+    expect(Array.from(decoded.rationaleHash)).toEqual(Array.from(rationaleHash));
+    expect(decoded.rationaleUri).toBe(rationaleUri);
   });
 
   it("expireDispute: program, derives + passes both bond PDAs in order, data round-trips", async () => {
@@ -189,6 +176,10 @@ describe("disputes facade (structural)", () => {
         task: TASK,
         authority: AUTHORITY,
         approve: true,
+        // P6.4 rationale args are required by the type even though the facade
+        // throws on the missing worker authority before it reaches the builder.
+        rationaleHash: new Uint8Array(32).fill(5),
+        rationaleUri: "agenc://ruling/sha256/approve",
         creator: CREATOR,
         bondTreasury: TREASURY,
       }),

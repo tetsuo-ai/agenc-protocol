@@ -892,4 +892,26 @@ pub enum CoordinationError {
     TaskFrozenCannotDispute,
     #[msg("RejectFrozen review is single-worker (Exclusive) only")]
     RejectFrozenSingleWorkerOnly,
+
+    // === Batch 4 (P6.1): rate_hire ===
+    #[msg("Rating score must be in the range 1..=5")]
+    InvalidRatingScore,
+    #[msg("Only a completed hired task can be rated")]
+    TaskNotCompletedForRating,
+    #[msg("Only the buyer (task creator) may rate this hire")]
+    RatingNotBuyer,
+    #[msg("Review URI exceeds the maximum allowed length")]
+    ReviewUriTooLong,
+
+    // === Batch 4 (P6.8): moderation attestor registry ===
+    #[msg("Invalid moderation attestor: pubkey must be non-zero")]
+    InvalidModerationAttestor,
+    #[msg("Signer is neither the moderation authority nor a registered attestor")]
+    UnauthorizedModerationAttestor,
+    #[msg("Supplied moderation attestor entry does not match the signing moderator")]
+    ModerationAttestorMismatch,
+
+    // === Batch 4 (P6.4): accountable dispute rulings ===
+    #[msg("Dispute ruling rationale URI exceeds the maximum allowed length")]
+    RationaleUriTooLong,
 }

@@ -14,13 +14,12 @@ import {
   type ProgramDerivedAddress,
 } from "@solana/kit";
 
-export type VoteDisputeVoteSeeds = {
-  dispute: Address;
-  arbiter: Address;
+export type AgentStatsSeeds = {
+  creatorAgent: Address;
 };
 
-export async function findVoteDisputeVotePda(
-  seeds: VoteDisputeVoteSeeds,
+export async function findAgentStatsPda(
+  seeds: AgentStatsSeeds,
   config: { programAddress?: Address | undefined } = {},
 ): Promise<ProgramDerivedAddress> {
   const {
@@ -29,9 +28,10 @@ export async function findVoteDisputeVotePda(
   return await getProgramDerivedAddress({
     programAddress,
     seeds: [
-      getBytesEncoder().encode(new Uint8Array([118, 111, 116, 101])),
-      getAddressEncoder().encode(seeds.dispute),
-      getAddressEncoder().encode(seeds.arbiter),
+      getBytesEncoder().encode(
+        new Uint8Array([97, 103, 101, 110, 116, 95, 115, 116, 97, 116, 115]),
+      ),
+      getAddressEncoder().encode(seeds.creatorAgent),
     ],
   });
 }

@@ -7,7 +7,8 @@ import type { Address } from "@solana/kit";
 import {
   // builders
   getInitiateDisputeInstructionAsync,
-  getVoteDisputeInstructionAsync,
+  // P6.3: `getVoteDisputeInstructionAsync` retired — the arbiter vote/quorum model is
+  // gone; disputes are decided by an assigned resolver (the dispute-resolver roster).
   getResolveDisputeInstructionAsync,
   getExpireDisputeInstructionAsync,
   getCancelDisputeInstructionAsync,
@@ -21,7 +22,6 @@ import {
   type AssignDisputeResolverAsyncInput,
   type RevokeDisputeResolverAsyncInput,
   type InitiateDisputeAsyncInput,
-  type VoteDisputeAsyncInput,
   type ResolveDisputeAsyncInput,
   type ExpireDisputeAsyncInput,
   type CancelDisputeAsyncInput,
@@ -51,13 +51,9 @@ export async function initiateDispute(input: InitiateDisputeAsyncInput) {
   return getInitiateDisputeInstructionAsync(input);
 }
 
-/**
- * Build a vote_dispute instruction. The arbiter's per-dispute vote, the Sybil-guard
- * authority vote, and protocol-config PDAs all auto-derive.
- */
-export async function voteDispute(input: VoteDisputeAsyncInput) {
-  return getVoteDisputeInstructionAsync(input);
-}
+// P6.3: the `voteDispute` facade wrapper is removed. `vote_dispute` no longer exists on
+// the program — the arbiter vote/quorum model is retired and disputes are decided by an
+// assigned resolver via `resolveDispute` (see `assignDisputeResolver`).
 
 /**
  * Build a resolve_dispute instruction.
@@ -71,6 +67,16 @@ export async function voteDispute(input: VoteDisputeAsyncInput) {
  *
  * Pass the worker's *authority* (wallet) that posted the bond as `workerBondAuthority`;
  * it defaults to `workerWallet` when present, since that is the SOL recipient leg.
+ *
+ * P6.4 accountable rulings: the program now REQUIRES a reasoned ruling. Supply
+ * `rationaleHash` (a 32-byte content hash of the off-chain rationale) and the bounded
+ * `rationaleUri` (empty string allowed — the hash may carry the rationale alone, max
+ * 256 bytes) — both are part of `ResolveDisputeAsyncInput` and flow straight through
+ * to the generated builder. When an ASSIGNED resolver decides (rather than the protocol
+ * authority), pass their roster PDA as `resolverAssignment` so their case counters
+ * (`resolvedCount`, `lastResolvedAt`) are recorded; the protocol authority resolving
+ * directly passes `resolverAssignment: null`. The deciding resolver + rationale hash
+ * are persisted on the dispute and emitted in `DisputeResolved`.
  */
 export async function resolveDispute(
   input: Omit<

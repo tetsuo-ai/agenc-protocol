@@ -115,7 +115,10 @@ pub fn handler(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
         // Cancellation = admission of frivolous dispute; always slash
         true
     } else {
-        // Resolved: use vote-based approval threshold
+        // Resolved (P6.3): read the resolver's RULING bit that `resolve_dispute` wrote
+        // into `(votes_for, votes_against)` — (1,0)=approved, (0,1)=rejected. No vote
+        // tally is involved; `calculate_approval_percentage` recovers 100%/0% and the
+        // same `dispute_threshold` comparison yields the resolver's decision.
         let (_total_votes, approval_pct) =
             calculate_approval_percentage(dispute.votes_for, dispute.votes_against)?;
         let approved = approval_pct >= config.dispute_threshold as u64;

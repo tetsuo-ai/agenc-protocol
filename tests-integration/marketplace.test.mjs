@@ -32,7 +32,7 @@ import {
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, sendMany, tokenAmount, expectOk, expectFail, decode, isClosed,
-  injectProtocolConfig, setProtocolPaused, setMinArbiterStake, injectAgentStake,
+  injectProtocolConfig, setProtocolPaused, injectAgentStake,
   setMultisig, injectModerationConfig, injectBidMarketplace, freshWorld, hireIx,
 } from "./harness.mjs";
 test("hire_from_listing: mints task + escrow + hire record, increments capacity", async () => {
@@ -76,6 +76,8 @@ test("hire -> cancel -> close: frees capacity, closes task + hire record", async
       // optional SPL-token accounts (default build has spl-token-rewards) — None for SOL
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      // P6.6 optional track-record accounts; omitted (no creator-agent attribution).
+      creatorAgent: null, agentStats: null,
     })
     .instruction();
   expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel");
@@ -149,7 +151,7 @@ test("record_listing_moderation: authority records CLEAN; non-authority rejected
   const recordArgs = (prog, who) =>
     prog.methods
       .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-      .accounts({ moderationConfig: modCfg, listing: w.listing, listingModeration: listingMod, moderator: who, systemProgram: SystemProgram.programId })
+      .accounts({ moderationConfig: modCfg, listing: w.listing, listingModeration: listingMod, moderator: who, moderationAttestor: null, systemProgram: SystemProgram.programId })
       .instruction();
 
   // Authority records a CLEAN attestation.
@@ -166,10 +168,13 @@ test("record_listing_moderation: authority records CLEAN; non-authority rejected
   );
   assert.equal(lm.moderator.toBase58(), modAuth.publicKey.toBase58());
 
-  // A non-authority (the buyer) cannot record.
+  // A non-authority (the buyer) cannot record. P6.8 widened the authorization check to
+  // the global authority OR a registered attestor, so the rejection is now
+  // UnauthorizedModerationAttestor ("neither the moderation authority nor a registered
+  // attestor") rather than the old UnauthorizedTaskModerator.
   expectFail(
     send(w.svm, await recordArgs(w.buyerProg, w.buyer.publicKey), [w.buyer]),
-    "UnauthorizedTaskModerator",
+    "UnauthorizedModerationAttestor",
     "non-authority record",
   );
 });
@@ -183,7 +188,7 @@ test("hire moderation gate: enabled requires a publishable listing attestation",
       w.svm,
       await modProg.methods
         .recordListingModeration(arr(w.specHash), status, risk, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(expiresAt))
-        .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+        .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
         .instruction(),
       [w.modAuth],
     );
@@ -207,7 +212,7 @@ test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
       w.svm,
       await modProg.methods
         .recordListingModeration(arr(w.specHash), 2 /* BLOCKED */, 80, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-        .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+        .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
         .instruction(),
       [w.modAuth],
     ),
@@ -221,7 +226,7 @@ async function recordListingMod(w, { status = 0, risk = 0, expiresAt = 0 } = {})
   const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
   const res = send(w.svm, await makeProgram(w.modAuth).methods
     .recordListingModeration(arr(w.specHash), status, risk, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(expiresAt))
-    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]);
   return { res, listingMod };
 }
@@ -279,7 +284,7 @@ test("moderation edges (set_task_job_spec): a non-publishable task moderation ca
   // record a BLOCKED task moderation, then try to publish the job spec.
   expectOk(send(w.svm, await makeProgram(w.modAuth).methods
     .recordTaskModeration(arr(jobHash), 2 /* BLOCKED */, 90, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task: m.task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task: m.task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "record BLOCKED task moderation");
   expectFail(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/blocked")
@@ -316,7 +321,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   // 2) moderator records CLEAN for (task, jobHash)
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "settle:moderate");
 
   // 3) creator publishes the job spec (moderation-gated)
@@ -377,7 +382,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
   if (isClosed(w.svm, listingMod)) {
     expectOk(send(w.svm, await modProg.methods
       .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+      .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.modAuth]), "hire-settle:record-listing-mod");
   }
 
@@ -394,7 +399,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
 
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "hire-settle:task-mod");
 
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -600,7 +605,7 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: workerBond, bondCreator: w.buyer.publicKey,
-      systemProgram: SystemProgram.programId,
+      systemProgram: SystemProgram.programId, agentStats: null,
     })
     .instruction(), [cleaner]), "expire_claim with no-show bond forfeit");
 
@@ -702,7 +707,8 @@ test("completion bond: cancel refunds the creator bond on an Open task", async (
   expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
     .accounts({ task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: creatorBond, workerCompletionBond: null, workerBondAuthority: null })
+      creatorCompletionBond: creatorBond, workerCompletionBond: null, workerBondAuthority: null,
+      creatorAgent: null, agentStats: null })
     .instruction(), [w.buyer]), "cancel with creator bond refund");
 
   assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task Cancelled");
@@ -803,7 +809,7 @@ async function setupBidTask(w, { publishJobSpec = true } = {}) {
     const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
     expectOk(send(w.svm, await modProg.methods
       .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.modAuth]), "bid:task-mod");
     expectOk(send(w.svm, await w.buyerProg.methods
       .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid")
@@ -895,7 +901,7 @@ test("operator-fee protection: a hired task cannot be re-routed to manual valida
   const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
   expectOk(send(w.svm, await makeProgram(w.modAuth).methods
     .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "record listing mod");
   const { ix: hix, task, hireRecord } = await hireIx(w, { listingModeration: listingMod });
   expectOk(send(w.svm, hix, [w.buyer]), "hire");
@@ -933,7 +939,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "manual:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/manual")
@@ -978,7 +984,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   } else if (decision === "reject") {
     expectOk(send(w.svm, await w.buyerProg.methods
       .rejectTaskResult(arr(id32()))
-      .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey })
+      .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, agentStats: null })
       .instruction(), [w.buyer]), "manual:reject");
   }
   return { task, escrow, claim, validation, submission, jobSpec, workerBalBefore, reward, creatorBond, workerBond };
@@ -1027,7 +1033,7 @@ async function setupSubmittedManual(w, opts = {}) {
   const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods.recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.modAuth]), "rc:mod");
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId }).instruction(), [w.modAuth]), "rc:mod");
   expectOk(send(w.svm, await w.buyerProg.methods.setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/rc")
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "rc:publish");
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
@@ -1063,7 +1069,7 @@ test("reject_and_freeze: terminal reject freezes the task and retains the claim 
   const r = await setupSubmittedManual(w);
   const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
   expectOk(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 7)))
-    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]), "reject_and_freeze");
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: null }).instruction(), [w.buyer]), "reject_and_freeze");
   assert.ok(decode(w.svm, "Task", r.task).status.RejectFrozen !== undefined, "task RejectFrozen");
   assert.ok(!isClosed(w.svm, r.claim), "claim retained for the frozen exit");
   assert.ok(!isClosed(w.svm, r.escrow), "escrow retained (no payout on freeze)");
@@ -1077,7 +1083,7 @@ test("reject_and_freeze: rejected on a Collaborative task (audit — would stran
   const w = await freshWorld({ moderationEnabled: true });
   const r = await setupSubmittedManual(w, { taskType: 1, maxWorkers: 2 }); // Collaborative
   expectFail(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 7)))
-    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]),
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: null }).instruction(), [w.buyer]),
     "RejectFrozenSingleWorkerOnly", "freeze refused on a Collaborative task");
 });
 
@@ -1092,7 +1098,7 @@ async function setupFrozen(w, { postBonds = false } = {}) {
     expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1).accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "frozen:worker-bond");
   }
   expectOk(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 7)))
-    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]), "frozen:freeze");
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: null }).instruction(), [w.buyer]), "frozen:freeze");
   assert.ok(decode(w.svm, "Task", r.task).status.RejectFrozen !== undefined, "task is RejectFrozen");
   return { ...r, creatorBond, workerBond };
 }
@@ -1105,7 +1111,8 @@ test("negative: a RejectFrozen task is refused by cancel / accept / request_chan
   expectFail(send(w.svm, await w.buyerProg.methods.cancelTask()
     .accounts({ task: f.task, escrow: f.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null })
+      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorAgent: null, agentStats: null })
     .instruction(), [w.buyer]), "TaskCannotBeCancelled", "cancel refused on a frozen task");
 
   // accept_task_result: requires PendingValidation; a frozen task is not.
@@ -1118,7 +1125,7 @@ test("negative: a RejectFrozen task is refused by cancel / accept / request_chan
     .accounts({ task: f.task, claim: f.claim, taskValidationConfig: f.validation, taskSubmission: f.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey })
     .instruction(), [w.buyer]), "TaskNotPendingValidation", "request_changes refused on a frozen task");
   expectFail(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 9)))
-    .accounts({ task: f.task, claim: f.claim, taskValidationConfig: f.validation, taskSubmission: f.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey })
+    .accounts({ task: f.task, claim: f.claim, taskValidationConfig: f.validation, taskSubmission: f.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: null })
     .instruction(), [w.buyer]), "TaskNotPendingValidation", "double-freeze refused");
 });
 
@@ -1300,7 +1307,7 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "token:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/token")
@@ -1337,7 +1344,10 @@ test("SPL-token settlement: complete pays worker + treasury in tokens (conservat
   assert.ok(isClosed(w.svm, r.escrow), "escrow PDA closed on completion");
 });
 
-test("dispute: resolve via arbiter quorum settles while the protocol is paused (exit-safe)", async () => {
+test("dispute: resolve via assigned resolver settles while the protocol is paused (exit-safe, no votes)", async () => {
+  // P6.3: the arbiter vote/quorum model is retired. The protocol authority resolves
+  // directly (resolverAssignment = null) with the required P6.4 rationale, no arbiters,
+  // no vote PDAs, and NO (vote, arbiter) remaining accounts.
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
 
@@ -1351,40 +1361,12 @@ test("dispute: resolve via arbiter quorum settles while the protocol is paused (
     .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "resolve:initiate");
 
-  // 3 distinct arbiters (ARBITER capability = 1<<7) register + vote -> reach quorum.
-  // resolve_dispute needs the (vote, arbiter) pairs passed as remaining_accounts.
-  const arbiterRemaining = [];
-  for (let i = 0; i < 3; i++) {
-    const arb = Keypair.generate();
-    w.svm.airdrop(arb.publicKey, BigInt(10e9));
-    const arbProg = makeProgram(arb);
-    const arbId = id32();
-    const [arbAgent] = pda([enc("agent"), arbId]);
-    expectOk(send(w.svm, await arbProg.methods
-      .registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
-      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [arb]), `resolve:register-arb${i}`);
-    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
-    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
-    expectOk(send(w.svm, await arbProg.methods
-      .voteDispute(true)
-      .accounts({ dispute, task: r.task, workerClaim: null, defendantAgent: null, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [arb]), `resolve:vote${i}`);
-    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true });
-    arbiterRemaining.push({ pubkey: arbAgent, isSigner: false, isWritable: true });
-  }
-
-  // resolve while paused — exit-safe (money never locks).
-  // warp past the voting period (86400s) but before the dispute expiry (604800s),
-  // then resolve while paused, signed by the protocol authority (admin) — exit-safe.
-  const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
-  w.svm.setClock(clk);
+  // resolve while paused — exit-safe (money never locks). No voting-period wait is
+  // needed anymore: an assigned resolver / the protocol authority decides directly.
   await setProtocolPaused(w.svm, true);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
-    .resolveDispute(true)
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
-    .remainingAccounts(arbiterRemaining)
+    .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/refund")
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
     .instruction(), [w.admin]), "resolve_dispute while paused");
 
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute resolved (no longer Active) while paused");
@@ -1398,7 +1380,6 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
   // operator carve in resolve_dispute and the two equalities below go red.
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
-  await setMinArbiterStake(w.svm, 1_000_000); // arbiter votes must carry weight to reach approval
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress, live hire w/ 10% operator fee
 
   // worker opens a Complete dispute (resolution_type 1 = Complete -> worker is paid).
@@ -1411,34 +1392,8 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
     .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "op-resolve:initiate Complete");
 
-  // 3 arbiters approve (vote for) -> quorum -> Complete executes.
-  const arbiterRemaining = [];
-  for (let i = 0; i < 3; i++) {
-    const arb = Keypair.generate();
-    w.svm.airdrop(arb.publicKey, BigInt(10e9));
-    const arbProg = makeProgram(arb);
-    const arbId = id32();
-    const [arbAgent] = pda([enc("agent"), arbId]);
-    expectOk(send(w.svm, await arbProg.methods
-      .registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
-      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [arb]), `op-resolve:register-arb${i}`);
-    await injectAgentStake(w.svm, arbAgent, 1_000_000); // vote weight
-    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
-    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
-    expectOk(send(w.svm, await arbProg.methods
-      .voteDispute(true)
-      .accounts({ dispute, task: r.task, workerClaim: null, defendantAgent: null, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [arb]), `op-resolve:vote${i}`);
-    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true });
-    arbiterRemaining.push({ pubkey: arbAgent, isSigner: false, isWritable: true });
-  }
-
-  // warp past the voting period and resolve as the protocol authority.
-  const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
-  w.svm.setClock(clk);
-
+  // P6.3: the protocol authority resolves the Complete ruling directly — no arbiters,
+  // no votes, no voting-period wait.
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
   const operatorBalBefore = Number(w.svm.getBalance(operatorKp.publicKey));
   // resolve_dispute also closes the worker_claim and refunds its rent to the worker
@@ -1446,9 +1401,8 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
   const claimRentBefore = Number(w.svm.getBalance(r.claim));
 
   expectOk(send(w.svm, await makeProgram(w.admin).methods
-    .resolveDispute(true)
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: operatorKp.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
-    .remainingAccounts(arbiterRemaining)
+    .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: operatorKp.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
     .instruction(), [w.admin]), "op-resolve:resolve Complete");
 
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed via dispute");
@@ -1467,7 +1421,6 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
   // Worker wins (Complete) -> worker bond refunded, creator (loser) bond forfeited to
   // treasury. Revert-sensitive: without the disposition both bonds stay open.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
-  await setMinArbiterStake(w.svm, 1_000_000);
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
@@ -1478,7 +1431,8 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
     .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "worker bond");
   const bondPrincipal = Math.floor(r.reward / 4); // 25% = 1,000,000
 
-  // worker opens a Complete dispute; 3 staked arbiters approve.
+  // worker opens a Complete dispute; P6.3: the protocol authority rules directly (no
+  // arbiters, no votes).
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
@@ -1487,30 +1441,11 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 1, "evidence")
     .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "bond-resolve:initiate");
-  const arbiterRemaining = [];
-  for (let i = 0; i < 3; i++) {
-    const arb = Keypair.generate();
-    w.svm.airdrop(arb.publicKey, BigInt(10e9));
-    const arbId = id32();
-    const [arbAgent] = pda([enc("agent"), arbId]);
-    expectOk(send(w.svm, await makeProgram(arb).methods.registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
-      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId }).instruction(), [arb]), `bond-resolve:reg${i}`);
-    await injectAgentStake(w.svm, arbAgent, 1_000_000);
-    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
-    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
-    expectOk(send(w.svm, await makeProgram(arb).methods.voteDispute(true)
-      .accounts({ dispute, task: r.task, workerClaim: null, defendantAgent: null, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId }).instruction(), [arb]), `bond-resolve:vote${i}`);
-    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true }, { pubkey: arbAgent, isSigner: false, isWritable: true });
-  }
-  const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
-  w.svm.setClock(clk);
 
   const treasuryBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await makeProgram(w.admin).methods
-    .resolveDispute(true)
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey })
-    .remainingAccounts(arbiterRemaining)
+    .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey })
     .instruction(), [w.admin]), "bond-resolve:resolve Complete");
 
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
@@ -1531,7 +1466,6 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
   // refund to the loser on the now-Completed task — inverting the forfeit. With the pin,
   // the tx fails atomically (MissingCompletionBondAccount) and nothing settles.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
-  await setMinArbiterStake(w.svm, 1_000_000);
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
@@ -1541,7 +1475,8 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
   expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
     .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "junk-bond:worker bond");
 
-  // worker opens a Complete dispute (worker wins -> creator bond is forfeit-due); 3 arbiters approve.
+  // worker opens a Complete dispute (worker wins -> creator bond is forfeit-due); P6.3:
+  // the protocol authority rules directly (no arbiters, no votes).
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
@@ -1550,32 +1485,13 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 1, "evidence")
     .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "junk-bond:initiate");
-  const arbiterRemaining = [];
-  for (let i = 0; i < 3; i++) {
-    const arb = Keypair.generate();
-    w.svm.airdrop(arb.publicKey, BigInt(10e9));
-    const arbId = id32();
-    const [arbAgent] = pda([enc("agent"), arbId]);
-    expectOk(send(w.svm, await makeProgram(arb).methods.registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
-      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId }).instruction(), [arb]), `junk-bond:reg${i}`);
-    await injectAgentStake(w.svm, arbAgent, 1_000_000);
-    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
-    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
-    expectOk(send(w.svm, await makeProgram(arb).methods.voteDispute(true)
-      .accounts({ dispute, task: r.task, workerClaim: null, defendantAgent: null, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId }).instruction(), [arb]), `junk-bond:vote${i}`);
-    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true }, { pubkey: arbAgent, isSigner: false, isWritable: true });
-  }
-  const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
-  w.svm.setClock(clk);
 
   // Substitute a junk pubkey for the forfeit-due creator bond. Pre-pin this would no-op
   // (forfeit skipped); post-pin it must be rejected.
   const junkBond = Keypair.generate().publicKey;
   expectFail(send(w.svm, await makeProgram(w.admin).methods
-    .resolveDispute(true)
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: junkBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey })
-    .remainingAccounts(arbiterRemaining)
+    .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: junkBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey })
     .instruction(), [w.admin]), "MissingCompletionBondAccount", "junk-bond:resolve must reject non-canonical creator bond");
 
   // Nothing settled: the dispute is still Active and the real creator bond is still open.
@@ -1583,9 +1499,10 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
   assert.ok(!isClosed(w.svm, creatorBond), "real creator bond untouched (forfeit not skipped)");
 });
 
-test("dispute: apply_dispute_slash slashes the losing worker while the protocol is paused (exit-safe)", async () => {
+test("dispute: apply_dispute_slash slashes the losing worker while the protocol is paused (exit-safe, roster ruling)", async () => {
+  // P6.3: no arbiters, no votes — the protocol authority rules a Refund (worker loses)
+  // directly. The slash decision is recovered from the resolver's ruling bit, not a tally.
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
-  await setMinArbiterStake(w.svm, 1_000_000); // arbiter votes carry weight
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
   await injectAgentStake(w.svm, w.providerAgent, 2_000_000); // worker has a slashable stake
 
@@ -1599,37 +1516,11 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
     .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: buyerRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "slash:initiate");
 
-  // 3 staked arbiters approve (worker loses).
-  const arbiterRemaining = [];
-  for (let i = 0; i < 3; i++) {
-    const arb = Keypair.generate();
-    w.svm.airdrop(arb.publicKey, BigInt(10e9));
-    const arbProg = makeProgram(arb);
-    const arbId = id32();
-    const [arbAgent] = pda([enc("agent"), arbId]);
-    expectOk(send(w.svm, await arbProg.methods
-      .registerAgent(arr(arbId), new BN(128), "http://arb.test", null, new BN(0))
-      .accounts({ agent: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [arb]), `slash:register-arb${i}`);
-    await injectAgentStake(w.svm, arbAgent, 1_000_000); // vote weight
-    const [vote] = pda([enc("vote"), dispute.toBuffer(), arbAgent.toBuffer()]);
-    const [authVote] = pda([enc("authority_vote"), dispute.toBuffer(), arb.publicKey.toBuffer()]);
-    expectOk(send(w.svm, await arbProg.methods
-      .voteDispute(true)
-      .accounts({ dispute, task: r.task, workerClaim: r.claim, defendantAgent: w.providerAgent, vote, authorityVote: authVote, arbiter: arbAgent, protocolConfig: w.protocolPda, authority: arb.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [arb]), `slash:vote${i}`);
-    arbiterRemaining.push({ pubkey: vote, isSigner: false, isWritable: true });
-    arbiterRemaining.push({ pubkey: arbAgent, isSigner: false, isWritable: true });
-  }
-
-  // warp past the voting period, resolve (worker loses, slash deferred).
-  const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + 86400n + 100n;
-  w.svm.setClock(clk);
+  // Resolve (approve the Refund -> worker loses, slash deferred). No arbiters, no votes,
+  // no remaining accounts.
   expectOk(send(w.svm, await makeProgram(w.admin).methods
-    .resolveDispute(true)
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
-    .remainingAccounts(arbiterRemaining)
+    .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/refund")
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
     .instruction(), [w.admin]), "slash:resolve");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "dispute Resolved (worker lost)");
   const stakeBefore = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
@@ -1638,7 +1529,7 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
   await setProtocolPaused(w.svm, true);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .applyDisputeSlash()
-    .accounts({ dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey, escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: null, workerCompletionBond: null, bondTreasury: null })
+    .accounts({ dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey, escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
     .instruction(), [w.admin]), "slash:apply_dispute_slash while paused");
 
   const stakeAfter = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
@@ -1659,9 +1550,10 @@ async function openCompleteDispute(w, r) {
 }
 
 async function resolveAsDispute(w, r, dispute, prog, signerPubkey, resolverAssignment, approve) {
+  // P6.4 rationale args are required; P6.3: no votes/arbiters/remaining accounts.
   return prog.methods
-    .resolveDispute(approve)
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: signerPubkey, resolverAssignment, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
+    .resolveDispute(approve, arr(Buffer.alloc(32, 5)), "agenc://ruling/roster")
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: signerPubkey, resolverAssignment, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey })
     .instruction();
 }
 
@@ -1774,6 +1666,7 @@ test("exit allow-list: a paused protocol blocks new hires but still lets a hired
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorAgent: null, agentStats: null,
     })
     .instruction();
   expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel under paused protocol");

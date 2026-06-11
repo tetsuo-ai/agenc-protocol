@@ -12,6 +12,7 @@ import {
   getSetServiceListingStateInstructionAsync,
   getHireFromListingInstructionAsync,
   getHireFromListingHumanlessInstructionAsync,
+  getRateHireInstructionAsync,
   findListingPda,
   findListingModerationPda,
   type CreateServiceListingAsyncInput,
@@ -19,6 +20,7 @@ import {
   type SetServiceListingStateAsyncInput,
   type HireFromListingAsyncInput,
   type HireFromListingHumanlessAsyncInput,
+  type RateHireAsyncInput,
 } from "../generated/index.js";
 import {
   LISTING_CATEGORIES,
@@ -239,4 +241,33 @@ export async function hireFromListingHumanless(
     });
   }
   return getHireFromListingHumanlessInstructionAsync(rest);
+}
+
+/**
+ * Build a rate_hire instruction (P6.1) — the buyer scores a completed listing
+ * hire (1..=5) and folds the score into the listing's `total_rating`/
+ * `rating_count` aggregate.
+ *
+ * The async builder auto-derives `task` (from creator + taskId), `hireRecord`
+ * (`["hire", task]`), the init-once `hireRating` PDA (`["hire_rating", task]`),
+ * `protocolConfig`, and `systemProgram`. The caller supplies `listing` (not
+ * derivable from the task alone), the `task`/identity inputs the generated input
+ * requires, and the `buyer` signer (must equal the task's recorded creator).
+ *
+ * `reviewHash` defaults to `null` and `reviewUri` to `""` (no written review),
+ * matching {@link rateSkill}'s optional-review convention. The program enforces
+ * the score range, terminal-Completed status, buyer identity, and one-rating-
+ * per-hire (the init-once PDA) on-chain.
+ */
+export async function rateHire(
+  input: Omit<RateHireAsyncInput, "reviewHash" | "reviewUri"> & {
+    reviewHash?: RateHireAsyncInput["reviewHash"];
+    reviewUri?: RateHireAsyncInput["reviewUri"];
+  },
+) {
+  return getRateHireInstructionAsync({
+    reviewHash: null,
+    reviewUri: "",
+    ...input,
+  });
 }

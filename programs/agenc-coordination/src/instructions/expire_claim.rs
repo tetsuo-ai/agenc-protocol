@@ -32,6 +32,10 @@ use crate::state::{
     TaskSubmission, TaskValidationConfig,
 };
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::AgentStats;
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::state::{BidMarketplaceConfig, TaskType};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -126,6 +130,20 @@ pub struct ExpireClaim<'info> {
     /// CHECK: forfeit recipient for the worker bond; validated == task.creator.
     #[account(mut)]
     pub bond_creator: Option<UncheckedAccount<'info>>,
+
+    /// OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a
+    /// no-show expiry bumps `claims_expired`. Created lazily on first write, bound to
+    /// `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account
+    /// list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = AgentStats::SIZE,
+        seeds = [b"agent_stats", worker.key().as_ref()],
+        bump
+    )]
+    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
 
     pub system_program: Program<'info, System>,
 }
@@ -321,6 +339,23 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         .active_tasks
         .checked_sub(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
+    #[cfg(not(feature = "mainnet-canary"))]
+    let worker_agent_key = worker.key();
+
+    // P6.6: a pure no-show expiry folds into the worker agent's `claims_expired` track
+    // record (no-op when the optional `agent_stats` account is absent). Telemetry only.
+    // Only pure no-shows count — a PendingValidation expiry (work was submitted) is not a
+    // no-show and must not be charged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    if is_pure_noshow {
+        apply_track_record(
+            &mut ctx.accounts.agent_stats,
+            worker_agent_key,
+            ctx.bumps.agent_stats,
+            Counter::ClaimsExpired,
+            clock.unix_timestamp,
+        )?;
+    }
 
     Ok(())
 }

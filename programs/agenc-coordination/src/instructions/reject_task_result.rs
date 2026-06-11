@@ -10,6 +10,10 @@ use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, release_claim_slot, sync_task_validation_status,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::AgentStats;
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
     TaskSubmission, TaskValidationConfig, ValidationMode, HASH_SIZE, RESULT_DATA_SIZE,
@@ -82,6 +86,24 @@ pub struct RejectTaskResult<'info> {
         constraint = worker_authority.key() == worker.authority @ CoordinationError::UnauthorizedAgent
     )]
     pub worker_authority: UncheckedAccount<'info>,
+
+    /// OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this
+    /// rejection bumps `tasks_rejected`. Created lazily on first write (`init_if_needed`),
+    /// bound to the canonical `["agent_stats", worker]` PDA. Full-surface only — gated so
+    /// the frozen canary account list for `reject_task_result` is unchanged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        init_if_needed,
+        payer = creator,
+        space = AgentStats::SIZE,
+        seeds = [b"agent_stats", worker.key().as_ref()],
+        bump
+    )]
+    pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
+
+    /// Required only when `agent_stats` is supplied (for `init_if_needed`).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub system_program: Option<Program<'info, System>>,
 }
 
 pub fn handler<'info>(
@@ -178,7 +200,21 @@ pub fn handler<'info>(
         rejected_at: clock.unix_timestamp,
     });
 
-    claim.close(ctx.accounts.worker_authority.to_account_info())?;
+    // P6.6: fold this rejection into the worker agent's track record (no-op when the
+    // optional `agent_stats` account is not supplied). Telemetry only — never gates the
+    // settlement above.
+    #[cfg(not(feature = "mainnet-canary"))]
+    apply_track_record(
+        &mut ctx.accounts.agent_stats,
+        worker_key,
+        ctx.bumps.agent_stats,
+        Counter::TasksRejected,
+        clock.unix_timestamp,
+    )?;
+
+    ctx.accounts
+        .claim
+        .close(ctx.accounts.worker_authority.to_account_info())?;
 
     Ok(())
 }
