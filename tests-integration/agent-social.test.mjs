@@ -367,7 +367,8 @@ test("post_to_feed: an eligible Active agent creates a FeedPost PDA", async () =
 
 test("post_to_feed: insufficient reputation is rejected (InsufficientReputation)", async () => {
   const w = await freshWorld({});
-  // Default reputation is 5000 (< 5500). Still warp age so reputation is the only failing gate.
+  // Fresh probationary reputation is 3000 (P6.7), still < the 5500 feed-post floor. Warp
+  // age so reputation is the only failing gate.
   warp(w.svm, 3600);
   const { ix } = await buildPost(w);
   expectFail(send(w.svm, ix, [w.provider]), "InsufficientReputation", "post below reputation floor");

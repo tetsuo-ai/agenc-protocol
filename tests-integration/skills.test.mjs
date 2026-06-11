@@ -16,7 +16,7 @@ import {
 
 const MIN_SKILL_PRICE = 1_000;
 
-// Register a brand-new agent under a fresh wallet (active, default reputation 5000).
+// Register a brand-new agent under a fresh wallet (active, probationary reputation 3000 — P6.7).
 // Returns { kp, agentPda, agentId, prog }.
 async function registerExtraAgent(w, { capabilities = 1, endpoint = "http://extra.test" } = {}) {
   const kp = Keypair.generate();
@@ -328,7 +328,9 @@ test("rate_skill: a paying buyer rates the skill (reputation-weighted)", async (
 
   const s = decode(w.svm, "SkillRegistration", skill);
   assert.equal(s.rating_count, 1, "rating_count incremented");
-  // reputation defaults to 5000 -> total_rating = rating * 5000.
+  // total_rating = rating * rater_reputation. The rater's reputation is read dynamically
+  // (ra.rater_reputation), so this assertion is independent of the start value (P6.7
+  // lowered the fresh-agent start to 3000).
   assert.equal(s.total_rating.toString(), String(rating * ra.rater_reputation));
 });
 
