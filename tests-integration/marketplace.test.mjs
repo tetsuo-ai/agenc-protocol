@@ -1127,6 +1127,37 @@ test("request_changes: non-terminal revision keeps the claim, worker resubmits i
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed after revision + accept");
 });
 
+test("request_changes near the deadline extends the resubmit window (no honest-worker bond forfeit, #70)", async () => {
+  // A creator must not be able to request changes near the deadline, strand the
+  // worker (submit blocks past task.deadline / claim.expires_at), then cancel the
+  // task as a "no-show" and forfeit the worker's completion bond. request_changes
+  // now pushes the deadline + claim expiry out by the review window so a worker who
+  // delivered can always resubmit. Revert-sensitive: pre-fix the resubmit below
+  // fails DeadlinePassed and the deadline is unchanged.
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await setupSubmittedManual(w); // PendingValidation, Submitted, claim open
+  const d0 = Number(decode(w.svm, "Task", r.task).deadline);
+  assert.ok(d0 > 0, "task has a deadline");
+
+  // jump to just before the deadline, then request changes.
+  let clk = w.svm.getClock();
+  clk.unixTimestamp = BigInt(d0 - 10);
+  w.svm.setClock(clk);
+  expectOk(send(w.svm, await w.buyerProg.methods.requestChanges(arr(Buffer.alloc(32, 9)))
+    .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey }).instruction(), [w.buyer]), "request_changes near deadline");
+
+  const d1 = Number(decode(w.svm, "Task", r.task).deadline);
+  assert.ok(d1 > d0, `deadline extended past the original (d0=${d0}, d1=${d1})`);
+
+  // advance past the ORIGINAL deadline; the worker can still resubmit (not stranded).
+  w.svm.expireBlockhash();
+  clk = w.svm.getClock();
+  clk.unixTimestamp = BigInt(d0 + 1);
+  w.svm.setClock(clk);
+  expectOk(await r.submit(), "worker resubmits after a near-deadline change request");
+  assert.ok(decode(w.svm, "Task", r.task).status.PendingValidation !== undefined, "resubmit -> PendingValidation (worker not stranded, bond safe)");
+});
+
 test("expire_claim: a PendingValidation claim with live submitted work cannot be expired (escrow-lock guard)", async () => {
   // Revert-sensitive guard for the critical escrow-lock: a PendingValidation task
   // has a live ["task_submission", claim] PDA (Submitted). Pre-fix, omitting that
