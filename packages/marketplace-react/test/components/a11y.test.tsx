@@ -36,10 +36,13 @@ import {
   FIXTURE_AGENT,
   FIXTURE_LISTING,
   FIXTURE_REFERRER,
+  FIXTURE_VERIFIED_DOMAIN,
   makeIndexerListing,
   makeListing,
   makeListingRows,
   makeTrackRecord,
+  makeUnverified,
+  makeVerified,
 } from "../../src/components/__fixtures__/index.js";
 
 afterEach(cleanup);
@@ -224,6 +227,24 @@ const CASES: Array<[string, ReactElement]> = [
   [
     "ProviderCard / verified",
     <ProviderCard agent={FIXTURE_AGENT} trackRecord={makeTrackRecord()} verified />,
+  ],
+  [
+    "ProviderCard / verified domain (on-chain)",
+    <ProviderCard
+      agent={FIXTURE_AGENT}
+      trackRecord={makeTrackRecord()}
+      verification={makeVerified()}
+      operatorDomain={FIXTURE_VERIFIED_DOMAIN}
+    />,
+  ],
+  [
+    "ProviderCard / claimed-only domain",
+    <ProviderCard
+      agent={FIXTURE_AGENT}
+      trackRecord={makeTrackRecord()}
+      verification={makeUnverified()}
+      operatorDomain="claimed-but-unproven.example"
+    />,
   ],
   [
     "ProviderCard / loading",

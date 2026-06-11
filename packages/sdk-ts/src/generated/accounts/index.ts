@@ -8,6 +8,7 @@
 
 export * from "./agentRegistration";
 export * from "./agentStats";
+export * from "./agentVerification";
 export * from "./authorityRateLimit";
 export * from "./bidderMarketState";
 export * from "./bidMarketplaceConfig";

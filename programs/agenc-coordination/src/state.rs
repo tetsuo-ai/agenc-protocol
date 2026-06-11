@@ -2073,6 +2073,109 @@ impl ModerationAttestor {
     }
 }
 
+/// Maximum length of a verified domain name. A DNS name is at most 253 octets
+/// (RFC 1035 §2.3.4 / RFC 1123), which bounds the `verified_domain` String.
+pub const AGENT_VERIFICATION_DOMAIN_MAX: usize = 253;
+
+/// Domain-control proof methods for `AgentVerification.method` (P7.3).
+pub mod agent_verification_method {
+    /// Operator proved control via a DNS `TXT` record on the domain.
+    pub const TXT_RECORD: u8 = 0;
+    /// Operator proved control via a `.well-known` file served over HTTPS.
+    pub const WELL_KNOWN: u8 = 1;
+}
+
+/// `true` iff `method` is a recognized `agent_verification_method::*` variant.
+pub fn is_valid_agent_verification_method(method: u8) -> bool {
+    matches!(
+        method,
+        agent_verification_method::TXT_RECORD | agent_verification_method::WELL_KNOWN
+    )
+}
+
+/// On-chain domain-verification attestation for an agent (P7.3).
+///
+/// A trusted attestor (the global moderation authority OR a registered, non-revoked
+/// `ModerationAttestor`) records that operator domain `D` was proven to control agent
+/// `A`. The off-chain proof (a DNS `TXT` record or `.well-known` file containing the
+/// agent PDA + a signed challenge) is the attestor SERVICE's job; on-chain this account
+/// only records the trusted attestor's verdict so `verified` + domain is trustlessly
+/// readable. Re-verification overwrites the same PDA (`init_if_needed`); a revocation
+/// marks `revoked = true`.
+///
+/// Authorization mirrors `record_*_moderation` EXACTLY (same trusted roster), so domain
+/// verifications come from the same set of attestors that gate moderation.
+///
+/// PDA seeds: ["agent_verification", agent]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct AgentVerification {
+    /// The `AgentRegistration` PDA this verification applies to.
+    pub agent: Pubkey,
+    /// The verified operator domain (DNS name, <= 253 octets). Lowercased ASCII.
+    #[max_len(AGENT_VERIFICATION_DOMAIN_MAX)]
+    pub verified_domain: String,
+    /// Proof method: one of `agent_verification_method::*`.
+    pub method: u8,
+    /// The attestor/authority that recorded this verification.
+    pub verified_by: Pubkey,
+    /// When the verification was recorded.
+    pub verified_at: i64,
+    /// Optional expiry timestamp. Zero means no expiry.
+    pub expires_at: i64,
+    /// Whether this verification has been revoked (set by `revoke_agent_verification`).
+    pub revoked: bool,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future verification metadata. MUST stay zeroed.
+    pub _reserved: [u8; 32],
+}
+
+impl AgentVerification {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 32]
+    }
+}
+
+/// Validate a `verified_domain` string for `record_agent_verification`.
+///
+/// Enforces: non-empty, bounded length (<= `AGENT_VERIFICATION_DOMAIN_MAX`), and a basic
+/// DNS-name charset (ASCII letters, digits, `-`, `.`; no leading/trailing dot, no empty
+/// labels). The full RFC-compliant + control-proof check is the attestor SERVICE's job;
+/// this is the on-chain sanity floor.
+pub fn validate_verified_domain(domain: &str) -> bool {
+    if domain.is_empty() || domain.len() > AGENT_VERIFICATION_DOMAIN_MAX {
+        return false;
+    }
+    if domain.starts_with('.') || domain.ends_with('.') {
+        return false;
+    }
+    let mut label_len = 0usize;
+    for b in domain.bytes() {
+        match b {
+            b'.' => {
+                // Empty label (e.g. "a..b") is invalid.
+                if label_len == 0 {
+                    return false;
+                }
+                label_len = 0;
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' => {
+                label_len = label_len.saturating_add(1);
+                // A single DNS label is at most 63 octets.
+                if label_len > 63 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    // Final label must be non-empty (handled by trailing-dot check, but keep explicit).
+    label_len > 0
+}
+
 /// Skill rating record (one per rater per skill)
 /// PDA seeds: ["skill_rating", skill_pda, rater_agent_pda]
 #[account]
@@ -2513,6 +2616,66 @@ mod tests {
             entry.validate_reserved_fields(),
             "a fresh ModerationAttestor must have zeroed reserved bytes"
         );
+    }
+
+    #[test]
+    fn test_agent_verification_size() {
+        test_size_constant!(AgentVerification);
+    }
+
+    #[test]
+    fn test_agent_verification_reserved_default_is_zeroed() {
+        let v = AgentVerification::default();
+        assert!(
+            v.validate_reserved_fields(),
+            "a fresh AgentVerification must have zeroed reserved bytes"
+        );
+    }
+
+    #[test]
+    fn test_agent_verification_method_validity() {
+        assert!(is_valid_agent_verification_method(
+            agent_verification_method::TXT_RECORD
+        ));
+        assert!(is_valid_agent_verification_method(
+            agent_verification_method::WELL_KNOWN
+        ));
+        assert!(!is_valid_agent_verification_method(2));
+        assert!(!is_valid_agent_verification_method(255));
+    }
+
+    #[test]
+    fn test_validate_verified_domain_accepts_clean_names() {
+        assert!(validate_verified_domain("example.com"));
+        assert!(validate_verified_domain("agent-1.operators.example.io"));
+        assert!(validate_verified_domain("a.co"));
+        assert!(validate_verified_domain("localhost"));
+    }
+
+    #[test]
+    fn test_validate_verified_domain_rejects_empty() {
+        assert!(!validate_verified_domain(""));
+    }
+
+    #[test]
+    fn test_validate_verified_domain_rejects_too_long() {
+        // 254 ASCII chars (one over the 253 cap), kept label-legal.
+        let long = "a".repeat(63) + "." + &"b".repeat(63) + "." + &"c".repeat(63) + "." + &"d".repeat(62);
+        assert_eq!(long.len(), 254);
+        assert!(!validate_verified_domain(&long));
+    }
+
+    #[test]
+    fn test_validate_verified_domain_rejects_bad_charset_and_shape() {
+        assert!(!validate_verified_domain("exa mple.com")); // space
+        assert!(!validate_verified_domain("under_score.com")); // underscore
+        assert!(!validate_verified_domain("https://example.com")); // scheme/slashes
+        assert!(!validate_verified_domain(".example.com")); // leading dot
+        assert!(!validate_verified_domain("example.com.")); // trailing dot
+        assert!(!validate_verified_domain("a..b")); // empty label
+        // A label over 63 octets is rejected even within the 253 cap.
+        let big_label = "a".repeat(64) + ".com";
+        assert!(!validate_verified_domain(&big_label));
     }
 
     #[test]

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenc.tech/schemas/agent-metadata-v1.schema.json",
+  "title": "AgenC AGENT_METADATA v1 document",
+  "description": "The provider-facing identity document for a registered AgenC agent (docs/AGENT_METADATA.md, P7.3). Off-chain JSON published by an agent operator and surfaced in provider cards / fetchAgent. It is NOT validated on-chain; conformance is a client/indexer contract. v1 evolves additively: readers MUST ignore unknown fields (additionalProperties stays true). Domain control claimed via operatorDomain is unverified in this document on its own — trust derives from the P7.3 step-2 on-chain AgentVerification attestation, not from the presence of this field.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema major version. v1 documents MUST set this to 1. Readers reject documents whose version they do not understand; a future v2 bumps this and gets a new $id."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Human-facing agent display name. Unconstrained by the 32-byte on-chain ServiceListing.name field; SHOULD be consistent with any listings the agent operates."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "What the agent does, what it is good at, and how to engage it. Markdown or plain text."
+    },
+    "operatorDomain": {
+      "type": "string",
+      "format": "hostname",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$",
+      "description": "Registrable domain the operator claims to control, as a bare hostname (no scheme, port, or path), e.g. \"acme.example\". This claim is unverified by itself; the trustless signal is the on-chain AgentVerification attestation (P7.3 step 2) keyed by this domain. Renderers MUST NOT show a verified badge from this field alone."
+    },
+    "contact": {
+      "type": "object",
+      "description": "Operator contact channels. At least one channel SHOULD be present; all are optional so an agent can publish only what it wants public.",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254,
+          "description": "Operator contact email."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048,
+          "pattern": "^https://",
+          "description": "Contact or support page. MUST be https."
+        },
+        "x": {
+          "type": "string",
+          "maxLength": 15,
+          "pattern": "^[A-Za-z0-9_]{1,15}$",
+          "description": "X / Twitter handle without the leading @."
+        }
+      },
+      "additionalProperties": true
+    },
+    "logo": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^(https://|ipfs://|ar://|agenc://)",
+      "description": "URI to the agent's logo image (square preferred). MUST use an https, ipfs, ar, or agenc scheme — never http or a data: URI (renderers refuse to inline untrusted data URIs)."
+    },
+    "tosUri": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^(https://|ipfs://|ar://|agenc://)",
+      "description": "URI to the operator's terms-of-service / usage policy. Same scheme allowlist as logo."
+    }
+  },
+  "required": ["version", "name"],
+  "additionalProperties": true
+}

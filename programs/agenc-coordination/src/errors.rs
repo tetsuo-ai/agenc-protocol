@@ -936,4 +936,10 @@ pub enum CoordinationError {
     InvalidReferrerAccount,
     #[msg("Referrer must not be the task creator (no self-deal)")]
     ReferrerIsCreator,
+
+    // === P7.3: agent domain verification ===
+    #[msg("Verified domain is empty, too long, or not a valid DNS name")]
+    InvalidVerifiedDomain,
+    #[msg("Unknown agent-verification method (expected TxtRecord or WellKnown)")]
+    InvalidAgentVerificationMethod,
 }

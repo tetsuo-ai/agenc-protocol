@@ -622,6 +622,10 @@ export const AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT = 0x189d; // 630
 export const AGENC_COORDINATION_ERROR__INVALID_REFERRER_ACCOUNT = 0x189e; // 6302
 /** ReferrerIsCreator: Referrer must not be the task creator (no self-deal) */
 export const AGENC_COORDINATION_ERROR__REFERRER_IS_CREATOR = 0x189f; // 6303
+/** InvalidVerifiedDomain: Verified domain is empty, too long, or not a valid DNS name */
+export const AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN = 0x18a0; // 6304
+/** InvalidAgentVerificationMethod: Unknown agent-verification method (expected TxtRecord or WellKnown) */
+export const AGENC_COORDINATION_ERROR__INVALID_AGENT_VERIFICATION_METHOD = 0x18a1; // 6305
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -702,6 +706,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INSUFFICIENT_VOTES
   | typeof AGENC_COORDINATION_ERROR__INVALID_ACCOUNT_OWNER
   | typeof AGENC_COORDINATION_ERROR__INVALID_AGENT_ID
+  | typeof AGENC_COORDINATION_ERROR__INVALID_AGENT_VERIFICATION_METHOD
   | typeof AGENC_COORDINATION_ERROR__INVALID_ATTESTOR
   | typeof AGENC_COORDINATION_ERROR__INVALID_BID_CONFIDENCE
   | typeof AGENC_COORDINATION_ERROR__INVALID_BID_ETA
@@ -769,6 +774,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_TREASURY
   | typeof AGENC_COORDINATION_ERROR__INVALID_VALIDATION_MODE
   | typeof AGENC_COORDINATION_ERROR__INVALID_VALIDATOR_QUORUM
+  | typeof AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN
   | typeof AGENC_COORDINATION_ERROR__INVALID_WEIGHTED_SCORE_WEIGHTS
   | typeof AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED
@@ -1012,6 +1018,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INSUFFICIENT_VOTES]: `Insufficient votes to resolve`,
     [AGENC_COORDINATION_ERROR__INVALID_ACCOUNT_OWNER]: `Account owner validation failed: account not owned by this program`,
     [AGENC_COORDINATION_ERROR__INVALID_AGENT_ID]: `Invalid agent ID: agent_id cannot be all zeros`,
+    [AGENC_COORDINATION_ERROR__INVALID_AGENT_VERIFICATION_METHOD]: `Unknown agent-verification method (expected TxtRecord or WellKnown)`,
     [AGENC_COORDINATION_ERROR__INVALID_ATTESTOR]: `External attestor must be a valid non-default wallet`,
     [AGENC_COORDINATION_ERROR__INVALID_BID_CONFIDENCE]: `Bid confidence must be between 0 and 10000 basis points`,
     [AGENC_COORDINATION_ERROR__INVALID_BID_ETA]: `Bid ETA must be greater than zero`,
@@ -1079,6 +1086,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_TREASURY]: `Invalid treasury: treasury account cannot be default pubkey`,
     [AGENC_COORDINATION_ERROR__INVALID_VALIDATION_MODE]: `Invalid validation mode`,
     [AGENC_COORDINATION_ERROR__INVALID_VALIDATOR_QUORUM]: `Validator quorum must be greater than zero`,
+    [AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN]: `Verified domain is empty, too long, or not a valid DNS name`,
     [AGENC_COORDINATION_ERROR__INVALID_WEIGHTED_SCORE_WEIGHTS]: `Weighted score weights must sum to 10000 basis points`,
     [AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED]: `Service listing must declare at least one required capability`,
     [AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED]: `Service listing has reached its maximum concurrent open hires`,

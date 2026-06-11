@@ -96,6 +96,18 @@ export { DisputeBanner, type DisputeBannerProps } from "./DisputeBanner.js";
 // Reputation + attribution.
 export { ProviderCard, type ProviderCardProps } from "./ProviderCard.js";
 export {
+  UNVERIFIED,
+  agentVerificationReaderFromRpc,
+  evaluateAgentVerification,
+  useAgentVerification,
+  type AgentVerificationReader,
+  type AgentVerificationReaderOptions,
+  type AgentVerificationResult,
+  type AgentVerificationRpc,
+  type UseAgentVerificationOptions,
+  type UseAgentVerificationResult,
+} from "./useAgentVerification.js";
+export {
   PoweredByAgenC,
   DEFAULT_TRUST_HREF,
   type PoweredByAgenCProps,

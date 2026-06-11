@@ -9,6 +9,7 @@
 export * from "./acceptTaskResultClaim";
 export * from "./agent";
 export * from "./agentStats";
+export * from "./agentVerification";
 export * from "./authorityRateLimit";
 export * from "./bid";
 export * from "./bidBook";

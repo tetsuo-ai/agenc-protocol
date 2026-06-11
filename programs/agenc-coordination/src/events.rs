@@ -423,6 +423,27 @@ pub struct ModerationAttestorRevoked {
     pub timestamp: i64,
 }
 
+/// Emitted when a trusted attestor records a domain-verification attestation for an
+/// agent (P7.3). `verified_by` is the recording attestor/authority.
+#[event]
+pub struct AgentVerified {
+    pub agent: Pubkey,
+    pub verified_domain: String,
+    pub method: u8,
+    pub verified_by: Pubkey,
+    pub verified_at: i64,
+    pub expires_at: i64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a trusted attestor revokes an agent's domain verification (P7.3).
+#[event]
+pub struct AgentVerificationRevoked {
+    pub agent: Pubkey,
+    pub revoked_by: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when a dispute expires without resolution
 /// Updated in fix #418 to include fair distribution details
 #[event]

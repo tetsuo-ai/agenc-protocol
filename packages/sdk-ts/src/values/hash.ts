@@ -63,3 +63,35 @@ export async function sha256(input: Uint8Array | string): Promise<Uint8Array> {
 export async function descriptionHash(input: string): Promise<Uint8Array> {
   return sha256(input.normalize("NFC"));
 }
+
+/**
+ * Lowercase-hex encode a byte array (e.g. a 32-byte digest -> 64 hex chars).
+ * Browser-safe: no `Buffer`. The inverse of {@link hexToBytes}.
+ */
+export function bytesToHex(bytes: Uint8Array): string {
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return hex;
+}
+
+/**
+ * Decode a hex string (with or without a `0x` prefix) into bytes. Case-insensitive.
+ * Browser-safe: no `Buffer`. The inverse of {@link bytesToHex}.
+ *
+ * @throws TypeError when the input has an odd length or contains a non-hex character.
+ */
+export function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
+  if (clean.length % 2 !== 0) {
+    throw new TypeError(`hexToBytes: odd-length hex string (${clean.length} chars)`);
+  }
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const byte = Number.parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(byte)) {
+      throw new TypeError(`hexToBytes: non-hex character at byte ${i}`);
+    }
+    out[i] = byte;
+  }
+  return out;
+}

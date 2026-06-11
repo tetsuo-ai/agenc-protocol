@@ -111,6 +111,14 @@ export const EN_COMPONENT_STRINGS = {
   "components.provider.noData": "No track record yet.",
   "components.provider.unavailable":
     "Track record is unavailable on this read transport.",
+  // Domain trust (P7.3) — VERIFIED is an on-chain attestation; CLAIMED is the
+  // operator's self-reported metadata. The copy keeps them distinct so a buyer
+  // never reads an unverified claim as a proven one.
+  "components.provider.verifiedDomain": "Verified: {domain}",
+  "components.provider.verifiedDomainLabel": "Verified domain {domain}",
+  "components.provider.claimedDomain": "Claims: {domain}",
+  "components.provider.claimedDomainLabel":
+    "Claimed domain {domain} (not verified on-chain)",
 
   // PoweredByAgenC.
   "components.poweredBy.label": "Powered by AgenC",

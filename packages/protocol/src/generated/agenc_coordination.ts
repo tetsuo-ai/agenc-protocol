@@ -8416,6 +8416,195 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "recordAgentVerification",
+      "docs": [
+        "Record a domain-verification attestation for an agent (P7.3). A TRUSTED attestor",
+        "(the global moderation authority OR a registered, non-revoked `ModerationAttestor`)",
+        "records that operator domain `verified_domain` was proven to control the agent. The",
+        "off-chain domain-control proof (TXT record / `.well-known` + signed challenge) is the",
+        "attestor SERVICE's job; on-chain this only records the trusted verdict. `method`:",
+        "0 = TxtRecord, 1 = WellKnown. `expires_at`: 0 = no expiry. Re-verification overwrites",
+        "the `[\"agent_verification\", agent]` PDA in place."
+      ],
+      "discriminator": [
+        185,
+        60,
+        213,
+        195,
+        106,
+        238,
+        222,
+        56
+      ],
+      "accounts": [
+        {
+          "name": "moderationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "agent",
+          "docs": [
+            "The agent being verified, pinned to its canonical `[\"agent\", agent_id]` PDA."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "agentVerification",
+          "docs": [
+            "Domain-verification attestation. `init_if_needed` so re-verification overwrites the",
+            "same PDA in place. Keyed only by `agent` (one current verification per agent)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  99,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "agent"
+              }
+            ]
+          }
+        },
+        {
+          "name": "attestor",
+          "docs": [
+            "The recording signer. Authorization (global moderation authority OR a registered",
+            "attestor) is checked in the handler, not as an account constraint here — mirroring",
+            "`record_*_moderation`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "OPTIONAL: a registered moderation-attestor roster entry. When supplied (and",
+            "`attestor == moderation_attestor.attestor`), authorizes a non-global-authority",
+            "attestor to record. Bound to `[\"moderation_attestor\", attestor]` — Anchor enforces",
+            "the canonical PDA, so a forged/mismatched entry fails account resolution, and a",
+            "REVOKED attestor's PDA is closed and fails to load (cannot attest). This instruction",
+            "is full-surface only, so this field carries no canary-surface implications."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "attestor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "verifiedDomain",
+          "type": "string"
+        },
+        {
+          "name": "method",
+          "type": "u8"
+        },
+        {
+          "name": "expiresAt",
+          "type": "i64"
+        }
+      ]
+    },
+    {
       "name": "recordListingModeration",
       "docs": [
         "Record a moderation decision for a service listing's pinned job-spec hash,",
@@ -10372,6 +10561,145 @@ export type AgencCoordination = {
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "revokeAgentVerification",
+      "docs": [
+        "Revoke an agent's domain verification (P7.3), marking it `revoked = true` so the",
+        "record stays readable. Same trusted-roster authorization as",
+        "`record_agent_verification`."
+      ],
+      "discriminator": [
+        241,
+        39,
+        84,
+        1,
+        9,
+        216,
+        243,
+        66
+      ],
+      "accounts": [
+        {
+          "name": "moderationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "agentVerification",
+          "docs": [
+            "The verification to revoke, pinned to its canonical PDA (seeded by the stored agent)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116,
+                  95,
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  99,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "agent_verification.agent",
+                "account": "agentVerification"
+              }
+            ]
+          }
+        },
+        {
+          "name": "attestor",
+          "docs": [
+            "The recording signer. Authorization (global moderation authority OR a registered",
+            "attestor) is checked in the handler, mirroring `record_*_moderation`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "OPTIONAL: a registered moderation-attestor roster entry (same semantics as",
+            "`record_agent_verification`). Canonical-PDA + `attestor == signer` bound; a revoked",
+            "attestor's PDA is closed and fails to load."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "attestor"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
     },
     {
       "name": "revokeDelegation",
@@ -13241,6 +13569,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "agentVerification",
+      "discriminator": [
+        128,
+        155,
+        95,
+        241,
+        66,
+        207,
+        166,
+        59
+      ]
+    },
+    {
       "name": "authorityRateLimit",
       "discriminator": [
         155,
@@ -13812,6 +14153,32 @@ export type AgencCoordination = {
         250,
         210,
         166
+      ]
+    },
+    {
+      "name": "agentVerificationRevoked",
+      "discriminator": [
+        67,
+        186,
+        43,
+        174,
+        149,
+        119,
+        196,
+        190
+      ]
+    },
+    {
+      "name": "agentVerified",
+      "discriminator": [
+        56,
+        159,
+        70,
+        162,
+        200,
+        46,
+        208,
+        1
       ]
     },
     {
@@ -16375,6 +16742,16 @@ export type AgencCoordination = {
       "code": 6303,
       "name": "referrerIsCreator",
       "msg": "Referrer must not be the task creator (no self-deal)"
+    },
+    {
+      "code": 6304,
+      "name": "invalidVerifiedDomain",
+      "msg": "Verified domain is empty, too long, or not a valid DNS name"
+    },
+    {
+      "code": 6305,
+      "name": "invalidAgentVerificationMethod",
+      "msg": "Unknown agent-verification method (expected TxtRecord or WellKnown)"
     }
   ],
   "types": [
@@ -16907,6 +17284,161 @@ export type AgencCoordination = {
           {
             "name": "status",
             "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "agentVerification",
+      "docs": [
+        "On-chain domain-verification attestation for an agent (P7.3).",
+        "",
+        "A trusted attestor (the global moderation authority OR a registered, non-revoked",
+        "`ModerationAttestor`) records that operator domain `D` was proven to control agent",
+        "`A`. The off-chain proof (a DNS `TXT` record or `.well-known` file containing the",
+        "agent PDA + a signed challenge) is the attestor SERVICE's job; on-chain this account",
+        "only records the trusted attestor's verdict so `verified` + domain is trustlessly",
+        "readable. Re-verification overwrites the same PDA (`init_if_needed`); a revocation",
+        "marks `revoked = true`.",
+        "",
+        "Authorization mirrors `record_*_moderation` EXACTLY (same trusted roster), so domain",
+        "verifications come from the same set of attestors that gate moderation.",
+        "",
+        "PDA seeds: [\"agent_verification\", agent]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "docs": [
+              "The `AgentRegistration` PDA this verification applies to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "verifiedDomain",
+            "docs": [
+              "The verified operator domain (DNS name, <= 253 octets). Lowercased ASCII."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "method",
+            "docs": [
+              "Proof method: one of `agent_verification_method::*`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "verifiedBy",
+            "docs": [
+              "The attestor/authority that recorded this verification."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "verifiedAt",
+            "docs": [
+              "When the verification was recorded."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "expiresAt",
+            "docs": [
+              "Optional expiry timestamp. Zero means no expiry."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "revoked",
+            "docs": [
+              "Whether this verification has been revoked (set by `revoke_agent_verification`)."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future verification metadata. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "agentVerificationRevoked",
+      "docs": [
+        "Emitted when a trusted attestor revokes an agent's domain verification (P7.3)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "revokedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "agentVerified",
+      "docs": [
+        "Emitted when a trusted attestor records a domain-verification attestation for an",
+        "agent (P7.3). `verified_by` is the recording attestor/authority."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "verifiedDomain",
+            "type": "string"
+          },
+          {
+            "name": "method",
+            "type": "u8"
+          },
+          {
+            "name": "verifiedBy",
+            "type": "pubkey"
+          },
+          {
+            "name": "verifiedAt",
+            "type": "i64"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
           },
           {
             "name": "timestamp",

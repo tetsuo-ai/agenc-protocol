@@ -31,6 +31,14 @@ import {
   type AgentUpdatedEventData,
 } from "./agentUpdated";
 import {
+  getAgentVerificationRevokedEventDecoder,
+  type AgentVerificationRevokedEventData,
+} from "./agentVerificationRevoked";
+import {
+  getAgentVerifiedEventDecoder,
+  type AgentVerifiedEventData,
+} from "./agentVerified";
+import {
   getBidAcceptedEventDecoder,
   type BidAcceptedEventData,
 } from "./bidAccepted";
@@ -369,6 +377,8 @@ export type AgencEvent =
   | { eventName: "AgentTrackRecordUpdated"; data: AgentTrackRecordUpdatedEventData }
   | { eventName: "AgentUnsuspended"; data: AgentUnsuspendedEventData }
   | { eventName: "AgentUpdated"; data: AgentUpdatedEventData }
+  | { eventName: "AgentVerificationRevoked"; data: AgentVerificationRevokedEventData }
+  | { eventName: "AgentVerified"; data: AgentVerifiedEventData }
   | { eventName: "BidAccepted"; data: BidAcceptedEventData }
   | { eventName: "BidBookInitialized"; data: BidBookInitializedEventData }
   | { eventName: "BidCancelled"; data: BidCancelledEventData }
@@ -510,6 +520,20 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "AgentUpdated",
       data: getAgentUpdatedEventDecoder().decode(payload),
+    }),
+  },
+  "43ba2bae9577c4be": {
+    eventName: "AgentVerificationRevoked",
+    decode: (payload) => ({
+      eventName: "AgentVerificationRevoked",
+      data: getAgentVerificationRevokedEventDecoder().decode(payload),
+    }),
+  },
+  "389f46a2c82ed001": {
+    eventName: "AgentVerified",
+    decode: (payload) => ({
+      eventName: "AgentVerified",
+      data: getAgentVerifiedEventDecoder().decode(payload),
     }),
   },
   "138c24afc30537c1": {

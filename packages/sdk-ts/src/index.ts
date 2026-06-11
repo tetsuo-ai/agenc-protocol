@@ -8,6 +8,8 @@
 // events/    = log parsing, subscriptions, waitForTaskStatus.
 // watch/     = watchClaimableTasks (worker-notification convenience over events+queries).
 // values/    = ids, hashing, listing-metadata codecs, canonical job-spec hash.
+// taskThread/= P7.1 buyer<->worker message envelopes (content-addressed comms).
+// delivery/  = P7.2 encrypted deliverable handoff (fair exchange, WebCrypto).
 export * from "./generated/index.js";
 export * as facade from "./facade/index.js";
 export * from "./client/index.js";
@@ -17,6 +19,12 @@ export * from "./webhooks/index.js";
 export * from "./events/index.js";
 export * from "./watch/index.js";
 export * as values from "./values/index.js";
+
+// P7.1 / P7.2 off-chain content rails. Namespaced (like `values`/`facade`) so
+// generic helper names (`encryptDeliverable`, `postTaskMessage`,
+// `createContentTransport`) don't collide with the flat top-level surface.
+export * as taskThread from "./task-thread/index.js";
+export * as delivery from "./delivery/index.js";
 
 // The P3.4 public moderation helper lives next to the devnet sandbox helpers
 // in src/sandbox/ but is NOT devnet-only: it POSTs a job spec to the

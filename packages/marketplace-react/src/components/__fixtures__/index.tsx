@@ -23,6 +23,7 @@ import type {
 } from "../../types.js";
 import type { ListingCardData } from "../ListingCard.js";
 import type { AgentTrackRecord } from "../../hooks/useAgentTrackRecord.js";
+import type { AgentVerificationResult } from "../useAgentVerification.js";
 
 /** A stable provider-agent PDA for fixtures. */
 export const FIXTURE_AGENT = address(
@@ -120,6 +121,33 @@ export function makeTrackRecord(
     partial: true,
     ...overrides,
   };
+}
+
+/** The verified operator domain used across the verification fixtures. */
+export const FIXTURE_VERIFIED_DOMAIN = "acme-agents.example";
+
+/**
+ * A live (verified, non-revoked, non-expired) verification result fixture.
+ * Overrides are shallow-merged onto the verified shape.
+ */
+export function makeVerified(
+  overrides: Partial<Extract<AgentVerificationResult, { verified: true }>> = {},
+): AgentVerificationResult {
+  return {
+    verified: true,
+    domain: FIXTURE_VERIFIED_DOMAIN,
+    method: 0,
+    verifiedBy: FIXTURE_AGENT,
+    verifiedAt: 1_700_000_000n,
+    expiresAt: 0n,
+    revoked: false,
+    ...overrides,
+  };
+}
+
+/** The unverified result fixture (account absent / revoked / expired). */
+export function makeUnverified(): AgentVerificationResult {
+  return { verified: false };
 }
 
 /** A no-op read transport for provider-wrapped stories. */
