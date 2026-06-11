@@ -97,7 +97,12 @@ jobs:
         working-directory: packages/sdk-ts
 
       # Runs here (not sdk-checks): the tarball ships testing-assets/, which
-      # needs the freshly built + synced .so this job produces.
+      # needs the freshly built + synced .so this job produces. npm pack also
+      # ships dist/, so build first (sdk-checks builds in a separate job).
+      - name: Build (ESM + CJS + d.ts)
+        run: npm run build
+        working-directory: packages/sdk-ts
+
       - name: Pack smoke (tarball install, ESM + CJS entry points)
         run: node scripts/pack-smoke.mjs
         working-directory: packages/sdk-ts
