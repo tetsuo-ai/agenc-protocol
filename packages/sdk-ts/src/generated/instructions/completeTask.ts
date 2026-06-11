@@ -43,6 +43,8 @@ import {
 } from "@solana/program-client-core";
 import {
   findAcceptTaskResultClaimPda,
+  findCompleteTaskWorkerCompletionBondPda,
+  findCreatorCompletionBondPda,
   findEscrowPda,
   findHireRecordPda,
   findProtocolConfigPda,
@@ -254,7 +256,6 @@ export type CompleteTaskAsyncInput<
    * a non-zero referrer fee. Receives the referrer fee leg in SOL.
    */
   referrer?: Address<TAccountReferrer>;
-  /** Validated in the handler by settle_completion_bond (owner/PDA/task/role/party). */
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   proofHash: CompleteTaskInstructionDataArgs["proofHash"];
@@ -415,6 +416,31 @@ export async function getCompleteTaskInstructionAsync<
       ),
     });
   }
+  if (!accounts.creatorCompletionBond.value) {
+    accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
+  if (!accounts.workerCompletionBond.value) {
+    accounts.workerCompletionBond.value =
+      await findCompleteTaskWorkerCompletionBondPda({
+        task: getAddressFromResolvedInstructionAccount(
+          "task",
+          accounts.task.value,
+        ),
+        authority: getAddressFromResolvedInstructionAccount(
+          "authority",
+          accounts.authority.value,
+        ),
+      });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -532,9 +558,8 @@ export type CompleteTaskInput<
    * a non-zero referrer fee. Receives the referrer fee leg in SOL.
    */
   referrer?: Address<TAccountReferrer>;
-  /** Validated in the handler by settle_completion_bond (owner/PDA/task/role/party). */
-  creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
-  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   proofHash: CompleteTaskInstructionDataArgs["proofHash"];
   resultData: CompleteTaskInstructionDataArgs["resultData"];
 };
@@ -762,9 +787,8 @@ export type ParsedCompleteTaskInstruction<
      * a non-zero referrer fee. Receives the referrer fee leg in SOL.
      */
     referrer?: TAccountMetas[16] | undefined;
-    /** Validated in the handler by settle_completion_bond (owner/PDA/task/role/party). */
-    creatorCompletionBond?: TAccountMetas[17] | undefined;
-    workerCompletionBond?: TAccountMetas[18] | undefined;
+    creatorCompletionBond: TAccountMetas[17];
+    workerCompletionBond: TAccountMetas[18];
   };
   data: CompleteTaskInstructionData;
 };
@@ -818,8 +842,8 @@ export function parseCompleteTaskInstruction<
       hireRecord: getNextAccount(),
       operator: getNextOptionalAccount(),
       referrer: getNextOptionalAccount(),
-      creatorCompletionBond: getNextOptionalAccount(),
-      workerCompletionBond: getNextOptionalAccount(),
+      creatorCompletionBond: getNextAccount(),
+      workerCompletionBond: getNextAccount(),
     },
     data: getCompleteTaskInstructionDataDecoder().decode(instruction.data),
   };

@@ -123,16 +123,29 @@ pub struct AcceptTaskResult<'info> {
     #[account(mut)]
     pub referrer: Option<UncheckedAccount<'info>>,
 
-    // === Batch 3 completion bonds (optional; refunded on accept) ===
-    /// CHECK: creator completion bond PDA; refunded to the creator on accept.
-    /// Validated by settle_completion_bond (owner/PDA/task/role/party).
+    // === Batch 3 completion bonds — REQUIRED + canonical-PDA-pinned (audit F12) ===
+    // Refunded on accept. Made required + seeds-pinned (was Optional) so a Completed
+    // transition can NEVER leave a live bond behind: if these were omittable, the bond
+    // PDAs would survive into the terminal task, and close_task — which closes the Task
+    // PDA — would then make reclaim_completion_bond (needs a live Task) impossible,
+    // permanently stranding the bond principal. The caller passes the derived PDA even
+    // for un-bonded tasks (an empty system account); settle_completion_bond no-ops on it.
+    /// CHECK: creator completion bond PDA, seeds-pinned; validated + refunded by helper.
     #[cfg(not(feature = "mainnet-canary"))]
-    #[account(mut)]
-    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: worker completion bond PDA; refunded to the worker on accept.
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), creator.key().as_ref()],
+        bump
+    )]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA, seeds-pinned to the validated worker authority.
     #[cfg(not(feature = "mainnet-canary"))]
-    #[account(mut)]
-    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), worker_authority.key().as_ref()],
+        bump
+    )]
+    pub worker_completion_bond: UncheckedAccount<'info>,
 
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
     #[cfg(feature = "spl-token-rewards")]
@@ -413,28 +426,26 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         .claim
         .close(ctx.accounts.worker_authority.to_account_info())?;
 
-    // Batch 3 §8: an accepted result means nobody lost — refund BOTH bonds.
+    // Batch 3 §8: an accepted result means nobody lost — refund BOTH bonds. Required +
+    // seeds-pinned accounts (audit F12), so this ALWAYS runs and a live bond can never
+    // survive the Completed transition; settle no-ops on an un-bonded task's empty PDA.
     #[cfg(not(feature = "mainnet-canary"))]
     {
         let task_key = ctx.accounts.task.key();
-        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &ctx.accounts.creator.to_account_info(),
-                &task_key,
-                CompletionBond::ROLE_CREATOR,
-                BondDisposition::Refund,
-            )?;
-        }
-        if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &ctx.accounts.worker_authority.to_account_info(),
-                &task_key,
-                CompletionBond::ROLE_WORKER,
-                BondDisposition::Refund,
-            )?;
-        }
+        settle_completion_bond(
+            &ctx.accounts.creator_completion_bond.to_account_info(),
+            &ctx.accounts.creator.to_account_info(),
+            &task_key,
+            CompletionBond::ROLE_CREATOR,
+            BondDisposition::Refund,
+        )?;
+        settle_completion_bond(
+            &ctx.accounts.worker_completion_bond.to_account_info(),
+            &ctx.accounts.worker_authority.to_account_info(),
+            &task_key,
+            CompletionBond::ROLE_WORKER,
+            BondDisposition::Refund,
+        )?;
     }
 
     Ok(())

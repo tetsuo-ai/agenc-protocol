@@ -6,15 +6,12 @@ import {
   getPostCompletionBondInstructionAsync,
   getReclaimCompletionBondInstructionAsync,
   findCompletionBondPda,
-  // Codama renamed this collision: the reclaim flow's completion_bond PDA helper.
-  findReclaimCompletionBondCompletionBondPda,
   type PostCompletionBondAsyncInput,
   type ReclaimCompletionBondAsyncInput,
 } from "../generated/index.js";
 
 export {
   findCompletionBondPda,
-  findReclaimCompletionBondCompletionBondPda,
 };
 
 /**

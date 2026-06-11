@@ -39,10 +39,12 @@ import {
 } from "@solana/program-client-core";
 import {
   findAcceptTaskResultClaimPda,
+  findCreatorCompletionBondPda,
   findEscrowPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  findWorkerCompletionBondPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -227,7 +229,6 @@ export type AcceptTaskResultAsyncInput<
    * receives the referrer fee leg in SOL.
    */
   referrer?: Address<TAccountReferrer>;
-  /** Validated by settle_completion_bond (owner/PDA/task/role/party). */
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   tokenEscrowAta?: Address<TAccountTokenEscrowAta>;
@@ -400,6 +401,30 @@ export async function getAcceptTaskResultInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.creatorCompletionBond.value) {
+    accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
+  if (!accounts.workerCompletionBond.value) {
+    accounts.workerCompletionBond.value = await findWorkerCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      workerAuthority: getAddressFromResolvedInstructionAccount(
+        "workerAuthority",
+        accounts.workerAuthority.value,
+      ),
+    });
+  }
   if (!accounts.tokenProgram.value) {
     accounts.tokenProgram.value =
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address<"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA">;
@@ -507,9 +532,8 @@ export type AcceptTaskResultInput<
    * receives the referrer fee leg in SOL.
    */
   referrer?: Address<TAccountReferrer>;
-  /** Validated by settle_completion_bond (owner/PDA/task/role/party). */
-  creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
-  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   tokenEscrowAta?: Address<TAccountTokenEscrowAta>;
   workerTokenAccount?: Address<TAccountWorkerTokenAccount>;
   treasuryTokenAccount?: Address<TAccountTreasuryTokenAccount>;
@@ -729,9 +753,8 @@ export type ParsedAcceptTaskResultInstruction<
      * receives the referrer fee leg in SOL.
      */
     referrer?: TAccountMetas[12] | undefined;
-    /** Validated by settle_completion_bond (owner/PDA/task/role/party). */
-    creatorCompletionBond?: TAccountMetas[13] | undefined;
-    workerCompletionBond?: TAccountMetas[14] | undefined;
+    creatorCompletionBond: TAccountMetas[13];
+    workerCompletionBond: TAccountMetas[14];
     tokenEscrowAta?: TAccountMetas[15] | undefined;
     workerTokenAccount?: TAccountMetas[16] | undefined;
     treasuryTokenAccount?: TAccountMetas[17] | undefined;
@@ -787,8 +810,8 @@ export function parseAcceptTaskResultInstruction<
       hireRecord: getNextOptionalAccount(),
       operator: getNextOptionalAccount(),
       referrer: getNextOptionalAccount(),
-      creatorCompletionBond: getNextOptionalAccount(),
-      workerCompletionBond: getNextOptionalAccount(),
+      creatorCompletionBond: getNextAccount(),
+      workerCompletionBond: getNextAccount(),
       tokenEscrowAta: getNextOptionalAccount(),
       workerTokenAccount: getNextOptionalAccount(),
       treasuryTokenAccount: getNextOptionalAccount(),

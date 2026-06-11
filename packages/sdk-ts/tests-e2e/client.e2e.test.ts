@@ -175,11 +175,11 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     await providerClient.postCompletionBond({ authority: provider, task, role: 1 });
     const [creatorBond] = await findCompletionBondPda({
       task,
-      authority: buyer.address,
+      party: buyer.address,
     });
     const [workerBond] = await findCompletionBondPda({
       task,
-      authority: provider.address,
+      party: provider.address,
     });
     expect(accountData(svm, creatorBond)).not.toBeNull();
     expect(accountData(svm, workerBond)).not.toBeNull();

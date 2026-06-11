@@ -87,7 +87,7 @@ test("hire -> cancel -> close: frees capacity, closes task + hire record", async
   // Close the terminal task: reclaim rent + free the listing slot.
   const closeIx = await w.buyerProg.methods
     .closeTask()
-    .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction();
   expectOk(send(w.svm, closeIx, [w.buyer]), "close");
 
@@ -929,31 +929,76 @@ test("completion bond: rejected on a ZK-private task (audit — would strand on 
     "BondUnsupportedTaskType", "bond rejected on a ZK-private task");
 });
 
-test("completion bond: reclaim_completion_bond recovers a bond stranded by an omitted account on a Completed task", async () => {
-  // Audit MEDIUM: a terminal exit can omit the optional bond account and strand it.
-  // reclaim_completion_bond lets the poster recover it once the task is Completed.
+test("completion bond (F12): complete_task FORCE-settles the worker bond even when the caller passes null — strand is structurally impossible", async () => {
+  // Audit F12 (HARD-verified): the bond accounts on accept/auto_accept/complete are now
+  // REQUIRED + canonical-PDA-pinned. A caller can no longer omit the worker bond to leave
+  // it live on a Completed task (which close_task would then strand forever). Here the
+  // worker posts a bond and the caller passes `workerCompletionBond: null`; the anchor
+  // client auto-derives the now-required seeds-pinned PDA, so complete_task settles
+  // (refunds) it. Revert-sensitive: restore the Optional+`if let Some` settlement and the
+  // bond is left live (strandable), flipping the "closed" + "refunded" assertions red.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
     .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "worker bond");
+  const bondLamports = Number(w.svm.getBalance(workerBond));
+  const providerBefore = Number(w.svm.getBalance(w.provider.publicKey));
 
-  // complete the task but OMIT the worker bond account -> it is stranded.
+  // complete_task passing workerCompletionBond:null — the required seeds-pinned account is
+  // auto-derived to the real bond PDA and force-settled (cannot be omitted/stranded).
   expectOk(send(w.svm, await w.providerProg.methods.completeTask(arr(id32()), null)
     .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
-    .instruction(), [w.provider]), "complete (omitting worker bond)");
+    .instruction(), [w.provider]), "complete (worker bond auto-settled despite null)");
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
-  assert.ok(!isClosed(w.svm, workerBond), "worker bond stranded (still open) after the omitted-account completion");
-
-  // reclaim recovers it to the poster.
-  const providerBefore = Number(w.svm.getBalance(w.provider.publicKey));
-  const bondLamports = Number(w.svm.getBalance(workerBond));
-  expectOk(send(w.svm, await makeProgram(w.provider).methods.reclaimCompletionBond(1)
-    .accounts({ task: r.task, completionBond: workerBond, party: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "reclaim worker bond");
-  assert.ok(isClosed(w.svm, workerBond), "worker bond reclaimed + closed");
-  // provider is the fee-payer here, so delta = bond (rent+principal) minus tx fee.
+  assert.ok(isClosed(w.svm, workerBond), "worker bond was force-refunded + closed at completion (NOT stranded)");
+  // The worker got the full bond (principal + rent) back; only the tx fee is lost.
   const providerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - providerBefore;
-  assert.ok(providerDelta > bondLamports - 50_000, `poster recovered the bond (delta ${providerDelta}, bond ${bondLamports})`);
+  assert.ok(providerDelta > bondLamports - 50_000, `worker refunded the bond at completion (delta ${providerDelta}, bond ${bondLamports})`);
+
+  // And close_task succeeds because no live bond remains.
+  expectOk(send(w.svm, await w.buyerProg.methods.closeTask()
+    .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
+    .instruction(), [w.buyer]), "close_task after bonds settled");
+  assert.ok(isClosed(w.svm, r.task), "task closed");
+});
+
+test("completion bond (F12): close_task REFUSES to close while a live creator bond exists; reclaim-on-Cancelled recovers it", async () => {
+  // Audit F12: close_task must not destroy the Task PDA while a completion bond is live,
+  // because reclaim_completion_bond needs a live Task. Here the creator bonds an Open task,
+  // then cancels OMITTING the bond (so it stays live on the Cancelled task). close_task is
+  // refused (TaskHasLiveCompletionBond), and reclaim — now valid on Cancelled — recovers it.
+  const w = await freshWorld({ price: 2_000_000 });
+  const { ix, task, escrow, hireRecord } = await hireIx(w, {});
+  expectOk(send(w.svm, ix, [w.buyer]), "hire"); // Open task, creator == buyer
+  const creatorBond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
+  expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
+    .accounts({ task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
+
+  // cancel OMITTING the bond -> it stays live on the Cancelled task.
+  expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
+    .accounts({ task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null, creatorAgent: null, agentStats: null })
+    .instruction(), [w.buyer]), "cancel omitting the creator bond");
+  assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task Cancelled");
+  assert.ok(!isClosed(w.svm, creatorBond), "creator bond still live after omitted-account cancel");
+
+  // close_task is REFUSED while the bond is live (revert-sensitive: drop the guard and this passes).
+  expectFail(send(w.svm, await w.buyerProg.methods.closeTask()
+    .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey })
+    .instruction(), [w.buyer]), "TaskHasLiveCompletionBond", "close_task refused while bond live");
+  assert.ok(!isClosed(w.svm, task), "task NOT closed (still recoverable)");
+
+  // reclaim on the Cancelled task (NEW: was Completed-only) recovers the bond to its poster
+  // while the Task PDA is still alive — the universal safety net for the cancel path.
+  const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+  const bondLamports = Number(w.svm.getBalance(creatorBond));
+  expectOk(send(w.svm, await makeProgram(w.buyer).methods.reclaimCompletionBond(0)
+    .accounts({ task, completionBond: creatorBond, party: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "reclaim on Cancelled");
+  assert.ok(isClosed(w.svm, creatorBond), "creator bond recovered via reclaim-on-Cancelled");
+  const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
+  assert.ok(buyerDelta > bondLamports - 50_000, `creator recovered the bond (delta ${buyerDelta}, bond ${bondLamports})`);
 });
 
 test("completion bond: cancel refunds the creator bond on an Open task", async () => {
@@ -1563,7 +1608,7 @@ test("close_task children: a program-owned non-child remaining account is reject
   // as a remaining account: it must be rejected, not closed.
   const closeIx = await w.buyerProg.methods
     .closeTask()
-    .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
     .remainingAccounts([{ pubkey: w.listing, isSigner: false, isWritable: true }])
     .instruction();
   expectFail(send(w.svm, closeIx, [w.buyer]), "InvalidInput", "close_task rejects a non-child remaining account");
@@ -2023,7 +2068,7 @@ test("close_task children: reclaims rent from a task_moderation child via remain
 
   const closeIx = await w.buyerProg.methods
     .closeTask()
-    .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
     .remainingAccounts([{ pubkey: r.taskMod, isSigner: false, isWritable: true }])
     .instruction();
   expectOk(send(w.svm, closeIx, [w.buyer]), "close_task with moderation child");
@@ -2042,7 +2087,7 @@ test("close_task children: rejects a child PDA bound to a different task (anti-g
   // Try to close task A while passing task B's moderation as a remaining account.
   const closeIx = await w.buyerProg.methods
     .closeTask()
-    .accounts({ task: a.task, taskJobSpec: a.jobSpec, escrow: null, hireRecord: a.hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .accounts({ task: a.task, taskJobSpec: a.jobSpec, escrow: null, hireRecord: a.hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), a.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
     .remainingAccounts([{ pubkey: b.taskMod, isSigner: false, isWritable: true }])
     .instruction();
   expectFail(send(w.svm, closeIx, [w.buyer]), "InvalidInput", "close_task rejects another task's moderation child");
@@ -2059,7 +2104,7 @@ test("negative: close_task rejects a non-terminal (Open) task", async () => {
 
   const closeIx = await w.buyerProg.methods
     .closeTask()
-    .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, authority: w.buyer.publicKey })
+    .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction();
   expectFail(send(w.svm, closeIx, [w.buyer]), "TaskNotClosable", "close Open task");
 });

@@ -26,6 +26,7 @@ import {
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
+  type ReadonlyAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
@@ -54,6 +55,8 @@ export type CloseTaskInstruction<
   TAccountEscrow extends string | AccountMeta<string> = string,
   TAccountHireRecord extends string | AccountMeta<string> = string,
   TAccountListing extends string | AccountMeta<string> = string,
+  TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
+  TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
@@ -75,6 +78,12 @@ export type CloseTaskInstruction<
       TAccountListing extends string
         ? WritableAccount<TAccountListing>
         : TAccountListing,
+      TAccountCreatorCompletionBond extends string
+        ? ReadonlyAccount<TAccountCreatorCompletionBond>
+        : TAccountCreatorCompletionBond,
+      TAccountWorkerCompletionBond extends string
+        ? WritableAccount<TAccountWorkerCompletionBond>
+        : TAccountWorkerCompletionBond,
       TAccountAuthority extends string
         ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
@@ -116,6 +125,8 @@ export type CloseTaskAsyncInput<
   TAccountEscrow extends string = string,
   TAccountHireRecord extends string = string,
   TAccountListing extends string = string,
+  TAccountCreatorCompletionBond extends string = string,
+  TAccountWorkerCompletionBond extends string = string,
   TAccountAuthority extends string = string,
 > = {
   task: Address<TAccountTask>;
@@ -144,6 +155,25 @@ export type CloseTaskAsyncInput<
    * capacity counter can be decremented. Verified against `hire_record.listing`.
    */
   listing?: Address<TAccountListing>;
+  /**
+   * Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
+   * REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
+   * (which reclaim_completion_bond needs) can never be destroyed out from under an
+   * unsettled creator bond. The party is the creator, so this PDA is canonically
+   * derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+   */
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  /**
+   * Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot
+   * canonically pin this (the worker authority is not recorded on the Task after the
+   * claim closes), so it is checked only when supplied: if a live program-owned bond is
+   * passed, close is REFUSED. The hard guarantee for the worker bond comes from the
+   * Completed settlement paths (accept/auto_accept/complete), which are now required +
+   * pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond
+   * (now also valid on Cancelled) is the worker's permissionless recovery on the cancel
+   * path. CHECK: liveness checked in the handler when present.
+   */
+  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
   authority: TransactionSigner<TAccountAuthority>;
 };
@@ -154,6 +184,8 @@ export async function getCloseTaskInstructionAsync<
   TAccountEscrow extends string,
   TAccountHireRecord extends string,
   TAccountListing extends string,
+  TAccountCreatorCompletionBond extends string,
+  TAccountWorkerCompletionBond extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -163,6 +195,8 @@ export async function getCloseTaskInstructionAsync<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond,
     TAccountAuthority
   >,
   config?: { programAddress?: TProgramAddress },
@@ -174,6 +208,8 @@ export async function getCloseTaskInstructionAsync<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond,
     TAccountAuthority
   >
 > {
@@ -188,6 +224,14 @@ export async function getCloseTaskInstructionAsync<
     escrow: { value: input.escrow ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: true },
     listing: { value: input.listing ?? null, isWritable: true },
+    creatorCompletionBond: {
+      value: input.creatorCompletionBond ?? null,
+      isWritable: false,
+    },
+    workerCompletionBond: {
+      value: input.workerCompletionBond ?? null,
+      isWritable: true,
+    },
     authority: { value: input.authority ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
@@ -229,6 +273,8 @@ export async function getCloseTaskInstructionAsync<
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
+      getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("authority", accounts.authority),
     ],
     data: getCloseTaskInstructionDataEncoder().encode({}),
@@ -240,6 +286,8 @@ export async function getCloseTaskInstructionAsync<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond,
     TAccountAuthority
   >);
 }
@@ -250,6 +298,8 @@ export type CloseTaskInput<
   TAccountEscrow extends string = string,
   TAccountHireRecord extends string = string,
   TAccountListing extends string = string,
+  TAccountCreatorCompletionBond extends string = string,
+  TAccountWorkerCompletionBond extends string = string,
   TAccountAuthority extends string = string,
 > = {
   task: Address<TAccountTask>;
@@ -278,6 +328,25 @@ export type CloseTaskInput<
    * capacity counter can be decremented. Verified against `hire_record.listing`.
    */
   listing?: Address<TAccountListing>;
+  /**
+   * Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
+   * REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
+   * (which reclaim_completion_bond needs) can never be destroyed out from under an
+   * unsettled creator bond. The party is the creator, so this PDA is canonically
+   * derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+   */
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  /**
+   * Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot
+   * canonically pin this (the worker authority is not recorded on the Task after the
+   * claim closes), so it is checked only when supplied: if a live program-owned bond is
+   * passed, close is REFUSED. The hard guarantee for the worker bond comes from the
+   * Completed settlement paths (accept/auto_accept/complete), which are now required +
+   * pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond
+   * (now also valid on Cancelled) is the worker's permissionless recovery on the cancel
+   * path. CHECK: liveness checked in the handler when present.
+   */
+  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
   authority: TransactionSigner<TAccountAuthority>;
 };
@@ -288,6 +357,8 @@ export function getCloseTaskInstruction<
   TAccountEscrow extends string,
   TAccountHireRecord extends string,
   TAccountListing extends string,
+  TAccountCreatorCompletionBond extends string,
+  TAccountWorkerCompletionBond extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -297,6 +368,8 @@ export function getCloseTaskInstruction<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond,
     TAccountAuthority
   >,
   config?: { programAddress?: TProgramAddress },
@@ -307,6 +380,8 @@ export function getCloseTaskInstruction<
   TAccountEscrow,
   TAccountHireRecord,
   TAccountListing,
+  TAccountCreatorCompletionBond,
+  TAccountWorkerCompletionBond,
   TAccountAuthority
 > {
   // Program address.
@@ -320,6 +395,14 @@ export function getCloseTaskInstruction<
     escrow: { value: input.escrow ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: true },
     listing: { value: input.listing ?? null, isWritable: true },
+    creatorCompletionBond: {
+      value: input.creatorCompletionBond ?? null,
+      isWritable: false,
+    },
+    workerCompletionBond: {
+      value: input.workerCompletionBond ?? null,
+      isWritable: true,
+    },
     authority: { value: input.authority ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
@@ -335,6 +418,8 @@ export function getCloseTaskInstruction<
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
+      getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("authority", accounts.authority),
     ],
     data: getCloseTaskInstructionDataEncoder().encode({}),
@@ -346,6 +431,8 @@ export function getCloseTaskInstruction<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond,
     TAccountAuthority
   >);
 }
@@ -382,8 +469,27 @@ export type ParsedCloseTaskInstruction<
      * capacity counter can be decremented. Verified against `hire_record.listing`.
      */
     listing?: TAccountMetas[4] | undefined;
+    /**
+     * Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
+     * REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
+     * (which reclaim_completion_bond needs) can never be destroyed out from under an
+     * unsettled creator bond. The party is the creator, so this PDA is canonically
+     * derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+     */
+    creatorCompletionBond: TAccountMetas[5];
+    /**
+     * Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot
+     * canonically pin this (the worker authority is not recorded on the Task after the
+     * claim closes), so it is checked only when supplied: if a live program-owned bond is
+     * passed, close is REFUSED. The hard guarantee for the worker bond comes from the
+     * Completed settlement paths (accept/auto_accept/complete), which are now required +
+     * pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond
+     * (now also valid on Cancelled) is the worker's permissionless recovery on the cancel
+     * path. CHECK: liveness checked in the handler when present.
+     */
+    workerCompletionBond?: TAccountMetas[6] | undefined;
     /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
-    authority: TAccountMetas[5];
+    authority: TAccountMetas[7];
   };
   data: CloseTaskInstructionData;
 };
@@ -396,12 +502,12 @@ export function parseCloseTaskInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCloseTaskInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 6) {
+  if (instruction.accounts.length < 8) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 6,
+        expectedAccountMetas: 8,
       },
     );
   }
@@ -425,6 +531,8 @@ export function parseCloseTaskInstruction<
       escrow: getNextOptionalAccount(),
       hireRecord: getNextAccount(),
       listing: getNextOptionalAccount(),
+      creatorCompletionBond: getNextAccount(),
+      workerCompletionBond: getNextOptionalAccount(),
       authority: getNextAccount(),
     },
     data: getCloseTaskInstructionDataDecoder().decode(instruction.data),

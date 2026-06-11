@@ -16,7 +16,7 @@ import {
 
 export type CompletionBondSeeds = {
   task: Address;
-  authority: Address;
+  party: Address;
 };
 
 export async function findCompletionBondPda(
@@ -36,7 +36,7 @@ export async function findCompletionBondPda(
         ]),
       ),
       getAddressEncoder().encode(seeds.task),
-      getAddressEncoder().encode(seeds.authority),
+      getAddressEncoder().encode(seeds.party),
     ],
   });
 }

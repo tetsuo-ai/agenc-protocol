@@ -44,9 +44,16 @@ pub struct ReclaimCompletionBond<'info> {
 }
 
 pub fn handler(ctx: Context<ReclaimCompletionBond>, role: u8) -> Result<()> {
-    // Only a Completed task owes both bonds back to their posters.
+    // A Completed task owes both bonds back to their posters. A Cancelled task is also
+    // accepted (audit F12/F13/F75) as a permissionless safety net: cancel_task settles
+    // bonds only if the caller passes them, so a bond omitted on cancel would otherwise be
+    // unrecoverable — this lets ANYONE (including the bond poster) refund a still-live bond
+    // to its rightful party while the Task PDA is alive. settle_completion_bond refunds to
+    // bond.party only, so it cannot misroute funds; a dispute LOSER's bond was already
+    // forfeited+closed inside resolve_dispute, so it is a no-op here. Reclaim never forfeits.
     require!(
-        ctx.accounts.task.status == TaskStatus::Completed,
+        ctx.accounts.task.status == TaskStatus::Completed
+            || ctx.accounts.task.status == TaskStatus::Cancelled,
         CoordinationError::InvalidStatusTransition
     );
 

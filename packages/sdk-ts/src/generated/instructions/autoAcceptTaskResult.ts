@@ -39,10 +39,12 @@ import {
 } from "@solana/program-client-core";
 import {
   findAcceptTaskResultClaimPda,
+  findCreatorCompletionBondPda,
   findEscrowPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  findWorkerCompletionBondPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -409,6 +411,30 @@ export async function getAutoAcceptTaskResultInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.creatorCompletionBond.value) {
+    accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
+  if (!accounts.workerCompletionBond.value) {
+    accounts.workerCompletionBond.value = await findWorkerCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      workerAuthority: getAddressFromResolvedInstructionAccount(
+        "workerAuthority",
+        accounts.workerAuthority.value,
+      ),
+    });
+  }
   if (!accounts.tokenProgram.value) {
     accounts.tokenProgram.value =
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address<"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA">;
@@ -516,8 +542,8 @@ export type AutoAcceptTaskResultInput<
    * receives the referrer leg (SOL).
    */
   referrer?: Address<TAccountReferrer>;
-  creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
-  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   authority: TransactionSigner<TAccountAuthority>;
   tokenEscrowAta?: Address<TAccountTokenEscrowAta>;
   workerTokenAccount?: Address<TAccountWorkerTokenAccount>;
@@ -741,8 +767,8 @@ export type ParsedAutoAcceptTaskResultInstruction<
      * receives the referrer leg (SOL).
      */
     referrer?: TAccountMetas[12] | undefined;
-    creatorCompletionBond?: TAccountMetas[13] | undefined;
-    workerCompletionBond?: TAccountMetas[14] | undefined;
+    creatorCompletionBond: TAccountMetas[13];
+    workerCompletionBond: TAccountMetas[14];
     authority: TAccountMetas[15];
     tokenEscrowAta?: TAccountMetas[16] | undefined;
     workerTokenAccount?: TAccountMetas[17] | undefined;
@@ -799,8 +825,8 @@ export function parseAutoAcceptTaskResultInstruction<
       hireRecord: getNextOptionalAccount(),
       operator: getNextOptionalAccount(),
       referrer: getNextOptionalAccount(),
-      creatorCompletionBond: getNextOptionalAccount(),
-      workerCompletionBond: getNextOptionalAccount(),
+      creatorCompletionBond: getNextAccount(),
+      workerCompletionBond: getNextAccount(),
       authority: getNextAccount(),
       tokenEscrowAta: getNextOptionalAccount(),
       workerTokenAccount: getNextOptionalAccount(),

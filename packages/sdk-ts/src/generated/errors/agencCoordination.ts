@@ -630,6 +630,8 @@ export const AGENC_COORDINATION_ERROR__INVALID_AGENT_VERIFICATION_METHOD = 0x18a
 export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN = 0x18a2; // 6306
 /** ProviderAgentNotActive: Provider agent must be Active for this listing operation */
 export const AGENC_COORDINATION_ERROR__PROVIDER_AGENT_NOT_ACTIVE = 0x18a3; // 6307
+/** TaskHasLiveCompletionBond: Task has a live completion bond; reclaim it before closing the task */
+export const AGENC_COORDINATION_ERROR__TASK_HAS_LIVE_COMPLETION_BOND = 0x18a4; // 6308
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -884,6 +886,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__TASK_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_FROZEN_CANNOT_DISPUTE
   | typeof AGENC_COORDINATION_ERROR__TASK_FULLY_CLAIMED
+  | typeof AGENC_COORDINATION_ERROR__TASK_HAS_LIVE_COMPLETION_BOND
   | typeof AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_TASK_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__TASK_MODERATION_EXPIRED
@@ -1198,6 +1201,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__TASK_EXPIRED]: `Task has expired`,
     [AGENC_COORDINATION_ERROR__TASK_FROZEN_CANNOT_DISPUTE]: `A frozen (rejected) task cannot be disputed`,
     [AGENC_COORDINATION_ERROR__TASK_FULLY_CLAIMED]: `Task has reached maximum workers`,
+    [AGENC_COORDINATION_ERROR__TASK_HAS_LIVE_COMPLETION_BOND]: `Task has a live completion bond; reclaim it before closing the task`,
     [AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED]: `Task claim requires a moderated job specification pointer`,
     [AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_TASK_MISMATCH]: `Task job specification account does not belong to this task`,
     [AGENC_COORDINATION_ERROR__TASK_MODERATION_EXPIRED]: `Task moderation decision is expired`,
