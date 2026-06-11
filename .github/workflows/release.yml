@@ -11,6 +11,12 @@ name: Release
 # (the attestation goes to a public transparency log). This repo is currently
 # private, so provenance is OFF. When the repo goes public (PLAN.md P0.6/P8.3),
 # add `--provenance` to both publish commands below.
+#
+# NOTE on verifiable builds: `.github/workflows/verify.yml` runs on the same
+# `protocol-v*` tags and attaches the reproducible on-chain program build hash
+# (`verifiable-build-hashes.txt`) to the Release this workflow creates. Full
+# third-party source-verification (solana-verify verify-from-repo / osec.io) is
+# gated on the repo going public — see docs/VERIFIABLE_BUILDS.md.
 
 on:
   push:

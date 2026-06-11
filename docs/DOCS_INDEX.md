@@ -24,8 +24,14 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [../packages/protocol/README.md](../packages/protocol/README.md) - npm package consumer view
 - [../migrations/README.md](../migrations/README.md) - migration authority and current-state guidance
 - [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - security assumptions referenced by the fuzz harness
+- [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - external-auditor entry point: scope (82-ix full surface + the two migrations), invariants, prior internal audits, test inventory, migration choreography
+- [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results
+- [./VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md) - reproducible build + verifying the deployed program matches source (what's provable now vs public-repo-gated)
+- [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 "the operator vanishes and it still works": the executed, reproducible zero-hosted-dependency hire→settle proof (`scripts/credible-exit.mjs`), with the honest gap list (source/verifiable-build/multisig deferred)
 
 ## Read By Task
+
+- I need the neutrality / credible-exit proof: [CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md)
 
 - I need the repo layout: [CODEBASE_MAP.md](./CODEBASE_MAP.md)
 - I need the on-chain surface: [PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md)
