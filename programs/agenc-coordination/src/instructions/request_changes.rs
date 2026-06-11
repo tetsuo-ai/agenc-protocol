@@ -104,6 +104,25 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
         CoordinationError::MaxRevisionRoundsExceeded
     );
 
+    // Guarantee a change-requested worker a fair resubmit window (audit #70).
+    // submit_task_result blocks once now > task.deadline or now > claim.expires_at,
+    // so a creator who requests changes near the deadline would otherwise strand
+    // the worker, then cancel the task as a "no-show" (cancel_task allows an
+    // InProgress, past-deadline, zero-completion task) and forfeit the worker's
+    // completion bond — stealing the bond of someone who actually delivered work.
+    // Extend both bounds to at least now + the review window so the worker always
+    // has time to resubmit before the task can become no-show-cancellable. Read the
+    // window before borrowing claim/task mutably below.
+    let resubmit_window = ctx
+        .accounts
+        .task_validation_config
+        .review_window_secs
+        .max(0);
+    let min_resubmit_deadline = clock
+        .unix_timestamp
+        .checked_add(resubmit_window)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+
     // Bounce the submission back for an in-place resubmit; the claim stays OPEN and the
     // worker remains engaged (no slot release, no claim close).
     let claim = &mut ctx.accounts.claim;
@@ -114,6 +133,10 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     claim.is_completed = false;
     claim.is_validated = false;
     claim.completed_at = 0;
+    // Keep the claim alive long enough for the resubmit (see #70 note above).
+    if claim.expires_at > 0 && claim.expires_at < min_resubmit_deadline {
+        claim.expires_at = min_resubmit_deadline;
+    }
 
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
 
@@ -127,6 +150,12 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     // Back to active so the worker resubmits in place (claim retained).
     let task = &mut ctx.accounts.task;
     task.status = TaskStatus::InProgress;
+    // Push the task deadline out far enough that the worker can resubmit before the
+    // task is no-show-cancellable (see #70 note above). A task with no deadline
+    // (deadline == 0) is unaffected.
+    if task.deadline > 0 && task.deadline < min_resubmit_deadline {
+        task.deadline = min_resubmit_deadline;
+    }
 
     emit!(TaskChangesRequested {
         task: task.key(),
