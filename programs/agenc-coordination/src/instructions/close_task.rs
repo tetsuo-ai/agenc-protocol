@@ -58,24 +58,32 @@ pub struct CloseTask<'info> {
     /// Optional leftover job-spec pointer for this task. When provided it is closed
     /// alongside the task so its rent is reclaimed too. Bound to this task by seeds
     /// + constraint so a caller cannot close another task's pointer.
+    // Boxed: an unboxed `Account<TaskJobSpec>` here deserializes the full struct onto
+    // the stack and overflows the 4KB SBF frame of `CloseTask::try_accounts` (the
+    // full-surface trampoline accreted several heavy accounts over the feature batches).
+    // Box moves the deserialized copy to the heap; all Anchor constraints
+    // (mut/seeds/bump/constraint) and close behavior are byte-identical. Mirrors the
+    // cancel_task SPL-account boxing fix.
     #[account(
         mut,
         seeds = [b"task_job_spec", task.key().as_ref()],
         bump = task_job_spec.bump,
         constraint = task_job_spec.task == task.key() @ CoordinationError::TaskJobSpecTaskMismatch
     )]
-    pub task_job_spec: Option<Account<'info, TaskJobSpec>>,
+    pub task_job_spec: Option<Box<Account<'info, TaskJobSpec>>>,
 
     /// Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow
     /// account open (drained, `is_closed = true`) on a terminal task; provide it
     /// here to reclaim its rent. Bound to this task by seeds + constraint.
+    // Boxed for the same SBF stack-frame reason as `task_job_spec` above — moves the
+    // deserialized escrow off the stack; constraints and close behavior unchanged.
     #[account(
         mut,
         seeds = [b"escrow", task.key().as_ref()],
         bump = escrow.bump,
         constraint = escrow.task == task.key() @ CoordinationError::InvalidInput
     )]
-    pub escrow: Option<Account<'info, TaskEscrow>>,
+    pub escrow: Option<Box<Account<'info, TaskEscrow>>>,
 
     /// Hire link PDA for this task. ALWAYS required — the caller passes the derived
     /// ["hire", task] address even for non-hired tasks (where it is an empty system
@@ -92,12 +100,15 @@ pub struct CloseTask<'info> {
 
     /// Source listing, required when a live hire link is present, so its `open_jobs`
     /// capacity counter can be decremented. Verified against `hire_record.listing`.
+    // Boxed for the same SBF stack-frame reason as `task_job_spec` above — moves the
+    // deserialized listing off the stack; constraints and the open_jobs/updated_at
+    // write-back behavior are unchanged.
     #[account(
         mut,
         seeds = [b"service_listing", listing.provider_agent.as_ref(), listing.listing_id.as_ref()],
         bump = listing.bump
     )]
-    pub listing: Option<Account<'info, ServiceListing>>,
+    pub listing: Option<Box<Account<'info, ServiceListing>>>,
 
     /// Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
     /// REFUSES to close the Task while this is a live program-owned bond, so the Task PDA

@@ -29,7 +29,8 @@
     "canary:build": "anchor build --no-idl -- --no-default-features --features mainnet-canary",
     "canary:idl": "anchor idl build -p agenc_coordination -o target/idl/agenc_coordination.canary.json -- --no-default-features --features mainnet-canary",
     "canary:check-idl": "node scripts/check-canary-idl.mjs",
-    "canary:test": "cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary"
+    "canary:test": "cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary",
+    "check:stack": "node scripts/check-stack-frames.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
