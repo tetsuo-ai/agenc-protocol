@@ -143,3 +143,17 @@ the challenge-window split of decide-vs-settle, (b) the `execute_resolution` /
 economics (stake size + slash curve) before any of step 3 is implemented. Until then,
 P6.4 ships steps 1+2 only; `overturned_count` and the resolver stake remain reserved
 hooks.
+
+---
+
+## DECISION (2026-06-10) — recorded: DESIGN APPROVED, BUILD DEFERRED
+
+The challenge-window + resolver-stake mechanism is the correct end-state (it closes the
+"a colluding resolver can rug a dispute with zero recourse" hole and gives roster
+resolvers skin in the game). But disputes are the rare exception path with **zero live
+volume**, and the accountable-disputes 80% (rationale on-chain, deciding resolver
+recorded, resolver counters — P6.4 steps 1+2) already shipped. Building a pending-outcome
++ vacate + stake-slash-on-overturn machine, and calibrating N, before any dispute has
+occurred is premature. BUILD TRIGGER: real dispute volume, or a single adversarial-resolver
+incident/credible threat — at which point N can be calibrated against observed timing.
+This design doc is build-ready when that trigger fires.

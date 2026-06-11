@@ -169,3 +169,27 @@ is the concrete reason this decision is load-bearing for the credible-exit test.
 
 _Decision owner: [HUMAN]. Once decided, link the chosen option from `docs/CREDIBLE_EXIT.md`
 (P8.6) and update `PLAN.md` P6.8 "Done when" to reference the implemented option._
+
+---
+
+## DECISION (2026-06-10) — recorded
+
+**Chosen: the registry (curated attestor roster) is the launch answer; permissionless
+per-integrator attestor choice is the committed post-PMF path.**
+
+Rationale (money/adoption framing): the attestor registry (P6.8, shipped) already
+delivers the neutrality story for vetted partners — `record_listing_moderation`/
+`record_task_moderation` accept the global authority **or any registered attestor**, and
+the hire gate accepts a publishable attestation from any of them, so a partner who runs
+a registered attestor can attest their own listings. Going *fully permissionless* now
+(anyone self-registers an attestor and self-attests CLEAN) would open a self-attestation
+scam vector the on-chain fail-closed gate cannot stop; an early scam/lemons flood destroys
+the buyer trust that drives repeat purchases (the north-star revenue metric). Per the
+governance lesson — decentralize **after** product-market fit, not before — we keep
+attestor *assignment* authority-gated at launch (quality), surface "attested by &lt;X&gt;" in
+discovery (the demand side sees who vouched), and publicly commit to opening attestor
+registration / per-listing attestor designation once there is real attestor diversity.
+The credible-exit promise (open program, state in PDAs, forkability, capped on-chain fee)
+remains structural regardless. Option (a) the moderation-optional discovery tier is
+deferred to the same post-PMF window (it only means "curated discovery" once multiple
+attestors exist). Option (c) pure status-quo is superseded by this.

@@ -33,9 +33,12 @@ const REPUTATION_STAKING_COOLDOWN = 604_800n;
 const MIN_DELEGATION_DURATION = 604_800n;
 const MIN_DELEGATION_AMOUNT = 100;
 const MAX_REPUTATION = 10000;
+// P6.7: fresh agents start at the probationary reputation, not the old max-neutral 5000.
+const PROBATIONARY_REPUTATION = 3000;
 
 // Register a fresh, standalone agent (its own authority keypair) into the world.
-// Returns { kp, prog, agentPda }. INITIAL_REPUTATION is 5000 and status = Active.
+// Returns { kp, prog, agentPda }. Fresh agents start at PROBATIONARY_REPUTATION (3000,
+// P6.7) and status = Active.
 async function registerAgent(w, { capabilities = 1, fund = 100e9 } = {}) {
   const kp = Keypair.generate();
   w.svm.airdrop(kp.publicKey, BigInt(fund));
@@ -354,7 +357,7 @@ test("delegate_reputation: creates delegation account + debits delegator reputat
   const delegatee = await registerAgent(w);
   const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
 
-  const repBefore = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation; // 5000
+  const repBefore = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation; // 3000 (P6.7)
   const amount = 1000;
 
   expectOk(
@@ -489,8 +492,14 @@ test("revoke_delegation: after min duration closes account + restores reputation
   const w = await freshWorld();
   const { delegator, delPda, amount } = await setupDelegation(w, 1000);
 
-  const repAfterDelegate = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation; // 5000-1000
-  assert.equal(repAfterDelegate, 5000 - amount, "reputation debited on delegate (precondition)");
+  // P6.7: fresh agents now start at PROBATIONARY_REPUTATION (3000), not 5000, so after
+  // delegating `amount` the delegator holds 3000 - amount.
+  const repAfterDelegate = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation; // 3000-1000
+  assert.equal(
+    repAfterDelegate,
+    PROBATIONARY_REPUTATION - amount,
+    "reputation debited on delegate (precondition)",
+  );
 
   // Warp past the minimum delegation duration so revoke is allowed.
   const clk = w.svm.getClock();

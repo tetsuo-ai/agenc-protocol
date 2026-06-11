@@ -388,7 +388,18 @@ impl Default for ProtocolConfig {
             dispute_threshold: 50,
             protocol_fee_bps: 100,
             min_arbiter_stake: 0,
-            min_agent_stake: 0,
+            // P6.7 sybil deterrent: a fresh protocol init requires a nonzero, slashable
+            // stake per agent identity so a sybil identity COSTS money (the primary
+            // deterrent; the probationary reputation start is the secondary one). This is
+            // exactly the 0.001 SOL floor (`MIN_REASONABLE_STAKE`) that
+            // `initialize_protocol` already enforces (`min_stake >= MIN_REASONABLE_STAKE`),
+            // so a fresh init can never go below it anyway — the default now matches.
+            // NOTE: this only affects FRESH initialize_protocol (devnet/localnet/new
+            // deploys); the already-initialized live mainnet config is unaffected. Raising
+            // mainnet's min_agent_stake is a [HUMAN] deploy-time config update — and see
+            // P6.7 in PLAN.md: there is currently NO config-update instruction that mutates
+            // min_agent_stake (only initialize_protocol sets it).
+            min_agent_stake: 1_000_000,
             max_claim_duration: ProtocolConfig::DEFAULT_MAX_CLAIM_DURATION,
             max_dispute_duration: ProtocolConfig::DEFAULT_MAX_DISPUTE_DURATION,
             total_agents: 0,
