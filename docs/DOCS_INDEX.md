@@ -16,6 +16,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md) - private-completion and zk-config flow
 - [./JOB_SPEC_REQUIRED_FLAG_DECISION.md](./JOB_SPEC_REQUIRED_FLAG_DECISION.md) - decision record for job-spec-required protocol flag evaluation
 - [./LISTING_METADATA.md](./LISTING_METADATA.md) - LISTING_METADATA v1: ServiceListing name/category/tags encoding, category taxonomy, and the spec_uri JSON Schema
+- [./VERSIONS.md](./VERSIONS.md) - P6.5 surface-versioning: program build ↔ SDK semver ↔ cluster matrix, `surface_revision` / `getDeployedSurface`, the `anchor idl init` release-runbook note, and the deprecation policy
 
 ## Other Active Docs
 

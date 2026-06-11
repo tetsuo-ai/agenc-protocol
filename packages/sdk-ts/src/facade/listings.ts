@@ -167,7 +167,10 @@ export async function setServiceListingState(
  * listing-moderation attestation PDA (bound to the listing's pinned spec hash)
  * instead of requiring the caller to compute it.
  */
-export type HireFromListingInput = HireFromListingAsyncInput & {
+export type HireFromListingInput = Omit<
+  HireFromListingAsyncInput,
+  "referrer" | "referrerFeeBps"
+> & {
   /**
    * The listing's pinned `spec_hash` (32 bytes). When provided and
    * `listingModeration` is not, the facade derives `listingModeration` from
@@ -175,6 +178,17 @@ export type HireFromListingInput = HireFromListingAsyncInput & {
    * the moderation gate is disabled, or pass `listingModeration` explicitly.
    */
   listingSpecHash?: HireFromListingAsyncInput["taskId"];
+  /**
+   * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
+   * pre-referrer behavior: the facade defaults `referrer` to `null` (the
+   * Option::None the program treats as "no referrer") and `referrerFeeBps` to
+   * `0`, which the on-chain `resolve_referrer_snapshot` maps to the no-leg/skip
+   * path — no funds are ever routed to a default/wrong address. Pass a real
+   * `referrer` with a non-zero `referrerFeeBps` to opt a demand-side embedder
+   * into the 4-way settlement split.
+   */
+  referrer?: HireFromListingAsyncInput["referrer"];
+  referrerFeeBps?: HireFromListingAsyncInput["referrerFeeBps"];
 };
 
 /**
@@ -188,15 +202,23 @@ export type HireFromListingInput = HireFromListingAsyncInput & {
  * the facade derives it from (listing, specHash).
  */
 export async function hireFromListing(input: HireFromListingInput) {
-  const { listingSpecHash, ...rest } = input;
-  if (rest.listingModeration === undefined && listingSpecHash !== undefined) {
+  const { listingSpecHash, referrer, referrerFeeBps, ...rest } = input;
+  const withReferrer = {
+    ...rest,
+    referrer: referrer ?? null,
+    referrerFeeBps: referrerFeeBps ?? 0,
+  };
+  if (withReferrer.listingModeration === undefined && listingSpecHash !== undefined) {
     const [listingModeration] = await findListingModerationPda({
-      listing: rest.listing,
+      listing: withReferrer.listing,
       jobSpecHash: listingSpecHash,
     });
-    return getHireFromListingInstructionAsync({ ...rest, listingModeration });
+    return getHireFromListingInstructionAsync({
+      ...withReferrer,
+      listingModeration,
+    });
   }
-  return getHireFromListingInstructionAsync(rest);
+  return getHireFromListingInstructionAsync(withReferrer);
 }
 
 /**
@@ -205,16 +227,25 @@ export async function hireFromListing(input: HireFromListingInput) {
  * the listing-moderation attestation PDA (bound to the listing's pinned spec
  * hash) instead of requiring the caller to compute it.
  */
-export type HireFromListingHumanlessInput =
-  HireFromListingHumanlessAsyncInput & {
-    /**
-     * The listing's pinned `spec_hash` (32 bytes). When provided and
-     * `listingModeration` is not, the facade derives `listingModeration` from
-     * (listing, specHash) so the fail-closed moderation gate resolves. Omit when
-     * the moderation gate is disabled, or pass `listingModeration` explicitly.
-     */
-    listingSpecHash?: HireFromListingHumanlessAsyncInput["taskId"];
-  };
+export type HireFromListingHumanlessInput = Omit<
+  HireFromListingHumanlessAsyncInput,
+  "referrer" | "referrerFeeBps"
+> & {
+  /**
+   * The listing's pinned `spec_hash` (32 bytes). When provided and
+   * `listingModeration` is not, the facade derives `listingModeration` from
+   * (listing, specHash) so the fail-closed moderation gate resolves. Omit when
+   * the moderation gate is disabled, or pass `listingModeration` explicitly.
+   */
+  listingSpecHash?: HireFromListingHumanlessAsyncInput["taskId"];
+  /**
+   * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
+   * pre-referrer behavior: defaults to the no-leg/skip path (`referrer: null`,
+   * `referrerFeeBps: 0`), so no funds are ever routed to a default/wrong address.
+   */
+  referrer?: HireFromListingHumanlessAsyncInput["referrer"];
+  referrerFeeBps?: HireFromListingHumanlessAsyncInput["referrerFeeBps"];
+};
 
 /**
  * Build a hire_from_listing_humanless instruction — the human-visitor storefront
@@ -229,18 +260,23 @@ export type HireFromListingHumanlessInput =
 export async function hireFromListingHumanless(
   input: HireFromListingHumanlessInput,
 ) {
-  const { listingSpecHash, ...rest } = input;
-  if (rest.listingModeration === undefined && listingSpecHash !== undefined) {
+  const { listingSpecHash, referrer, referrerFeeBps, ...rest } = input;
+  const withReferrer = {
+    ...rest,
+    referrer: referrer ?? null,
+    referrerFeeBps: referrerFeeBps ?? 0,
+  };
+  if (withReferrer.listingModeration === undefined && listingSpecHash !== undefined) {
     const [listingModeration] = await findListingModerationPda({
-      listing: rest.listing,
+      listing: withReferrer.listing,
       jobSpecHash: listingSpecHash,
     });
     return getHireFromListingHumanlessInstructionAsync({
-      ...rest,
+      ...withReferrer,
       listingModeration,
     });
   }
-  return getHireFromListingHumanlessInstructionAsync(rest);
+  return getHireFromListingHumanlessInstructionAsync(withReferrer);
 }
 
 /**

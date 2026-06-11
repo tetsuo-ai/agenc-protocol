@@ -505,6 +505,18 @@ pub struct OperatorFeePaid {
     pub timestamp: i64,
 }
 
+/// Emitted when a referrer (demand-side embedder) fee leg is paid out of a
+/// settlement (spec §4 4-way split, P6.2). Only emitted when the referrer leg is
+/// non-zero.
+#[event]
+pub struct ReferrerFeePaid {
+    pub task_id: [u8; 32],
+    pub referrer: Pubkey,
+    pub amount: u64,
+    pub referrer_fee_bps: u16,
+    pub timestamp: i64,
+}
+
 /// Emitted when a rate limit is hit
 #[event]
 pub struct RateLimitHit {
@@ -530,6 +542,17 @@ pub struct MigrationCompleted {
 #[event]
 pub struct TaskMigrated {
     pub task: Pubkey,
+    pub from_size: u32,
+    pub to_size: u32,
+    pub authority: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when the ProtocolConfig account is reallocated to the P6.5
+/// surface-versioning layout (349B -> 351B, zero-init `surface_revision`).
+#[event]
+pub struct ProtocolConfigMigrated {
+    pub config: Pubkey,
     pub from_size: u32,
     pub to_size: u32,
     pub authority: Pubkey,

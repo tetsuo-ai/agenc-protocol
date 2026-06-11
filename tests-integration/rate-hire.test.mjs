@@ -60,7 +60,7 @@ async function hireToCompleted(w) {
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .hireFromListing(arr(taskId), new BN(w.price), new BN(1))
+    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0)
     .accounts({
       task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration: listingMod,
@@ -95,7 +95,7 @@ async function hireToCompleted(w) {
     complete: async () => {
       expectOk(send(w.svm, await w.providerProg.methods
         .completeTask(arr(id32()), null)
-        .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: null, creatorCompletionBond: null, workerCompletionBond: null })
+        .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
         .instruction(), [w.provider]), "rate-hire:complete");
     } };
 }

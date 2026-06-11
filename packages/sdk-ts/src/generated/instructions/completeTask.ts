@@ -79,6 +79,7 @@ export type CompleteTaskInstruction<
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   TAccountHireRecord extends string | AccountMeta<string> = string,
   TAccountOperator extends string | AccountMeta<string> = string,
+  TAccountReferrer extends string | AccountMeta<string> = string,
   TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -135,6 +136,9 @@ export type CompleteTaskInstruction<
       TAccountOperator extends string
         ? WritableAccount<TAccountOperator>
         : TAccountOperator,
+      TAccountReferrer extends string
+        ? WritableAccount<TAccountReferrer>
+        : TAccountReferrer,
       TAccountCreatorCompletionBond extends string
         ? WritableAccount<TAccountCreatorCompletionBond>
         : TAccountCreatorCompletionBond,
@@ -202,6 +206,7 @@ export type CompleteTaskAsyncInput<
   TAccountTokenProgram extends string = string,
   TAccountHireRecord extends string = string,
   TAccountOperator extends string = string,
+  TAccountReferrer extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
 > = {
@@ -244,6 +249,11 @@ export type CompleteTaskAsyncInput<
    * operator fee leg in SOL.
    */
   operator?: Address<TAccountOperator>;
+  /**
+   * snapshotted referrer (P6.2 §4 4-way split). Required only when the task carries
+   * a non-zero referrer fee. Receives the referrer fee leg in SOL.
+   */
+  referrer?: Address<TAccountReferrer>;
   /** Validated in the handler by settle_completion_bond (owner/PDA/task/role/party). */
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
@@ -268,6 +278,7 @@ export async function getCompleteTaskInstructionAsync<
   TAccountTokenProgram extends string,
   TAccountHireRecord extends string,
   TAccountOperator extends string,
+  TAccountReferrer extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -289,6 +300,7 @@ export async function getCompleteTaskInstructionAsync<
     TAccountTokenProgram,
     TAccountHireRecord,
     TAccountOperator,
+    TAccountReferrer,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond
   >,
@@ -312,6 +324,7 @@ export async function getCompleteTaskInstructionAsync<
     TAccountTokenProgram,
     TAccountHireRecord,
     TAccountOperator,
+    TAccountReferrer,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond
   >
@@ -344,6 +357,7 @@ export async function getCompleteTaskInstructionAsync<
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     operator: { value: input.operator ?? null, isWritable: true },
+    referrer: { value: input.referrer ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -421,6 +435,7 @@ export async function getCompleteTaskInstructionAsync<
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("operator", accounts.operator),
+      getAccountMeta("referrer", accounts.referrer),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
     ],
@@ -446,6 +461,7 @@ export async function getCompleteTaskInstructionAsync<
     TAccountTokenProgram,
     TAccountHireRecord,
     TAccountOperator,
+    TAccountReferrer,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond
   >);
@@ -468,6 +484,7 @@ export type CompleteTaskInput<
   TAccountTokenProgram extends string = string,
   TAccountHireRecord extends string = string,
   TAccountOperator extends string = string,
+  TAccountReferrer extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
 > = {
@@ -510,6 +527,11 @@ export type CompleteTaskInput<
    * operator fee leg in SOL.
    */
   operator?: Address<TAccountOperator>;
+  /**
+   * snapshotted referrer (P6.2 §4 4-way split). Required only when the task carries
+   * a non-zero referrer fee. Receives the referrer fee leg in SOL.
+   */
+  referrer?: Address<TAccountReferrer>;
   /** Validated in the handler by settle_completion_bond (owner/PDA/task/role/party). */
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
@@ -534,6 +556,7 @@ export function getCompleteTaskInstruction<
   TAccountTokenProgram extends string,
   TAccountHireRecord extends string,
   TAccountOperator extends string,
+  TAccountReferrer extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -555,6 +578,7 @@ export function getCompleteTaskInstruction<
     TAccountTokenProgram,
     TAccountHireRecord,
     TAccountOperator,
+    TAccountReferrer,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond
   >,
@@ -577,6 +601,7 @@ export function getCompleteTaskInstruction<
   TAccountTokenProgram,
   TAccountHireRecord,
   TAccountOperator,
+  TAccountReferrer,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond
 > {
@@ -608,6 +633,7 @@ export function getCompleteTaskInstruction<
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     operator: { value: input.operator ?? null, isWritable: true },
+    referrer: { value: input.referrer ?? null, isWritable: true },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
       isWritable: true,
@@ -654,6 +680,7 @@ export function getCompleteTaskInstruction<
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("operator", accounts.operator),
+      getAccountMeta("referrer", accounts.referrer),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
     ],
@@ -679,6 +706,7 @@ export function getCompleteTaskInstruction<
     TAccountTokenProgram,
     TAccountHireRecord,
     TAccountOperator,
+    TAccountReferrer,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond
   >);
@@ -729,9 +757,14 @@ export type ParsedCompleteTaskInstruction<
      * operator fee leg in SOL.
      */
     operator?: TAccountMetas[15] | undefined;
+    /**
+     * snapshotted referrer (P6.2 §4 4-way split). Required only when the task carries
+     * a non-zero referrer fee. Receives the referrer fee leg in SOL.
+     */
+    referrer?: TAccountMetas[16] | undefined;
     /** Validated in the handler by settle_completion_bond (owner/PDA/task/role/party). */
-    creatorCompletionBond?: TAccountMetas[16] | undefined;
-    workerCompletionBond?: TAccountMetas[17] | undefined;
+    creatorCompletionBond?: TAccountMetas[17] | undefined;
+    workerCompletionBond?: TAccountMetas[18] | undefined;
   };
   data: CompleteTaskInstructionData;
 };
@@ -744,12 +777,12 @@ export function parseCompleteTaskInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCompleteTaskInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 18) {
+  if (instruction.accounts.length < 19) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 18,
+        expectedAccountMetas: 19,
       },
     );
   }
@@ -784,6 +817,7 @@ export function parseCompleteTaskInstruction<
       tokenProgram: getNextOptionalAccount(),
       hireRecord: getNextAccount(),
       operator: getNextOptionalAccount(),
+      referrer: getNextOptionalAccount(),
       creatorCompletionBond: getNextOptionalAccount(),
       workerCompletionBond: getNextOptionalAccount(),
     },

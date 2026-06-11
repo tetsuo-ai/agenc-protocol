@@ -65,12 +65,43 @@ export {
 };
 
 /**
+ * The demand-side referral leg (P6.2) on a create/hire input. Both fields are
+ * OPTIONAL in the facade: omit them (the default) for the exact pre-referrer
+ * behavior. The facade defaults `referrer` to `null` (the Option::None the
+ * program treats as "no referrer") and `referrerFeeBps` to `0`, which maps to
+ * the on-chain no-leg/skip path in `resolve_referrer_snapshot` — no funds are
+ * ever routed to a default/wrong address when no referrer is supplied. Pass a
+ * real `referrer` address with a non-zero `referrerFeeBps` to opt a demand-side
+ * embedder into the 4-way settlement split.
+ */
+type OptionalReferrer<T extends { referrer: unknown; referrerFeeBps: number }> =
+  Omit<T, "referrer" | "referrerFeeBps"> & {
+    referrer?: T["referrer"];
+    referrerFeeBps?: number;
+  };
+
+/** Apply the facade's referrer defaults (no-leg skip path): `null` / `0`. */
+function withReferrerDefaults<
+  T extends { referrer: unknown; referrerFeeBps: number },
+>(input: OptionalReferrer<T>): T {
+  return {
+    referrer: null,
+    referrerFeeBps: 0,
+    ...input,
+  } as T;
+}
+
+/**
  * Create a task. Auto-derives the task, escrow, protocol-config, and
  * authority-rate-limit PDAs; token accounts default to the SPL/ATA programs.
  * For a plain SOL task, pass `rewardMintArg: null` and omit the token accounts.
+ *
+ * The P6.2 demand-side referral leg is optional: omit `referrer`/`referrerFeeBps`
+ * for the exact pre-referrer behavior (they default to the no-leg skip path —
+ * `referrer: null`, `referrerFeeBps: 0`).
  */
-export async function createTask(input: CreateTaskAsyncInput) {
-  return getCreateTaskInstructionAsync(input);
+export async function createTask(input: OptionalReferrer<CreateTaskAsyncInput>) {
+  return getCreateTaskInstructionAsync(withReferrerDefaults(input));
 }
 
 /**
@@ -78,11 +109,14 @@ export async function createTask(input: CreateTaskAsyncInput) {
  * Forces a CreatorReview validation config so it can never settle on the auto-pay
  * path. Auto-derives task, escrow, validation config, protocol config, and the
  * wallet-scoped rate limit.
+ *
+ * The P6.2 demand-side referral leg is optional and defaults to the no-leg skip
+ * path (`referrer: null`, `referrerFeeBps: 0`).
  */
 export async function createTaskHumanless(
-  input: CreateTaskHumanlessAsyncInput,
+  input: OptionalReferrer<CreateTaskHumanlessAsyncInput>,
 ) {
-  return getCreateTaskHumanlessInstructionAsync(input);
+  return getCreateTaskHumanlessInstructionAsync(withReferrerDefaults(input));
 }
 
 /**

@@ -283,8 +283,9 @@ describe("autoAcceptTaskResult facade instruction", () => {
     expect(names[7]).toBe(C); // treasury
     expect(names[8]).toBe(D); // creator
     expect(names[9]).toBe(A); // workerAuthority
-    // hireRecord(10), operator(11), creator/workerCompletionBond(12,13) auto-derived.
-    expect(names[14]).toBe(signerA.address); // authority
+    // hireRecord(10), operator(11), referrer(12), creator/workerCompletionBond(13,14)
+    // auto-derived (P6.2 inserted the optional referrer leg between operator and bonds).
+    expect(names[15]).toBe(signerA.address); // authority
 
     const decoded =
       getAutoAcceptTaskResultInstructionDataDecoder().decode(ix.data);

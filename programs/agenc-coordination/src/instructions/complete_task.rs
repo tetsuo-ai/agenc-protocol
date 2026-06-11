@@ -8,8 +8,9 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
-    validate_completion_prereqs, validate_task_dependency, OperatorLeg,
+    build_referrer_leg, calculate_fee_with_reputation, execute_completion_rewards,
+    load_task_claim_or_not_claimed, validate_completion_prereqs, validate_task_dependency,
+    OperatorLeg,
 };
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
@@ -126,6 +127,12 @@ pub struct CompleteTask<'info> {
     /// operator fee leg in SOL.
     #[account(mut)]
     pub operator: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: referrer payee — validated in the handler to equal the task's
+    /// snapshotted referrer (P6.2 §4 4-way split). Required only when the task carries
+    /// a non-zero referrer fee. Receives the referrer fee leg in SOL.
+    #[account(mut)]
+    pub referrer: Option<UncheckedAccount<'info>>,
 
     // === Batch 3 completion bonds (optional) ===
     /// CHECK: creator completion bond PDA; refunded to the creator on success.
@@ -301,19 +308,34 @@ fn handle_complete_task<'info>(
     // HireRecord — never drop this fallback or those operators go unpaid. A worker
     // still cannot dodge the leg: the operator terms come from program-owned state,
     // and the seeds-fixed hire_record account stays required by the struct.
-    let (operator_pubkey, operator_fee_bps_resolved) = if task.operator != Pubkey::default() {
-        (task.operator, task.operator_fee_bps)
-    } else if accounts.hire_record.owner == &crate::ID {
-        let hire_info = accounts.hire_record.to_account_info();
-        let hire = {
-            let data = hire_info.try_borrow_data()?;
-            HireRecord::try_deserialize(&mut &data[..])?
+    // Resolve BOTH the operator (supply-side) and referrer (P6.2 demand-side) legs
+    // from program-owned state: Task-first (stamped at hire/create), HireRecord
+    // fallback for pre-stamp tasks. Neither leg can be dodged — the terms come from
+    // trusted on-chain snapshots, and a present leg makes its payee account required.
+    let (operator_pubkey, operator_fee_bps_resolved, referrer_pubkey, referrer_fee_bps_resolved) =
+        if task.operator != Pubkey::default() || task.referrer != Pubkey::default() {
+            (
+                task.operator,
+                task.operator_fee_bps,
+                task.referrer,
+                task.referrer_fee_bps,
+            )
+        } else if accounts.hire_record.owner == &crate::ID {
+            let hire_info = accounts.hire_record.to_account_info();
+            let hire = {
+                let data = hire_info.try_borrow_data()?;
+                HireRecord::try_deserialize(&mut &data[..])?
+            };
+            require!(hire.task == task_key, CoordinationError::InvalidHireRecord);
+            (
+                hire.operator,
+                hire.operator_fee_bps,
+                hire.referrer,
+                hire.referrer_fee_bps,
+            )
+        } else {
+            (Pubkey::default(), 0, Pubkey::default(), 0)
         };
-        require!(hire.task == task_key, CoordinationError::InvalidHireRecord);
-        (hire.operator, hire.operator_fee_bps)
-    } else {
-        (Pubkey::default(), 0)
-    };
     let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
         let op = accounts
             .operator
@@ -330,6 +352,11 @@ fn handle_complete_task<'info>(
     } else {
         None
     };
+    let referrer_leg = build_referrer_leg(
+        referrer_pubkey,
+        referrer_fee_bps_resolved,
+        accounts.referrer.as_ref().map(|r| r.as_ref()),
+    )?;
 
     // Execute reward transfer, state updates, event emissions, and conditional escrow closure
     execute_completion_rewards(
@@ -347,6 +374,7 @@ fn handle_complete_task<'info>(
         &clock,
         token_accounts,
         operator_leg,
+        referrer_leg,
     )?;
 
     if let Some(settlement) = &bid_settlement {

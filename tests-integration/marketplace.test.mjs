@@ -314,7 +314,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
 
   // 1) create_task (buyer + buyerAgent), Auto mode (constraint_hash = None)
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "settle:create_task");
 
@@ -348,7 +348,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: autoHire, operator: null, creatorCompletionBond: null, workerCompletionBond: null })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: autoHire, operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
     .instruction(), [w.provider]), "settle:complete");
 
   return { task, escrow, claim, jobSpec, taskMod, workerAuthority: w.provider.publicKey, workerBalBefore, treasuryBalBefore, reward };
@@ -425,7 +425,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
   //    split fires. operator may be null when the listing has no operator fee.
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator, creatorCompletionBond: null, workerCompletionBond: null })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord, operator: w.operator, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
     .instruction(), [w.provider]), "hire-settle:complete");
 
   return { task, escrow, claim, hireRecord, taskMod, jobSpec, workerBalBefore, treasuryBalBefore, operatorBalBefore, reward: w.price };
@@ -443,7 +443,7 @@ test("operator-fee protection: a hired task cannot be completed without paying t
     protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey,
     systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null,
     treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator,
-    creatorCompletionBond: null, workerCompletionBond: null,
+    referrer: null, creatorCompletionBond: null, workerCompletionBond: null,
   });
 
   // (a) omit the operator account on a hired task with a fee -> MissingOperatorAccount
@@ -476,20 +476,21 @@ test("operator-fee guard: a listing whose operator is the hiring creator is reje
   expectFail(send(w.svm, ix, [w.buyer]), "OperatorIsCreator", "hire rejected when operator == creator");
 });
 
-test("migrate_task: reallocs a legacy 382B Task to 432B (multisig-gated, dry-run-safe, idempotent, rent topped up)", async () => {
+test("migrate_task: reallocs a legacy 382B Task to 466B (multisig-gated, dry-run-safe, idempotent, rent topped up)", async () => {
   const w = await freshWorld({ price: 2_000_000 });
-  // A new hire inits the Task at the Batch-2 size (432B).
+  // A new hire inits the Task at the current P6.2 size (466B): the Batch-2 operator
+  // tail (50B) plus the P6.2 referrer tail (34B) over the 382B pre-Batch-2 prefix.
   const { ix, task } = await hireIx(w, {});
   expectOk(send(w.svm, ix, [w.buyer]), "hire");
   const full = w.svm.getAccount(task);
-  assert.equal(full.data.length, 432, "new tasks are created at the Batch-2 size");
+  assert.equal(full.data.length, 466, "new tasks are created at the P6.2 size");
 
-  // Simulate a pre-Batch-2 legacy account: drop the trailing 50 zero bytes
-  // (operator/fee/_reserved — all zero for a non-operator task) back to 382B, and
-  // fund it at only the 382-byte rent so the migration must top up the rent.
+  // Simulate a deep pre-Batch-2 legacy account: drop the trailing 84 zero bytes
+  // (operator/fee/_reserved + referrer/referrer_fee_bps — all zero for a plain task)
+  // back to 382B, and fund it at only the 382-byte rent so the migration must top up.
   const legacy = Buffer.from(full.data).subarray(0, 382);
   const rent382 = Number(w.svm.minimumBalanceForRentExemption(382n));
-  const rent432 = Number(w.svm.minimumBalanceForRentExemption(432n));
+  const rent466 = Number(w.svm.minimumBalanceForRentExemption(466n));
   w.svm.setAccount(task, { lamports: rent382, data: legacy, owner: PID, executable: false, rentEpoch: 0 });
 
   // 2-of-2 multisig gate.
@@ -518,21 +519,24 @@ test("migrate_task: reallocs a legacy 382B Task to 432B (multisig-gated, dry-run
   expectOk(send(w.svm, await buildMigrate(true), [w.admin, owner2]), "migrate dry-run");
   assert.equal(w.svm.getAccount(task).data.length, 382, "dry-run left the account at the legacy size");
 
-  // real migration: 382 -> 432, rent topped up, decodes with a zero-filled operator tail.
+  // real migration: 382 -> 466, rent topped up, decodes with zero-filled operator AND
+  // referrer tails.
   expectOk(send(w.svm, await buildMigrate(false), [w.admin, owner2]), "migrate real");
   const migrated = w.svm.getAccount(task);
-  assert.equal(migrated.data.length, 432, "task reallocated to the Batch-2 size");
-  assert.ok(Number(migrated.lamports) >= rent432, `rent topped up to >= ${rent432} (got ${migrated.lamports})`);
+  assert.equal(migrated.data.length, 466, "task reallocated to the P6.2 size");
+  assert.ok(Number(migrated.lamports) >= rent466, `rent topped up to >= ${rent466} (got ${migrated.lamports})`);
   const t = decode(w.svm, "Task", task);
   assert.equal(t.operator.toBase58(), PublicKey.default.toBase58(), "operator zero-filled by migration");
   assert.equal(t.operator_fee_bps, 0, "operator_fee_bps zero-filled by migration");
+  assert.equal(t.referrer.toBase58(), PublicKey.default.toBase58(), "referrer zero-filled by migration");
+  assert.equal(t.referrer_fee_bps, 0, "referrer_fee_bps zero-filled by migration");
   assert.equal(t.status.Open !== undefined, true, "pre-migration status preserved (Open)");
 
-  // idempotent: a second run on the now-432B account is a no-op Ok. Expire the
+  // idempotent: a second run on the now-466B account is a no-op Ok. Expire the
   // blockhash first so this isn't a byte-identical (deduped) repeat of the real run.
   w.svm.expireBlockhash();
   expectOk(send(w.svm, await buildMigrate(false), [w.admin, owner2]), "migrate idempotent re-run");
-  assert.equal(w.svm.getAccount(task).data.length, 432, "still 432 after idempotent re-run");
+  assert.equal(w.svm.getAccount(task).data.length, 466, "still 466 after idempotent re-run");
 });
 
 test("completion bond: creator + worker each post a 25% bond into distinct PDAs (dup + self-deal rejected)", async () => {
@@ -634,7 +638,7 @@ test("completion bond: a clean completion refunds BOTH bonds to their posters", 
       task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey,
       systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null,
-      treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator: null,
+      treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator: null, referrer: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond,
     })
     .instruction(), [w.provider]), "complete with bond refunds");
@@ -660,7 +664,7 @@ test("completion bond: rejected on a ZK-private task (audit — would strand on 
   const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
   const constraintHash = crypto.randomBytes(32); // real ZK constraint -> private task
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, arr(constraintHash), 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, arr(constraintHash), 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "create private task");
   const bond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
@@ -680,7 +684,7 @@ test("completion bond: reclaim_completion_bond recovers a bond stranded by an om
 
   // complete the task but OMIT the worker bond account -> it is stranded.
   expectOk(send(w.svm, await w.providerProg.methods.completeTask(arr(id32()), null)
-    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator: null, creatorCompletionBond: null, workerCompletionBond: null })
+    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, hireRecord: r.hireRecord, operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
     .instruction(), [w.provider]), "complete (omitting worker bond)");
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
   assert.ok(!isClosed(w.svm, workerBond), "worker bond stranded (still open) after the omitted-account completion");
@@ -798,7 +802,7 @@ async function setupBidTask(w, { publishJobSpec = true } = {}) {
 
   // 1) create a BidExclusive task (task_type = 3).
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null) // task_type=3 (BidExclusive)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null, null, 0) // task_type=3 (BidExclusive)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "bid:create_task");
 
@@ -882,7 +886,7 @@ async function setupManualTask(w, { mode = 1, reviewWindow = 3600, reward = 2_00
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), taskType, null, 0, null)
+    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), taskType, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "manual:create_task");
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -979,7 +983,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   if (decision === "accept") {
     expectOk(send(w.svm, await w.buyerProg.methods
       .acceptTaskResult()
-      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, hireRecord: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+      .accounts({ task, claim, escrow, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, referrer: null, hireRecord: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]), "manual:accept");
   } else if (decision === "reject") {
     expectOk(send(w.svm, await w.buyerProg.methods
@@ -1060,7 +1064,7 @@ test("request_changes: non-terminal revision keeps the claim, worker resubmits i
   assert.ok(decode(w.svm, "Task", r.task).status.PendingValidation !== undefined, "resubmit -> PendingValidation");
 
   expectOk(send(w.svm, await w.buyerProg.methods.acceptTaskResult()
-    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, taskValidationConfig: r.validation, taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, hireRecord: null, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "accept after revision");
+    .accounts({ task: r.task, claim: r.claim, escrow: r.escrow, taskValidationConfig: r.validation, taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, referrer: null, hireRecord: null, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "accept after revision");
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed after revision + accept");
 });
 
@@ -1117,7 +1121,7 @@ test("negative: a RejectFrozen task is refused by cancel / accept / request_chan
 
   // accept_task_result: requires PendingValidation; a frozen task is not.
   expectFail(send(w.svm, await w.buyerProg.methods.acceptTaskResult()
-    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskValidationConfig: f.validation, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, hireRecord: null, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskValidationConfig: f.validation, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, operator: null, referrer: null, hireRecord: null, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "TaskNotPendingValidation", "accept refused on a frozen task");
 
   // request_changes + reject_and_freeze: both require PendingValidation.
@@ -1297,7 +1301,7 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, mint.publicKey)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, mint.publicKey, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: mint.publicKey, creatorTokenAccount: buyerAta, tokenEscrowAta: escrowAta, tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID })
     .instruction(), [w.buyer]), "token:create_task");
 
@@ -1323,7 +1327,7 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
-    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: escrowAta, workerTokenAccount: workerAta, treasuryTokenAccount: treasuryAta, rewardMint: mint.publicKey, tokenProgram: TOKEN_PROGRAM_ID, hireRecord, operator: null, creatorCompletionBond: null, workerCompletionBond: null })
+    .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: escrowAta, workerTokenAccount: workerAta, treasuryTokenAccount: treasuryAta, rewardMint: mint.publicKey, tokenProgram: TOKEN_PROGRAM_ID, hireRecord, operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
     .instruction(), [w.provider]), "token:complete");
 
   return { task, escrow, mint: mint.publicKey, buyerAta, treasuryAta, workerAta, escrowAta, reward };
@@ -1628,7 +1632,7 @@ test("create_task_humanless: a wallet with no agent posts a task pinned to Creat
   desc.set(crypto.randomBytes(32), 0); // hash-shaped commitment (32 + zero tail)
 
   const ix = await humanProg.methods
-    .createTaskHumanless(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), new BN(now + 3600), 0, new BN(3600))
+    .createTaskHumanless(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), new BN(now + 3600), 0, new BN(3600), null, 0)
     .accounts({ task, escrow, taskValidationConfig: validation, protocolConfig: w.protocolPda, authorityRateLimit: rateLimit, creator: human.publicKey, systemProgram: SystemProgram.programId })
     .instruction();
   expectOk(send(w.svm, ix, [human]), "humanless create");

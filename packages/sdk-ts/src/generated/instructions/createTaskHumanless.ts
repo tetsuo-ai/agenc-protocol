@@ -10,10 +10,14 @@ import {
   combineCodec,
   fixDecoderSize,
   fixEncoderSize,
+  getAddressDecoder,
+  getAddressEncoder,
   getBytesDecoder,
   getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
+  getOptionDecoder,
+  getOptionEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -26,12 +30,14 @@ import {
   type AccountMeta,
   type AccountSignerMeta,
   type Address,
-  type FixedSizeCodec,
-  type FixedSizeDecoder,
-  type FixedSizeEncoder,
+  type Codec,
+  type Decoder,
+  type Encoder,
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
+  type Option,
+  type OptionOrNullable,
   type ReadonlyAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
@@ -112,6 +118,8 @@ export type CreateTaskHumanlessInstructionData = {
   deadline: bigint;
   minReputation: number;
   reviewWindowSecs: bigint;
+  referrer: Option<Address>;
+  referrerFeeBps: number;
 };
 
 export type CreateTaskHumanlessInstructionDataArgs = {
@@ -122,9 +130,11 @@ export type CreateTaskHumanlessInstructionDataArgs = {
   deadline: number | bigint;
   minReputation: number;
   reviewWindowSecs: number | bigint;
+  referrer: OptionOrNullable<Address>;
+  referrerFeeBps: number;
 };
 
-export function getCreateTaskHumanlessInstructionDataEncoder(): FixedSizeEncoder<CreateTaskHumanlessInstructionDataArgs> {
+export function getCreateTaskHumanlessInstructionDataEncoder(): Encoder<CreateTaskHumanlessInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
@@ -135,6 +145,8 @@ export function getCreateTaskHumanlessInstructionDataEncoder(): FixedSizeEncoder
       ["deadline", getI64Encoder()],
       ["minReputation", getU16Encoder()],
       ["reviewWindowSecs", getI64Encoder()],
+      ["referrer", getOptionEncoder(getAddressEncoder())],
+      ["referrerFeeBps", getU16Encoder()],
     ]),
     (value) => ({
       ...value,
@@ -143,7 +155,7 @@ export function getCreateTaskHumanlessInstructionDataEncoder(): FixedSizeEncoder
   );
 }
 
-export function getCreateTaskHumanlessInstructionDataDecoder(): FixedSizeDecoder<CreateTaskHumanlessInstructionData> {
+export function getCreateTaskHumanlessInstructionDataDecoder(): Decoder<CreateTaskHumanlessInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["taskId", fixDecoderSize(getBytesDecoder(), 32)],
@@ -153,10 +165,12 @@ export function getCreateTaskHumanlessInstructionDataDecoder(): FixedSizeDecoder
     ["deadline", getI64Decoder()],
     ["minReputation", getU16Decoder()],
     ["reviewWindowSecs", getI64Decoder()],
+    ["referrer", getOptionDecoder(getAddressDecoder())],
+    ["referrerFeeBps", getU16Decoder()],
   ]);
 }
 
-export function getCreateTaskHumanlessInstructionDataCodec(): FixedSizeCodec<
+export function getCreateTaskHumanlessInstructionDataCodec(): Codec<
   CreateTaskHumanlessInstructionDataArgs,
   CreateTaskHumanlessInstructionData
 > {
@@ -195,6 +209,8 @@ export type CreateTaskHumanlessAsyncInput<
   deadline: CreateTaskHumanlessInstructionDataArgs["deadline"];
   minReputation: CreateTaskHumanlessInstructionDataArgs["minReputation"];
   reviewWindowSecs: CreateTaskHumanlessInstructionDataArgs["reviewWindowSecs"];
+  referrer: CreateTaskHumanlessInstructionDataArgs["referrer"];
+  referrerFeeBps: CreateTaskHumanlessInstructionDataArgs["referrerFeeBps"];
 };
 
 export async function getCreateTaskHumanlessInstructionAsync<
@@ -356,6 +372,8 @@ export type CreateTaskHumanlessInput<
   deadline: CreateTaskHumanlessInstructionDataArgs["deadline"];
   minReputation: CreateTaskHumanlessInstructionDataArgs["minReputation"];
   reviewWindowSecs: CreateTaskHumanlessInstructionDataArgs["reviewWindowSecs"];
+  referrer: CreateTaskHumanlessInstructionDataArgs["referrer"];
+  referrerFeeBps: CreateTaskHumanlessInstructionDataArgs["referrerFeeBps"];
 };
 
 export function getCreateTaskHumanlessInstruction<

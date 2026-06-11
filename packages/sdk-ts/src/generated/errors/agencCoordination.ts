@@ -606,6 +606,22 @@ export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_ATTESTOR = 0x1895
 export const AGENC_COORDINATION_ERROR__MODERATION_ATTESTOR_MISMATCH = 0x1896; // 6294
 /** RationaleUriTooLong: Dispute ruling rationale URI exceeds the maximum allowed length */
 export const AGENC_COORDINATION_ERROR__RATIONALE_URI_TOO_LONG = 0x1897; // 6295
+/** ConfigNotMigratable: ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout) */
+export const AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE = 0x1898; // 6296
+/** InvalidPda: Account is not the canonical PDA for this instruction */
+export const AGENC_COORDINATION_ERROR__INVALID_PDA = 0x1899; // 6297
+/** InvalidSurfaceRevision: Surface revision value is not a recognized surface */
+export const AGENC_COORDINATION_ERROR__INVALID_SURFACE_REVISION = 0x189a; // 6298
+/** ReferrerFeeTooHigh: Referrer fee in basis points exceeds the maximum allowed */
+export const AGENC_COORDINATION_ERROR__REFERRER_FEE_TOO_HIGH = 0x189b; // 6299
+/** CombinedFeeAboveCap: Combined protocol + operator + referrer fees leave the worker below the floor */
+export const AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP = 0x189c; // 6300
+/** MissingReferrerAccount: Referrer payee account is missing for a task that carries a referrer fee */
+export const AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT = 0x189d; // 6301
+/** InvalidReferrerAccount: Referrer payee account does not match the snapshotted referrer */
+export const AGENC_COORDINATION_ERROR__INVALID_REFERRER_ACCOUNT = 0x189e; // 6302
+/** ReferrerIsCreator: Referrer must not be the task creator (no self-deal) */
+export const AGENC_COORDINATION_ERROR__REFERRER_IS_CREATOR = 0x189f; // 6303
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -647,7 +663,9 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__CLAIM_ALREADY_COMPLETED
   | typeof AGENC_COORDINATION_ERROR__CLAIM_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED
+  | typeof AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP
   | typeof AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON
+  | typeof AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE
   | typeof AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE
@@ -717,6 +735,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_NULLIFIER
   | typeof AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__INVALID_OUTPUT_COMMITMENT
+  | typeof AGENC_COORDINATION_ERROR__INVALID_PDA
   | typeof AGENC_COORDINATION_ERROR__INVALID_PROOF
   | typeof AGENC_COORDINATION_ERROR__INVALID_PROOF_BINDING
   | typeof AGENC_COORDINATION_ERROR__INVALID_PROOF_HASH
@@ -725,6 +744,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_TYPE
   | typeof AGENC_COORDINATION_ERROR__INVALID_PROTOCOL_FEE
   | typeof AGENC_COORDINATION_ERROR__INVALID_RATING_SCORE
+  | typeof AGENC_COORDINATION_ERROR__INVALID_REFERRER_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__INVALID_RENT_RECIPIENT
   | typeof AGENC_COORDINATION_ERROR__INVALID_REQUIRED_CAPABILITIES
   | typeof AGENC_COORDINATION_ERROR__INVALID_RESULT_DATA
@@ -735,6 +755,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATE_KEY
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION
+  | typeof AGENC_COORDINATION_ERROR__INVALID_SURFACE_REVISION
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_ID
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_URI
@@ -768,6 +789,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED
   | typeof AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__MISSING_OPERATOR_ACCOUNT
+  | typeof AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS
   | typeof AGENC_COORDINATION_ERROR__MODERATION_ATTESTOR_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER
@@ -806,6 +828,8 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__RATING_NOT_BUYER
   | typeof AGENC_COORDINATION_ERROR__RATIONALE_URI_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__RECENT_VOTE_ACTIVITY
+  | typeof AGENC_COORDINATION_ERROR__REFERRER_FEE_TOO_HIGH
+  | typeof AGENC_COORDINATION_ERROR__REFERRER_IS_CREATOR
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE
@@ -949,7 +973,9 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__CLAIM_ALREADY_COMPLETED]: `Claim has already been completed`,
     [AGENC_COORDINATION_ERROR__CLAIM_EXPIRED]: `Claim has expired`,
     [AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED]: `Claim has not expired yet`,
+    [AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP]: `Combined protocol + operator + referrer fees leave the worker below the floor`,
     [AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON]: `Competitive task already completed by another worker`,
+    [AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE]: `ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)`,
     [AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH]: `Proof constraint hash does not match task's stored constraint hash`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED]: `Cooldown period has not elapsed since last action`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE]: `Cooldown value exceeds maximum (24 hours)`,
@@ -1019,6 +1045,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_NULLIFIER]: `Invalid nullifier: nullifier value cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT]: `Operator payee account does not match the hire record operator`,
     [AGENC_COORDINATION_ERROR__INVALID_OUTPUT_COMMITMENT]: `Invalid output commitment: output_commitment cannot be all zeros`,
+    [AGENC_COORDINATION_ERROR__INVALID_PDA]: `Account is not the canonical PDA for this instruction`,
     [AGENC_COORDINATION_ERROR__INVALID_PROOF]: `Invalid proof of work`,
     [AGENC_COORDINATION_ERROR__INVALID_PROOF_BINDING]: `Invalid proof binding: expected_binding cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_PROOF_HASH]: `Invalid proof hash: proof_hash cannot be all zeros`,
@@ -1027,6 +1054,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_TYPE]: `Invalid proposal type`,
     [AGENC_COORDINATION_ERROR__INVALID_PROTOCOL_FEE]: `Invalid protocol fee (must be <= 1000 bps)`,
     [AGENC_COORDINATION_ERROR__INVALID_RATING_SCORE]: `Rating score must be in the range 1..=5`,
+    [AGENC_COORDINATION_ERROR__INVALID_REFERRER_ACCOUNT]: `Referrer payee account does not match the snapshotted referrer`,
     [AGENC_COORDINATION_ERROR__INVALID_RENT_RECIPIENT]: `Invalid rent recipient: must be worker authority`,
     [AGENC_COORDINATION_ERROR__INVALID_REQUIRED_CAPABILITIES]: `Invalid required capabilities: required_capabilities cannot be zero`,
     [AGENC_COORDINATION_ERROR__INVALID_RESULT_DATA]: `Invalid result data: result_data cannot be all zeros when provided`,
@@ -1037,6 +1065,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_STATE_KEY]: `Invalid state key: state_key cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE]: `Invalid state value: state_value cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION]: `Invalid task status transition`,
+    [AGENC_COORDINATION_ERROR__INVALID_SURFACE_REVISION]: `Surface revision value is not a recognized surface`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_ID]: `Invalid task ID: cannot be zero`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH]: `Invalid task job specification hash`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_URI]: `Invalid task job specification URI`,
@@ -1070,6 +1099,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED]: `Maximum revision rounds exceeded; escalate to reject`,
     [AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT]: `A required completion bond account was not provided`,
     [AGENC_COORDINATION_ERROR__MISSING_OPERATOR_ACCOUNT]: `Operator payee account is required for this hire's operator fee`,
+    [AGENC_COORDINATION_ERROR__MISSING_REFERRER_ACCOUNT]: `Referrer payee account is missing for a task that carries a referrer fee`,
     [AGENC_COORDINATION_ERROR__MISSING_TOKEN_ACCOUNTS]: `Token accounts not provided for token-denominated task`,
     [AGENC_COORDINATION_ERROR__MODERATION_ATTESTOR_MISMATCH]: `Supplied moderation attestor entry does not match the signing moderator`,
     [AGENC_COORDINATION_ERROR__MULTISIG_DEFAULT_SIGNER]: `Multisig signer cannot be default pubkey`,
@@ -1108,6 +1138,8 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__RATING_NOT_BUYER]: `Only the buyer (task creator) may rate this hire`,
     [AGENC_COORDINATION_ERROR__RATIONALE_URI_TOO_LONG]: `Dispute ruling rationale URI exceeds the maximum allowed length`,
     [AGENC_COORDINATION_ERROR__RECENT_VOTE_ACTIVITY]: `Agent must wait 24 hours after voting before deregistering`,
+    [AGENC_COORDINATION_ERROR__REFERRER_FEE_TOO_HIGH]: `Referrer fee in basis points exceeds the maximum allowed`,
+    [AGENC_COORDINATION_ERROR__REFERRER_IS_CREATOR]: `Referrer must not be the task creator (no self-deal)`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY]: `RejectFrozen review is single-worker (Exclusive) only`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED]: `RejectFrozen review timeout has not elapsed`,
     [AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE]: `Agent must be Active to participate in reputation economy`,

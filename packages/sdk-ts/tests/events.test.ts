@@ -126,14 +126,16 @@ function buildTaskCreatedBlob({
 }
 
 describe("generated event discriminator table", () => {
-  it("has a decoder entry for every event in the IDL (all 84)", () => {
+  it("has a decoder entry for every event in the IDL (all 86)", () => {
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf8")) as {
       events: { name: string; discriminator: number[] }[];
     };
     // P6 surface: 82 -> 84 (+AgentTrackRecordUpdated [P6.6], +ListingRated [P6.1],
     // +ModerationAttestorAssigned/Revoked [P6.8]; -ArbiterVotesCleanedUp,
-    // -DisputeVoteCast from the P6.3 vote_dispute retirement).
-    expect(idl.events.length).toBe(84);
+    // -DisputeVoteCast from the P6.3 vote_dispute retirement) -> 86
+    // (+ReferrerFeePaid [P6.2 demand-side referral leg],
+    // +ProtocolConfigMigrated [P6.5 surface-versioning realloc]).
+    expect(idl.events.length).toBe(86);
     expect(Object.keys(AGENC_EVENT_DECODERS).length).toBe(idl.events.length);
     for (const event of idl.events) {
       const entry = AGENC_EVENT_DECODERS[hex(event.discriminator)];
@@ -831,6 +833,9 @@ describe("waitForTaskStatus (fake rpc)", () => {
       operator: CREATOR,
       operatorFeeBps: 0,
       reserved: new Uint8Array(16),
+      // P6.2: no-referrer default (Pubkey::default() == system program), fee 0.
+      referrer: address("11111111111111111111111111111111"),
+      referrerFeeBps: 0,
     });
     return toBase64(new Uint8Array(bytes));
   }

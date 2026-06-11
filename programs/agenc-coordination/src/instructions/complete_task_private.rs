@@ -764,6 +764,7 @@ fn finalize_private_completion<'info>(
         clock,
         token_accounts,
         None, // operator leg: ZK completion is not a hire-from-listing path
+        None, // referrer leg: ZK completion is not a referred hire path
     )
 }
 

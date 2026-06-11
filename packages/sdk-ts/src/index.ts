@@ -31,3 +31,19 @@ export {
   type ListingModerationVerdict,
   type RequestListingModerationInput,
 } from "./sandbox/moderation.js";
+
+// P6.5 surface-versioning contract. `getDeployedSurface` is a top-level read
+// capability (like getAgentTrackRecord) — re-export it and its types/error at the
+// package root so mainnet integrators reach it without the `facade` namespace.
+export {
+  getDeployedSurface,
+  capabilitiesForRevision,
+  readSurfaceRevision,
+  assertCapability,
+  SurfaceNotDeployedError,
+  SURFACE_REVISION_FULL,
+  SURFACE_REVISION_OFFSET,
+  OLD_PROTOCOL_CONFIG_SIZE,
+  NEW_PROTOCOL_CONFIG_SIZE,
+  type CapabilitySet,
+} from "./facade/surface.js";

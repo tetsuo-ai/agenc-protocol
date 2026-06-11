@@ -83,7 +83,7 @@ async function setupSubmittedManual(w) {
   const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
 
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "trk:create_task");
   expectOk(send(w.svm, await w.buyerProg.methods
@@ -162,7 +162,7 @@ test("track-record: cancel_task bumps the creator agent's total_cancelled (Agent
   const now = Number(w.svm.getClock().unixTimestamp);
   const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(1_000_000), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(1_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "cancel-trk:create_task");
 
@@ -307,7 +307,7 @@ test("track-record: cancel_task WITHOUT the optional accounts still works and wr
   const now = Number(w.svm.getClock().unixTimestamp);
   const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(1_000_000), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(1_000_000), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "nostats:create_task");
 

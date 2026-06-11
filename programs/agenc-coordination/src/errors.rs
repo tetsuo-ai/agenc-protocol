@@ -914,4 +914,26 @@ pub enum CoordinationError {
     // === Batch 4 (P6.4): accountable dispute rulings ===
     #[msg("Dispute ruling rationale URI exceeds the maximum allowed length")]
     RationaleUriTooLong,
+
+    // === Batch 4 (P6.5): surface-versioning migration ===
+    #[msg("ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)")]
+    ConfigNotMigratable,
+
+    #[msg("Account is not the canonical PDA for this instruction")]
+    InvalidPda,
+
+    #[msg("Surface revision value is not a recognized surface")]
+    InvalidSurfaceRevision,
+
+    // === Batch 4 (P6.2): demand-side referral leg ===
+    #[msg("Referrer fee in basis points exceeds the maximum allowed")]
+    ReferrerFeeTooHigh,
+    #[msg("Combined protocol + operator + referrer fees leave the worker below the floor")]
+    CombinedFeeAboveCap,
+    #[msg("Referrer payee account is missing for a task that carries a referrer fee")]
+    MissingReferrerAccount,
+    #[msg("Referrer payee account does not match the snapshotted referrer")]
+    InvalidReferrerAccount,
+    #[msg("Referrer must not be the task creator (no self-deal)")]
+    ReferrerIsCreator,
 }

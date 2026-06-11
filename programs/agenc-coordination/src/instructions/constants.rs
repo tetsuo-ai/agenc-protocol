@@ -10,11 +10,23 @@ pub const MAX_PROTOCOL_FEE_BPS: u16 = 2000;
 /// Carried on a ServiceListing in Batch 1; enforced at settlement in Batch 2.
 pub const MAX_OPERATOR_FEE_BPS: u16 = 2000;
 
+/// Maximum referrer (demand-side embedder) fee in basis points (20% = 2000 bps),
+/// per-leg ceiling for the P6.2 4-way split. The COMBINED cap below is the binding
+/// money-safety invariant; this is a per-leg sanity bound (defense in depth).
+pub const MAX_REFERRER_FEE_BPS: u16 = 2000;
+
+/// Maximum COMBINED protocol + operator + referrer fee in basis points
+/// (40% = 4000 bps) for the P6.2 4-way split. Enforced at settlement
+/// (`calculate_combined_fees`) so the worker ALWAYS keeps ≥ `WORKER_FLOOR_BPS`
+/// (60%). This is the binding invariant — `4000 + WORKER_FLOOR_BPS == 10000`.
+pub const MAX_COMBINED_FEE_BPS: u16 = 4000;
+
 /// Minimum share of a settlement the worker must always keep (60% = 6000 bps),
 /// per spec §4. With protocol ≤20% (MAX_PROTOCOL_FEE_BPS) + operator ≤20%
 /// (MAX_OPERATOR_FEE_BPS), the worker is left exactly ≥60% at the caps, so this
 /// floor is the *binding* invariant at maximum fees — enforced + tested at
-/// settlement (`calculate_operator_fee`), not merely emergent.
+/// settlement (`calculate_operator_fee` / `calculate_combined_fees`), not merely
+/// emergent.
 pub const WORKER_FLOOR_BPS: u16 = 6000;
 
 /// Base for percentage calculations (100 = 100%)

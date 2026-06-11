@@ -362,6 +362,22 @@ pub struct ProtocolConfig {
     /// Only the first `multisig_owners_len` entries are valid; remaining slots
     /// are always `Pubkey::default()`.
     pub multisig_owners: [Pubkey; ProtocolConfig::MAX_MULTISIG_OWNERS],
+    // === P6.5: surface-versioning contract ===
+    /// Deployed instruction-surface revision stamp.
+    ///
+    /// APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte
+    /// pre-P6.5 prefix (the live mainnet config account) stays valid. The live
+    /// account is migrated up to the new size by `migrate_protocol` (realloc +
+    /// zero-init), which lands this at `0` = "surface not yet stamped". An operator
+    /// then sets the real revision via `update_launch_controls` (the existing
+    /// multisig-gated config-update authority path).
+    ///
+    /// Semantics:
+    /// - `0`  → surface unstamped (treat as the conservative canary surface;
+    ///          clients should fall back to capability probing).
+    /// - `>0` → the operator-declared surface revision; the SDK maps it to a typed
+    ///          capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface).
+    pub surface_revision: u16,
 }
 
 impl Default for ProtocolConfig {
@@ -397,6 +413,12 @@ impl Default for ProtocolConfig {
             protocol_paused: false,
             disabled_task_type_mask: 0,
             multisig_owners: [Pubkey::default(); ProtocolConfig::MAX_MULTISIG_OWNERS],
+            // P6.5: a freshly initialized config has the full surface available
+            // (init only runs on dev/devnet/localnet — the mainnet canary config
+            // already exists and is brought forward by migrate_protocol). Stamp it
+            // to the full-surface revision so a fresh full-surface deploy advertises
+            // `listings: true` without a manual stamp.
+            surface_revision: ProtocolConfig::SURFACE_REVISION_FULL,
         }
     }
 }
@@ -429,12 +451,29 @@ impl ProtocolConfig {
     pub const DEFAULT_VOTING_PERIOD: i64 = PROTOCOL_DEFAULT_VOTING_PERIOD;
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // multisig owners
 
+    /// On-chain byte size of the pre-P6.5 `ProtocolConfig` (8-byte discriminator +
+    /// 341 INIT_SPACE = 349). The single live mainnet config account is at this
+    /// size; `migrate_protocol` reallocs it up to `SIZE` and zero-inits the appended
+    /// `surface_revision`. Do NOT change — it is the migration precondition.
+    pub const OLD_CONFIG_SIZE: usize = 349;
+
+    /// `surface_revision` value meaning "the full 80-instruction surface is live".
+    /// An operator stamps this via `update_launch_controls` after deploying the full
+    /// surface; the SDK maps it to a complete `CapabilitySet`.
+    pub const SURFACE_REVISION_FULL: u16 = 1;
+
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
     pub fn validate_padding_fields(&self) -> bool {
         self.disabled_task_type_mask & !Self::TASK_TYPE_DISABLE_MASK == 0
     }
 }
+
+/// Compile-time pin for the P6.5 surface-versioning migration: a layout drift
+/// (field add/reorder changing INIT_SPACE) fails the build instead of silently
+/// bricking the single-account `migrate_protocol` realloc of the live config.
+const _: () = assert!(ProtocolConfig::SIZE == 351);
+const _: () = assert!(ProtocolConfig::OLD_CONFIG_SIZE + 2 == ProtocolConfig::SIZE);
 
 /// ZK verifier configuration account
 /// PDA seeds: ["zk_config"]
@@ -958,6 +997,16 @@ pub struct Task {
     /// Reserved padding so future field adds become value-only migrates rather
     /// than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
+    // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
+    /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
+    /// `Pubkey::default()` means no referrer leg (the common case). Snapshotted from
+    /// the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields
+    /// exceed the 16B `_reserved`, so this is a size-extending migration of the 149
+    /// live tasks (see `migrate_task`).
+    pub referrer: Pubkey,
+    /// Referrer fee in basis points, snapshotted at hire/create time. 0 = no referrer
+    /// leg. Combined with protocol + operator, capped so the worker keeps ≥60%.
+    pub referrer_fee_bps: u16,
 }
 
 impl Default for Task {
@@ -989,6 +1038,8 @@ impl Default for Task {
             operator: Pubkey::default(),
             operator_fee_bps: 0,
             _reserved: [0u8; 16],
+            referrer: Pubkey::default(),
+            referrer_fee_bps: 0,
         }
     }
 }
@@ -1003,6 +1054,14 @@ impl Task {
     /// reallocs them up to `SIZE`. Do NOT change — it is the migration precondition.
     pub const OLD_TASK_SIZE: usize = 382;
 
+    /// On-chain byte size of the intermediate Batch-2 `Task` (operator leg added,
+    /// pre-P6.2). A task already grown to this size by a Batch-2 `migrate_task` run
+    /// is a SECOND valid migration precondition — `migrate_task` accepts EITHER the
+    /// pre-Batch-2 (382B) OR the Batch-2 (432B) layout and reallocs straight up to
+    /// `SIZE`, so the sweep is correct regardless of whether the live tasks were ever
+    /// migrated to 432 before this P6.2 deploy (on mainnet today they are still 382).
+    pub const BATCH2_TASK_SIZE: usize = 432;
+
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
     pub fn validate_reserved_fields(&self) -> bool {
@@ -1012,8 +1071,11 @@ impl Task {
 
 /// Compile-time pin: a layout drift (field add/reorder changing INIT_SPACE)
 /// fails the build instead of silently bricking the 149-task migration.
-const _: () = assert!(Task::SIZE == 432);
-const _: () = assert!(Task::OLD_TASK_SIZE + 50 == Task::SIZE);
+/// P6.2 appends `referrer` (32B) + `referrer_fee_bps` (2B) = 34B onto the Batch-2
+/// layout, taking the Task from 432B to 466B.
+const _: () = assert!(Task::SIZE == 466);
+const _: () = assert!(Task::OLD_TASK_SIZE + 84 == Task::SIZE);
+const _: () = assert!(Task::BATCH2_TASK_SIZE + 34 == Task::SIZE);
 
 /// Worker's claim on a task
 /// PDA seeds: ["claim", task, worker_agent]
@@ -1704,6 +1766,14 @@ pub struct HireRecord {
     pub bump: u8,
     /// Reserved for future hire metadata.
     pub _reserved: [u8; 32],
+    // === P6.2 demand-side referral leg (APPEND-ONLY) ===
+    /// Referrer (embedder) payee snapshot for the §4 4-way split
+    /// (`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have
+    /// NO live mainnet accounts (`hire_from_listing` is full-module only), so this is
+    /// a fresh-init size bump — no realloc migration needed for HireRecord.
+    pub referrer: Pubkey,
+    /// Referrer fee in basis points, snapshotted at hire time.
+    pub referrer_fee_bps: u16,
 }
 
 impl HireRecord {
@@ -2583,15 +2653,62 @@ mod tests {
             "OLD_TASK_SIZE is the migration precondition; do not change"
         );
         assert_eq!(
-            Task::SIZE,
+            Task::BATCH2_TASK_SIZE,
             432,
-            "Task grew by operator(32)+fee(2)+reserved(16)=50"
+            "BATCH2_TASK_SIZE is the second migration precondition; do not change"
+        );
+        assert_eq!(
+            Task::SIZE,
+            466,
+            "P6.2: Task grew by referrer(32)+referrer_fee_bps(2)=34 on top of Batch-2"
         );
         assert_eq!(
             Task::SIZE - Task::OLD_TASK_SIZE,
-            50,
-            "realloc delta must be exactly +50 bytes"
+            84,
+            "382B legacy task -> 466B realloc delta must be exactly +84 bytes"
         );
+        assert_eq!(
+            Task::SIZE - Task::BATCH2_TASK_SIZE,
+            34,
+            "432B Batch-2 task -> 466B realloc delta must be exactly +34 bytes"
+        );
+    }
+
+    // === P6.5 ProtocolConfig layout (surface-versioning migration safety) ===
+
+    #[test]
+    fn test_protocol_config_size_pins() {
+        // Runtime guard mirroring the compile-time const_assert. If a field add
+        // changes the layout, the single-account realloc (OLD_CONFIG_SIZE -> SIZE)
+        // breaks; this fails loudly rather than silently bricking the live config.
+        assert_eq!(
+            ProtocolConfig::OLD_CONFIG_SIZE,
+            349,
+            "OLD_CONFIG_SIZE is the migration precondition; do not change"
+        );
+        assert_eq!(
+            ProtocolConfig::SIZE,
+            351,
+            "ProtocolConfig grew by surface_revision (u16) = 2 bytes"
+        );
+        assert_eq!(
+            ProtocolConfig::SIZE - ProtocolConfig::OLD_CONFIG_SIZE,
+            2,
+            "realloc delta must be exactly +2 bytes"
+        );
+    }
+
+    #[test]
+    fn test_protocol_config_surface_revision_default_is_full() {
+        // A freshly initialized config (full-surface deploy) advertises the full
+        // surface; the live mainnet config is brought to 0 by migrate_protocol and
+        // stamped later by an operator.
+        let config = ProtocolConfig::default();
+        assert_eq!(
+            config.surface_revision,
+            ProtocolConfig::SURFACE_REVISION_FULL
+        );
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_FULL, 1);
     }
 
     #[test]

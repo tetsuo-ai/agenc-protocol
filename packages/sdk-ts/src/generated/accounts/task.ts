@@ -149,6 +149,19 @@ export type Task = {
    * than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
+  /**
+   * Referrer (embedder who brought the buyer) payee for the §4 4-way split.
+   * `Pubkey::default()` means no referrer leg (the common case). Snapshotted from
+   * the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields
+   * exceed the 16B `_reserved`, so this is a size-extending migration of the 149
+   * live tasks (see `migrate_task`).
+   */
+  referrer: Address;
+  /**
+   * Referrer fee in basis points, snapshotted at hire/create time. 0 = no referrer
+   * leg. Combined with protocol + operator, capped so the worker keeps ≥60%.
+   */
+  referrerFeeBps: number;
 };
 
 export type TaskArgs = {
@@ -230,6 +243,19 @@ export type TaskArgs = {
    * than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
+  /**
+   * Referrer (embedder who brought the buyer) payee for the §4 4-way split.
+   * `Pubkey::default()` means no referrer leg (the common case). Snapshotted from
+   * the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields
+   * exceed the 16B `_reserved`, so this is a size-extending migration of the 149
+   * live tasks (see `migrate_task`).
+   */
+  referrer: Address;
+  /**
+   * Referrer fee in basis points, snapshotted at hire/create time. 0 = no referrer
+   * leg. Combined with protocol + operator, capped so the worker keeps ≥60%.
+   */
+  referrerFeeBps: number;
 };
 
 /** Gets the encoder for {@link TaskArgs} account data. */
@@ -263,6 +289,8 @@ export function getTaskEncoder(): Encoder<TaskArgs> {
       ["operator", getAddressEncoder()],
       ["operatorFeeBps", getU16Encoder()],
       ["reserved", fixEncoderSize(getBytesEncoder(), 16)],
+      ["referrer", getAddressEncoder()],
+      ["referrerFeeBps", getU16Encoder()],
     ]),
     (value) => ({ ...value, discriminator: TASK_DISCRIMINATOR }),
   );
@@ -298,6 +326,8 @@ export function getTaskDecoder(): Decoder<Task> {
     ["operator", getAddressDecoder()],
     ["operatorFeeBps", getU16Decoder()],
     ["reserved", fixDecoderSize(getBytesDecoder(), 16)],
+    ["referrer", getAddressDecoder()],
+    ["referrerFeeBps", getU16Decoder()],
   ]);
 }
 

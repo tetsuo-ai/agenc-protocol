@@ -54,7 +54,7 @@ async function setupAttestedTask(w, { attestor, reward = 2_000_000 } = {}) {
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "attested:create_task");
 

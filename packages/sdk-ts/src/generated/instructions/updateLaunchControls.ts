@@ -16,6 +16,8 @@ import {
   getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
+  getU16Decoder,
+  getU16Encoder,
   getU8Decoder,
   getU8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -75,11 +77,13 @@ export type UpdateLaunchControlsInstructionData = {
   discriminator: ReadonlyUint8Array;
   protocolPaused: boolean;
   disabledTaskTypeMask: number;
+  surfaceRevision: number;
 };
 
 export type UpdateLaunchControlsInstructionDataArgs = {
   protocolPaused: boolean;
   disabledTaskTypeMask: number;
+  surfaceRevision: number;
 };
 
 export function getUpdateLaunchControlsInstructionDataEncoder(): FixedSizeEncoder<UpdateLaunchControlsInstructionDataArgs> {
@@ -88,6 +92,7 @@ export function getUpdateLaunchControlsInstructionDataEncoder(): FixedSizeEncode
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["protocolPaused", getBooleanEncoder()],
       ["disabledTaskTypeMask", getU8Encoder()],
+      ["surfaceRevision", getU16Encoder()],
     ]),
     (value) => ({
       ...value,
@@ -101,6 +106,7 @@ export function getUpdateLaunchControlsInstructionDataDecoder(): FixedSizeDecode
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["protocolPaused", getBooleanDecoder()],
     ["disabledTaskTypeMask", getU8Decoder()],
+    ["surfaceRevision", getU16Decoder()],
   ]);
 }
 
@@ -122,6 +128,7 @@ export type UpdateLaunchControlsAsyncInput<
   authority: TransactionSigner<TAccountAuthority>;
   protocolPaused: UpdateLaunchControlsInstructionDataArgs["protocolPaused"];
   disabledTaskTypeMask: UpdateLaunchControlsInstructionDataArgs["disabledTaskTypeMask"];
+  surfaceRevision: UpdateLaunchControlsInstructionDataArgs["surfaceRevision"];
 };
 
 export async function getUpdateLaunchControlsInstructionAsync<
@@ -188,6 +195,7 @@ export type UpdateLaunchControlsInput<
   authority: TransactionSigner<TAccountAuthority>;
   protocolPaused: UpdateLaunchControlsInstructionDataArgs["protocolPaused"];
   disabledTaskTypeMask: UpdateLaunchControlsInstructionDataArgs["disabledTaskTypeMask"];
+  surfaceRevision: UpdateLaunchControlsInstructionDataArgs["surfaceRevision"];
 };
 
 export function getUpdateLaunchControlsInstruction<

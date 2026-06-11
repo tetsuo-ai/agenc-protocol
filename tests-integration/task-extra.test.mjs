@@ -62,7 +62,7 @@ async function setupManualTask(w, { mode = 1, reviewWindow = 3600, validatorQuor
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), taskType, null, 0, null)
+    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), taskType, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "manual:create_task");
   // ValidatorQuorum / ExternalAttestation require review_window == 0; CreatorReview requires > 0.
@@ -122,7 +122,7 @@ async function createParentTask(w, { reward = 1_000_000, capabilities = CAP_COMP
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null)
+    .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "parent:create_task");
   return task;
@@ -224,7 +224,7 @@ async function autoAcceptIx(w, r, signerKp) {
       task: r.task, claim: r.claim, escrow: r.escrow, taskValidationConfig: r.validation,
       taskSubmission: r.submission, worker: w.providerAgent, protocolConfig: w.protocolPda,
       treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey,
-      operator: null, hireRecord: null,
+      operator: null, referrer: null, hireRecord: null,
       creatorCompletionBond: null, workerCompletionBond: null, authority: signerKp.publicKey,
       tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null,
       rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId,

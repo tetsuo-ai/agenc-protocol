@@ -39,7 +39,7 @@ async function setupBidTask(w, { publishJobSpec = true, bidExpiresIn = 1800, min
 
   // 1) create a BidExclusive task (task_type = 3, SOL-only).
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null)
+    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "bid:create_task");
 

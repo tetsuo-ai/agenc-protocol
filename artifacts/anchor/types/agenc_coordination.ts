@@ -484,6 +484,15 @@ export type AgencCoordination = {
           "optional": true
         },
         {
+          "name": "referrer",
+          "docs": [
+            "4-way split). Required only when the task carries a non-zero referrer fee;",
+            "receives the referrer fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "creatorCompletionBond",
           "docs": [
             "Validated by settle_completion_bond (owner/PDA/task/role/party)."
@@ -1264,6 +1273,15 @@ export type AgencCoordination = {
           "name": "operator",
           "docs": [
             "when the task carries a non-zero operator fee; receives the operator leg (SOL)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "referrer",
+          "docs": [
+            "4-way split). Required only when the task carries a non-zero referrer fee;",
+            "receives the referrer leg (SOL)."
           ],
           "writable": true,
           "optional": true
@@ -2553,6 +2571,15 @@ export type AgencCoordination = {
           "docs": [
             "Required only when a live hire carries a non-zero operator fee. Receives the",
             "operator fee leg in SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "referrer",
+          "docs": [
+            "snapshotted referrer (P6.2 §4 4-way split). Required only when the task carries",
+            "a non-zero referrer fee. Receives the referrer fee leg in SOL."
           ],
           "writable": true,
           "optional": true
@@ -4460,6 +4487,16 @@ export type AgencCoordination = {
           "type": {
             "option": "pubkey"
           }
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -4676,6 +4713,16 @@ export type AgencCoordination = {
         {
           "name": "reviewWindowSecs",
           "type": "i64"
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -6203,6 +6250,16 @@ export type AgencCoordination = {
         {
           "name": "expectedVersion",
           "type": "u64"
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -6545,6 +6602,16 @@ export type AgencCoordination = {
         {
           "name": "reviewWindowSecs",
           "type": "i64"
+        },
+        {
+          "name": "referrer",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
         }
       ]
     },
@@ -7317,28 +7384,28 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "protocolConfig",
+          "docs": [
+            "`[\"protocol\"]` PDA, size, and a real ProtocolConfig via try_deserialize). MUST",
+            "be raw — a typed `Account<ProtocolConfig>` would reject the 349B pre-migration",
+            "account before the handler runs, making migration impossible."
+          ],
+          "writable": true
+        },
+        {
+          "name": "payer",
+          "docs": [
+            "Funds the rent top-up for the +2-byte growth."
+          ],
           "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
+          "signer": true
         },
         {
           "name": "authority",
           "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -7351,9 +7418,10 @@ export type AgencCoordination = {
     {
       "name": "migrateTask",
       "docs": [
-        "Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig",
-        "gated, VERSION-UNGATED (must run while version == 1, before the version",
-        "bump). `dry_run` validates without mutating. Idempotent / re-runnable."
+        "Migrate one Task account to the P6.2 layout (382B or 432B -> 466B; appends the",
+        "operator + referrer fee legs). Multisig gated, VERSION-UNGATED (must run while",
+        "version == 1, before the version bump). `dry_run` validates without mutating.",
+        "Idempotent / re-runnable."
       ],
       "discriminator": [
         114,
@@ -7398,7 +7466,8 @@ export type AgencCoordination = {
         {
           "name": "payer",
           "docs": [
-            "Funds the rent top-up for the +50-byte growth."
+            "Funds the rent top-up for the growth (up to +84 bytes from a 382B legacy task,",
+            "or +34 from a 432B Batch-2 task)."
           ],
           "writable": true,
           "signer": true
@@ -11698,6 +11767,10 @@ export type AgencCoordination = {
         {
           "name": "disabledTaskTypeMask",
           "type": "u8"
+        },
+        {
+          "name": "surfaceRevision",
+          "type": "u16"
         }
       ]
     },
@@ -14220,6 +14293,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "protocolConfigMigrated",
+      "discriminator": [
+        30,
+        232,
+        133,
+        208,
+        55,
+        91,
+        175,
+        0
+      ]
+    },
+    {
       "name": "protocolFeeUpdated",
       "discriminator": [
         172,
@@ -14282,6 +14368,19 @@ export type AgencCoordination = {
         25,
         219,
         10
+      ]
+    },
+    {
+      "name": "referrerFeePaid",
+      "discriminator": [
+        127,
+        186,
+        248,
+        231,
+        123,
+        86,
+        255,
+        130
       ]
     },
     {
@@ -16246,6 +16345,46 @@ export type AgencCoordination = {
       "code": 6295,
       "name": "rationaleUriTooLong",
       "msg": "Dispute ruling rationale URI exceeds the maximum allowed length"
+    },
+    {
+      "code": 6296,
+      "name": "configNotMigratable",
+      "msg": "ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)"
+    },
+    {
+      "code": 6297,
+      "name": "invalidPda",
+      "msg": "Account is not the canonical PDA for this instruction"
+    },
+    {
+      "code": 6298,
+      "name": "invalidSurfaceRevision",
+      "msg": "Surface revision value is not a recognized surface"
+    },
+    {
+      "code": 6299,
+      "name": "referrerFeeTooHigh",
+      "msg": "Referrer fee in basis points exceeds the maximum allowed"
+    },
+    {
+      "code": 6300,
+      "name": "combinedFeeAboveCap",
+      "msg": "Combined protocol + operator + referrer fees leave the worker below the floor"
+    },
+    {
+      "code": 6301,
+      "name": "missingReferrerAccount",
+      "msg": "Referrer payee account is missing for a task that carries a referrer fee"
+    },
+    {
+      "code": 6302,
+      "name": "invalidReferrerAccount",
+      "msg": "Referrer payee account does not match the snapshotted referrer"
+    },
+    {
+      "code": 6303,
+      "name": "referrerIsCreator",
+      "msg": "Referrer must not be the task creator (no self-deal)"
     }
   ],
   "types": [
@@ -18846,6 +18985,23 @@ export type AgencCoordination = {
                 32
               ]
             }
+          },
+          {
+            "name": "referrer",
+            "docs": [
+              "Referrer (embedder) payee snapshot for the §4 4-way split",
+              "(`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have",
+              "NO live mainnet accounts (`hire_from_listing` is full-module only), so this is",
+              "a fresh-init size bump — no realloc migration needed for HireRecord."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "referrerFeeBps",
+            "docs": [
+              "Referrer fee in basis points, snapshotted at hire time."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -20148,6 +20304,58 @@ export type AgencCoordination = {
                 5
               ]
             }
+          },
+          {
+            "name": "surfaceRevision",
+            "docs": [
+              "Deployed instruction-surface revision stamp.",
+              "",
+              "APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte",
+              "pre-P6.5 prefix (the live mainnet config account) stays valid. The live",
+              "account is migrated up to the new size by `migrate_protocol` (realloc +",
+              "zero-init), which lands this at `0` = \"surface not yet stamped\". An operator",
+              "then sets the real revision via `update_launch_controls` (the existing",
+              "multisig-gated config-update authority path).",
+              "",
+              "Semantics:",
+              "- `0`  → surface unstamped (treat as the conservative canary surface;",
+              "clients should fall back to capability probing).",
+              "- `>0` → the operator-declared surface revision; the SDK maps it to a typed",
+              "capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface)."
+            ],
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "protocolConfigMigrated",
+      "docs": [
+        "Emitted when the ProtocolConfig account is reallocated to the P6.5",
+        "surface-versioning layout (349B -> 351B, zero-init `surface_revision`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "config",
+            "type": "pubkey"
+          },
+          {
+            "name": "fromSize",
+            "type": "u32"
+          },
+          {
+            "name": "toSize",
+            "type": "u32"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -20371,6 +20579,44 @@ export type AgencCoordination = {
           {
             "name": "updatedBy",
             "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "referrerFeePaid",
+      "docs": [
+        "Emitted when a referrer (demand-side embedder) fee leg is paid out of a",
+        "settlement (spec §4 4-way split, P6.2). Only emitted when the referrer leg is",
+        "non-zero."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "taskId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "referrer",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "referrerFeeBps",
+            "type": "u16"
           },
           {
             "name": "timestamp",
@@ -21923,6 +22169,25 @@ export type AgencCoordination = {
                 16
               ]
             }
+          },
+          {
+            "name": "referrer",
+            "docs": [
+              "Referrer (embedder who brought the buyer) payee for the §4 4-way split.",
+              "`Pubkey::default()` means no referrer leg (the common case). Snapshotted from",
+              "the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields",
+              "exceed the 16B `_reserved`, so this is a size-extending migration of the 149",
+              "live tasks (see `migrate_task`)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "referrerFeeBps",
+            "docs": [
+              "Referrer fee in basis points, snapshotted at hire/create time. 0 = no referrer",
+              "leg. Combined with protocol + operator, capped so the worker keeps ≥60%."
+            ],
+            "type": "u16"
           }
         ]
       }

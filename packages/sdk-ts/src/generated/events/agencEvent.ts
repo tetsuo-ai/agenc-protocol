@@ -175,6 +175,10 @@ import {
   type ProposalExecutedEventData,
 } from "./proposalExecuted";
 import {
+  getProtocolConfigMigratedEventDecoder,
+  type ProtocolConfigMigratedEventData,
+} from "./protocolConfigMigrated";
+import {
   getProtocolFeeUpdatedEventDecoder,
   type ProtocolFeeUpdatedEventData,
 } from "./protocolFeeUpdated";
@@ -194,6 +198,10 @@ import {
   getRateLimitsUpdatedEventDecoder,
   type RateLimitsUpdatedEventData,
 } from "./rateLimitsUpdated";
+import {
+  getReferrerFeePaidEventDecoder,
+  type ReferrerFeePaidEventData,
+} from "./referrerFeePaid";
 import {
   getRejectFrozenExpiredEventDecoder,
   type RejectFrozenExpiredEventData,
@@ -397,11 +405,13 @@ export type AgencEvent =
   | { eventName: "ProposalCancelled"; data: ProposalCancelledEventData }
   | { eventName: "ProposalCreated"; data: ProposalCreatedEventData }
   | { eventName: "ProposalExecuted"; data: ProposalExecutedEventData }
+  | { eventName: "ProtocolConfigMigrated"; data: ProtocolConfigMigratedEventData }
   | { eventName: "ProtocolFeeUpdated"; data: ProtocolFeeUpdatedEventData }
   | { eventName: "ProtocolInitialized"; data: ProtocolInitializedEventData }
   | { eventName: "ProtocolVersionUpdated"; data: ProtocolVersionUpdatedEventData }
   | { eventName: "RateLimitHit"; data: RateLimitHitEventData }
   | { eventName: "RateLimitsUpdated"; data: RateLimitsUpdatedEventData }
+  | { eventName: "ReferrerFeePaid"; data: ReferrerFeePaidEventData }
   | { eventName: "RejectFrozenExpired"; data: RejectFrozenExpiredEventData }
   | { eventName: "RejectFrozenResolved"; data: RejectFrozenResolvedEventData }
   | { eventName: "ReputationChanged"; data: ReputationChangedEventData }
@@ -754,6 +764,13 @@ export const AGENC_EVENT_DECODERS: {
       data: getProposalExecutedEventDecoder().decode(payload),
     }),
   },
+  "1ee885d0375baf00": {
+    eventName: "ProtocolConfigMigrated",
+    decode: (payload) => ({
+      eventName: "ProtocolConfigMigrated",
+      data: getProtocolConfigMigratedEventDecoder().decode(payload),
+    }),
+  },
   "ac385371db454569": {
     eventName: "ProtocolFeeUpdated",
     decode: (payload) => ({
@@ -787,6 +804,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "RateLimitsUpdated",
       data: getRateLimitsUpdatedEventDecoder().decode(payload),
+    }),
+  },
+  "7fbaf8e77b56ff82": {
+    eventName: "ReferrerFeePaid",
+    decode: (payload) => ({
+      eventName: "ReferrerFeePaid",
+      data: getReferrerFeePaidEventDecoder().decode(payload),
     }),
   },
   "9a16c27d02c2bc6b": {

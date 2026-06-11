@@ -195,7 +195,7 @@ import {
   getInitializeProtocolInstructionAsync,
   getInitializeZkConfigInstructionAsync,
   getInitiateDisputeInstructionAsync,
-  getMigrateProtocolInstructionAsync,
+  getMigrateProtocolInstruction,
   getMigrateTaskInstructionAsync,
   getPostCompletionBondInstructionAsync,
   getPostToFeedInstructionAsync,
@@ -359,7 +359,7 @@ import {
   type InitializeProtocolAsyncInput,
   type InitializeZkConfigAsyncInput,
   type InitiateDisputeAsyncInput,
-  type MigrateProtocolAsyncInput,
+  type MigrateProtocolInput,
   type MigrateTaskAsyncInput,
   type ParsedAcceptBidInstruction,
   type ParsedAcceptTaskResultInstruction,
@@ -3115,8 +3115,8 @@ export type AgencCoordinationPluginInstructions = {
   ) => ReturnType<typeof getInitiateDisputeInstructionAsync> &
     SelfPlanAndSendFunctions;
   migrateProtocol: (
-    input: MigrateProtocolAsyncInput,
-  ) => ReturnType<typeof getMigrateProtocolInstructionAsync> &
+    input: MakeOptional<MigrateProtocolInput, "payer">,
+  ) => ReturnType<typeof getMigrateProtocolInstruction> &
     SelfPlanAndSendFunctions;
   migrateTask: (
     input: MakeOptional<MigrateTaskAsyncInput, "payer">,
@@ -3665,7 +3665,10 @@ export function agencCoordinationProgram() {
           migrateProtocol: (input) =>
             addSelfPlanAndSendFunctions(
               client,
-              getMigrateProtocolInstructionAsync(input),
+              getMigrateProtocolInstruction({
+                ...input,
+                payer: input.payer ?? client.payer,
+              }),
             ),
           migrateTask: (input) =>
             addSelfPlanAndSendFunctions(

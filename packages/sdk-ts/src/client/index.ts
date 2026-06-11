@@ -25,6 +25,7 @@ export {
 } from "./transport.js";
 export {
   createMarketplaceClient,
+  withReferrerDefault,
   DEFAULT_COMMITMENT,
   DEFAULT_COMPUTE_UNIT_LIMIT,
   DEFAULT_MAX_RETRIES,

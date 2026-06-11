@@ -133,7 +133,10 @@ export type MigrateTaskAsyncInput<
    * pre-migration account before the handler runs, making migration impossible.
    */
   task: Address<TAccountTask>;
-  /** Funds the rent top-up for the +50-byte growth. */
+  /**
+   * Funds the rent top-up for the growth (up to +84 bytes from a 382B legacy task,
+   * or +34 from a 432B Batch-2 task).
+   */
   payer: TransactionSigner<TAccountPayer>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -231,7 +234,10 @@ export type MigrateTaskInput<
    * pre-migration account before the handler runs, making migration impossible.
    */
   task: Address<TAccountTask>;
-  /** Funds the rent top-up for the +50-byte growth. */
+  /**
+   * Funds the rent top-up for the growth (up to +84 bytes from a 382B legacy task,
+   * or +34 from a 432B Batch-2 task).
+   */
   payer: TransactionSigner<TAccountPayer>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -323,7 +329,10 @@ export type ParsedMigrateTaskInstruction<
      * pre-migration account before the handler runs, making migration impossible.
      */
     task: TAccountMetas[1];
-    /** Funds the rent top-up for the +50-byte growth. */
+    /**
+     * Funds the rent top-up for the growth (up to +84 bytes from a 382B legacy task,
+     * or +34 from a 432B Batch-2 task).
+     */
     payer: TAccountMetas[2];
     authority: TAccountMetas[3];
     systemProgram: TAccountMetas[4];

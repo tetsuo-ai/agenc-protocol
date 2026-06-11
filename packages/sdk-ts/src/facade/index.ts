@@ -8,3 +8,4 @@ export * from "./moderation.js";
 export * from "./bids.js";
 export * from "./governance.js";
 export * from "./reputation.js";
+export * from "./surface.js";

@@ -17,6 +17,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{ServiceListingHired, TaskCreated};
+use crate::instructions::completion_helpers::resolve_referrer_snapshot;
 use crate::instructions::hire_from_listing::{
     hire_deadline_offset, validate_hire_terms, validate_listing_capacity,
     validate_listing_moderation_for_hire, validate_listing_spec_hash,
@@ -135,6 +136,8 @@ pub fn handler(
     expected_price: u64,
     expected_version: u64,
     review_window_secs: i64,
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
 ) -> Result<()> {
     let clock = Clock::get()?;
     let config = ctx.accounts.protocol_config.as_ref();
@@ -234,14 +237,29 @@ pub fn handler(
 
     // §4: stamp the operator terms onto the Task so settlement runs the 3-way split.
     // A creator that is also the operator could self-deal the operator leg.
-    if listing_operator != Pubkey::default() {
+    let stamped_operator_fee_bps = if listing_operator != Pubkey::default() {
         require!(
             listing_operator != creator_key,
             CoordinationError::OperatorIsCreator
         );
         task.operator = listing_operator;
         task.operator_fee_bps = listing_operator_fee_bps;
-    }
+        listing_operator_fee_bps
+    } else {
+        0
+    };
+
+    // P6.2 demand-side referral leg (buyer-supplied), validated + snapshotted exactly
+    // as in hire_from_listing.
+    let (referrer_key, referrer_bps) = resolve_referrer_snapshot(
+        referrer,
+        referrer_fee_bps,
+        protocol_fee_bps,
+        stamped_operator_fee_bps,
+        creator_key,
+    )?;
+    task.referrer = referrer_key;
+    task.referrer_fee_bps = referrer_bps;
     let task_key = task.key();
 
     let escrow = ctx.accounts.escrow.as_mut();
@@ -284,6 +302,8 @@ pub fn handler(
     hire_record.operator_fee_bps = listing_operator_fee_bps;
     hire_record.bump = ctx.bumps.hire_record;
     hire_record._reserved = [0u8; 32];
+    hire_record.referrer = referrer_key;
+    hire_record.referrer_fee_bps = referrer_bps;
 
     // Pin CreatorReview so the human buyer always reviews before settlement.
     let vc = ctx.accounts.task_validation_config.as_mut();

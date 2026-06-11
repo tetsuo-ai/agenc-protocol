@@ -112,6 +112,8 @@ pub mod agenc_coordination {
         constraint_hash: Option<[u8; 32]>,
         min_reputation: u16,
         reward_mint: Option<Pubkey>,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::create_task::handler(
             ctx,
@@ -125,6 +127,8 @@ pub mod agenc_coordination {
             constraint_hash,
             min_reputation,
             reward_mint,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -755,12 +759,18 @@ pub mod agenc_coordination {
         ctx: Context<UpdateLaunchControls>,
         protocol_paused: bool,
         disabled_task_type_mask: u8,
+        surface_revision: u16,
     ) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
             CoordinationError::MultisigNotEnoughSigners
         );
-        instructions::update_launch_controls::handler(ctx, protocol_paused, disabled_task_type_mask)
+        instructions::update_launch_controls::handler(
+            ctx,
+            protocol_paused,
+            disabled_task_type_mask,
+            surface_revision,
+        )
     }
 
     /// Migrate protocol to a new version (multisig gated).
@@ -776,9 +786,10 @@ pub mod agenc_coordination {
         instructions::migrate::handler(ctx, target_version)
     }
 
-    /// Migrate one Task account to the Batch-2 layout (382B -> 432B). Multisig
-    /// gated, VERSION-UNGATED (must run while version == 1, before the version
-    /// bump). `dry_run` validates without mutating. Idempotent / re-runnable.
+    /// Migrate one Task account to the P6.2 layout (382B or 432B -> 466B; appends the
+    /// operator + referrer fee legs). Multisig gated, VERSION-UNGATED (must run while
+    /// version == 1, before the version bump). `dry_run` validates without mutating.
+    /// Idempotent / re-runnable.
     pub fn migrate_task(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
         instructions::migrate::migrate_task_handler(ctx, dry_run)
     }
@@ -990,8 +1001,17 @@ pub mod agenc_coordination {
         task_id: [u8; 32],
         expected_price: u64,
         expected_version: u64,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
-        instructions::hire_from_listing::handler(ctx, task_id, expected_price, expected_version)
+        instructions::hire_from_listing::handler(
+            ctx,
+            task_id,
+            expected_price,
+            expected_version,
+            referrer,
+            referrer_fee_bps,
+        )
     }
 
     /// Hire a provider from a standing service listing as a human buyer with NO
@@ -999,12 +1019,15 @@ pub mod agenc_coordination {
     /// listing's operator-fee leg (the embedding site's cut), and pins
     /// ValidationMode::CreatorReview so the human reviews the work before payout.
     #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
     pub fn hire_from_listing_humanless(
         ctx: Context<HireFromListingHumanless>,
         task_id: [u8; 32],
         expected_price: u64,
         expected_version: u64,
         review_window_secs: i64,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::hire_from_listing_humanless::handler(
             ctx,
@@ -1012,6 +1035,8 @@ pub mod agenc_coordination {
             expected_price,
             expected_version,
             review_window_secs,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -1054,6 +1079,8 @@ pub mod agenc_coordination {
         deadline: i64,
         min_reputation: u16,
         review_window_secs: i64,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::create_task_humanless::handler(
             ctx,
@@ -1064,6 +1091,8 @@ pub mod agenc_coordination {
             deadline,
             min_reputation,
             review_window_secs,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -1279,6 +1308,8 @@ pub mod agenc_coordination {
         constraint_hash: Option<[u8; 32]>,
         min_reputation: u16,
         reward_mint: Option<Pubkey>,
+        referrer: Option<Pubkey>,
+        referrer_fee_bps: u16,
     ) -> Result<()> {
         instructions::create_task::handler(
             ctx,
@@ -1292,6 +1323,8 @@ pub mod agenc_coordination {
             constraint_hash,
             min_reputation,
             reward_mint,
+            referrer,
+            referrer_fee_bps,
         )
     }
 
@@ -1481,17 +1514,23 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Update emergency launch controls.
+    /// Update emergency launch controls and stamp the deployed surface revision.
     pub fn update_launch_controls(
         ctx: Context<UpdateLaunchControls>,
         protocol_paused: bool,
         disabled_task_type_mask: u8,
+        surface_revision: u16,
     ) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
             CoordinationError::MultisigNotEnoughSigners
         );
-        instructions::update_launch_controls::handler(ctx, protocol_paused, disabled_task_type_mask)
+        instructions::update_launch_controls::handler(
+            ctx,
+            protocol_paused,
+            disabled_task_type_mask,
+            surface_revision,
+        )
     }
 
     /// Migrate protocol to a new version.

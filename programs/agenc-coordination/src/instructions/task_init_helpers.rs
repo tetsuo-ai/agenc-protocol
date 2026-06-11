@@ -164,6 +164,14 @@ pub fn init_task_fields(
     task.depends_on = None;
     task.min_reputation = min_reputation;
     task.reward_mint = reward_mint;
+    // Append-only Batch-2 / P6.2 fields: default to "no leg" on init. The hire +
+    // referrer paths stamp these afterward; create_task leaves them as no-leg unless
+    // a referrer is supplied. (`init` zero-fills, but set them explicitly so a reused
+    // account can never carry a stale operator/referrer payee.)
+    task.operator = Pubkey::default();
+    task.operator_fee_bps = 0;
+    task.referrer = Pubkey::default();
+    task.referrer_fee_bps = 0;
 
     Ok(())
 }

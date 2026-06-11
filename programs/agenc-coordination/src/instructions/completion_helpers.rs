@@ -4,11 +4,12 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{
-    reputation_reason, OperatorFeePaid, ReputationChanged, RewardDistributed, TaskCompleted,
+    reputation_reason, OperatorFeePaid, ReferrerFeePaid, ReputationChanged, RewardDistributed,
+    TaskCompleted,
 };
 use crate::instructions::constants::{
-    BASIS_POINTS_DIVISOR, MAX_OPERATOR_FEE_BPS, MAX_REPUTATION, REPUTATION_PER_COMPLETION,
-    WORKER_FLOOR_BPS,
+    BASIS_POINTS_DIVISOR, MAX_COMBINED_FEE_BPS, MAX_OPERATOR_FEE_BPS, MAX_REFERRER_FEE_BPS,
+    MAX_REPUTATION, REPUTATION_PER_COMPLETION, WORKER_FLOOR_BPS,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
 #[cfg(feature = "spl-token-rewards")]
@@ -204,6 +205,7 @@ pub fn transfer_rewards<'info>(
     worker_reward: u64,
     protocol_fee: u64,
     operator: Option<(&AccountInfo<'info>, u64)>,
+    referrer: Option<(&AccountInfo<'info>, u64)>,
 ) -> Result<()> {
     transfer_lamports(&escrow.to_account_info(), worker_account, worker_reward)?;
     transfer_lamports(&escrow.to_account_info(), treasury, protocol_fee)?;
@@ -212,6 +214,13 @@ pub fn transfer_rewards<'info>(
     if let Some((operator_account, operator_fee)) = operator {
         if operator_fee > 0 {
             transfer_lamports(&escrow.to_account_info(), operator_account, operator_fee)?;
+        }
+    }
+    // §4 4-way split (P6.2): pay the referrer (demand-side embedder) leg when
+    // present. `None` (the common case) leaves behavior unchanged.
+    if let Some((referrer_account, referrer_fee)) = referrer {
+        if referrer_fee > 0 {
+            transfer_lamports(&escrow.to_account_info(), referrer_account, referrer_fee)?;
         }
     }
     Ok(())
@@ -405,8 +414,8 @@ pub fn validate_task_dependency(
         );
 
         // Deserialize and check parent task status.
-        // BRICK-SAFE (Batch 2): the 149 live parents are at OLD_TASK_SIZE(382) until
-        // migrated, but the Task type is now SIZE(432). Borsh tolerates trailing bytes
+        // BRICK-SAFE: the 149 live parents are at OLD_TASK_SIZE(382) until migrated,
+        // but the Task type is now SIZE(466). Borsh tolerates trailing bytes
         // but NOT missing ones, so a raw `Task::try_deserialize` of a 382B parent would
         // FAIL and brick create_dependent_task against every un-migrated parent. Since
         // the new fields are append-only, zero-pad a short legacy account up to SIZE
@@ -492,6 +501,149 @@ pub fn calculate_operator_fee(
     Ok(operator_fee)
 }
 
+/// The optional referrer (demand-side embedder) leg of a 4-way settlement (spec §4,
+/// P6.2). Present only for tasks whose hire/create snapshotted a non-zero referrer
+/// fee onto the `Task` (or its `HireRecord`). `payee` receives the referrer fee in
+/// lamports; `fee_bps` is the snapshotted referrer fee in basis points.
+pub struct ReferrerLeg<'info> {
+    pub payee: AccountInfo<'info>,
+    pub fee_bps: u16,
+}
+
+/// Compute the operator + referrer fee legs from a settlement `base` and enforce the
+/// spec §4 4-way economic invariants in ONE place, so the combined-cap math can
+/// never disagree between the two legs.
+///
+/// Invariants (defense in depth; the bps are also bounded at their source):
+///   * operator fee ≤ `MAX_OPERATOR_FEE_BPS`
+///   * referrer fee ≤ `MAX_REFERRER_FEE_BPS`
+///   * COMBINED CAP: `protocol + operator + referrer ≤ MAX_COMBINED_FEE_BPS`
+///     (4000 bps), i.e. the worker ALWAYS keeps ≥ `WORKER_FLOOR_BPS` (6000).
+///
+/// Returns `(operator_fee, referrer_fee)` in lamports (each floored independently,
+/// so the worker keeps any rounding dust).
+pub fn calculate_combined_fees(
+    base: u64,
+    protocol_fee_bps: u16,
+    operator_fee_bps: u16,
+    referrer_fee_bps: u16,
+) -> Result<(u64, u64)> {
+    require!(
+        operator_fee_bps <= MAX_OPERATOR_FEE_BPS,
+        CoordinationError::ListingOperatorFeeTooHigh
+    );
+    require!(
+        referrer_fee_bps <= MAX_REFERRER_FEE_BPS,
+        CoordinationError::ReferrerFeeTooHigh
+    );
+    // Combined cap, checked in bps to avoid rounding ambiguity: protocol + operator +
+    // referrer must leave the worker at least WORKER_FLOOR_BPS. The cap is the
+    // BINDING money-safety invariant for the 4-way split.
+    let combined_bps = (protocol_fee_bps as u64)
+        .checked_add(operator_fee_bps as u64)
+        .ok_or(CoordinationError::ArithmeticOverflow)?
+        .checked_add(referrer_fee_bps as u64)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    require!(
+        combined_bps <= MAX_COMBINED_FEE_BPS as u64,
+        CoordinationError::CombinedFeeAboveCap
+    );
+    let worker_bps = BASIS_POINTS_DIVISOR
+        .checked_sub(combined_bps)
+        .ok_or(CoordinationError::CombinedFeeAboveCap)?;
+    require!(
+        worker_bps >= WORKER_FLOOR_BPS as u64,
+        CoordinationError::CombinedFeeAboveCap
+    );
+    let operator_fee = base
+        .checked_mul(operator_fee_bps as u64)
+        .ok_or(CoordinationError::ArithmeticOverflow)?
+        .checked_div(BASIS_POINTS_DIVISOR)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let referrer_fee = base
+        .checked_mul(referrer_fee_bps as u64)
+        .ok_or(CoordinationError::ArithmeticOverflow)?
+        .checked_div(BASIS_POINTS_DIVISOR)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    Ok((operator_fee, referrer_fee))
+}
+
+/// Normalize + validate referrer args at snapshot time (hire / create-task), so a
+/// bad referral is rejected at task creation rather than surfacing only at
+/// settlement. Returns the canonical `(referrer_pubkey, referrer_fee_bps)` to stamp
+/// onto the Task / HireRecord:
+///   * `referrer == None` OR `referrer_fee_bps == 0` → `(default, 0)` (no leg).
+///   * otherwise validates the per-leg cap, the combined cap against the (already
+///     bounded) protocol + operator fees, and the no-self-deal guard.
+///
+/// `operator_fee_bps` is the operator leg that will co-exist on this task (0 when
+/// there is none), so the combined cap is enforced at creation with the SAME math
+/// the settlement path uses.
+pub fn resolve_referrer_snapshot(
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
+    protocol_fee_bps: u16,
+    operator_fee_bps: u16,
+    creator: Pubkey,
+) -> Result<(Pubkey, u16)> {
+    let referrer_key = referrer.unwrap_or_default();
+    if referrer_key == Pubkey::default() || referrer_fee_bps == 0 {
+        // No leg. A non-zero fee with a default/absent payee is meaningless — reject
+        // so the args can't silently drop the fee.
+        require!(
+            referrer_fee_bps == 0 || referrer_key != Pubkey::default(),
+            CoordinationError::MissingReferrerAccount
+        );
+        return Ok((Pubkey::default(), 0));
+    }
+    require!(
+        referrer_fee_bps <= MAX_REFERRER_FEE_BPS,
+        CoordinationError::ReferrerFeeTooHigh
+    );
+    // Combined cap (protocol + operator + referrer ≤ MAX_COMBINED_FEE_BPS) checked at
+    // creation — same invariant as settlement, surfaced early.
+    let combined = (protocol_fee_bps as u32)
+        .checked_add(operator_fee_bps as u32)
+        .ok_or(CoordinationError::ArithmeticOverflow)?
+        .checked_add(referrer_fee_bps as u32)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    require!(
+        combined <= MAX_COMBINED_FEE_BPS as u32,
+        CoordinationError::CombinedFeeAboveCap
+    );
+    // No self-deal: the buyer/creator cannot pay themselves the referrer leg.
+    require!(
+        referrer_key != creator,
+        CoordinationError::ReferrerIsCreator
+    );
+    Ok((referrer_key, referrer_fee_bps))
+}
+
+/// Build the optional `ReferrerLeg` from a snapshotted `(referrer, referrer_fee_bps)`
+/// and the optional referrer payee account, mirroring the per-caller operator-leg
+/// construction. Returns `Ok(None)` when there is no referrer leg (fee 0 or default
+/// payee), or validates the supplied account matches the snapshot. A worker cannot
+/// dodge the leg: the snapshot comes from program-owned state (the Task / its
+/// HireRecord), and the leg becomes REQUIRED whenever the snapshot carries a fee.
+pub fn build_referrer_leg<'info>(
+    referrer: Pubkey,
+    referrer_fee_bps: u16,
+    referrer_account: Option<&AccountInfo<'info>>,
+) -> Result<Option<ReferrerLeg<'info>>> {
+    if referrer_fee_bps == 0 || referrer == Pubkey::default() {
+        return Ok(None);
+    }
+    let acct = referrer_account.ok_or(CoordinationError::MissingReferrerAccount)?;
+    require!(
+        acct.key() == referrer,
+        CoordinationError::InvalidReferrerAccount
+    );
+    Ok(Some(ReferrerLeg {
+        payee: acct.clone(),
+        fee_bps: referrer_fee_bps,
+    }))
+}
+
 /// Execute reward transfer, state updates, event emissions, and conditional escrow closure.
 ///
 /// Shared by both `complete_task` (public) and `complete_task_private` (ZK) handlers.
@@ -526,6 +678,7 @@ pub fn execute_completion_rewards<'a, 'info>(
     clock: &Clock,
     token_accounts: Option<TokenPaymentAccounts<'a, 'info>>,
     operator_leg: Option<OperatorLeg<'info>>,
+    referrer_leg: Option<ReferrerLeg<'info>>,
 ) -> Result<()> {
     let settlement_amount = reward_amount_override.unwrap_or(task.reward_amount);
     let (mut worker_reward, protocol_fee) = match reward_amount_override {
@@ -533,28 +686,55 @@ pub fn execute_completion_rewards<'a, 'info>(
         None => calculate_reward_split(task, protocol_fee_bps)?,
     };
 
-    // §4 3-way split: carve the operator (embedding-site) leg out of the worker's
-    // share. STRICTLY gated — when no operator leg is supplied (every existing and
-    // non-hire task), `operator_fee` is 0 and the 2-way behavior below is
-    // byte-for-byte unchanged. Operator legs are SOL-only (they originate from a
-    // HireRecord on a SOL hire), so a present leg forbids the token path.
-    let operator_fee = match operator_leg.as_ref() {
-        Some(leg) if leg.fee_bps > 0 && leg.payee.key() != Pubkey::default() => {
-            require!(
-                task.reward_mint.is_none() && token_accounts.is_none(),
-                CoordinationError::InvalidTokenMint
-            );
-            let base = worker_reward
-                .checked_add(protocol_fee)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-            let fee = calculate_operator_fee(base, protocol_fee_bps, leg.fee_bps)?;
-            worker_reward = worker_reward
-                .checked_sub(fee)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-            require!(worker_reward > 0, CoordinationError::RewardTooSmall);
-            fee
-        }
-        _ => 0,
+    // §4 3-/4-way split: resolve the active operator + referrer fee bps (0 when a leg
+    // is absent or its payee is default), then carve BOTH legs out of the worker's
+    // share through a SINGLE combined-cap calculation so the math can never disagree.
+    // STRICTLY gated — when neither leg is supplied (every existing and non-hire,
+    // non-referred task), both fees are 0 and the 2-way behavior below is
+    // byte-for-byte unchanged. Both legs are SOL-only (they originate from on-chain
+    // snapshots set on SOL hires), so a present leg forbids the token path.
+    let operator_active = matches!(
+        operator_leg.as_ref(),
+        Some(leg) if leg.fee_bps > 0 && leg.payee.key() != Pubkey::default()
+    );
+    let referrer_active = matches!(
+        referrer_leg.as_ref(),
+        Some(leg) if leg.fee_bps > 0 && leg.payee.key() != Pubkey::default()
+    );
+    let operator_fee_bps = if operator_active {
+        operator_leg.as_ref().map(|l| l.fee_bps).unwrap_or(0)
+    } else {
+        0
+    };
+    let referrer_fee_bps = if referrer_active {
+        referrer_leg.as_ref().map(|l| l.fee_bps).unwrap_or(0)
+    } else {
+        0
+    };
+
+    let (operator_fee, referrer_fee) = if operator_active || referrer_active {
+        require!(
+            task.reward_mint.is_none() && token_accounts.is_none(),
+            CoordinationError::InvalidTokenMint
+        );
+        let base = worker_reward
+            .checked_add(protocol_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        let (op_fee, ref_fee) =
+            calculate_combined_fees(base, protocol_fee_bps, operator_fee_bps, referrer_fee_bps)?;
+        // Carve both legs out of the worker's share (protocol fee was already split
+        // off above). The combined cap guarantees the worker stays ≥ WORKER_FLOOR_BPS,
+        // but re-check > 0 to the lamport for the rounding/dust edge.
+        let total_legs = op_fee
+            .checked_add(ref_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        worker_reward = worker_reward
+            .checked_sub(total_legs)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        require!(worker_reward > 0, CoordinationError::RewardTooSmall);
+        (op_fee, ref_fee)
+    } else {
+        (0, 0)
     };
 
     // Checks: validate escrow balance for SOL path before any state mutations.
@@ -563,6 +743,8 @@ pub fn execute_completion_rewards<'a, 'info>(
             .checked_add(protocol_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?
             .checked_add(operator_fee)
+            .ok_or(CoordinationError::ArithmeticOverflow)?
+            .checked_add(referrer_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         require!(
             escrow.to_account_info().lamports() >= total,
@@ -574,12 +756,15 @@ pub fn execute_completion_rewards<'a, 'info>(
     // This follows the checks-effects-interactions pattern to prevent
     // stale state reads via Token-2022 transfer hooks or future CPI callbacks.
     update_claim_state(claim, escrow, worker_reward, protocol_fee)?;
-    // The operator leg is also withdrawn from escrow — track it in `distributed`
-    // so dispute remaining-funds accounting stays accurate.
-    if operator_fee > 0 {
+    // The operator + referrer legs are also withdrawn from escrow — track them in
+    // `distributed` so dispute remaining-funds accounting stays accurate.
+    let extra_legs = operator_fee
+        .checked_add(referrer_fee)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    if extra_legs > 0 {
         escrow.distributed = escrow
             .distributed
-            .checked_add(operator_fee)
+            .checked_add(extra_legs)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
     }
     let task_completed =
@@ -630,8 +815,26 @@ pub fn execute_completion_rewards<'a, 'info>(
             });
         }
     }
+    // §4 4-way split (P6.2): announce the referrer leg and prepare it for transfer.
+    // No-op when `referrer_fee == 0` (the common path).
+    if referrer_fee > 0 {
+        if let Some(leg) = referrer_leg.as_ref() {
+            emit!(ReferrerFeePaid {
+                task_id: task.task_id,
+                referrer: leg.payee.key(),
+                amount: referrer_fee,
+                referrer_fee_bps: leg.fee_bps,
+                timestamp: clock.unix_timestamp,
+            });
+        }
+    }
     let operator_xfer: Option<(&AccountInfo<'info>, u64)> = if operator_fee > 0 {
         operator_leg.as_ref().map(|leg| (&leg.payee, operator_fee))
+    } else {
+        None
+    };
+    let referrer_xfer: Option<(&AccountInfo<'info>, u64)> = if referrer_fee > 0 {
+        referrer_leg.as_ref().map(|leg| (&leg.payee, referrer_fee))
     } else {
         None
     };
@@ -650,6 +853,7 @@ pub fn execute_completion_rewards<'a, 'info>(
                 worker_reward,
                 protocol_fee,
                 operator_xfer,
+                referrer_xfer,
             )?;
         }
 
@@ -701,6 +905,7 @@ pub fn execute_completion_rewards<'a, 'info>(
             worker_reward,
             protocol_fee,
             operator_xfer,
+            referrer_xfer,
         )?;
         if task_completed {
             close_escrow_to_creator(escrow, creator_info)?;
@@ -760,6 +965,136 @@ mod tests {
         assert_eq!(calculate_operator_fee(7, 100, 1000).unwrap(), 0);
     }
 
+    // ---- §4 4-way combined operator + referrer split (P6.2) ----
+
+    #[test]
+    fn test_combined_fees_4way_basic_math() {
+        // base 1_000_000, protocol 100 bps (1%), operator 1000 bps (10%), referrer
+        // 500 bps (5%). operator = 100_000, referrer = 50_000.
+        let (op, rf) = calculate_combined_fees(1_000_000, 100, 1000, 500).unwrap();
+        assert_eq!(op, 100_000);
+        assert_eq!(rf, 50_000);
+    }
+
+    #[test]
+    fn test_combined_fees_referrer_only() {
+        // No operator leg: operator 0, referrer 2000 bps (20%) -> referrer = 200_000.
+        let (op, rf) = calculate_combined_fees(1_000_000, 100, 0, 2000).unwrap();
+        assert_eq!(op, 0);
+        assert_eq!(rf, 200_000);
+    }
+
+    #[test]
+    fn test_combined_fees_zero_legs_is_zero() {
+        let (op, rf) = calculate_combined_fees(1_000_000, 100, 0, 0).unwrap();
+        assert_eq!(op, 0);
+        assert_eq!(rf, 0);
+    }
+
+    #[test]
+    fn test_combined_fees_rejects_referrer_over_cap() {
+        // referrer_fee_bps above MAX_REFERRER_FEE_BPS is rejected.
+        assert!(calculate_combined_fees(1_000_000, 100, 0, MAX_REFERRER_FEE_BPS + 1).is_err());
+        assert!(calculate_combined_fees(1_000_000, 100, 0, MAX_REFERRER_FEE_BPS).is_ok());
+    }
+
+    #[test]
+    fn test_combined_fees_enforces_combined_cap() {
+        // protocol 2000 + operator 2000 + referrer 1 = 4001 > MAX_COMBINED_FEE_BPS
+        // (4000) -> rejected. The combined cap is the BINDING money-safety invariant.
+        assert!(calculate_combined_fees(1_000_000, 2000, 2000, 1).is_err());
+        // Boundary: 2000 + 1000 + 1000 = 4000 -> worker exactly 6000 -> ok.
+        let (op, rf) = calculate_combined_fees(1_000_000, 2000, 1000, 1000).unwrap();
+        assert_eq!(op, 100_000);
+        assert_eq!(rf, 100_000);
+    }
+
+    #[test]
+    fn test_combined_cap_constant_leaves_worker_floor() {
+        // MAX_COMBINED_FEE_BPS + WORKER_FLOOR_BPS must be exactly 100% — the worker
+        // floor is the complement of the combined fee cap.
+        assert_eq!(
+            MAX_COMBINED_FEE_BPS as u64 + WORKER_FLOOR_BPS as u64,
+            BASIS_POINTS_DIVISOR
+        );
+    }
+
+    #[test]
+    fn test_combined_fees_round_down_independently() {
+        // base 7, both legs 1000 bps: 7*1000/10000 = 0.7 -> 0 each (worker keeps dust).
+        let (op, rf) = calculate_combined_fees(7, 100, 1000, 1000).unwrap();
+        assert_eq!(op, 0);
+        assert_eq!(rf, 0);
+    }
+
+    // ---- referrer snapshot validation (P6.2) ----
+
+    #[test]
+    fn test_resolve_referrer_none_is_no_leg() {
+        let creator = Pubkey::new_unique();
+        let (key, bps) = resolve_referrer_snapshot(None, 0, 100, 0, creator).unwrap();
+        assert_eq!(key, Pubkey::default());
+        assert_eq!(bps, 0);
+    }
+
+    #[test]
+    fn test_resolve_referrer_zero_fee_is_no_leg() {
+        // A referrer pubkey with 0 fee snapshots as no-leg.
+        let creator = Pubkey::new_unique();
+        let referrer = Pubkey::new_unique();
+        let (key, bps) = resolve_referrer_snapshot(Some(referrer), 0, 100, 0, creator).unwrap();
+        assert_eq!(key, Pubkey::default());
+        assert_eq!(bps, 0);
+    }
+
+    #[test]
+    fn test_resolve_referrer_nonzero_fee_default_payee_rejected() {
+        // A non-zero fee with an absent/default payee is a misconfiguration — reject so
+        // the fee can't be silently dropped.
+        let creator = Pubkey::new_unique();
+        assert!(resolve_referrer_snapshot(None, 500, 100, 0, creator).is_err());
+        assert!(
+            resolve_referrer_snapshot(Some(Pubkey::default()), 500, 100, 0, creator).is_err()
+        );
+    }
+
+    #[test]
+    fn test_resolve_referrer_valid_snapshot() {
+        let creator = Pubkey::new_unique();
+        let referrer = Pubkey::new_unique();
+        let (key, bps) =
+            resolve_referrer_snapshot(Some(referrer), 500, 100, 1000, creator).unwrap();
+        assert_eq!(key, referrer);
+        assert_eq!(bps, 500);
+    }
+
+    #[test]
+    fn test_resolve_referrer_self_deal_rejected() {
+        // The creator cannot pay themselves the referrer leg.
+        let creator = Pubkey::new_unique();
+        assert!(resolve_referrer_snapshot(Some(creator), 500, 100, 0, creator).is_err());
+    }
+
+    #[test]
+    fn test_resolve_referrer_combined_cap_at_creation() {
+        // protocol 2000 + operator 2000 + referrer 1 = 4001 -> rejected at snapshot.
+        let creator = Pubkey::new_unique();
+        let referrer = Pubkey::new_unique();
+        assert!(resolve_referrer_snapshot(Some(referrer), 1, 2000, 2000, creator).is_err());
+        // 2000 + 1000 + 1000 = 4000 -> ok.
+        assert!(resolve_referrer_snapshot(Some(referrer), 1000, 2000, 1000, creator).is_ok());
+    }
+
+    #[test]
+    fn test_resolve_referrer_over_per_leg_cap_rejected() {
+        let creator = Pubkey::new_unique();
+        let referrer = Pubkey::new_unique();
+        assert!(
+            resolve_referrer_snapshot(Some(referrer), MAX_REFERRER_FEE_BPS + 1, 0, 0, creator)
+                .is_err()
+        );
+    }
+
     /// Create a test task with configurable parameters
     fn build_test_task_fixture(
         task_type: TaskType,
@@ -794,6 +1129,8 @@ mod tests {
             operator: Pubkey::default(),
             operator_fee_bps: 0,
             _reserved: [0u8; 16],
+            referrer: Pubkey::default(),
+            referrer_fee_bps: 0,
         }
     }
 

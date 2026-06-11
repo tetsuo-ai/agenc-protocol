@@ -11,6 +11,7 @@ use anchor_spl::associated_token::AssociatedToken;
 #[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
+use super::completion_helpers::resolve_referrer_snapshot;
 use super::launch_controls::require_task_type_index_enabled;
 use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use super::task_init_helpers::{
@@ -123,6 +124,8 @@ pub fn handler(
     constraint_hash: Option<[u8; 32]>,
     min_reputation: u16,
     reward_mint: Option<Pubkey>,
+    referrer: Option<Pubkey>,
+    referrer_fee_bps: u16,
 ) -> Result<()> {
     validate_task_params(
         &task_id,
@@ -172,11 +175,12 @@ pub fn handler(
     // depend on a stale view of freshly funded PDAs.
     let escrow_key = ctx.accounts.escrow.key();
     let protocol_fee_bps = config.protocol_fee_bps;
+    let creator_key = ctx.accounts.creator.key();
     let task = ctx.accounts.task.as_mut();
     init_task_fields(
         task,
         task_id,
-        ctx.accounts.creator.key(),
+        creator_key,
         required_capabilities,
         description,
         constraint_hash,
@@ -191,6 +195,27 @@ pub fn handler(
         min_reputation,
         reward_mint,
     )?;
+
+    // P6.2 demand-side referral leg: a creator may credit the embedder who brought
+    // them (referrer + bps). No operator leg exists on a direct create_task, so the
+    // combined cap is checked against protocol + referrer only. Validated + stamped
+    // onto the Task for the settlement split (no HireRecord on a direct create_task).
+    // SOL-ONLY (mirrors the operator leg): the settlement split pays the referrer in
+    // lamports, so a referrer fee on a token-denominated task is rejected at creation
+    // rather than bricking the task at settlement.
+    let (referrer_key, referrer_bps) = resolve_referrer_snapshot(
+        referrer,
+        referrer_fee_bps,
+        protocol_fee_bps,
+        0, // no operator leg on a direct create_task
+        creator_key,
+    )?;
+    require!(
+        referrer_bps == 0 || reward_mint.is_none(),
+        CoordinationError::InvalidTokenMint
+    );
+    task.referrer = referrer_key;
+    task.referrer_fee_bps = referrer_bps;
 
     let escrow = ctx.accounts.escrow.as_mut();
     init_escrow_fields(escrow, task.key(), reward_amount, ctx.bumps.escrow);
