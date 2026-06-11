@@ -6,6 +6,7 @@
 // indexer/   = hosted indexer API client (the scale read path + tx builder).
 // webhooks/  = webhook delivery signature verification.
 // events/    = log parsing, subscriptions, waitForTaskStatus.
+// watch/     = watchClaimableTasks (worker-notification convenience over events+queries).
 // values/    = ids, hashing, listing-metadata codecs, canonical job-spec hash.
 export * from "./generated/index.js";
 export * as facade from "./facade/index.js";
@@ -14,6 +15,7 @@ export * from "./queries/index.js";
 export * from "./indexer/index.js";
 export * from "./webhooks/index.js";
 export * from "./events/index.js";
+export * from "./watch/index.js";
 export * as values from "./values/index.js";
 
 // The P3.4 public moderation helper lives next to the devnet sandbox helpers

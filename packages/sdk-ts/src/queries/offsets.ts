@@ -81,3 +81,27 @@ export const TASK_BID_TASK_OFFSET = 8;
  * HireRecords against the buyer's Tasks client-side.
  */
 export const HIRE_RECORD_TASK_OFFSET = 8;
+
+// ---------------------------------------------------------------------------
+// TaskJobSpec (src/generated/accounts/taskJobSpec.ts)
+//   disc(8) | task(32) | creator(32) | jobSpecHash(32) | jobSpecUri(4+len) | ...
+// ---------------------------------------------------------------------------
+
+/**
+ * `TaskJobSpec.task` (the Task PDA this job spec pins): 8.
+ *
+ * A `TaskJobSpec` account existing for a task is the on-chain
+ * "job-spec pinned" signal `claim_task_with_job_spec` requires (the claim
+ * instruction takes the `["task_job_spec", task]` PDA as a plain
+ * `Account<TaskJobSpec>` — absent ⇒ `AccountNotInitialized`).
+ */
+export const TASK_JOB_SPEC_TASK_OFFSET = 8;
+
+/**
+ * `TaskJobSpec.jobSpecHash` (the SHA-256 commitment): 8 + 32 + 32 = 72.
+ *
+ * The on-chain `validate_job_spec_pointer` additionally requires this hash to
+ * have at least one non-zero byte, so the claimable predicate checks both PDA
+ * existence AND a non-zero hash to mirror the program exactly.
+ */
+export const TASK_JOB_SPEC_HASH_OFFSET = 72;

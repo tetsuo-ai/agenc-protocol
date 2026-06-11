@@ -1,0 +1,80 @@
+{
+  "name": "@tetsuo-ai/marketplace-tools",
+  "version": "0.1.0",
+  "description": "Framework-neutral AgenC marketplace tool definitions (JSON-Schema) for AI agents — discovery, inspection, and unsigned mutation-prepare tools, with OpenAI / LangChain / CrewAI adapters",
+  "packageManager": "npm@11.7.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "docs:api": "typedoc"
+  },
+  "dependencies": {
+    "@tetsuo-ai/marketplace-sdk": "*"
+  },
+  "peerDependencies": {
+    "@solana/kit": "^6.9.0"
+  },
+  "devDependencies": {
+    "@solana/kit": "6.9.0",
+    "tsup": "8.5.1",
+    "typedoc": "^0.28.13",
+    "typedoc-plugin-markdown": "^4.9.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.8"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetsuo-ai/agenc-protocol.git",
+    "directory": "packages/marketplace-tools"
+  },
+  "homepage": "https://github.com/tetsuo-ai/agenc-protocol/tree/main/packages/marketplace-tools#readme",
+  "bugs": {
+    "url": "https://github.com/tetsuo-ai/agenc-protocol/issues"
+  },
+  "keywords": [
+    "solana",
+    "agenc",
+    "marketplace",
+    "agents",
+    "tools",
+    "mcp",
+    "openai",
+    "langchain",
+    "crewai",
+    "function-calling",
+    "json-schema"
+  ],
+  "author": "Tetsuo AI",
+  "engines": {
+    "node": ">=20.18.0"
+  }
+}

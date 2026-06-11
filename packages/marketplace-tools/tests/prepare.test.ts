@@ -1,0 +1,185 @@
+import { describe, it, expect } from "vitest";
+import {
+  getTool,
+  MarketplaceToolError,
+  type MarketplaceToolContext,
+  type UnsignedInstructionView,
+} from "../src/index.js";
+import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "@tetsuo-ai/marketplace-sdk";
+import {
+  A_LISTING_PDA,
+  A_TASK_PDA,
+  A_PROVIDER,
+  A_AUTHORITY,
+} from "./fixtures.js";
+
+// prepare-* tools build instructions purely from args; no transport needed.
+const ctx: MarketplaceToolContext = { read: { async getProgramAccounts() {
+  return [];
+} } };
+
+const HEX32 = "07".repeat(32);
+/** A valid fixed 64-byte resultData payload (128 hex chars). */
+const HEX64 = "ab".repeat(64);
+
+describe("prepare_hire handler", () => {
+  it("returns an UNSIGNED instruction targeting the agenc program with no signatures", async () => {
+    const ix = (await getTool("prepare_hire")!.handler(
+      {
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        creatorAgent: A_PROVIDER,
+        taskId: HEX32,
+        expectedPrice: "50000000",
+        expectedVersion: "4",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // The canonical assertion: it carries NO signatures.
+    expect(ix.signatures).toEqual([]);
+    expect(Array.isArray(ix.accounts)).toBe(true);
+    expect(ix.accounts.length).toBeGreaterThan(0);
+    expect(typeof ix.dataBase64).toBe("string");
+    expect(ix.dataBase64.length).toBeGreaterThan(0);
+
+    // The buyer wallet appears as a writable signer (fee payer); a noop signer
+    // carries the address but never produced a signature.
+    const buyerMeta = ix.accounts.find((a) => a.address === A_AUTHORITY);
+    expect(buyerMeta, "buyer is an account meta").toBeDefined();
+    expect(buyerMeta!.role.signer).toBe(true);
+  });
+
+  it("rejects a taskId that is not 64 hex chars", async () => {
+    await expect(
+      getTool("prepare_hire")!.handler(
+        {
+          listing: A_LISTING_PDA,
+          buyer: A_AUTHORITY,
+          creatorAgent: A_PROVIDER,
+          taskId: "deadbeef", // too short
+          expectedPrice: "1",
+          expectedVersion: "1",
+        },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(MarketplaceToolError);
+  });
+});
+
+describe("prepare_claim handler", () => {
+  it("returns an unsigned claim instruction with no signatures", async () => {
+    const ix = (await getTool("prepare_claim")!.handler(
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.signatures).toEqual([]);
+    const auth = ix.accounts.find((a) => a.address === A_AUTHORITY);
+    expect(auth!.role.signer).toBe(true);
+  });
+});
+
+describe("prepare_submit handler", () => {
+  it("returns an unsigned submit instruction with no signatures (no resultData)", async () => {
+    const ix = (await getTool("prepare_submit")!.handler(
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        proofHash: HEX32,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.signatures).toEqual([]);
+    expect(ix.dataBase64.length).toBeGreaterThan(0);
+  });
+
+  it("accepts a full fixed 64-byte resultData hex", async () => {
+    const ix = (await getTool("prepare_submit")!.handler(
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        proofHash: HEX32,
+        resultData: HEX64,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.signatures).toEqual([]);
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+  });
+
+  it("rejects an odd-length resultData hex", async () => {
+    await expect(
+      getTool("prepare_submit")!.handler(
+        {
+          task: A_TASK_PDA,
+          worker: A_PROVIDER,
+          workerAuthority: A_AUTHORITY,
+          proofHash: HEX32,
+          resultData: "abc", // odd length
+        },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(MarketplaceToolError);
+  });
+
+  // REVERT-SENSITIVE (finding #2): a SHORT resultData must throw, not be
+  // silently zero-padded to 64 bytes. Pre-fix, `hexToBytes("cafe")` returned a
+  // 2-byte array and `fixEncoderSize(..., 64)` zero-padded it to 64 bytes, so
+  // the worker committed 62 trailing zero bytes it never supplied — and this
+  // built a tx instead of throwing.
+  it("rejects a too-short resultData (would be silently zero-padded) with BAD_RESULTDATA_LEN", async () => {
+    const err = await getTool("prepare_submit")!
+      .handler(
+        {
+          task: A_TASK_PDA,
+          worker: A_PROVIDER,
+          workerAuthority: A_AUTHORITY,
+          proofHash: HEX32,
+          resultData: "cafe", // 2 bytes — short of the fixed 64
+        },
+        ctx,
+      )
+      .then(
+        () => {
+          throw new Error("expected a throw, got a built instruction");
+        },
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(MarketplaceToolError);
+    expect((err as MarketplaceToolError).code).toBe("BAD_RESULTDATA_LEN");
+  });
+
+  // REVERT-SENSITIVE (finding #2): a LONG resultData must throw, not be silently
+  // truncated to the first 64 bytes. Pre-fix, a 100-byte input was sliced to 64
+  // by `fixEncoderSize` and still built a (wrong) tx.
+  it("rejects a too-long resultData (would be silently truncated) with BAD_RESULTDATA_LEN", async () => {
+    const err = await getTool("prepare_submit")!
+      .handler(
+        {
+          task: A_TASK_PDA,
+          worker: A_PROVIDER,
+          workerAuthority: A_AUTHORITY,
+          proofHash: HEX32,
+          resultData: "ab".repeat(100), // 100 bytes — over the fixed 64
+        },
+        ctx,
+      )
+      .then(
+        () => {
+          throw new Error("expected a throw, got a built instruction");
+        },
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(MarketplaceToolError);
+    expect((err as MarketplaceToolError).code).toBe("BAD_RESULTDATA_LEN");
+  });
+});

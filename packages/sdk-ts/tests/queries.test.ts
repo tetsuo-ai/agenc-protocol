@@ -1,10 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { Buffer } from "node:buffer";
-import { address, getAddressDecoder, type Address } from "@solana/kit";
+import {
+  address,
+  getAddressDecoder,
+  getAddressEncoder,
+  type Address,
+} from "@solana/kit";
 import {
   createRpcProgramAccountsTransport,
+  isTaskJobSpecPinned,
   listActiveListings,
   listOpenTasks,
+  listPinnedJobSpecTasks,
   listingsByProvider,
   HIRE_RECORD_TASK_OFFSET,
   SERVICE_LISTING_AUTHORITY_OFFSET,
@@ -14,6 +21,8 @@ import {
   TASK_CLAIM_TASK_OFFSET,
   TASK_CLAIM_WORKER_OFFSET,
   TASK_CREATOR_OFFSET,
+  TASK_JOB_SPEC_HASH_OFFSET,
+  TASK_JOB_SPEC_TASK_OFFSET,
   TASK_STATUS_OFFSET,
   type GpaFilter,
   type ProgramAccountsTransport,
@@ -30,6 +39,7 @@ import {
   getTaskBidEncoder,
   getTaskClaimEncoder,
   getTaskEncoder,
+  getTaskJobSpecEncoder,
   type ServiceListingArgs,
   type TaskArgs,
 } from "../src/index.js";
@@ -131,6 +141,27 @@ function taskFixtureArgs(overrides: Partial<TaskArgs> = {}): TaskArgs {
 
 function encodeTask(overrides: Partial<TaskArgs> = {}): Uint8Array {
   return new Uint8Array(getTaskEncoder().encode(taskFixtureArgs(overrides)));
+}
+
+function encodeTaskJobSpec(
+  overrides: Partial<{
+    task: Address;
+    creator: Address;
+    jobSpecHash: Uint8Array;
+  }> = {},
+): Uint8Array {
+  return new Uint8Array(
+    getTaskJobSpecEncoder().encode({
+      task: overrides.task ?? addrFromByte(0x91),
+      creator: overrides.creator ?? addrFromByte(0x92),
+      jobSpecHash: overrides.jobSpecHash ?? bytes32(0x93),
+      jobSpecUri: "agenc://job-spec/x",
+      createdAt: 0n,
+      updatedAt: 0n,
+      bump: 247,
+      reserved: new Uint8Array(7),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +279,89 @@ describe("queries offsets are drift-proofed against the generated encoders", () 
     expect(decodeAddressAt(data, HIRE_RECORD_TASK_OFFSET)).toBe(
       addrFromByte(0xf1),
     );
+  });
+
+  it("TaskJobSpec: task + jobSpecHash offsets hit their sentinels", () => {
+    const data = encodeTaskJobSpec({
+      task: addrFromByte(0x91),
+      jobSpecHash: bytes32(0x93),
+    });
+    expect(decodeAddressAt(data, TASK_JOB_SPEC_TASK_OFFSET)).toBe(
+      addrFromByte(0x91),
+    );
+    expect(
+      data.subarray(TASK_JOB_SPEC_HASH_OFFSET, TASK_JOB_SPEC_HASH_OFFSET + 32),
+    ).toEqual(bytes32(0x93));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Job-spec pin helpers: these mirror the on-chain claim_task_with_job_spec gate
+// (the ["task_job_spec", task] PDA exists AND its jobSpecHash is non-zero), so
+// the watch/worker layer never builds a doomed claim against an unpinned task.
+// ---------------------------------------------------------------------------
+describe("listPinnedJobSpecTasks / isTaskJobSpecPinned", () => {
+  it("listPinnedJobSpecTasks returns only tasks with a NON-ZERO job-spec hash", async () => {
+    const pinnedTask = addrFromByte(0x41);
+    const zeroHashTask = addrFromByte(0x42);
+    const jobSpecPinned = addrFromByte(0x51);
+    const jobSpecZero = addrFromByte(0x52);
+    const transport = staticTransport([
+      {
+        address: jobSpecPinned,
+        data: encodeTaskJobSpec({
+          task: pinnedTask,
+          jobSpecHash: bytes32(0xaa),
+        }),
+      },
+      {
+        address: jobSpecZero,
+        data: encodeTaskJobSpec({
+          task: zeroHashTask,
+          jobSpecHash: new Uint8Array(32), // all-zero: validate_job_spec_pointer rejects
+        }),
+      },
+    ]);
+    const pinned = await listPinnedJobSpecTasks(transport);
+    expect(pinned.has(pinnedTask)).toBe(true);
+    expect(pinned.has(zeroHashTask)).toBe(false);
+    expect(pinned.size).toBe(1);
+  });
+
+  it("isTaskJobSpecPinned: true for a non-zero-hash pointer, false when absent or zero", async () => {
+    const task = addrFromByte(0x61);
+    const jobSpec = addrFromByte(0x71);
+    // memcmp on TASK_JOB_SPEC_TASK_OFFSET must go out so the transport can scope.
+    const captured: Array<readonly GpaFilter[]> = [];
+    const pinnedTransport = staticTransport(
+      [
+        {
+          address: jobSpec,
+          data: encodeTaskJobSpec({ task, jobSpecHash: bytes32(0xbb) }),
+        },
+      ],
+      captured,
+    );
+    expect(await isTaskJobSpecPinned(pinnedTransport, task)).toBe(true);
+    // The task-field memcmp filter is present at the right offset.
+    expect(captured[0][1]).toEqual({
+      memcmp: {
+        offset: TASK_JOB_SPEC_TASK_OFFSET,
+        bytes: new Uint8Array(getAddressEncoder().encode(task)),
+      },
+    });
+
+    // Absent pointer → not pinned.
+    expect(await isTaskJobSpecPinned(staticTransport([]), task)).toBe(false);
+
+    // Present but zero hash → not pinned.
+    const zeroTransport = staticTransport([
+      {
+        address: jobSpec,
+        data: encodeTaskJobSpec({ task, jobSpecHash: new Uint8Array(32) }),
+      },
+    ]);
+    expect(await isTaskJobSpecPinned(zeroTransport, task)).toBe(false);
   });
 });
 
