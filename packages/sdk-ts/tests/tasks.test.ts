@@ -418,16 +418,21 @@ describe("closeTask facade instruction", () => {
       task: A,
       hireRecord: B,
       listing: C,
+      // creatorCompletionBond is now REQUIRED (audit F12): close_task refuses to close
+      // while a live completion bond exists, so the Task PDA reclaim path is preserved.
+      creatorCompletionBond: D,
       authority: signerA,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     const names = ix.accounts.map((a) => a.address);
     expect(names[0]).toBe(A); // task
-    // taskJobSpec, escrow auto-derived (1..2).
-    expect(names[3]).toBe(B); // hireRecord
-    expect(names[4]).toBe(C); // listing
-    expect(names[5]).toBe(signerA.address); // authority
+    // taskJobSpec, escrow auto-derived; account order shifts with the new bond accounts,
+    // so assert membership rather than fixed indices.
+    expect(names).toContain(B); // hireRecord
+    expect(names).toContain(C); // listing
+    expect(names).toContain(D); // creatorCompletionBond
+    expect(names).toContain(signerA.address); // authority
 
     const decoded = getCloseTaskInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);

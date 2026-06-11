@@ -118,15 +118,26 @@ pub struct AutoAcceptTaskResult<'info> {
     #[account(mut)]
     pub referrer: Option<UncheckedAccount<'info>>,
 
-    // === Batch 3 completion bonds (optional; refunded on auto-accept) ===
-    /// CHECK: creator completion bond PDA; refunded on auto-accept. Validated by helper.
+    // === Batch 3 completion bonds — REQUIRED + canonical-PDA-pinned (audit F12) ===
+    // Refunded on auto-accept. Required + seeds-pinned (was Optional) so the Completed
+    // transition can never strand a live bond past close_task; settle no-ops on the empty
+    // PDA of an un-bonded task. See accept_task_result for the full rationale.
+    /// CHECK: creator completion bond PDA, seeds-pinned; validated + refunded by helper.
     #[cfg(not(feature = "mainnet-canary"))]
-    #[account(mut)]
-    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: worker completion bond PDA; refunded on auto-accept.
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), creator.key().as_ref()],
+        bump
+    )]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA, seeds-pinned to the validated worker authority.
     #[cfg(not(feature = "mainnet-canary"))]
-    #[account(mut)]
-    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), worker_authority.key().as_ref()],
+        bump
+    )]
+    pub worker_completion_bond: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -392,28 +403,26 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         .claim
         .close(ctx.accounts.worker_authority.to_account_info())?;
 
-    // Batch 3 §8: auto-accept is a success — refund BOTH completion bonds.
+    // Batch 3 §8: auto-accept is a success — refund BOTH completion bonds. Required +
+    // seeds-pinned accounts (audit F12): always runs, so no live bond survives the
+    // Completed transition; settle no-ops on an un-bonded task's empty PDA.
     #[cfg(not(feature = "mainnet-canary"))]
     {
         let task_key = ctx.accounts.task.key();
-        if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &ctx.accounts.creator.to_account_info(),
-                &task_key,
-                CompletionBond::ROLE_CREATOR,
-                BondDisposition::Refund,
-            )?;
-        }
-        if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &ctx.accounts.worker_authority.to_account_info(),
-                &task_key,
-                CompletionBond::ROLE_WORKER,
-                BondDisposition::Refund,
-            )?;
-        }
+        settle_completion_bond(
+            &ctx.accounts.creator_completion_bond.to_account_info(),
+            &ctx.accounts.creator.to_account_info(),
+            &task_key,
+            CompletionBond::ROLE_CREATOR,
+            BondDisposition::Refund,
+        )?;
+        settle_completion_bond(
+            &ctx.accounts.worker_completion_bond.to_account_info(),
+            &ctx.accounts.worker_authority.to_account_info(),
+            &task_key,
+            CompletionBond::ROLE_WORKER,
+            BondDisposition::Refund,
+        )?;
     }
 
     Ok(())

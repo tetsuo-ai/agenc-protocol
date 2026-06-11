@@ -507,6 +507,7 @@ import {
   findBidMarketplacePda,
   findBidPda,
   findClaimPda,
+  findCompleteTaskWorkerCompletionBondPda,
   findCompletionBondPda,
   findCreateTaskHumanlessAuthorityRateLimitPda,
   findCreatorCompletionBondPda,
@@ -529,7 +530,6 @@ import {
   findPurchaseRecordPda,
   findRateSkillPurchaseRecordPda,
   findRatingAccountPda,
-  findReclaimCompletionBondCompletionBondPda,
   findRecordListingModerationModerationAttestorPda,
   findReputationStakePda,
   findSkillPda,
@@ -3375,11 +3375,14 @@ export type AgencCoordinationPluginPdas = {
   escrow: typeof findEscrowPda;
   taskValidationConfig: typeof findTaskValidationConfigPda;
   taskSubmission: typeof findTaskSubmissionPda;
+  creatorCompletionBond: typeof findCreatorCompletionBondPda;
+  workerCompletionBond: typeof findWorkerCompletionBondPda;
   disputeResolver: typeof findDisputeResolverPda;
   moderationConfig: typeof findModerationConfigPda;
   moderationAttestor: typeof findModerationAttestorPda;
   agentStats: typeof findAgentStatsPda;
   hireRecord: typeof findHireRecordPda;
+  completeTaskWorkerCompletionBond: typeof findCompleteTaskWorkerCompletionBondPda;
   zkConfig: typeof findZkConfigPda;
   taskAttestorConfig: typeof findTaskAttestorConfigPda;
   bidMarketplace: typeof findBidMarketplacePda;
@@ -3394,21 +3397,18 @@ export type AgencCoordinationPluginPdas = {
   expireClaimAgentStats: typeof findExpireClaimAgentStatsPda;
   dispute: typeof findDisputePda;
   initiatorClaim: typeof findInitiatorClaimPda;
-  completionBond: typeof findCompletionBondPda;
   post: typeof findPostPda;
   purchaseRecord: typeof findPurchaseRecordPda;
   hireRating: typeof findHireRatingPda;
   ratingAccount: typeof findRatingAccountPda;
   rateSkillPurchaseRecord: typeof findRateSkillPurchaseRecordPda;
-  reclaimCompletionBondCompletionBond: typeof findReclaimCompletionBondCompletionBondPda;
+  completionBond: typeof findCompletionBondPda;
   agentVerification: typeof findAgentVerificationPda;
   listingModeration: typeof findListingModerationPda;
   recordListingModerationModerationAttestor: typeof findRecordListingModerationModerationAttestorPda;
   taskModeration: typeof findTaskModerationPda;
   agent: typeof findAgentPda;
   skill: typeof findSkillPda;
-  creatorCompletionBond: typeof findCreatorCompletionBondPda;
-  workerCompletionBond: typeof findWorkerCompletionBondPda;
   state: typeof findStatePda;
   vote: typeof findVotePda;
   taskValidationVote: typeof findTaskValidationVotePda;
@@ -3987,11 +3987,15 @@ export function agencCoordinationProgram() {
           escrow: findEscrowPda,
           taskValidationConfig: findTaskValidationConfigPda,
           taskSubmission: findTaskSubmissionPda,
+          creatorCompletionBond: findCreatorCompletionBondPda,
+          workerCompletionBond: findWorkerCompletionBondPda,
           disputeResolver: findDisputeResolverPda,
           moderationConfig: findModerationConfigPda,
           moderationAttestor: findModerationAttestorPda,
           agentStats: findAgentStatsPda,
           hireRecord: findHireRecordPda,
+          completeTaskWorkerCompletionBond:
+            findCompleteTaskWorkerCompletionBondPda,
           zkConfig: findZkConfigPda,
           taskAttestorConfig: findTaskAttestorConfigPda,
           bidMarketplace: findBidMarketplacePda,
@@ -4007,14 +4011,12 @@ export function agencCoordinationProgram() {
           expireClaimAgentStats: findExpireClaimAgentStatsPda,
           dispute: findDisputePda,
           initiatorClaim: findInitiatorClaimPda,
-          completionBond: findCompletionBondPda,
           post: findPostPda,
           purchaseRecord: findPurchaseRecordPda,
           hireRating: findHireRatingPda,
           ratingAccount: findRatingAccountPda,
           rateSkillPurchaseRecord: findRateSkillPurchaseRecordPda,
-          reclaimCompletionBondCompletionBond:
-            findReclaimCompletionBondCompletionBondPda,
+          completionBond: findCompletionBondPda,
           agentVerification: findAgentVerificationPda,
           listingModeration: findListingModerationPda,
           recordListingModerationModerationAttestor:
@@ -4022,8 +4024,6 @@ export function agencCoordinationProgram() {
           taskModeration: findTaskModerationPda,
           agent: findAgentPda,
           skill: findSkillPda,
-          creatorCompletionBond: findCreatorCompletionBondPda,
-          workerCompletionBond: findWorkerCompletionBondPda,
           state: findStatePda,
           vote: findVotePda,
           taskValidationVote: findTaskValidationVotePda,

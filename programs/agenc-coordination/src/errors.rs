@@ -949,4 +949,6 @@ pub enum CoordinationError {
     ReputationStakeNotWithdrawn,
     #[msg("Provider agent must be Active for this listing operation")]
     ProviderAgentNotActive,
+    #[msg("Task has a live completion bond; reclaim it before closing the task")]
+    TaskHasLiveCompletionBond,
 }

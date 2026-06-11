@@ -162,11 +162,11 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
     });
     const [creatorBond] = await findCompletionBondPda({
       task,
-      authority: buyer.address,
+      party: buyer.address,
     });
     const [workerBond] = await findCompletionBondPda({
       task,
-      authority: provider.address,
+      party: provider.address,
     });
     expect(accountData(market, creatorBond)).not.toBeNull();
     expect(accountData(market, workerBond)).not.toBeNull();

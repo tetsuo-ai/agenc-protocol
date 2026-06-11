@@ -240,11 +240,11 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
 
     const [creatorBond] = await findCompletionBondPda({
       task: w.task,
-      authority: w.creator.address,
+      party: w.creator.address,
     });
     const [workerBond] = await findCompletionBondPda({
       task: w.task,
-      authority: w.worker.address,
+      party: w.worker.address,
     });
 
     // ON-CHAIN ASSERT: both bond accounts exist and decode with the SDK decoder.
@@ -281,11 +281,11 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
 
     const [creatorBond] = await findCompletionBondPda({
       task: w.task,
-      authority: w.creator.address,
+      party: w.creator.address,
     });
     const [workerBond] = await findCompletionBondPda({
       task: w.task,
-      authority: w.worker.address,
+      party: w.worker.address,
     });
     expect(accountData(w.svm, creatorBond)).not.toBeNull();
     expect(accountData(w.svm, workerBond)).not.toBeNull();
@@ -334,7 +334,7 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
     ]);
     const [creatorBond] = await findCompletionBondPda({
       task: w.task,
-      authority: w.creator.address,
+      party: w.creator.address,
     });
     const bondData = accountData(w.svm, creatorBond);
     expect(bondData).not.toBeNull();
@@ -366,7 +366,10 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
     expect(creatorDelta).toBeGreaterThan(bondLamports - 50_000n);
   });
 
-  it("reclaim_completion_bond recovers a bond stranded by an omitted account", async () => {
+  it("complete_task FORCE-settles the worker bond (audit F12: strand is structurally impossible)", async () => {
+    // Audit F12: the completion-bond accounts on complete_task are now REQUIRED +
+    // canonical-PDA-pinned, and the generated builder auto-derives them — so a worker bond
+    // can NO LONGER be left live on a Completed task (which close_task would then strand).
     const w = await claimedAutoTask(40);
 
     await send(w.svm, w.worker, [
@@ -374,11 +377,13 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
     ]);
     const [workerBond] = await findCompletionBondPda({
       task: w.task,
-      authority: w.worker.address,
+      party: w.worker.address,
     });
     expect(accountData(w.svm, workerBond)).not.toBeNull();
+    const workerBefore = bal(w.svm, w.worker.address);
+    const bondLamports = bal(w.svm, workerBond);
 
-    // complete the task but OMIT the worker bond account -> it is stranded (still open).
+    // complete the task — the required worker bond is auto-derived + force-refunded.
     await send(w.svm, w.worker, [
       await facade.completeTask({
         authority: w.worker,
@@ -393,20 +398,9 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
     expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(
       TaskStatus.Completed,
     );
-    expect(accountData(w.svm, workerBond)).not.toBeNull(); // stranded
 
-    // reclaim recovers the stranded bond to its poster on the Completed task.
-    const workerBefore = bal(w.svm, w.worker.address);
-    const bondLamports = bal(w.svm, workerBond);
-    await send(w.svm, w.worker, [
-      await facade.reclaimCompletionBond({
-        task: w.task,
-        party: w.worker.address,
-        role: 1,
-      }),
-    ]);
-
-    // ON-CHAIN ASSERT: bond PDA closed; poster recovered (rent + principal) minus tx fee.
+    // ON-CHAIN ASSERT: the bond was force-refunded at completion (NOT stranded), and the
+    // worker recovered rent + principal. close_task can then never meet a live bond here.
     expect(accountData(w.svm, workerBond)).toBeNull();
     const workerDelta = bal(w.svm, w.worker.address) - workerBefore;
     expect(workerDelta).toBeGreaterThan(bondLamports - 50_000n);

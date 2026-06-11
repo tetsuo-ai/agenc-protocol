@@ -9,7 +9,6 @@ import {
   postCompletionBond,
   reclaimCompletionBond,
   findCompletionBondPda,
-  findReclaimCompletionBondCompletionBondPda,
 } from "../src/facade/bonds.js";
 
 // Structural tests: build the facade instruction (async builders auto-derive the bond PDA)
@@ -30,7 +29,7 @@ describe("postCompletionBond (facade)", () => {
     // PDA auto-derived from (task, signing authority).
     const [bond] = await findCompletionBondPda({
       task,
-      authority: authority.address,
+      party: authority.address,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -52,8 +51,8 @@ describe("reclaimCompletionBond (facade)", () => {
   it("assembles with the right program, account order, and round-trips its data", async () => {
     const ix = await reclaimCompletionBond({ task, party, role: 0 });
 
-    // Codama renamed this collision: reclaim derives its bond PDA from (task, party).
-    const [bond] = await findReclaimCompletionBondCompletionBondPda({
+    // The completion-bond PDA is derived from (task, party).
+    const [bond] = await findCompletionBondPda({
       task,
       party,
     });

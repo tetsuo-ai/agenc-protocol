@@ -39,7 +39,7 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findCompletionBondPda } from "../pdas";
+import { findCompleteTaskWorkerCompletionBondPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const POST_COMPLETION_BOND_DISCRIMINATOR: ReadonlyUint8Array =
@@ -178,16 +178,17 @@ export async function getPostCompletionBondInstructionAsync<
 
   // Resolve default values.
   if (!accounts.completionBond.value) {
-    accounts.completionBond.value = await findCompletionBondPda({
-      task: getAddressFromResolvedInstructionAccount(
-        "task",
-        accounts.task.value,
-      ),
-      authority: getAddressFromResolvedInstructionAccount(
-        "authority",
-        accounts.authority.value,
-      ),
-    });
+    accounts.completionBond.value =
+      await findCompleteTaskWorkerCompletionBondPda({
+        task: getAddressFromResolvedInstructionAccount(
+          "task",
+          accounts.task.value,
+        ),
+        authority: getAddressFromResolvedInstructionAccount(
+          "authority",
+          accounts.authority.value,
+        ),
+      });
   }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =

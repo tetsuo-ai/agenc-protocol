@@ -99,9 +99,43 @@ pub struct CloseTask<'info> {
     )]
     pub listing: Option<Account<'info, ServiceListing>>,
 
+    /// Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task
+    /// REFUSES to close the Task while this is a live program-owned bond, so the Task PDA
+    /// (which reclaim_completion_bond needs) can never be destroyed out from under an
+    /// unsettled creator bond. The party is the creator, so this PDA is canonically
+    /// derivable here. For an already-settled / un-bonded task it is an empty system PDA.
+    /// CHECK: address fixed by seeds; liveness checked in the handler.
+    #[account(
+        seeds = [b"completion_bond", task.key().as_ref(), task.creator.as_ref()],
+        bump
+    )]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+
+    /// Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot
+    /// canonically pin this (the worker authority is not recorded on the Task after the
+    /// claim closes), so it is checked only when supplied: if a live program-owned bond is
+    /// passed, close is REFUSED. The hard guarantee for the worker bond comes from the
+    /// Completed settlement paths (accept/auto_accept/complete), which are now required +
+    /// pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond
+    /// (now also valid on Cancelled) is the worker's permissionless recovery on the cancel
+    /// path. CHECK: liveness checked in the handler when present.
+    #[account(mut)]
+    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+
     /// Task creator; receives the reclaimed rent. Mutable to credit lamports.
     #[account(mut)]
     pub authority: Signer<'info>,
+}
+
+/// A program-owned, non-tombstoned account at the bond PDA means a completion bond is
+/// still live and must be settled (reclaim_completion_bond) before the Task can be closed.
+fn completion_bond_is_live(info: &AccountInfo) -> Result<bool> {
+    if info.owner != &crate::ID {
+        return Ok(false);
+    }
+    let data = info.try_borrow_data()?;
+    // < 8 bytes or the [255; 8] tombstone written by settle_completion_bond => not live.
+    Ok(data.len() >= 8 && data[..8] != [255u8; 8])
 }
 
 pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
@@ -115,6 +149,22 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     // orphan. close_task therefore does not take the escrow account (it is already
     // gone) and only reclaims the leftover Task (+ optional TaskJobSpec).
     validate_task_closable(task.status, task.current_workers)?;
+
+    // Audit F12: never close the Task PDA while a completion bond is still live, because
+    // reclaim_completion_bond needs a live Task to refund it — closing first would strand
+    // the bond principal forever. Force the caller to settle (reclaim) first. The creator
+    // bond is canonically seeds-pinned; the worker bond is checked best-effort here and is
+    // additionally guaranteed settled by the required+pinned Completed-path settlement.
+    require!(
+        !completion_bond_is_live(&ctx.accounts.creator_completion_bond.to_account_info())?,
+        CoordinationError::TaskHasLiveCompletionBond
+    );
+    if let Some(worker_bond) = ctx.accounts.worker_completion_bond.as_ref() {
+        require!(
+            !completion_bond_is_live(&worker_bond.to_account_info())?,
+            CoordinationError::TaskHasLiveCompletionBond
+        );
+    }
 
     let job_spec_closed = ctx.accounts.task_job_spec.is_some();
     let escrow_closed = ctx.accounts.escrow.is_some();

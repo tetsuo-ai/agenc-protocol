@@ -494,16 +494,75 @@ export type AgencCoordination = {
         },
         {
           "name": "creatorCompletionBond",
-          "docs": [
-            "Validated by settle_completion_bond (owner/PDA/task/role/party)."
-          ],
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         },
         {
           "name": "workerCompletionBond",
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "workerAuthority"
+              }
+            ]
+          }
         },
         {
           "name": "tokenEscrowAta",
@@ -1304,12 +1363,74 @@ export type AgencCoordination = {
         {
           "name": "creatorCompletionBond",
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         },
         {
           "name": "workerCompletionBond",
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "workerAuthority"
+              }
+            ]
+          }
         },
         {
           "name": "authority",
@@ -2334,6 +2455,64 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "creatorCompletionBond",
+          "docs": [
+            "Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task",
+            "REFUSES to close the Task while this is a live program-owned bond, so the Task PDA",
+            "(which reclaim_completion_bond needs) can never be destroyed out from under an",
+            "unsettled creator bond. The party is the creator, so this PDA is canonically",
+            "derivable here. For an already-settled / un-bonded task it is an empty system PDA."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "workerCompletionBond",
+          "docs": [
+            "Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot",
+            "canonically pin this (the worker authority is not recorded on the Task after the",
+            "claim closes), so it is checked only when supplied: if a live program-owned bond is",
+            "passed, close is REFUSED. The hard guarantee for the worker bond comes from the",
+            "Completed settlement paths (accept/auto_accept/complete), which are now required +",
+            "pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond",
+            "(now also valid on Cancelled) is the worker's permissionless recovery on the cancel",
+            "path. CHECK: liveness checked in the handler when present."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "authority",
           "docs": [
             "Task creator; receives the reclaimed rent. Mutable to credit lamports."
@@ -2601,16 +2780,75 @@ export type AgencCoordination = {
         },
         {
           "name": "creatorCompletionBond",
-          "docs": [
-            "Validated in the handler by settle_completion_bond (owner/PDA/task/role/party)."
-          ],
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         },
         {
           "name": "workerCompletionBond",
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -16816,6 +17054,11 @@ export type AgencCoordination = {
       "code": 6307,
       "name": "providerAgentNotActive",
       "msg": "Provider agent must be Active for this listing operation"
+    },
+    {
+      "code": 6308,
+      "name": "taskHasLiveCompletionBond",
+      "msg": "Task has a live completion bond; reclaim it before closing the task"
     }
   ],
   "types": [
