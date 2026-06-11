@@ -1127,6 +1127,47 @@ test("request_changes: non-terminal revision keeps the claim, worker resubmits i
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed after revision + accept");
 });
 
+test("expire_claim: a PendingValidation claim with live submitted work cannot be expired (escrow-lock guard)", async () => {
+  // Revert-sensitive guard for the critical escrow-lock: a PendingValidation task
+  // has a live ["task_submission", claim] PDA (Submitted). Pre-fix, omitting that
+  // optional account (taskSubmission: null) made the guard read "no pending
+  // submission" and CLOSE the claim — discarding the work and permanently locking
+  // escrow (no settlement path survives a closed claim). After the fix, a
+  // PendingValidation expiry MUST supply the submission, and a Submitted one is
+  // rejected either way. Drop the fix and the `taskSubmission: null` call succeeds.
+  const w = await freshWorld({ moderationEnabled: true });
+  const r = await setupSubmittedManual(w); // task PendingValidation, submission Submitted, claim open
+  assert.ok(decode(w.svm, "Task", r.task).status.PendingValidation !== undefined, "precondition: PendingValidation");
+
+  // warp past claim expiry + grace so an expire would otherwise be permissionless.
+  const clk = w.svm.getClock();
+  clk.unixTimestamp = clk.unixTimestamp + 700_000n;
+  w.svm.setClock(clk);
+
+  const cleaner = Keypair.generate();
+  w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
+  const expireWith = async (taskSubmission) => send(w.svm, await makeProgram(cleaner).methods
+    .expireClaim()
+    .accounts({
+      authority: cleaner.publicKey, task: r.task, escrow: r.escrow, claim: r.claim,
+      worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
+      taskSubmission, rentRecipient: w.provider.publicKey,
+      workerCompletionBond: null, bondCreator: null,
+      systemProgram: SystemProgram.programId, agentStats: null,
+    })
+    .instruction(), [cleaner]);
+
+  // (a) omitting the submission no longer bypasses the guard.
+  expectFail(await expireWith(null), "TaskSubmissionRequired", "PendingValidation expiry must supply the submission");
+  // (b) supplying the real (Submitted) submission is rejected too — live work is never expirable.
+  w.svm.expireBlockhash();
+  expectFail(await expireWith(r.submission), "TaskNotInProgress", "a Submitted claim cannot be expired");
+
+  // escrow and claim survive intact; the work and funds are not lost.
+  assert.ok(!isClosed(w.svm, r.claim), "claim retained (not closed by a bypassed expire)");
+  assert.ok(!isClosed(w.svm, r.escrow), "escrow retained (not locked)");
+});
+
 test("reject_and_freeze: terminal reject freezes the task and retains the claim (no payout)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const r = await setupSubmittedManual(w);

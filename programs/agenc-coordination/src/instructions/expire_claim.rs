@@ -196,12 +196,24 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         task.status != TaskStatus::Disputed,
         CoordinationError::InvalidStatusTransition
     );
-    let claim_has_pending_submission = ctx
-        .accounts
-        .task_submission
-        .as_ref()
-        .map(|submission| submission.status == SubmissionStatus::Submitted)
-        .unwrap_or(false);
+    // A PendingValidation task has a live `["task_submission", claim]` PDA by
+    // construction (submit_task_result init's it and leaves the claim open). The
+    // account MUST be supplied here so we can honestly evaluate whether the claim
+    // still holds Submitted work. Trusting a caller-omitted optional account (the
+    // old `.unwrap_or(false)`) let an attacker pass `task_submission = None`, read
+    // the guard as "no pending submission", and close a claim that actually had
+    // live Submitted work — permanently locking escrow (a closed claim leaves no
+    // accept/reject/dispute settlement path on mainnet). The genuine no-show path
+    // is `InProgress` with no submission PDA, which stays permitted via the `None`
+    // arm. When supplied, the `["task_submission", claim]` seed already pins the
+    // account to THIS claim, so a present submission is the canonical one.
+    let claim_has_pending_submission = match (task.status, ctx.accounts.task_submission.as_ref()) {
+        (TaskStatus::PendingValidation, None) => {
+            return Err(CoordinationError::TaskSubmissionRequired.into());
+        }
+        (_, Some(submission)) => submission.status == SubmissionStatus::Submitted,
+        (_, None) => false,
+    };
     require!(
         task.status == TaskStatus::InProgress
             || (task.status == TaskStatus::PendingValidation && !claim_has_pending_submission),
