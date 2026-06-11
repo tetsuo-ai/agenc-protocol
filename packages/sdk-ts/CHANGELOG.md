@@ -1,5 +1,18 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.5.0
+
+### Minor Changes
+
+- Phase 6 (Batch 4) client surfaces: `getDeployedSurface(rpc)` (reads the new
+  `surface_revision` and returns a typed capability set, tolerant of the
+  pre-migration ProtocolConfig layout) + `SurfaceNotDeployedError`; the `referrer`
+  config on `createMarketplaceClient` and the optional `referrer`/`referrerFeeBps`
+  args on the hire/create facades (the demand-side referral leg); facade wrappers
+  for `rateHire`, `getAgentTrackRecord`, the moderation-attestor registry
+  (assign/revoke), and `resolveDispute` rationale args; `voteDispute` removed.
+  Generated client regenerated from the Batch-4 IDL (86 event codecs).
+
 ## 0.4.0
 
 ### Minor Changes
