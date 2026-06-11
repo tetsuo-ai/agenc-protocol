@@ -123,6 +123,13 @@ jobs:
           npm run examples:check
           node scripts/pack-smoke.mjs
 
+      # react/tools/mcp typecheck + test against the workspace-linked sdk,
+      # whose types/runtime live in dist/ — build it first.
+      - name: Build workspace sdk (react/tools/mcp gates)
+        if: startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'tools-v') || startsWith(github.ref_name, 'mcp-v')
+        working-directory: packages/sdk-ts
+        run: npm run build
+
       # --- Gate: react ---
       - name: React gate (typecheck, tests, build)
         if: startsWith(github.ref_name, 'react-v')
@@ -142,6 +149,11 @@ jobs:
           npm run build
 
       # --- Gate: mcp (litesvm e2e boots the real .so via the SDK testing sandbox) ---
+      - name: Build workspace tools (mcp gate)
+        if: startsWith(github.ref_name, 'mcp-v')
+        working-directory: packages/marketplace-tools
+        run: npm run build
+
       - name: MCP gate (typecheck, tests incl. e2e, build)
         if: startsWith(github.ref_name, 'mcp-v')
         working-directory: packages/marketplace-mcp
