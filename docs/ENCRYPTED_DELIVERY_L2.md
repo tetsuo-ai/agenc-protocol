@@ -43,7 +43,7 @@ not fit. Two storable options:
   a NEW account holding `{ submission, key_commitment: [u8;32], ciphertext_hash:
   [u8;32], reveal_deadline: i64, revealed_key: [u8;32], status, bump }`. A new
   account + new PDA is **NOT a migration** (per CLAUDE.md): no existing layout
-  changes, the 149 live tasks and all existing `TaskSubmission`s are untouched,
+  changes, the 169 live tasks and all existing `TaskSubmission`s are untouched,
   and the account is `init`-ed only when a worker opts into encrypted delivery.
 - **(B) Extend `TaskSubmission`** — append-only fields + a `migrate` sweep over
   every existing submission. This is a layout-change migration (deploy-gated,

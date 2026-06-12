@@ -39,7 +39,7 @@ bump, _reserved
 
 A new account type + new PDA is **NOT a migration** (CLAUDE.md golden rule 3):
 no existing layout changes; `Task`, `TaskEscrow`, `ServiceListing` (all with
-live accounts) are untouched. The 149 live tasks are untouched.
+live accounts) are untouched. The 169 live tasks are untouched.
 
 `price_per_period` is locked at creation via the existing compare-and-swap
 pattern (`ServiceListing.version` — the same CAS `hire_from_listing` already

@@ -72,12 +72,13 @@ us; only discovery did, and discovery is allowed to degrade).
 - Marketplace operators embedding the widget must consciously decide whether to expose the
   unattested tier; most will not, which preserves brand-safety but blunts the neutrality
   claim *for typical embedders*.
-- **Layout:** a per-listing flag is a `ServiceListing` field. `ServiceListing` is
-  full-surface only (not in the canary), but it is a live full-surface account — adding a
-  field is still an append-only change with a new `const_assert`; verify there are no live
-  accounts that need migrating on the target cluster before relying on in-place value
-  writes. The task-side flag rides `TaskJobSpec`/`Task` and must respect the 149-task
-  migration rules.
+- **Layout:** a per-listing flag is a `ServiceListing` field. `ServiceListing` is a
+  full-surface account (not in the canary build); since the 2026-06-11 full-surface
+  upgrade the full surface is live on mainnet, so treat it as a live mainnet account type —
+  adding a field is still an append-only change with a new `const_assert`; verify there are
+  no live accounts that need migrating on the target cluster before relying on in-place
+  value writes. The task-side flag rides `TaskJobSpec`/`Task` and must respect the task
+  migration rules (the live Task corpus was 169 at the 2026-06-11 upgrade).
 
 ## Option (b) — Per-listing / per-integrator attestor choice (RECOMMENDED core)
 

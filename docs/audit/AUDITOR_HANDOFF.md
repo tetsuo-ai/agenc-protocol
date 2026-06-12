@@ -16,15 +16,19 @@ to the ground-truth code/doc.
 `agenc-coordination` (Anchor 0.32.1, Solana 3.0.13, program id
 `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, upgradeable) is a Solana escrow +
 coordination program for an agent task marketplace. It has **two `#[program]` modules**:
-the **full** surface (**82 IDL instructions**) and a restricted **mainnet-canary**
-surface (**25 instructions**) that is what is *actually live on mainnet today*. The
+the **full** surface (**84 IDL instructions**) and a restricted **mainnet-canary**
+surface (**25 instructions**). This handoff was written while the canary was live on
+mainnet; **as of 2026-06-11 the full surface is live on mainnet** (`surface_revision =
+FULL`, the 169 live Tasks migrated, bid marketplace live, `ZkConfig` deferred), so the
+audited migration described below has since been executed. The
 design goal the auditor should hold the code against is **"money never locks"**: every
 escrow has at least one always-available exit (cancel / refund / reclaim / settle), and
 those exits keep working even while the protocol is paused. Settlement splits up to four
 ways (worker / protocol / operator / referrer) under a **hard 4000-bps combined fee cap
 in bytecode** that leaves the worker ≥ 60%. The highest-stakes thing to audit is the
-**deploy-gated, irreversible layout migration** of the 149 live `Task` accounts (and the
-single live `ProtocolConfig`).
+**deploy-gated, irreversible layout migration** of the live `Task` accounts (and the
+single live `ProtocolConfig`) — at the time this was written there were 149 live tasks;
+the migration was executed 2026-06-11 against the then-169 live tasks (0 failures).
 
 ---
 
@@ -233,7 +237,8 @@ Full per-batch detail (commits, regression tests, revert-sensitivity proofs) is 
 
 Additional gates (all clean at HEAD): clippy `--lib -D warnings` on both the default and
 `mainnet-canary` profiles; `anchor build` + `npm run artifacts:check`;
-`npm run canary:check-idl` (live surface = exactly **25** instructions);
+`npm run canary:check-idl` (the `mainnet-canary` BUILD's IDL stays at exactly **25**
+instructions — note the live mainnet surface is now the full 84-ix build, not the canary);
 `cd packages/sdk-ts && npm run sdk:drift` (generated client in sync with the IDL).
 
 **Phase-6-specific litesvm files** the auditor should map to the new invariants:

@@ -1,8 +1,10 @@
 # Marketplace Program Plan — v3 (autoplan-patched)
 
 **Complete plan to upgrade `agenc-coordination` for the embeddable marketplace.**
-Validated against HEAD `9558c7d`, program `HJsZ53…` (live: 149 Tasks, full build,
-upgrade authority `Hcecp…`). v3 folds in the /autoplan dual-voice review: 11
+Validated against HEAD `9558c7d`, program `HJsZ53…` (live: 169 Tasks as of the
+2026-06-11 full-surface upgrade — 149 when this was validated; the full 84-ix surface is
+now live, `surface_revision = FULL`; upgrade authority is now a 2-of-3 multisig
+`Hcecp…`/`BXDan…`/`4QcKB…`). v3 folds in the /autoplan dual-voice review: 11
 correctness patches + 5 taste decisions baked in; the 3 strategic challenges are
 now the §11.5 go/no-go gate. **ZK deferred** (Appendix Z). Planning doc only — no
 program code changed by this file.
@@ -69,7 +71,7 @@ SDK + widgets so any third party runs their own marketplace on AgenC.
   asserts `protocol+operator+worker+slash_reserve == remaining_funds` per branch
   (SOL + SPL).
 - **[PATCH] Operator-leg guards** (every call site): skip the operator transfer
-  when `operator_fee_bps == 0 || operator == Pubkey::default()` (the 149 migrated
+  when `operator_fee_bps == 0 || operator == Pubkey::default()` (the 169 migrated
   legacy Tasks — else a default-pubkey burn / ATA revert); and require
   `operator_info.key() == task.operator` (mirror the treasury binding at
   `apply_dispute_slash.rs:67`) or the caller picks the recipient.
@@ -178,7 +180,8 @@ SDK + widgets so any third party runs their own marketplace on AgenC.
 - **[PATCH] LUT / versioned-tx is a hard Batch-2 deliverable** (settlement ix are
   already 16-21 accounts; +operator leg +operator ATA risks the legacy tx ceiling).
   State the worst-case account count; make the operator account OPTIONAL when fee==0.
-- **Confirmed scope:** 149 live Tasks (382B → ~416B), bounded one-time sweep.
+- **Confirmed scope:** 169 live Tasks (149 when written), bounded one-time sweep —
+  executed 2026-06-11 (382B → 466B, 0 failures).
 
 ---
 
@@ -197,7 +200,8 @@ SDK + widgets so any third party runs their own marketplace on AgenC.
 
 ## 11.5 Strategic go/no-go gate (HUMAN-OWNED — both models challenge the plan here)
 
-**Batch 2 is irreversible (audit + 149-task mainnet migration). Do NOT start it until:**
+**Batch 2 is irreversible (audit + the task-layout mainnet migration — executed
+2026-06-11 over 169 tasks). Do NOT start it until:**
 1. **Demand thesis written** — name 2-3 concrete would-be operators (is
    `agenc-services-storefront` the first?), the evidence, and a kill criterion. The
    embed/operator premise currently has zero supporting artifact in the repo.
@@ -215,8 +219,9 @@ bonds compounds supply-side cost).
 
 ## 12. Pre-launch operational checklist
 
-1. ✅ Live Tasks? yes (149) → realloc required, bounded.
-2. ✅ Build? full (921 KB, private-zk in) → ZK deferral is a usage choice.
+1. ✅ Live Tasks? yes (169 at the 2026-06-11 upgrade; 149 when written) → realloc done.
+2. ✅ Build? full (~1.95 MB live binary, sha `ea2fa92f…`; the 921 KB figure was the canary
+   build) → ZK deferral is a usage choice (`ZkConfig` not yet initialized on mainnet).
 3. Live `disabled_task_type_mask == 0` and `protocol_paused == false`? (RPC verify)
 4. `ModerationConfig` created + `enabled`? (else marketplace halted — verify)
 5. CU + account-count profile for the SPL 3-way split (LUT/versioned-tx).

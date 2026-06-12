@@ -2,6 +2,11 @@
 
 **Status:** authored 2026-06-09. Detailed execution spec for the embeddable UI surface —
 the layer that turns the SDK + program into things third parties actually deploy.
+**Update (2026-06-11):** the "until Phase 9" mainnet gates below are now SATISFIED — the
+full 84-instruction surface is live on mainnet (`surface_revision = FULL`, listings/hire
+live, bid marketplace live, `ZkConfig` deferred). Mainnet mode no longer needs to wait on
+Phase 9; the `getDeployedSurface` capability check still governs whether each surface is
+advertised (it now returns `listings: true` on mainnet).
 **Relationship to PLAN.md:** PLAN.md is the MASTER roadmap and keeps authority over
 sequencing, gates, standing rules, and traceability. This document is the expanded
 "how" for PLAN.md Phase 4 (P4.1–P4.4) and the new **P4.5 (store templates)** anchored

@@ -128,7 +128,8 @@ proportion to the resolver's overturned rate (see parameters).
   steps 1+2 — append-only on devnet, no migration).
 - **`ProtocolConfig`:** `dispute_challenge_window_secs` is a new field on the **live**
   config account → a real size-extending migration. Sequence it with P6.5's
-  `surface_revision` realloc so the 149-task-style config migration happens once.
+  `surface_revision` realloc so the task-layout-style config migration happens once
+  (the live ProtocolConfig was migrated 349B → 351B in the 2026-06-11 upgrade).
 - **Exit-safety invariant:** moving settlement to `execute_resolution` relocates the
   "money never locks" guarantee. `execute_resolution` MUST be paused-tolerant and
   permissionless-after-deadline, or the split *weakens* the exit guarantee instead of

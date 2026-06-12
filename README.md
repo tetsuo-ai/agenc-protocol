@@ -37,23 +37,30 @@ covers the full lifecycle:
 - **Moderation** — listing- and task-keyed moderation attestations gate hire/publish
   (fail-closed) — see [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Bid marketplace, reputation, skills, governance (multisig), and a social feed** round
-  out the surface (80 instructions total).
+  out the surface (84 instructions total).
 
 > **Two program surfaces.** `lib.rs` has two `#[program]` modules: the full/dev module
-> (everything) and the conservative **mainnet-canary** module (the restricted surface
-> currently live). New feature work is gated to the full module; `migrate_task` is in both.
+> (everything, **live on mainnet as of 2026-06-11**) and the conservative
+> **mainnet-canary** module (the restricted 25-instruction build, retained in source but
+> no longer what is live). New feature work is gated to the full module; `migrate_task` is
+> in both.
 
 ## Mainnet source of truth
 
 `main` is the canonical public source-of-truth branch for the currently **deployed** AgenC
-mainnet canary program. The live program has **149 Task accounts**, so any `Task` /
-`ProtocolConfig` layout change is a real, irreversible migration.
+mainnet program.
 
-- The current `main` tree matches the deployed mainnet (canary) program source.
-- Larger feature work (operator economics, the Task-layout migration, completion bonds,
-  RejectFrozen) and the SDK are staged on **feature branches / PRs**, not yet merged or
-  deployed. See [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md) and
-  [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md).
+> **As of 2026-06-11 the full 84-instruction surface is live on mainnet**
+> (`surface_revision = FULL (1)`, all task types enabled, bid marketplace live, `ZkConfig`
+> deferred so `complete_task_private` is off). Mainnet is **no longer the canary**: the
+> Phase 9 upgrade migrated the 169 live Task accounts (382B → 466B, 0 failures) and the
+> `ProtocolConfig` (349B → 351B). Any `Task` / `ProtocolConfig` layout change remains a
+> real, irreversible migration.
+
+- The current `main` tree matches the deployed mainnet (full-surface) program source.
+- See [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md),
+  [docs/MAINNET_ROLLOUT_RUNBOOK.md](docs/MAINNET_ROLLOUT_RUNBOOK.md) (the completed rollout
+  record), and [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md).
 
 If a future mainnet upgrade changes the deployed source, update `main` in the same release
 window and refresh [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md). Historical rollout
@@ -138,12 +145,17 @@ these) rather than assuming `target/` or runtime-vendored copies are canonical. 
 
 ## Mainnet deploy gates (human-owned)
 
-Before any mainnet deploy of the staged feature work:
+> The full-surface upgrade gated by these requirements was **completed on 2026-06-11**
+> (see [docs/MAINNET_ROLLOUT_RUNBOOK.md](docs/MAINNET_ROLLOUT_RUNBOOK.md)). The list below
+> remains the standing policy for any **future** mainnet deploy/upgrade.
+
+Before any mainnet deploy that changes the deployed surface or account layout:
 
 1. **§11.5 human go/no-go.**
 2. **Professional external audit** of the full surface.
-3. **The irreversible 149-task migration choreography** — binary-first → migrate all 149 →
-   version-bump last; multisig/upgrade-authority gated.
+3. **The irreversible task-layout migration choreography** — binary-first → migrate all
+   live tasks → version-bump last; multisig/upgrade-authority gated. (The 2026-06-11
+   upgrade migrated 169 tasks.)
 4. **SDK/client updates** for any new required accounts.
 
 ## Security & trust

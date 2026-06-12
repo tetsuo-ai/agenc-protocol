@@ -1,55 +1,60 @@
 # MAINNET ROLLOUT RUNBOOK — full-surface upgrade
 
-Operational runbook for upgrading the live mainnet `agenc-coordination` program
-from the restricted **25-instruction canary** surface to the full **~80-instruction**
-surface. This is the Phase 9 on-chain upgrade. It is **irreversible** and
-**human-run**; this document is the choreography, not an authorization.
+> **STATUS: COMPLETED (2026-06-11).** The Phase 9 full-surface upgrade has been
+> executed on mainnet. The live program is now the **full 84-instruction surface**
+> (`surface_revision = FULL (1)`, all task types enabled, bid marketplace live,
+> `ZkConfig` deferred). This document is retained as the **historical choreography
+> and record** of how the rollout was run; it is no longer a pending plan. The §0/§1
+> numbers below have been corrected to the as-executed values (169 tasks migrated,
+> ~1.95 MB binary, ~7.15 SOL permanent extension). See
+> [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md) for the now-live deployment record.
+
+Operational runbook that was used to upgrade the live mainnet `agenc-coordination`
+program from the restricted **25-instruction canary** surface to the full
+**84-instruction** surface. This was the Phase 9 on-chain upgrade. It was
+**irreversible** and **human-run**; this document is the choreography, not an
+authorization.
 
 > Source of truth for layout/version semantics: [`VERSIONS.md`](./VERSIONS.md).
 > Branch-of-record policy: [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
 
 ---
 
-## 0. Current live state (verified 2026-06-11)
+## 0. Pre-upgrade live state (the state this rollout started from, 2026-06-11)
 
-| | Value |
+> Historical: these were the values **before** the upgrade. They are no longer the
+> live state. Post-upgrade live values are recorded in §6 and `MAINNET_MAINLINE.md`.
+
+| | Value (pre-upgrade) |
 |---|---|
 | Program ID | `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` |
 | ProgramData | `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` |
-| Upgrade authority | `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` (single key) |
+| Upgrade authority | now a **2-of-3 multisig** (`Hcecp…` / `BXDan…` / `4QcKB…`) |
 | Live binary | 921,016 B (canary build, `--features mainnet-canary`) |
-| ProgramData balance | 6.41147544 SOL — **allocated tight** (rent(921016+45) == balance exactly; no headroom) |
 | Live ProtocolConfig | OLD 349-byte layout (pre-P6.5, no `surface_revision`) |
-| Live Task accounts | 149, at 382-byte (pre-Batch-2) layout |
+| Live Task accounts | **169**, at 382-byte (pre-Batch-2) layout |
 
-The full-surface binary (default features) is **2,975,920 B** (~2.84 MB) as of
-the current build — ~3× the canary. Re-measure the exact byte count of the
-binary you actually deploy before funding (a verifiable/Docker build can differ
-by a few KB).
+The full-surface binary as deployed is **1,948,384 B** (~1.95 MB, size-optimized;
+sha `ea2fa92f…`).
 
 ---
 
-## 1. Cost (verified against live mainnet rent)
+## 1. Cost (as executed against live mainnet rent)
 
 Solana rent = `(128 + bytes) × 6960` lamports; verified with `solana rent`.
 
 | Item | SOL | Nature |
 |---|---|---|
-| New ProgramData rent (2,975,920 + 45) | ~20.71 | permanent floor |
-| Current ProgramData rent (already funded) | 6.41147544 | already locked |
-| **Permanent extension top-up** | **~14.30** | **locked forever** (recoverable only by closing the program) |
-| Upgrade buffer rent (2,975,920 + 37) | ~20.71 | **temporary — refunded** to the payer after the upgrade |
-| Write/upgrade tx fees (~2,900 txns) | ~0.015 | permanent |
+| Current ProgramData rent (already funded, pre-upgrade) | 6.41147544 | already locked |
+| **Permanent extension top-up** (to fund the ~1.95 MB binary) | **~7.15** | **locked forever** (recoverable only by closing the program) |
+| Upgrade buffer rent | — | **temporary — refunded** to the payer after the upgrade |
+| Write/upgrade tx fees | ~0.015 | permanent |
 
-- **Peak balance the authority must hold:** ~**35 SOL** (buffer + extension + fees).
-- **Net permanent spend:** ~**14.3 SOL** (the ProgramData rent increase) + fees.
-- The authority currently holds **6.94 SOL** → fund at least **~30 SOL** before
-  starting (round up from the ~28 SOL peak shortfall for fee/retry headroom).
-  ~21 SOL returns when the buffer refunds.
+- **Net permanent spend:** ~**7.15 SOL** (the ProgramData rent increase) + fees.
 
-`solana program deploy --program-id <ID>` auto-extends ProgramData (a single
-+2,054,904-byte extend is permitted; result < the 10 MiB `MAX_PERMITTED_DATA_LENGTH`
-ceiling). Pass `--no-auto-extend` only if extending manually first.
+`solana program deploy --program-id <ID>` auto-extends ProgramData (result <
+the 10 MiB `MAX_PERMITTED_DATA_LENGTH` ceiling). Pass `--no-auto-extend` only if
+extending manually first.
 
 ---
 
@@ -69,9 +74,10 @@ record that decision here before proceeding.
       explicitly here that an external audit was/was not done.**
 - [ ] **Upgrade authority is multisig** (P8.5). An irreversible upgrade under a
       single key is a single point of failure; move authority to a threshold
-      multisig before the deploy if at all possible.
-- [ ] **Rehearsed on devnet/localnet** against a ≥149-task clone — see §4.
-- [ ] **Authority funded** with ~30 SOL (§1).
+      multisig before the deploy if at all possible. (As executed: a **2-of-3
+      multisig**, `Hcecp…` / `BXDan…` / `4QcKB…`.)
+- [ ] **Rehearsed on devnet/localnet** against a ≥169-task clone — see §4.
+- [ ] **Authority funded** for the upgrade (§1).
 - [ ] **§11.5 go/no-go** decision recorded (business gate; owner's call).
 
 ---
@@ -88,7 +94,7 @@ record that decision here before proceeding.
    solana program deploy --program-id HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK \
      <full-surface agenc_coordination.so> --upgrade-authority <multisig/authority>
    ```
-   At this instant the live 349-byte ProtocolConfig and the 149 382-byte Tasks
+   At this instant the live 349-byte ProtocolConfig and the 169 382-byte Tasks
    **fail typed reads** — this is expected and is why steps 2–3 follow immediately.
 
 2. **`migrate_protocol` FIRST** (realloc ProtocolConfig 349 → 351, zero-init
@@ -96,22 +102,26 @@ record that decision here before proceeding.
    realloc-only path. Multisig-gated, idempotent. Until this runs, `migrate_task`
    itself cannot resolve the config.
 
-3. **`migrate_task` for ALL 149 tasks** (realloc Task 382 → 466, idempotent,
+3. **`migrate_task` for ALL 169 tasks** (realloc Task 382 → 466, idempotent,
    order-independent). Pass each Task PDA as a **raw** account (the handler
    deserializes manually so it accepts the 382B legacy layout). Sweep every live
-   task; verify count migrated == 149. A task left un-migrated stays unreadable
-   by typed clients.
+   task; verify count migrated == 169. A task left un-migrated stays unreadable
+   by typed clients. (As executed: all 169 migrated, 0 failures.)
 
 4. **Initialize the new full-surface config accounts BEFORE advertising them**
    (audit gap — these have no canary counterpart, so they do not exist on mainnet
    today, and the bid-flow / private-completion instructions fail
    `AccountNotInitialized` until they are created):
    - `initialize_bid_marketplace` (creates `BidMarketplaceConfig`) — required before
-     any `create_bid` / `accept_bid` / `expire_bid`.
+     any `create_bid` / `accept_bid` / `expire_bid`. (As executed: initialized — min
+     bond 0.001 SOL, no-show slash 10%, 60s cooldown, 50/24h, 20 active/task, 7d
+     lifetime. Bid marketplace is LIVE.)
    - `initialize_zk_config` with the **audited mainnet image ID** (creates `ZkConfig`)
      — required before `complete_task_private`. Do NOT reuse a devnet/test image ID
      (see the zkVM image-provenance flag in the audit report). `update_zk_image_id` is
-     now M-of-N multisig gated.
+     now M-of-N multisig gated. (As executed: **DEFERRED** — `ZkConfig` was NOT
+     initialized at upgrade time, so `complete_task_private` stays OFF until
+     `initialize_zk_config` runs with the audited agenc-prover image id.)
    - Verify `ModerationConfig` (`configure_task_moderation`) reflects the intended
      mainnet moderation authority.
    - `initialize_bid_book` is per-task and is created on demand by creators, not here.
@@ -132,7 +142,7 @@ record that decision here before proceeding.
 Prove the freeze-then-recover cycle at scale before touching mainnet:
 
 1. Boot the localnet stack (`scripts/localnet-up`) with the program loaded at the
-   real ID, run the real initializers, and seed **≥149** Task accounts at the
+   real ID, run the real initializers, and seed **≥169** Task accounts at the
    **382-byte legacy layout** (clone of the mainnet shape).
 2. Upgrade to the full binary; confirm typed reads of those tasks now **fail**
    (the freeze).
@@ -145,7 +155,7 @@ Prove the freeze-then-recover cycle at scale before touching mainnet:
 The existing `tests-integration/surface-versioning.test.mjs` proves the
 per-instruction migration semantics (349→351, 382/432→466, idempotency,
 multisig-gating, rent top-up, `surface_revision` stamping) against the compiled
-program. The rehearsal extends that to the full 149-task sweep choreography.
+program. The rehearsal extends that to the full 169-task sweep choreography.
 
 ---
 
@@ -157,19 +167,22 @@ program. The rehearsal extends that to the full 149-task sweep choreography.
   re-deploying the canary binary would itself require its own migration and is
   not a clean revert. **Do not pause between step 1 and step 3.** Have the
   migrate sweep scripted and ready to fire immediately after the deploy lands.
-- **Rent is not recoverable** short of closing the program. Treat the ~14.3 SOL
+- **Rent is not recoverable** short of closing the program. Treat the ~7.15 SOL
   as spent.
 
 ---
 
-## 6. Post-rollout
+## 6. Post-rollout — as executed (2026-06-11)
 
-- [ ] All 149 tasks readable via typed `Account<Task>`.
-- [ ] `BidMarketplaceConfig` + `ZkConfig` initialized; `ModerationConfig` authority verified (step 4).
-- [ ] `getDeployedSurface(rpc)` reports the full capability set.
-- [ ] Mainnet IDL published and fetchable matches the full surface.
-- [ ] `MAINNET_MAINLINE.md` "Current Mainnet Deployment" updated (scope = full surface).
-- [ ] Buffer account refund received by the payer (~21 SOL back).
+- [x] All **169** tasks readable via typed `Account<Task>` (migrated 382B → 466B, 0 failures).
+- [x] `ProtocolConfig` migrated 349B → 351B; `surface_revision = FULL (1)`.
+- [x] `disabled_task_type_mask = 0` — **all** task types enabled (Exclusive, Collaborative, Competitive, BidExclusive).
+- [x] `BidMarketplaceConfig` initialized; bid marketplace LIVE (step 4).
+- [ ] **`ZkConfig` DEFERRED** — `complete_task_private` stays OFF until `initialize_zk_config` runs with the audited agenc-prover image id.
+- [x] `getDeployedSurface(rpc)` reports the full capability set.
+- [ ] Mainnet IDL published and fetchable matches the full surface (the now-live **84-instruction** IDL, not the canary IDL).
+- [x] `MAINNET_MAINLINE.md` "Current Mainnet Deployment" updated (scope = full surface).
+- [ ] Buffer account refund received by the payer.
 - [ ] Published SDK semver compatible with the now-live surface (see `VERSIONS.md`).
 
-_Generated 2026-06-11. Re-verify byte sizes and rent against live mainnet before each run._
+_Generated 2026-06-11; rollout COMPLETED 2026-06-11. Re-verify byte sizes and rent against live mainnet before any future run._

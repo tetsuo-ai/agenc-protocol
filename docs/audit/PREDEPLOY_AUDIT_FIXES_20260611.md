@@ -1,5 +1,15 @@
 # Pre-mainnet audit — fixes applied & remaining human-owned items (2026-06-11)
 
+> **Post-deploy status (2026-06-11):** the full-surface upgrade this audit gated has since
+> been executed — the full 84-instruction surface is live on mainnet
+> (`surface_revision = FULL`), the 169 live Task accounts were migrated (382B → 466B, 0
+> failures), `ProtocolConfig` migrated (349B → 351B), and `BidMarketplaceConfig` was
+> initialized (bid marketplace live). The "Remaining" deploy-day items below that were
+> completed by the upgrade are now done; **`ZkConfig` remains DEFERRED**
+> (`complete_task_private` stays off until `initialize_zk_config` runs with the audited
+> agenc-prover image id). The "149 live tasks" figures in the text were 149 when written;
+> the live count was 169 at the upgrade. See `docs/MAINNET_ROLLOUT_RUNBOOK.md`.
+
 Source: the multi-agent pre-deploy completeness audit (workflow `mainnet-predeploy-audit`,
 161 agents) surfaced ~94 findings across the full ~84-instruction surface. Its adversarial
 verification phase was cut short by a billing limit, so each item below was **re-verified by

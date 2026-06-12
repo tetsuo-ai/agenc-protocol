@@ -112,7 +112,7 @@ they were signed instruction data.
 - update launch controls (pause / task-type disable kill switch)
 - update min version
 - update state
-- migrate protocol / migrate task (149-task layout migration; multisig + version gated)
+- migrate protocol / migrate task (Task/ProtocolConfig layout migration; multisig + version gated — the 2026-06-11 mainnet upgrade migrated 169 live tasks)
 
 ### Governance
 

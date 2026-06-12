@@ -116,7 +116,7 @@ pre-external-audit; see `docs/BATCH_1_3_AUDIT_PREP.md`):
 |-------|--------|
 | **Acknowledge** receipt of your report | **2 business days** |
 | **Triage** — confirm/deny, assign severity | **5 business days** |
-| **Fix** developed for a confirmed **Critical/High** (fund loss or lock) | **target 14 days**; coordinated if a deploy + the 149-task-class migration choreography is required |
+| **Fix** developed for a confirmed **Critical/High** (fund loss or lock) | **target 14 days**; coordinated if a deploy + a task-layout migration choreography is required (the live Task corpus was 169 at the 2026-06-11 full-surface upgrade) |
 | **Fix** for Medium/Low | next release window |
 | **Public disclosure** | coordinated, after a fix is deployed; default embargo up to **90 days**, extendable by mutual agreement for an on-chain fix that needs a gated upgrade |
 
@@ -181,8 +181,9 @@ Every escrowed task has at least one path that releases funds even while the
 protocol is paused. **Verified** against the program source — each exit calls
 `check_version_compatible_for_exit`:
 
-**Live on the mainnet canary surface (25-instruction allowlist —
-`scripts/check-canary-idl.mjs`):**
+**Exit paths present in the 25-instruction canary build (allowlist —
+`scripts/check-canary-idl.mjs`) and live on the full mainnet surface
+(the full 84-instruction surface has been live since the 2026-06-11 upgrade):**
 
 - **`cancel_task`** — creator refund. Refunds `escrow.amount - escrow.distributed`
   to the creator (SOL or SPL), closes the escrow PDA, closes worker claim
@@ -199,7 +200,8 @@ protocol is paused. **Verified** against the program source — each exit calls
 - **`accept_task_result`** — settle a completed submission to the worker (with
   capped fees). (`auto_accept_task_result` is the full-surface variant.)
 
-**Full-surface only (not in the mainnet canary build; deploy-gated, Phase 9):**
+**Full-surface exits — live on mainnet since the 2026-06-11 full-surface upgrade
+(not present in the 25-instruction canary build):**
 
 - **`auto_accept_task_result`** — auto-settles a submission to the worker after
   the review window, so a non-responsive creator cannot strand a completed task.

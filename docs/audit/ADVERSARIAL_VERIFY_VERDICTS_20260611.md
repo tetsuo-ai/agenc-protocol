@@ -1,5 +1,12 @@
 # Adversarial verification verdicts (2026-06-11)
 
+> **Post-deploy note (2026-06-11):** the full-surface upgrade has since been executed —
+> mainnet now runs the full 84-instruction surface (`surface_revision = FULL`), with the 169
+> live Task accounts migrated (382B → 466B, 0 failures). The deploy-day ops items below
+> (e.g. F42, the `migrate_task` sweep for the then-"149 tasks") were carried out during the
+> rollout; the live count at the upgrade was 169. `ZkConfig` remains deferred. See
+> `docs/MAINNET_ROLLOUT_RUNBOOK.md`.
+
 The multi-agent verification workflow (94 findings × 3 lens-skeptics + adjudicator) was
 blocked twice by a **sustained server-side API throttle** ("Server is temporarily limiting
 requests — not your usage limit") that wiped ~376 agents per run. Rather than burn a third

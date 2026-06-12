@@ -1,10 +1,15 @@
 # Upgrade Authority — Custody & Multisig Migration Runbook
 
-This document records the **current** upgrade authority of the live mainnet
+This document records the upgrade authority of the live mainnet
 program and the precise runbook to migrate it from a single key to a **Squads
-(or equivalent) multisig**. The actual authority transfer is **[HUMAN:
-executes]** — this file is the plan and the safety checklist, not a record that
-it has been done.
+(or equivalent) multisig**.
+
+> **Status update (2026-06-11):** the multisig migration this runbook plans has been
+> executed — the upgrade authority is now a **2-of-3 multisig** (`Hcecp…` / `BXDan…` /
+> `4QcKB…`), which was a pre-flight gate for the same-day full-surface upgrade
+> (`surface_revision = FULL`, 169 tasks migrated; see `docs/MAINNET_ROLLOUT_RUNBOOK.md`).
+> The "single key" / "[HUMAN: executes]" framing below describes the pre-migration state.
+> Re-run the `solana program show` check to confirm the live authority.
 
 > See also: `SECURITY.md` §5.3 (custody summary integrators inherit),
 > `docs/MAINNET_MAINLINE.md` (what `main` means for the live program), and
@@ -13,7 +18,7 @@ it has been done.
 
 ---
 
-## 1. Current state (verified on-chain)
+## 1. State (the table below is the PRE-MIGRATION state — see the 2026-06-11 status note above)
 
 The program is deployed with the **BPF Upgradeable Loader**, so it has a
 mutable upgrade authority that can push new bytecode.
@@ -22,7 +27,7 @@ mutable upgrade authority that can push new bytecode.
 Program ID:        HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
 ProgramData:       E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw
 Owner (loader):    BPFLoaderUpgradeab1e11111111111111111111111
-Upgrade Authority: HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh   ← SINGLE KEY
+Upgrade Authority: HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh   ← was SINGLE KEY pre-2026-06-11; now a 2-of-3 multisig (Hcecp…/BXDan…/4QcKB…)
 ```
 
 Verify at any time:
@@ -30,8 +35,8 @@ Verify at any time:
 ```bash
 solana program show HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK \
   --url https://api.mainnet-beta.solana.com
-# read the "Authority:" line — it must equal HcecpKX…GLqh today,
-# and the target multisig vault PDA after the migration in §4.
+# read the "Authority:" line — as of 2026-06-11 it is the 2-of-3 multisig vault,
+# not the single HcecpKX…GLqh key it was before the migration in §4.
 ```
 
 > The **upgrade authority** (this document) is distinct from the **protocol /
@@ -45,9 +50,10 @@ solana program show HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK \
 
 ## 2. The risk
 
-`HcecpKX…GLqh` is a **single keypair** with unilateral power to deploy arbitrary
-new bytecode to a program that **custodies escrow, completion bonds, and
-reputation stakes**, and to run the irreversible 149-task-class migration.
+Before the 2026-06-11 migration, `HcecpKX…GLqh` was a **single keypair** with unilateral
+power to deploy arbitrary new bytecode to a program that **custodies escrow, completion
+bonds, and reputation stakes**, and to run the irreversible task-layout migration (executed
+2026-06-11 over the 169 live tasks). The authority is now a 2-of-3 multisig.
 
 Concretely, a single compromised or coerced key can:
 
@@ -143,7 +149,7 @@ single key.
 
 > ⚠️ **Do NOT use `--final`.** Setting the authority to `--final` (none) makes the
 > program **permanently immutable** and is irreversible — it would prevent any
-> future security fix or the 149-task migration. The goal is *multisig*, not
+> future security fix or any future task-layout migration. The goal is *multisig*, not
 > *immutable*.
 
 > ⚠️ **Do NOT transfer to an address you do not control / cannot sign with.** A

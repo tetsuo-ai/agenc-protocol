@@ -21,19 +21,19 @@ land, and no way for a buyer to send an ad-hoc partial or tip mid-task.
 A milestone schedule is **≤8** stages of `{ amount: u64, spec_hash: [u8;32],
 status: MilestoneStatus }`.
 
-It MUST NOT live on `Task`. `Task` is already a **432-byte, migrated** account
-with **149 live mainnet instances** and only a **16-byte `_reserved`**
+It MUST NOT live on `Task`. `Task` is already a **466-byte, migrated** account
+with **169 live mainnet instances** (as of the 2026-06-11 full-surface upgrade) and only a **16-byte `_reserved`**
 (`Task._reserved: [u8; 16]`, partially the staging ground for the P6.2 referral
 fields). Eight stages × (8 + 32 + 1) bytes = 328 bytes — an order of magnitude
 past `_reserved`. Putting the schedule on `Task` would force *another*
-realloc-all sweep over all 149 tasks (irreversible, multisig-gated). So:
+realloc-all sweep over all 169 tasks (irreversible, multisig-gated). So:
 
 **Recommendation: a child `TaskMilestone` PDA per stage.**
 `["task_milestone", task, index_le_u8]` holding
 `{ task, index: u8, amount: u64, spec_hash: [u8;32], status, submitted_at,
 accepted_at, bump, _reserved }`. A new account type + new PDA is **NOT a
 migration** (per CLAUDE.md golden rule 3): existing `Task`/`TaskEscrow` layouts
-are untouched, the 149 live tasks are untouched, and milestones are `init`-ed
+are untouched, the 169 live tasks are untouched, and milestones are `init`-ed
 only for engagements that opt in. This mirrors `HireRecord` and the
 `SubmissionKeyEscrow` of the P7.2 design — additive child accounts instead of
 parent reallocs.
@@ -137,7 +137,7 @@ DECISION-NEEDED #6 on whether these are the same facade type or two.)
 
 1. **Child PDA per stage (recommended) vs `Task` realloc.** Confirm the child
    `TaskMilestone` + `MilestoneSchedule` header (zero migration) over extending
-   `Task` (another 149-task realloc).
+   `Task` (another 169-task realloc).
 2. **Sequential vs out-of-order acceptance.** Default sequential (stage N+1
    requires stage N accepted) is simplest and matches "phased delivery."
    Out-of-order needs no prior-stage check but complicates the "final stage →

@@ -42,7 +42,7 @@ the human can take — prepare everything, then stop and ask.
 4. **Every bug fix and every new guard gets a revert-sensitive test** — prove it fails
    against the broken/missing code, then restore.
 5. **A `Task`/`ProtocolConfig`/`AgentRegistration` layout change is a migration:**
-   append-only, keep the live 149-task prefix valid, `const_assert` the size, add
+   append-only, keep the live 169-task prefix valid, `const_assert` the size, add
    `migrate_task` (or sibling) coverage, deploy-gated.
 6. **New full-surface instructions are canary-gated** with
    `#[cfg(not(feature = "mainnet-canary"))]` unless mainnet explicitly needs them.
@@ -350,10 +350,12 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 
 ## Phase 2 — Test-mode: local sandbox + hosted devnet sandbox
 
-> Audit findings #5, #25 (**critical**). Mainnet runs the 25-instruction canary (no
-> listings/hire/bonds/disputes — exact allowlist in `scripts/check-canary-idl.mjs`),
-> and the moderation gate is fail-closed with a single authority — so today there is
-> NOWHERE a third party can execute the flagship flow.
+> Audit findings #5, #25 (**critical**) — context from when mainnet ran the canary.
+> **Update (2026-06-11): mainnet now runs the full 84-instruction surface** (Phase 9
+> complete — `surface_revision = FULL`, all task types enabled, bid marketplace live,
+> `ZkConfig` deferred), so listings/hire/bonds/disputes are live on mainnet. The
+> original finding (mainnet ran the 25-instruction canary, so a third party had nowhere
+> to execute the flagship flow) is resolved by the upgrade.
 
 ### P2.1 `@tetsuo-ai/marketplace-sdk/testing` (local litesvm sandbox)
 - **Steps:**
@@ -570,7 +572,8 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   kit already established. Submit to the MCP registries.
 - **Done when:** `npx @tetsuo-ai/marketplace-mcp` works in a clean environment —
   tasks/agents tools validated against mainnet readonly; listings tools validated
-  against devnet (mainnet has zero ServiceListing accounts until Phase 9); registry
+  against devnet (mainnet had zero ServiceListing accounts until the Phase 9 full-surface
+  upgrade went live 2026-06-11; listings are now a live mainnet surface); registry
   listing live **[HUMAN confirms publish + registry]**.
 
 ### P5.2 `@tetsuo-ai/marketplace-tools` + framework adapters **[HUMAN: confirms publish + approves relicensing]**
@@ -614,9 +617,12 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 ## Phase 6 — Program Batch 4: small high-leverage on-chain changes
 
 > Audit findings #13, #29, #17, #26, #14, #15, #16(b) + the standing decision to retire
-> `vote_dispute`. All deploy-gated (Phase 9). Develop now on the full surface behind
-> `#[cfg(not(feature = "mainnet-canary"))]`, full gate + revert-sensitive tests per
-> standing rules. Keep each change a separate commit with its own litesvm coverage.
+> `vote_dispute`. All deploy-gated (Phase 9). **Phase 9 completed 2026-06-11** — the full
+> surface (including the referral/Batch-4 Task layout: live Tasks are now 466B) is live on
+> mainnet, so these changes are no longer pending a future deploy. Develop further work on
+> the full surface behind `#[cfg(not(feature = "mainnet-canary"))]`, full gate +
+> revert-sensitive tests per standing rules. Keep each change a separate commit with its
+> own litesvm coverage.
 
 ### P6.1 `rate_hire` — make the dead rating fields live
 - **What:** `ServiceListing.total_hires/total_rating/rating_count` exist
@@ -639,7 +645,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   `hire_from_listing`, `hire_from_listing_humanless`, and the `create_task` family;
   snapshot onto Task/HireRecord exactly like the operator leg. **Layout math:** the
   referrer fields total 34B, which EXCEEDS Task's 16B `_reserved` — this is a
-  realloc/size-extending migration of the 149 live tasks (432B → larger, new
+  realloc/size-extending migration of the live tasks (169 at the 2026-06-11 upgrade; 432B → larger, new
   `const_assert`, old-size precondition in `migrate_task`), NOT a value-only write into
   reserved space; HireRecord's 32B reserved also cannot hold both fields. Enforce a
   combined cap in `execute_completion_rewards`
@@ -670,9 +676,10 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   1. Require `rationale_hash: [u8;32]` + bounded `rationale_uri` args on
      `resolve_dispute`. The Dispute struct has NO reserved space — append
      `rationale_hash`/`rationale_uri`/`resolved_by` fields and update the size
-     `const_assert` (layout change; disputes are compiled out of the live mainnet
-     canary, so no live mainnet Dispute accounts need migrating — verify on-chain that
-     zero Dispute accounts exist before relying on this; treat devnet append-only).
+     `const_assert` (layout change; disputes were compiled out of the canary build, so at
+     canary time no live mainnet Dispute accounts needed migrating — **but as of the
+     2026-06-11 full-surface upgrade disputes ARE live on mainnet**, so re-verify on-chain
+     whether any Dispute accounts now exist before relying on this; treat append-only).
      Emit the deciding resolver's pubkey + rationale in `DisputeResolved`.
   2. Use `DisputeResolver`'s 32 reserved bytes (real: `_reserved: [u8;32]`,
      state.rs:1777) for case counters: resolved count, overturned count,
@@ -685,8 +692,9 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   flag **[HUMAN: approve challenge-window + resolver-stake design before build]**.
 
 ### P6.5 Surface-versioning contract
-- **What:** one program ID serves the 25-instruction canary on mainnet and the full
-  surface (80 ixs) elsewhere; nothing lets a client ask what's live.
+- **What:** one program ID can serve the 25-instruction canary build and the full
+  surface (84 ixs); nothing lets a client ask what's live. (As of 2026-06-11 the full
+  84-ix surface is what is live on mainnet, `surface_revision = FULL`.)
 - **Steps:** (1) add a `surface_revision: u16` to ProtocolConfig — NOTE: ProtocolConfig
   has NO `_reserved` field, so this is a realloc/size-extending migration of the live
   mainnet config account (append-only, new `const_assert`, rehearsed in P9.2);
@@ -784,7 +792,8 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 
 ### P7.2 Encrypted deliverable handoff (fair exchange, layer 1 — off-chain)
 - **What:** today the buyer downloads the full plaintext artifact before paying and can
-  then reject; bonds/disputes that mitigate this are not in the live canary.
+  then reject; the bonds/disputes that mitigate this were not in the canary but ARE in the
+  full surface now live on mainnet (since the 2026-06-11 upgrade).
 - **Steps (no program change):** extend the artifacts rails with an encrypted-delivery
   convention: artifact encrypted to the creator's pubkey (or per-task symmetric key), a
   public manifest/preview published for review, and the artifact host gating
@@ -893,11 +902,17 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 
 ---
 
-## Phase 9 — Mainnet full-surface rollout (the big unlock) **[HUMAN-gated]**
+## Phase 9 — Mainnet full-surface rollout (the big unlock) **[HUMAN-gated]** — ✅ COMPLETED 2026-06-11
 
-> Everything above ships value on devnet/sandbox, but the flagship flow reaches real
-> users only when mainnet moves beyond the 25-instruction canary. This phase is
-> human-owned choreography; the AI prepares every artifact and rehearses on devnet.
+> **DONE (2026-06-11):** mainnet was upgraded from the 25-instruction canary to the full
+> **84-instruction** surface — `surface_revision = FULL (1)`, all task types enabled, bid
+> marketplace live, `ZkConfig` deferred (`complete_task_private` stays off). The 169 live
+> Task accounts migrated (382B → 466B, 0 failures) and `ProtocolConfig` migrated (349B →
+> 351B). See `docs/MAINNET_ROLLOUT_RUNBOOK.md`. The notes below are the pre-rollout plan.
+>
+> Everything above ships value on devnet/sandbox; the flagship flow reached real users when
+> mainnet moved beyond the 25-instruction canary. This phase was human-owned choreography;
+> the AI prepared every artifact and rehearsed on devnet.
 
 ### P9.1 Pre-flight gates (all must be green)
 - §11.5 human go/no-go (demand thesis + SDK slice + a success signal) — **decided on
@@ -911,15 +926,16 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 
 ### P9.2 Migration rehearsal (AI does this on devnet now)
 - **Scope — ALL live-account migrations Batch 4 creates, not just Task:**
-  1. `migrate_task` over all 149 mainnet-shaped Task accounts (Batch 2 operator fields
-     + P6.2 referrer fields → realloc to the new size).
+  1. `migrate_task` over all mainnet-shaped Task accounts (Batch 2 operator fields
+     + P6.2 referrer fields → realloc to the new size). (Executed against 169 live tasks.)
   2. The P6.5 ProtocolConfig realloc/extend (`surface_revision`) on the live config
      account.
   3. The P6.6 AgentRegistration migration over ALL live agent accounts — only if
      option (b) was chosen in P6.6; enumerate live agents on the devnet clone the same
      way mainnet will be enumerated.
 - **Steps:** script the full choreography against a devnet clone seeded with
-  mainnet-shaped accounts (149 tasks + live-agent set + config): deploy new binary
+  mainnet-shaped accounts (149 tasks at rehearsal time; 169 live at the actual upgrade +
+  live-agent set + config): deploy new binary
   FIRST → run every migration (each idempotent, multisig-gated) → version-bump LAST.
   Capture a runbook with exact commands, expected outputs, abort criteria, and
   rollback boundaries (binary rollback possible until version bump; migrations
@@ -934,8 +950,9 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   P6.5 `surface_revision` is bumped at each stage so `getDeployedSurface` stays truthful.
 
 ### P9.4 Execute **[HUMAN runs; AI verifies]**
-- Human executes the runbook. AI verifies post-conditions: all 149 tasks migrated, the
-  ProtocolConfig realloc applied (`surface_revision` readable), all live
+- Human executes the runbook. AI verifies post-conditions: all live tasks migrated (169
+  on 2026-06-11, 0 failures), the ProtocolConfig realloc applied (`surface_revision`
+  readable = FULL), all live
   AgentRegistration accounts migrated (if P6.6 option b), `getDeployedSurface` correct,
   explorer indexing the new accounts, SDK e2e smoke test against mainnet readonly paths.
 

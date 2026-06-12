@@ -58,14 +58,14 @@ produce **different bytecode and different hashes**:
 
 | Surface | Cargo build args | What it is |
 |---------|------------------|------------|
-| **mainnet-canary** (25 instructions) | `--no-default-features --features mainnet-canary` | The conservative surface **actually live** at `HJsZ…` on mainnet today. |
-| **full / default** (80 instructions) | *(default features)* | The complete surface, **deploy-gated** (PLAN.md Phase 9). Not live. |
+| **full / default** (84 instructions) | *(default features)* | The complete surface — **live** at `HJsZ…` on mainnet as of the 2026-06-11 full-surface upgrade (size-optimized binary, sha `ea2fa92f…`). |
+| **mainnet-canary** (25 instructions) | `--no-default-features --features mainnet-canary` | The conservative restricted BUILD. Still in source, but **no longer live on mainnet** (it was the surface live before 2026-06-11). |
 
-> **Critical:** to match the *deployed* mainnet program you MUST build the
-> **mainnet-canary** surface. Building the default (full) surface produces a
-> different, larger program and a **non-matching** hash. This mirrors the
-> repo's own `canary:build` npm script
-> (`anchor build --no-idl -- --no-default-features --features mainnet-canary`).
+> **Critical:** as of 2026-06-11 the mainnet program runs the **full / default**
+> surface — to match the *deployed* mainnet program you MUST build the default
+> (full) surface. Building the `mainnet-canary` surface produces a different,
+> smaller program and a **non-matching** hash. (Before the 2026-06-11 upgrade the
+> opposite was true — mainnet ran the canary build.)
 
 The `verify.yml` workflow builds and hashes **both** surfaces on every
 `protocol-v*` tag so the live surface can be checked and the full surface has a
@@ -104,21 +104,23 @@ Requires Docker and Rust. Targets **solana-verify v0.5.x**
 # 1. Install the pinned verifier (the version verify.yml uses).
 cargo install solana-verify --version 0.5.0 --locked
 
-# 2. Build the LIVE (mainnet-canary) surface deterministically, from the
-#    program crate directory. Extra cargo args go after the `--` separator.
+# 2. Build the LIVE (full / default) surface deterministically, from the
+#    program crate directory. As of 2026-06-11 the full surface is what is
+#    deployed on mainnet, so this is the build to match the live program.
 cd programs/agenc-coordination
-solana-verify build \
-  --library-name agenc_coordination \
-  -- --no-default-features --features mainnet-canary
+solana-verify build --library-name agenc_coordination
 
 # 3. Hash the built program.
 solana-verify get-executable-hash target/deploy/agenc_coordination.so
 ```
 
-To reproduce the **full** (deploy-gated) surface instead, drop the feature args:
+To reproduce the **mainnet-canary** surface instead (no longer live; the build
+that was on mainnet before 2026-06-11), add the feature args:
 
 ```bash
-solana-verify build --library-name agenc_coordination
+solana-verify build \
+  --library-name agenc_coordination \
+  -- --no-default-features --features mainnet-canary
 solana-verify get-executable-hash target/deploy/agenc_coordination.so
 ```
 
@@ -133,16 +135,17 @@ The hash from step 3 must equal the corresponding entry in the release's
 way — **no signing, read-only, no wallet**:
 
 ```bash
-# Mainnet. Compare this to the mainnet-canary hash from step 3 above.
+# Mainnet. Compare this to the full/default-surface hash from step 3 above.
 solana-verify get-program-hash \
   -u https://api.mainnet-beta.solana.com \
   HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
 ```
 
-If the deployed-program hash equals your locally reproduced **mainnet-canary**
-hash, you have proven the live program matches this source tree at this commit —
-*for anyone who has the source*. That is the strongest property available while
-the repo is private.
+If the deployed-program hash equals your locally reproduced **full/default**
+surface hash, you have proven the live program matches this source tree at this
+commit — *for anyone who has the source*. (Before 2026-06-11 the live program was
+the `mainnet-canary` build; the full surface went live with the Phase 9 upgrade.)
+That is the strongest property available while the repo is private.
 
 ---
 
@@ -162,9 +165,12 @@ solana-verify verify-from-repo \
   --library-name agenc_coordination \
   --mount-path programs/agenc-coordination \
   --commit-hash <TAG_COMMIT_SHA> \
-  https://github.com/tetsuo-ai/agenc-protocol \
-  -- --no-default-features --features mainnet-canary
+  https://github.com/tetsuo-ai/agenc-protocol
 ```
+
+(As of the 2026-06-11 upgrade the deployed surface is the full / default build,
+so verify against the default features — drop the `--no-default-features
+--features mainnet-canary` args that were required when mainnet ran the canary.)
 
 PLAN.md P8.3 done-criterion: **this command passes against the deployed
 program.** It cannot pass until the repo URL is publicly cloneable (P0.6).

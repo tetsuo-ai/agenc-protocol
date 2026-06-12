@@ -7,13 +7,22 @@
 > For the consolidated auditor entry point, see
 > [`docs/audit/AUDITOR_HANDOFF.md`](audit/AUDITOR_HANDOFF.md).
 
+> **Status note (2026-06-11):** the deploy this doc prepped for has happened — the full
+> 84-instruction surface is now live on mainnet (`surface_revision = FULL`), and the
+> "149-task migration" referenced throughout was executed against the 169 live tasks
+> (382B → 466B, 0 failures). Where the text below reads "149", read "169 at the upgrade";
+> where it reads "before any deploy", the deploy is now done. See
+> `docs/MAINNET_ROLLOUT_RUNBOOK.md`.
+
 Pre-audit map of the additive, no-migration Batch 1 of the embeddable-marketplace
 work, for a professional security review **before any deploy**. Pairs with the full
 plan in `docs/MARKETPLACE_EMBED_UPGRADE_SPEC.md`.
 
 - **Program:** `agenc-coordination`, id `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
-  (Anchor 0.32.1). Live mainnet has **149 Task accounts** — so any `Task`/`ProtocolConfig`
-  **layout** change is a real migration. **Batch 1 makes no layout change** (all new
+  (Anchor 0.32.1). Live mainnet has **169 Task accounts** (149 when this doc was written;
+  169 at the 2026-06-11 full-surface upgrade, all migrated 382B → 466B) — so any
+  `Task`/`ProtocolConfig` **layout** change is a real migration. **Batch 1 makes no layout
+  change** (all new
   data lives in new PDAs); it is gated `#[cfg(not(feature = "mainnet-canary"))]` where new.
 - **Status:** local commits only on branch `fix/bid-self-deal-guard`; nothing pushed.
 - **Tests:** 225 Rust unit (`cargo test --lib`) + 36 litesvm integration
@@ -340,10 +349,10 @@ the upgradeable ProgramData account litesvm does not model — hence the inject 
 > Local only — nothing pushed/deployed. Phase 6 is **two layout migrations** (a
 > per-`Task` realloc 382/432→466B AND a `ProtocolConfig` realloc 349→351B), so it is
 > **§11.5-gated** exactly like Batch 2/3 and requires the external audit + the migration
-> choreography below before any mainnet deploy. The full surface is **82 IDL
-> instructions** (the spec's "80-instruction surface" plus the two `bid_book` /
-> `bid_marketplace` initializers and `update_min_version`; `vote_dispute` was **retired**,
-> P6.3); the live **mainnet-canary surface stays at 25** (enforced by
+> choreography below before any mainnet deploy. The full surface is **84 IDL
+> instructions** (verified against `target/idl/agenc_coordination.json`;
+> `vote_dispute` was **retired**, P6.3) and has been **live on mainnet since the
+> 2026-06-11 full-surface upgrade**; the **mainnet-canary build stays at 25** (enforced by
 > `scripts/check-canary-idl.mjs`), and the referrer 4th leg is **fail-closed on canary**
 > (see the canary referrer guard below).
 
@@ -420,8 +429,10 @@ vote+quorum design (see `docs/audit/THREAT_MODEL.md` and `CLAUDE.md`).
   `#[cfg(feature = "mainnet-canary")]` requires `referrer.is_none() &&
   referrer_fee_bps == 0` in `create_task` (a canary instruction), mirroring the existing
   canary `reward_mint`/`constraint_hash` rejections. Guarantees **every canary task has
-  `referrer == default`**, so the unaudited 4th leg can never route money on the live
-  mainnet surface until Phase 9 / audit. Unit-tested under the `mainnet-canary` cfg
+  `referrer == default`**, so the 4th leg could never route money while the canary build
+  was live on mainnet. (Phase 9 completed 2026-06-11: the full, audited surface is now live
+  on mainnet, so the referral leg runs on the full surface; this guard remains a property of
+  the `mainnet-canary` build.) Unit-tested under the `mainnet-canary` cfg
   (`create_rejects_nondefault_referrer_on_canary`, revert-proven; canary unit count
   212 → 214).
 - **Probationary-reputation / min-stake sybil invariant.** `register_agent.rs`:
