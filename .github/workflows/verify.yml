@@ -10,9 +10,12 @@ name: Verifiable Build
 # WHAT THIS DOES TODAY (works while the repo is PRIVATE):
 #   - Builds the program inside the pinned `solana-verify` Docker image so the
 #     `.so` is deterministic (same input source -> same output bytes).
-#   - Emits the SHA-256 executable hash for BOTH on-chain surfaces:
-#       * the mainnet-canary 25-instruction surface (what is LIVE on mainnet),
-#       * the full default-feature surface (deploy-gated, Phase 9).
+#   - Emits the SHA-256 executable hash for BOTH program surfaces:
+#       * the full default-feature surface — LIVE on mainnet since the
+#         2026-06-11 full-surface upgrade (this is the hash that should match
+#         `get-program-hash` against mainnet),
+#       * the mainnet-canary 25-instruction surface — the historical/alternate
+#         restricted build, no longer what is deployed.
 #   - Attaches `verifiable-build-hashes.txt` to the GitHub Release for the tag,
 #     so every release permanently records the hash an integrator can reproduce.
 #
@@ -77,11 +80,10 @@ jobs:
           solana-verify --version
           docker --version
 
-      # --- LIVE surface: mainnet-canary (25 instructions) ---
-      # This is the surface actually deployed at PROGRAM_ID today, so its hash
-      # is the one that should match `get-program-hash` against mainnet.
-      # Extra cargo args are passed after the `--` separator, exactly as the
-      # canary:build npm script does (--no-default-features --features mainnet-canary).
+      # --- mainnet-canary (25 instructions) — historical/alternate build ---
+      # No longer what is deployed (the full surface went live 2026-06-11); its
+      # hash is recorded for the record only. Extra cargo args after the `--`
+      # separator mirror the canary:build npm script.
       - name: Reproducible build (mainnet-canary surface)
         working-directory: programs/agenc-coordination
         run: |
@@ -98,9 +100,9 @@ jobs:
           echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
           echo "mainnet-canary .so SHA-256: ${HASH}"
 
-      # --- FULL surface: default features (deploy-gated, Phase 9) ---
-      # Recorded too so the full surface has a reproducible hash on file before
-      # it is ever deployed. Not what is live today.
+      # --- FULL surface: default features — LIVE on mainnet (since 2026-06-11) ---
+      # This is the surface actually deployed at PROGRAM_ID, so THIS hash is the
+      # one that should match `get-program-hash` against mainnet.
       - name: Reproducible build (full default-feature surface)
         working-directory: programs/agenc-coordination
         run: |
@@ -128,11 +130,11 @@ jobs:
             echo "#"
             echo "# Reproduce locally: see docs/VERIFIABLE_BUILDS.md"
             echo ""
-            echo "mainnet-canary (LIVE surface, --no-default-features --features mainnet-canary):"
-            echo "  ${{ steps.canary_hash.outputs.hash }}"
-            echo ""
-            echo "full (default features, deploy-gated / Phase 9):"
+            echo "full (default features) — LIVE surface on mainnet (matches get-program-hash):"
             echo "  ${{ steps.full_hash.outputs.hash }}"
+            echo ""
+            echo "mainnet-canary (--no-default-features --features mainnet-canary) — historical/alternate build, not deployed:"
+            echo "  ${{ steps.canary_hash.outputs.hash }}"
           } > verifiable-build-hashes.txt
           cat verifiable-build-hashes.txt
 
@@ -161,7 +163,7 @@ jobs:
       # builder, which cannot reach a private repo, and the on-chain
       # verification PDA / `remote submit-job` would advertise an unverifiable
       # source. Activate this step only after the repo is public AND the
-      # canary-surface hash above matches `get-program-hash` against mainnet.
+      # full-surface hash above matches `get-program-hash` against mainnet.
       #
       # - name: Verify deployed program matches this repo (PUBLIC REPO ONLY)
       #   run: |
@@ -171,5 +173,5 @@ jobs:
       #       --library-name "${LIBRARY_NAME}" \
       #       --mount-path "${MOUNT_PATH}" \
       #       --commit-hash "${GITHUB_SHA}" \
-      #       https://github.com/tetsuo-ai/agenc-protocol \
-      #       -- --no-default-features --features mainnet-canary
+      #       https://github.com/tetsuo-ai/agenc-protocol
+      #       # (full/default surface — the live mainnet build)
