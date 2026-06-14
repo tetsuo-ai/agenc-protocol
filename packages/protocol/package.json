@@ -18,6 +18,7 @@
       }
     },
     "./idl/agenc_coordination.json": "./src/generated/agenc_coordination.json",
+    "./daemon-json-rpc.schema.json": "./src/generated/daemon-json-rpc.schema.json",
     "./manifest.json": "./src/generated/manifest.json",
     "./verifier-router.json": "./src/generated/verifier_router.json",
     "./package.json": "./package.json"
