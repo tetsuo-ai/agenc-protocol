@@ -1,23 +1,20 @@
 /**
- * `useReferrerEarnings(wallet)` — referrer earnings (STRICTLY P6.2-GATED).
+ * `useReferrerEarnings(wallet)` — referrer earnings (indexer-gated).
  *
- * ## THE P6.2 GATE (PLAN_2 §0, MANDATORY — this hook is the canonical example)
+ * ## EARNINGS INDEXER GATE
  *
- * Referrer earnings depend on TWO unbuilt things:
- * 1. the on-chain P6.2 referrer fields snapshotted on `HireRecord` (the 4th
- *    settlement leg), and
- * 2. the off-chain `GET /api/explorer/referrers/:wallet/hires` indexer endpoint
- *    that aggregates them.
+ * Referrer settlement is live in the protocol. Aggregated referrer earnings still
+ * depend on the off-chain `GET /api/explorer/referrers/:wallet/hires` indexer
+ * endpoint that sums paid referral events.
  *
- * NEITHER exists today. So this hook:
+ * That endpoint is not published yet. So this hook:
  * - resolves `resolveReferrerCapability()` from context;
- * - when `live === false` (ALWAYS, today): returns the documented not-live
+ * - when the earnings indexer is not live: returns the documented not-live
  *   state `{ live: false, totalLamports: 0n, hires: [] }` and makes NO network
  *   request. It NEVER fabricates earnings and NEVER infers a non-zero total
  *   from anything.
- * - the real fetch path is written but DEAD-CODE-GATED behind `capability.live`
- *   with a clear TODO, so when P6.2 + the endpoint land, only the gate flips —
- *   the surface does not change.
+ * - the real fetch path is written but gated behind `EARNINGS_INDEXER_LIVE`, so
+ *   when the endpoint lands, only the gate flips — the surface does not change.
  *
  * @module hooks/useReferrerEarnings
  */
@@ -27,7 +24,9 @@ import { t } from "../strings/index.js";
 import type { Address } from "../types.js";
 import { pdaKey, queryKeys } from "./internal.js";
 
-/** A single referral-earning hire (shape defined now; populated post-P6.2). */
+const EARNINGS_INDEXER_LIVE = false;
+
+/** A single referral-earning hire (shape defined now; populated once the earnings indexer ships). */
 export interface ReferrerHire {
   /** The minted Task PDA of the referred hire. */
   taskPda: string;
@@ -42,16 +41,16 @@ export interface ReferrerHire {
 /** Return value of {@link useReferrerEarnings}. */
 export interface UseReferrerEarningsResult {
   /**
-   * Whether referral settlement is live on this cluster. ALWAYS `false` today
-   * (the P6.2 gate). When false, the numbers below are the documented not-live
-   * zero state, not real data.
+   * Whether aggregated referral earnings are live. Settlement may be live even
+   * when this is false; false means the numbers below are the documented
+   * not-live zero state, not real data.
    */
   live: boolean;
   /** Total lamports earned. `0n` while not live (never fabricated). */
   totalLamports: bigint;
   /** Per-hire earnings. `[]` while not live. */
   hires: ReferrerHire[];
-  /** True while a (post-P6.2) fetch is in flight. Always false today. */
+  /** True while a fetch is in flight. Always false until the earnings indexer ships. */
   isLoading: boolean;
   /** The fetch error, or null. */
   error: Error | null;
@@ -69,12 +68,13 @@ export interface UseReferrerEarningsResult {
  *
  * @param wallet - The referrer wallet (base58 / Address). Falsy disables the
  *   (future) fetch; the not-live state is still returned.
- * @returns {@link UseReferrerEarningsResult} — the not-live zero state today.
+   * @returns {@link UseReferrerEarningsResult} — the not-live zero state until
+   * the earnings indexer ships.
  *
  * @example
  * ```tsx
  * const { live, totalLamports, hires, reason } = useReferrerEarnings(myWallet);
- * // today: live === false, totalLamports === 0n, hires === []
+   * // until the earnings indexer ships: live === false, totalLamports === 0n, hires === []
  * ```
  */
 export function useReferrerEarnings(
@@ -83,30 +83,27 @@ export function useReferrerEarnings(
   const ctx = useAgencContext();
   const capability = ctx.resolveReferrerCapability();
 
-  // THE GATE: the query is enabled ONLY when referral settlement is live. Today
-  // `capability.live` is hardcoded false, so this query never runs and we
-  // return the not-live zero state below. NEVER remove this gate.
-  const enabled = capability.live && Boolean(wallet);
+  // THE GATE: settlement can be live while the aggregate earnings indexer is not.
+  // Keep this false until the endpoint is published.
+  const enabled = capability.live && EARNINGS_INDEXER_LIVE && Boolean(wallet);
 
   const query = useQuery<{ totalLamports: bigint; hires: ReferrerHire[] }, Error>(
     {
       queryKey: queryKeys.referrerEarnings(wallet ? pdaKey(wallet) : ""),
       enabled,
       queryFn: async () => {
-        // TODO(P6.2 / indexer): once the referrer fields exist on HireRecord
-        // AND the indexer exposes `GET /api/explorer/referrers/:wallet/hires`,
-        // fetch + sum here. Unreachable today because `enabled` is gated on
-        // `capability.live` (hardcoded false). Returning fabricated numbers
-        // here would violate PLAN_2 §0 — do not.
+        // TODO(indexer): once `GET /api/explorer/referrers/:wallet/hires` is
+        // published, fetch + sum here. Returning fabricated numbers here would
+        // violate the money-surface contract.
         throw new Error(
-          "useReferrerEarnings: the P6.2 referrer earnings path is not " +
-            "deployed; this query must never run while capability.live is false.",
+          "useReferrerEarnings: the referrer earnings indexer is not deployed; " +
+            "this query must never run while EARNINGS_INDEXER_LIVE is false.",
         );
       },
     },
   );
 
-  if (!capability.live) {
+  if (!capability.live || !EARNINGS_INDEXER_LIVE) {
     // The documented not-live state. Zeroes are HONEST (no data exists), not
     // fabricated, and no request was made.
     return {
@@ -115,14 +112,16 @@ export function useReferrerEarnings(
       hires: [],
       isLoading: false,
       error: null,
-      reason: capability.reason ?? t("referrer.notLiveReason"),
+      reason: capability.live
+        ? t("referrer.earningsNotLiveReason")
+        : (capability.reason ?? t("referrer.notLiveReason")),
       refetch: () => {
         /* no-op while not live */
       },
     };
   }
 
-  // --- Post-P6.2 path (currently unreachable; kept wired for the flip) ---
+  // --- Post-indexer path (currently unreachable; kept wired for the flip) ---
   return {
     live: true,
     totalLamports: query.data?.totalLamports ?? 0n,

@@ -1,7 +1,7 @@
 // Facade: P6.5 surface-versioning contract.
 //
-// One program ID serves the restricted 25-instruction canary surface on mainnet and
-// the full ~80-instruction surface on dev/devnet. `getDeployedSurface` lets a client
+// One program ID historically served the restricted 25-instruction canary surface on
+// mainnet and the full 84-instruction surface on dev/devnet. `getDeployedSurface` lets a client
 // ask, against a live RPC, WHICH surface a given cluster actually exposes — so the
 // facade/client can fail-closed (throw `SurfaceNotDeployedError`) before building a
 // transaction that calls an instruction the deployed program does not have.
@@ -37,7 +37,7 @@ export const OLD_PROTOCOL_CONFIG_SIZE = 349;
 export const NEW_PROTOCOL_CONFIG_SIZE = 351;
 
 /**
- * `surface_revision` value meaning "the full (~80-instruction) surface is live".
+ * `surface_revision` value meaning "the full 84-instruction surface is live".
  * Mirrors the on-chain `ProtocolConfig::SURFACE_REVISION_FULL`. `0` means the surface
  * is unstamped — treated as the conservative canary surface.
  */

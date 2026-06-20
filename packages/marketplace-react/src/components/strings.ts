@@ -62,10 +62,10 @@ export const EN_COMPONENT_STRINGS = {
   "components.hire.moderationIssues": "Moderation issues found",
   "components.hire.notConnected": "Connect a wallet to hire.",
 
-  // Referrer disclosure (P6.2 gate — never claims a live fee).
+  // Referrer disclosure.
   "components.referrer.disclosure": "This site earns a referral fee.",
   "components.referrer.disclosurePending":
-    "This site earns a referral fee (pending protocol support).",
+    "Referral fee is not active for this hire.",
   "components.referrer.feeBps": "{bps} bps",
 
   // TaskTimeline.

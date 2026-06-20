@@ -7,6 +7,12 @@ Issue: `agenc-protocol#32`
 Do not add a new on-chain `job_spec_required` flag for the current launch
 scope.
 
+> Current-state note: since this decision was written, legacy `claim_task` has
+> been kept in the ABI but made permanently fail-closed (`TaskJobSpecRequired`).
+> The live claim path is `claim_task_with_job_spec`, so job-spec-aware claim
+> semantics are now enforced directly by the protocol without adding a separate
+> task-level flag.
+
 The protocol already has the primitives needed for marketplace-created tasks:
 
 - `TaskJobSpec` PDA stores a content-addressed off-chain job-spec pointer for a
@@ -35,16 +41,15 @@ extension path. That risk is not justified while the marketplace path can
 already force `claim_task_with_job_spec` through runtime policy and storefront
 controls.
 
-Keeping the protocol unchanged also preserves direct core/CLI task creation for
-non-storefront users while allowing marketplace-created orders to be stricter at
-the runtime boundary.
+Keeping the protocol unchanged preserves the task account layout while making the
+claim boundary strict: every successful worker claim must use
+`claim_task_with_job_spec`.
 
 ## Residual Risk
 
-A generic client can still call the base `claim_task` instruction for tasks that
-were not created through the marketplace-controlled path. That is acceptable for
-the current scope because those tasks are outside the storefront capability
-envelope.
+A generic client can still build the base `claim_task` instruction because the
+ABI remains present, but the instruction returns `TaskJobSpecRequired`. This is
+intentional compatibility for IDL consumers, not an alternate live claim path.
 
 The marketplace launch invariant is:
 
@@ -53,15 +58,16 @@ runtime claim-time verification`
 
 ## Revisit Trigger
 
-Add a protocol-level flag if AgenC needs permissionless public marketplace task
-creation where arbitrary creators can mark a task as marketplace-governed and
-expect every client to enforce job-spec-aware claim semantics directly on-chain.
+Revisit only if AgenC needs a richer per-task policy than "all successful claims
+must carry a valid `TaskJobSpec` pointer" — for example multiple job-spec
+revisions, creator-selected attestor sets, or explicit marketplace-governed task
+extensions.
 
 If that trigger happens, the compatible plan is:
 
 - Add a migration-safe task extension account keyed by task PDA.
 - Store `job_spec_required: bool` and expected `job_spec_hash`.
 - Add a protocol instruction to initialize the extension before task claim.
-- Gate base `claim_task` or introduce a new claim router that rejects missing or
-  mismatched job spec hashes when the extension exists.
+- Keep base `claim_task` fail-closed, or replace it with a new claim router that
+  still rejects missing or mismatched job spec hashes when the extension exists.
 - Add tests proving claim without expected job spec is rejected.

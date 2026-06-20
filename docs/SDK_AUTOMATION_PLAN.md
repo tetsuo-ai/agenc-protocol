@@ -1,10 +1,14 @@
 # Embeddable-Marketplace SDK + Docs — Loop Automation Plan
 
-Status: **EXECUTED 2026-06-09** (Loops 0–5 built on branch `feat/marketplace-sdk`, local only).
+Status: **HISTORICAL / EXECUTED 2026-06-09** (Loops 0–5 built on branch `feat/marketplace-sdk`, local only).
 Decisions locked 2026-06-09.
 
-> Execution summary: `packages/sdk-ts` = `@tetsuo-ai/marketplace-sdk` v0.1.0 (publish-ready).
-> Codama-generated `@solana/kit` client (77 instructions) + facade wrapping **75/77**
+> Current-state note: this plan is retained as implementation history. The live
+> full surface is now 84 instructions, `@tetsuo-ai/marketplace-sdk` is 0.6.0
+> locally, and the package README is the current SDK status surface.
+
+> Historical execution summary: `packages/sdk-ts` = `@tetsuo-ai/marketplace-sdk` v0.1.0 (publish-ready).
+> Codama-generated `@solana/kit` client (77 instructions at that time) + facade wrapping **75/77**
 > instructions (the 2 unwrapped — `claim_task` fail-closed, `complete_task_private` ZK — are
 > intentional). **98 tests green: 89 structural + 9 REAL on-chain e2e** (register, create-listing,
 > hire→settle, manual-validation, dispute→resolve, bonds) that execute the compiled program in
@@ -25,7 +29,7 @@ Decisions locked 2026-06-09.
 Pinned tool versions (live npm, 2026-06-09 — re-pin before building): `codama@1.7.0`,
 `@codama/nodes-from-anchor@1.5.0`, `@codama/renderers-js@2.2.0`, `@solana/kit@6.9.0`,
 `litesvm@1.1.0`, `tsup@8.5.1`, `typedoc@0.28.x`, `vitest@4.x`. Program IDL:
-`artifacts/anchor/idl/agenc_coordination.json` (77 instructions, 38 accounts, 287 errors,
+`artifacts/anchor/idl/agenc_coordination.json` (77 instructions at that time, 38 accounts, 287 errors,
 program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`).
 
 > Stack note: Codama's JS renderer targets **`@solana/kit`** (web3.js v2). The existing
@@ -83,9 +87,9 @@ Agent SDK in CI for durable runs. Copy-pasteable loop prompts below.
 ### Loop 0 — Scaffold + codegen smoke test  *(one-time; do interactively)*
 Stand up `packages/sdk-ts`; write `sdk-generate.mjs`; run it against the IDL.
 **Smoke check (important):** Anchor 0.32.1 emits a newer IDL — confirm Codama handles all
-77 instructions / 134 types cleanly; defined types / generics / zero-copy accounts may need
+77 instructions / 134 types from this historical cut cleanly; defined types / generics / zero-copy accounts may need
 Codama visitors or overrides. **Gate:** `tsc --noEmit` over `generated/` passes and the
-client exports a builder for every one of the 77 instructions.
+client exports a builder for every one of the then-current 77 instructions.
 
 ### Loop 1 — Drift gate + IDL-sync wiring
 Wire `sdk-drift-check.mjs` + `npm run sdk:check`; add a CI job that runs on any change to

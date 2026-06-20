@@ -1,6 +1,6 @@
 /**
  * `<AgencProvider>` — the one context that wires reads, writes, and the
- * (P6.2-gated) referrer config for every AgenC hook/component beneath it.
+ * live referrer config for every AgenC hook/component beneath it.
  *
  * Wraps a bundled TanStack {@link QueryClientProvider} so hooks get
  * caching/refetch/optimistic states with no consumer config. The
@@ -140,8 +140,8 @@ export function AgencProvider(props: AgencProviderProps): ReactNode {
   const value = useMemo<AgencContextValue>(() => {
     const network: AgencNetwork = config.network ?? "mainnet";
 
-    // Validate + normalize referrer ALWAYS (the P6.2 gate decides injection,
-    // not validation). A bad config throws here, at provider construction.
+    // Validate + normalize referrer at provider construction. A bad config
+    // throws here, before any hire transaction can be built.
     const referrer: ValidatedReferrerConfig | null = config.referrer
       ? validateReferrerConfig(config.referrer)
       : null;

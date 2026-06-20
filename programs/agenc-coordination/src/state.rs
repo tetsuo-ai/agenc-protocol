@@ -468,7 +468,7 @@ impl ProtocolConfig {
     /// `surface_revision`. Do NOT change — it is the migration precondition.
     pub const OLD_CONFIG_SIZE: usize = 349;
 
-    /// `surface_revision` value meaning "the full 80-instruction surface is live".
+    /// `surface_revision` value meaning "the full 84-instruction surface is live".
     /// An operator stamps this via `update_launch_controls` after deploying the full
     /// surface; the SDK maps it to a complete `CapabilitySet`.
     pub const SURFACE_REVISION_FULL: u16 = 1;
@@ -553,7 +553,7 @@ pub struct AgentRegistration {
     /// Total rewards earned
     pub total_earned: u64,
     /// Agent reputation score (0-10000)
-    /// Initial value: 5000 (neutral starting point)
+    /// Initial value: 3000 (probationary starting point)
     /// Can be adjusted via protocol config in future versions
     pub reputation: u16,
     /// Active task count

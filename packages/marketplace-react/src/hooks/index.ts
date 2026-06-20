@@ -5,9 +5,9 @@
  * Query (bundled), surfaces typed `AgencError`s from the runtime client
  * UNTOUCHED, and is SSR-safe (no `window`/`document` at module scope).
  *
- * Referrer-related surfaces (`useHire`'s injection, `useReferrerEarnings`) are
- * gated by the P6.2 capability check: not-live today, so no referrer is ever
- * injected and no earnings are ever fabricated.
+ * Referrer-related surfaces are split deliberately: `useHire` injects a
+ * configured referrer into live settlement, while `useReferrerEarnings` remains
+ * indexer-gated so no earnings are ever fabricated.
  *
  * @module hooks
  */
@@ -79,7 +79,7 @@ export {
   type WalletSignerAdapter,
 } from "./useWalletSigner.js";
 
-// Referrer earnings (P6.2-gated)
+// Referrer earnings (indexer-gated)
 export {
   useReferrerEarnings,
   type ReferrerHire,

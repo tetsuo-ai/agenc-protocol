@@ -110,8 +110,8 @@ export type AgencNetwork = "localnet" | "devnet" | "mainnet";
 
 /**
  * Referrer configuration. Accepted + validated + stored ALWAYS; injected into
- * hires only when {@link ReferrerCapability.live} is true (the P6.2 gate — not
- * today). See {@link resolveReferrerCapability}.
+ * hires only when {@link ReferrerCapability.live} is true. See
+ * {@link resolveReferrerCapability}.
  */
 export interface ReferrerConfig {
   /** Referrer wallet that earns the fee. Must be a valid base58 address. */
@@ -138,11 +138,9 @@ export interface ValidatedReferrerConfig {
  * The runtime answer to "can a referral fee actually be charged on this
  * cluster?". Returned by `resolveReferrerCapability()`.
  *
- * THE P6.2 GATE: `live` is hardcoded `false` today because the on-chain
- * referrer args + 4th settlement leg (PLAN.md P6.2) are unbuilt. When it ships,
- * this resolver will consult P6.5 `getDeployedSurface` instead. Until then:
- * referrer is never injected, earnings hooks return a documented not-live
- * state, and disclosure UI may still show the pending-support copy.
+ * Referrer settlement is live on the full 84-instruction surface. `live` is true
+ * when a validated provider referrer is configured. Aggregated earnings remain a
+ * separate indexer-gated read surface.
  */
 export interface ReferrerCapability {
   /** Whether referral settlement is live on the target cluster. */
@@ -169,7 +167,7 @@ export interface AgencProviderConfig {
   rpcSubscriptionsUrl?: string;
   /** Indexer connection — presence of `indexer.baseUrl` selects indexer-first. */
   indexer?: IndexerConfig;
-  /** Referrer config (accepted + validated; injected only when P6.2 is live). */
+  /** Referrer config (accepted + validated; injected into hire transactions). */
   referrer?: ReferrerConfig;
   /** Signer for write operations (the kit `TransactionSigner`). */
   signer?: TransactionSigner;
@@ -205,8 +203,7 @@ export interface AgencContextValue {
   /** Validated referrer config, or `null` when none was supplied. */
   referrer: ValidatedReferrerConfig | null;
   /**
-   * Resolve whether referral settlement is live on this cluster (the P6.2
-   * gate). Today always `{ live: false, ... }`.
+   * Resolve whether this provider has a live referral-settlement config.
    */
   resolveReferrerCapability(): ReferrerCapability;
 }

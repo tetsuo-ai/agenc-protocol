@@ -6,7 +6,7 @@ required CSS imports for headless use.
 
 > Status: **foundation layer** (PLAN.md P4.2 / PLAN_2 Part A). This package
 > currently ships `<AgencProvider>`, the read-transport abstraction, the
-> (P6.2-gated) referrer config, the `--agenc-*` theme contract, and the string
+> live referrer config, the `--agenc-*` theme contract, and the string
 > catalog. Hooks (`useListings`, `useHire`, …) and components (`ListingCard`, …)
 > land in the next phases and bind to the context exposed here.
 
@@ -38,8 +38,8 @@ export default function App() {
         // Write client is built from rpcUrl + signer when both are present,
         // or pass a pre-built `client` (e.g. from startLocalMarketplace()).
         // rpcUrl, signer,
-        // Referrer config is accepted + validated, but NOT injected until the
-        // on-chain P6.2 settlement leg is live (see "Referrer gate" below).
+        // Referrer config is accepted + validated, then injected into hires.
+        // The earnings hook is still indexer-gated (see "Referrers" below).
         // referrer: { wallet: "<base58>", feeBps: 250 },
       }}
     >
@@ -59,7 +59,7 @@ context (read it with `useAgencContext()`):
 | `client` | `MarketplaceClient \| null` | write runtime; `null` if not configured |
 | `signer` | `TransactionSigner \| null` | the configured signer |
 | `referrer` | `ValidatedReferrerConfig \| null` | validated + stored |
-| `resolveReferrerCapability()` | `ReferrerCapability` | the **P6.2 gate** |
+| `resolveReferrerCapability()` | `ReferrerCapability` | live when a valid referrer is configured |
 
 ### Override slots (test seams, public API)
 
@@ -78,20 +78,19 @@ return parity shapes by SDK design, so callers never branch on which is live.
 `listingHires` / `agentTrackRecord` are indexer-native; the gPA fallback rejects
 them with a typed `ReadTransportUnsupportedError`.
 
-## Referrer gate (P6.2)
+## Referrers
 
-Referral fees require an **unbuilt** on-chain change (PLAN.md P6.2 — referrer args
-+ a 4th settlement leg). Until it ships:
+Referral settlement is live on the full 84-instruction protocol surface. When
+`referrer: { wallet, feeBps }` is configured:
 
-- `referrer: { wallet, feeBps }` is **accepted, validated, and stored** (bad base58
-  throws; out-of-range basis points are rejected);
-- it is **never injected** into a hire;
-- `resolveReferrerCapability()` returns `{ live: false, reason }`;
-- disclosure UI may still show "this site earns a referral fee (pending protocol
-  support)" — but earnings are never faked.
+- the provider validates and stores it (bad base58 throws; out-of-range basis
+  points are rejected);
+- `resolveReferrerCapability()` returns `{ live: true, referrer }`;
+- `useHire()` injects the referrer fields into standard and humanless hires.
 
-When P6.2 deploys, `resolveReferrerCapability()` will consult P6.5
-`getDeployedSurface` and flip to `live: true` on supporting clusters.
+Aggregated referrer earnings are a separate indexer feature. Until the indexer
+publishes `GET /api/explorer/referrers/:wallet/hires`, `useReferrerEarnings()`
+returns the documented not-live zero state and never fabricates totals.
 
 ## Components
 

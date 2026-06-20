@@ -106,12 +106,11 @@ async function rpcHealthy(rpcUrl: string): Promise<boolean> {
 
 beforeAll(async () => {
   try {
-    // Reuse a running sandbox; otherwise boot it. Existing env files do NOT
-    // prove the validator is up (after `down --purge` they survive but the
-    // ledger is wiped), so health-check the RPC and (re)boot when down/unseeded.
+    // Reuse a running sandbox only when it is healthy, seeded, and loaded with
+    // the current repo-built program binary.
     let env = await readSandboxEnv();
     const healthy = env !== null && (await rpcHealthy(env.rpcUrl));
-    if (env === null || env.fixtures === null || !healthy) {
+    if (env === null || env.fixtures === null || !healthy || !env.programCurrent) {
       env = await start({ quiet: true });
     }
     if (env.fixtures === null || env.keypairs === null) {

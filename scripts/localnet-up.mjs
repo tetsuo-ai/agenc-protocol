@@ -24,6 +24,7 @@
 // .so at programs/agenc-coordination/target/deploy/agenc_coordination.so, and
 // the built SDK at packages/sdk-ts/dist (cd packages/sdk-ts && npm run build).
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { openSync, closeSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -152,6 +153,25 @@ async function readPidFile() {
   }
 }
 
+async function hashFile(p) {
+  return createHash("sha256").update(await readFile(p)).digest("hex");
+}
+
+async function stopPid(label, pid) {
+  if (!pidAlive(pid)) return;
+  process.kill(pid, "SIGTERM");
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  process.kill(pid, "SIGKILL");
+  await new Promise((r) => setTimeout(r, 500));
+  if (pidAlive(pid)) {
+    fail(`${label} pid ${pid} is still alive after SIGKILL`);
+  }
+}
+
 async function rpcCall(rpcUrl, method, params = [], timeoutMs = 2500) {
   const response = await fetch(rpcUrl, {
     method: "POST",
@@ -263,9 +283,12 @@ async function main() {
   if (!(await fileExists(IDL_PATH))) {
     fail(`IDL missing: ${IDL_PATH} (run \`anchor build && npm run artifacts:refresh\`).`);
   }
+  const soSha256 = await hashFile(SO_PATH);
   const programId = JSON.parse(await readFile(IDL_PATH, "utf8")).address;
   if (!programId) fail(`IDL at ${IDL_PATH} has no .address field`);
-  stepDone(`${validatorVersion}; .so ${soBytes} bytes; program ${programId}`);
+  stepDone(
+    `${validatorVersion}; .so ${soBytes} bytes sha256=${soSha256.slice(0, 16)}; program ${programId}`,
+  );
 
   // ------------------------------------------------------- state dir + keys
   step("state dir + keypairs (.localnet/)");
@@ -292,9 +315,28 @@ async function main() {
 
   // ------------------------------------------------------------- run check
   step(`validator on port ${args.port}`);
-  const pidInfo = await readPidFile();
-  const ourValidatorAlive = pidInfo !== null && pidAlive(pidInfo.pid);
+  let pidInfo = await readPidFile();
+  let ourValidatorAlive = pidInfo !== null && pidAlive(pidInfo.pid);
   let booted = false;
+
+  if (
+    ourValidatorAlive &&
+    !args.keepLedger &&
+    pidInfo.programSha256 !== soSha256
+  ) {
+    const stalePid = pidInfo.pid;
+    const previous = pidInfo.programSha256
+      ? pidInfo.programSha256.slice(0, 16)
+      : "missing";
+    await stopPid("validator", stalePid);
+    await rm(PID_FILE, { force: true });
+    pidInfo = null;
+    ourValidatorAlive = false;
+    stepDone(
+      `stopped stale pid ${stalePid} (program sha ${previous} -> ${soSha256.slice(0, 16)})`,
+    );
+    step(`validator on port ${args.port}`);
+  }
 
   if (ourValidatorAlive) {
     if (pidInfo.rpcPort !== args.port) {
@@ -361,7 +403,17 @@ async function main() {
     closeSync(logFd);
     await writeFile(
       PID_FILE,
-      `${JSON.stringify({ pid: child.pid, rpcPort: args.port, startedAt: new Date().toISOString() }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          pid: child.pid,
+          rpcPort: args.port,
+          startedAt: new Date().toISOString(),
+          programSha256: soSha256,
+          programSize: soBytes,
+        },
+        null,
+        2,
+      )}\n`,
     );
 
     const deadline = Date.now() + 90_000;
@@ -574,6 +626,8 @@ async function main() {
     rpcUrl,
     rpcSubscriptionsUrl,
     programId,
+    programSha256: soSha256,
+    programSize: soBytes,
     attestorUrl,
     fixturesPath: FIXTURES_PATH,
     keypairs: {

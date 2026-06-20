@@ -14,8 +14,8 @@
 
 The `agenc-coordination` program (`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`)
 custodies escrow, completion bonds, and reputation stakes. A bounty is the
-standing complement to the internal adversarial audits and the pending external
-audit (`docs/BATCH_1_3_AUDIT_PREP.md`): it pays for the bugs those processes
+standing complement to the internal adversarial audits and any commissioned external
+audit report (`docs/audit/`): it pays for the bugs those processes
 miss, prioritized strictly by **how close the bug is to user funds**.
 
 ## Priority ordering (reward weighting)
@@ -111,7 +111,7 @@ cleverness. Examples are concrete and tied to the actual program.
 Out of scope (no reward):
 
 - Anything requiring a **compromised or malicious trusted role** — the program
-  **upgrade authority** (`HcecpKX…GLqh`, single-key today; see
+  **upgrade authority** (now 2-of-3 multisig; see
   `docs/UPGRADE_AUTHORITY.md`), the **protocol/config multisig**, or an
   **assigned dispute resolver**. These are trusted by design; governance-design
   feedback is welcome but not paid as a vulnerability.
