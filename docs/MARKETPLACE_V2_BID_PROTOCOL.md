@@ -602,7 +602,8 @@ state accounts are likewise created on first use.
 The following are intentionally left for later follow-up:
 
 - on-chain enforcement that accepted bids respect the stored matching policy
-- protocol treasury fees or marketplace take-rate
+- any **additional** bid-marketplace take-rate beyond the existing protocol
+  settlement fee
 - SPL-token-denominated bid tasks
 - multi-worker bid books
 - richer reliability scoring beyond current reputation-based signals
@@ -624,4 +625,6 @@ It keeps the protocol intentionally conservative:
 - explicit creator acceptance instead of auto-match
 - additive compatibility with existing tasks
 - bond-based spam resistance and accountability
-- no protocol treasury fee in the first version
+- no extra bid-marketplace take-rate in the first version; accepted bids settle
+  through the existing task-completion split, so the normal protocol fee still
+  applies

@@ -4,8 +4,7 @@
  * This is the one component that binds the hooks directly: it renders a price-
  * aware CTA that opens {@link HireCheckoutModal}, drives the hire through
  * `useHire()`, resolves the signer via `useWalletSigner()`, and threads the
- * provider's configured referrer + the P6.2 capability into the modal's
- * disclosure (never injecting a fee — the gate lives in `useHire`).
+ * provider's configured referrer + capability into the modal's disclosure.
  *
  * ## Why the caller supplies the hire input
  *

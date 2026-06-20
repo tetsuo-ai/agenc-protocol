@@ -1,21 +1,19 @@
 /**
- * Referrer config validation + the P6.2 capability gate.
+ * Referrer config validation + the live referral-settlement capability.
  *
- * ## THE P6.2 GATE (PLAN_2 §0, MANDATORY)
+ * ## REFERRER SETTLEMENT
  *
- * Referrer args + the 4th settlement leg are an UNBUILT Phase-6 on-chain change
- * (PLAN.md P6.2). The SDK `facade.hireFromListing` has NO referrer params yet.
- * So this module:
+ * Referrer args + the 4th settlement leg are part of the full 84-instruction
+ * surface. The SDK `facade.hireFromListing` and
+ * `facade.hireFromListingHumanless` both accept referrer fields. This module:
  * - ACCEPTS + VALIDATES `referrer: { wallet, feeBps }` and stores the normalized
  *   form (validation is real: bad base58 throws, out-of-range bps rejected);
- * - exposes {@link resolveReferrerCapability}, which currently returns
- *   `{ live: false, reason: "P6.2 not deployed" }` — HARDCODED false today, with
- *   a clear TODO citing P6.2 / P6.5 `getDeployedSurface` as the future signal.
+ * - exposes {@link resolveReferrerCapability}, which reports live when a valid
+ *   referrer config is present.
  *
- * When NOT live (today, always): referrer is NEVER injected into a hire, the
- * earnings hook returns a documented not-live state, and disclosure UI may still
- * SHOW "this site earns a referral fee (pending protocol support)". We NEVER
- * fake earnings or silently inject.
+ * Aggregated earnings are separate from settlement. `useReferrerEarnings` still
+ * remains indexer-gated and must not fabricate totals before that endpoint is
+ * published.
  *
  * @module provider/referrer
  */
@@ -31,12 +29,11 @@ import type {
 /** Minimum referral fee, in basis points. */
 export const REFERRER_FEE_BPS_MIN = 0;
 /**
- * Maximum referral fee, in basis points. 10000 bps = 100%. The on-chain P6.2
- * leg will enforce its own cap; this client-side bound is a sane outer guard so
- * an obviously-wrong config (e.g. a typo'd 99999) is rejected at provider
- * construction rather than silently stored.
+ * Maximum referral fee, in basis points. Mirrors the on-chain per-leg cap
+ * (`MAX_REFERRER_FEE_BPS = 2000`) so invalid provider config fails before the
+ * user signs a transaction.
  */
-export const REFERRER_FEE_BPS_MAX = 10_000;
+export const REFERRER_FEE_BPS_MAX = 2_000;
 
 /**
  * Validate + normalize a raw {@link ReferrerConfig} into a
@@ -71,27 +68,22 @@ export function validateReferrerConfig(
 }
 
 /**
- * Resolve whether a referral fee can actually be charged on the target cluster.
- *
- * THE P6.2 GATE — returns `live: false` UNCONDITIONALLY today.
- *
- * TODO(P6.2 / P6.5): once the on-chain referrer args + 4th settlement leg
- * (PLAN.md P6.2) are deployed, replace the hardcoded `false` with a real check
- * against P6.5 `getDeployedSurface` for the target cluster. Until then, returning
- * a truthy `live` here would cause silent fee injection against a program that
- * cannot honor it — strictly forbidden by PLAN_2 §0.
+ * Resolve whether a referral fee can actually be charged by this provider.
  *
  * @param referrer - The validated referrer config under the provider, or null.
- * @returns A {@link ReferrerCapability} (always `{ live: false, ... }` today).
+ * @returns A {@link ReferrerCapability}; live only when a referrer is configured.
  */
 export function resolveReferrerCapability(
   referrer: ValidatedReferrerConfig | null,
 ): ReferrerCapability {
-  // P6.2 GATE: hardcoded not-live. Do NOT make this conditionally true until
-  // P6.2 is deployed AND P6.5 getDeployedSurface confirms it on the cluster.
+  if (!referrer) {
+    return {
+      live: false,
+      reason: t("referrer.notLiveReason"),
+    };
+  }
   return {
-    live: false,
-    reason: t("referrer.notLiveReason"),
-    ...(referrer ? { referrer } : {}),
+    live: true,
+    referrer,
   };
 }

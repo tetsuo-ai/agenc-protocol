@@ -102,9 +102,9 @@ Creator calls:
 
 ### 2. Claim the task
 
-Workers still use:
+Workers use the job-spec-pinning claim path:
 
-- `claim_task`
+- `claim_task_with_job_spec`
 
 ### 3. Submit the result
 

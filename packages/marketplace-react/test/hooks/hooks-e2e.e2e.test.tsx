@@ -222,7 +222,7 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
         listingSpecHash,
       } as never)) as never;
     });
-    // The P6.2 gate held: no referrer injected.
+    // No provider referrer configured in this e2e path, so no referrer injected.
     expect(hireResult.referrerInjected).toBe(false);
     expect(hireResult.signature).toBeTruthy();
 

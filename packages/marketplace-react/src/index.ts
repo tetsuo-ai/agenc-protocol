@@ -4,9 +4,9 @@
  *
  * This barrel exposes the FOUNDATION layer (PLAN.md P4.2 / PLAN_2 Part A):
  * - `<AgencProvider>` + `useAgencContext()` — the one context wiring reads,
- *   writes, and the (P6.2-gated) referrer config;
+ *   writes, and the live referrer config;
  * - `createReadTransport()` — indexer-first read transport with gPA fallback;
- * - the referrer validation + capability gate (`resolveReferrerCapability()`,
+ * - the referrer validation + capability resolver (`resolveReferrerCapability()`,
  *   not-live today per PLAN_2 §0);
  * - the `--agenc-*` theme contract helpers + the English string catalog.
  *

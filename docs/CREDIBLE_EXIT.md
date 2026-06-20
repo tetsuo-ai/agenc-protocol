@@ -32,7 +32,7 @@ and is **brutally honest about the gaps** the currently-private repo creates.
 | **On-chain settlement** | escrow → claim → complete; worker paid; exact protocol fee to treasury | ✅ Proven (balances measured) |
 | **Source availability** (fork the program) | An embedder can read/fork the Solana source | ❌ **Deferred — repo PRIVATE (P0.6, [HUMAN])** |
 | **Third-party verifiable build** | An outsider runs `solana-verify verify-from-repo` against `HJsZ…` | ❌ **Deferred — needs public repo (P8.3 → P0.6)** |
-| **Multisig upgrade custody** | No single key can push a malicious program upgrade | ❌ **Deferred — single key today (P8.5, [HUMAN])** |
+| **Multisig upgrade custody** | No single key can push a malicious program upgrade | ✅ **DONE — 2-of-3 multisig as of 2026-06-11** |
 
 P8.6 formally **depends on P0.6, P8.3, and P8.5**. With the repo private, an
 embedder **cannot fork the source or independently verify the build**, which
@@ -293,15 +293,11 @@ genuine weaknesses in the credible-exit story — stated plainly, not hidden:
    with the source*, **not** *verifiable by an outsider*. That gap closes only
    when the repo goes public.
 
-3. **Multisig upgrade custody — DEFERRED (P8.5, [HUMAN]).** The mainnet upgrade
-   authority is currently a **single key**
-   (`HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`; see [SECURITY.md](../SECURITY.md)
-   §5.4). A single key can push a program upgrade. The target is a **Squads (or
-   equivalent) multisig**; until that human-executed migration lands, "the
-   operator can't unilaterally change the program" is **not** yet true.
-   (Mitigation: the program is upgradeable but the *current* bytecode is what runs
-   and what these proofs exercise; the risk is a *future* malicious upgrade, not
-   the present behavior.)
+3. **Multisig upgrade custody — DONE (P8.5).** The 2026-06-11 rollout moved the
+   upgrade authority to a **2-of-3 multisig**; see
+   [UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md). Re-check the live authority with
+   `solana program show` before relying on this property for an audit or customer
+   security review.
 
 4. **Moderation consumption gate — see §3.** The P6.8 roster does not yet let a
    delegated attestor's record unlock a hire; moderation independence requires
@@ -315,10 +311,10 @@ genuine weaknesses in the credible-exit story — stated plainly, not hidden:
 > — escrow funded, worker paid, exact fee to treasury — with **zero** tetsuo-hosted
 > services. We executed exactly that (§2). **What is not yet true:** because the
 > repo is **private**, you cannot **fork the source** or **independently verify the
-> build**, and because the upgrade authority is a **single key**, tetsuo could
-> still push a program **upgrade**. Those three pillars (P0.6, P8.3, P8.5) are
-> human-owned and deferred. Sell the proven runtime property; do **not** claim the
-> deferred ones until they ship.
+> build** through the public osec.io path. Upgrade custody has since moved to a
+> 2-of-3 multisig. The remaining source/public-verification pillars (P0.6, P8.3)
+> are human-owned and deferred. Sell the proven runtime property; do **not** claim
+> the deferred ones until they ship.
 
 ---
 

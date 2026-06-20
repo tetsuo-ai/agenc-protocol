@@ -5,22 +5,14 @@
  * surfaces the resulting transaction signature + minted Task PDA. Typed
  * `AgencError`s from the runtime client are surfaced UNTOUCHED in `error`.
  *
- * ## THE P6.2 REFERRER GATE (PLAN_2 §0, MANDATORY — read before editing)
+ * ## REFERRER SETTLEMENT
  *
- * The on-chain referrer args + 4th settlement leg (PLAN.md P6.2) are UNBUILT.
- * The SDK `facade.hireFromListing` has NO referrer parameter. So this hook:
+ * The full 84-instruction protocol supports a demand-side referrer leg. This hook:
  * - reads `resolveReferrerCapability()` from context BEFORE building the hire;
- * - when `live === false` (ALWAYS, today): it injects NO referrer argument into
- *   the hire input. The referrer config is still accepted/validated/stored on
- *   the provider and disclosure UI may show the pending-support copy — but the
- *   transaction the user signs is a plain hire with no referral leg.
- * - the `referrerInjected` flag in the result is the audit signal: it is `false`
- *   today and would only become `true` once P6.2 is live AND a referrer is
- *   configured. We NEVER fabricate it.
- *
- * When P6.2 ships, the ONLY change here is: under `capability.live === true`,
- * spread the referrer fields (`referrer`, `referrerFeeBps`) into the hire input
- * below. Nothing else moves.
+ * - when `live === true`, spreads the validated provider referrer into the hire
+ *   input for both standard and humanless hires;
+ * - the `referrerInjected` flag in the result is the audit signal. We never set
+ *   it true unless the transaction input included the referrer fields.
  *
  * @module hooks/useHire
  */
@@ -39,8 +31,8 @@ import { requireClient } from "./internal.js";
  * MINUS the fee-payer signers, which default to the provider's write-client
  * signer (authority == creator == buyer). Pass them only to override.
  *
- * NOTE: deliberately NO referrer field — the referrer is provider-level config,
- * gated by P6.2, and is never threaded through a per-call hire input.
+ * NOTE: deliberately NO referrer field — the referrer is provider-level config
+ * and is injected only when `resolveReferrerCapability()` is live.
  */
 export type HireInput = Omit<
   Parameters<typeof facadeNs.hireFromListing>[0],
@@ -85,8 +77,8 @@ export interface HireResult {
   /** The minted Task PDA (derived from creator + taskId). */
   taskPda: Address;
   /**
-   * Whether a referrer fee leg was injected into THIS hire. Always `false`
-   * today (the P6.2 gate). Audit signal — never fabricated.
+   * Whether a referrer fee leg was injected into THIS hire. Audit signal —
+   * never fabricated.
    */
   referrerInjected: boolean;
 }
@@ -130,12 +122,17 @@ export function useHire(): UseHireResult {
     mutationFn: async (input: AnyHireInput): Promise<HireResult> => {
       const client = requireClient(ctx.client);
 
-      // --- THE P6.2 GATE ---
-      // Capability is resolved fresh per hire. Today it is ALWAYS not-live, so
-      // we build a referrer-free hire. When P6.2 lands, the `capability.live`
-      // branch is where the referrer fields get spread in (for BOTH paths).
+      // Resolve fresh per hire so a provider referrer config change cannot leak
+      // stale referral terms into a new transaction.
       const capability = ctx.resolveReferrerCapability();
-      const referrerInjected = capability.live && ctx.referrer !== null;
+      const referrerArgs =
+        capability.live && capability.referrer
+          ? {
+              referrer: capability.referrer.wallet,
+              referrerFeeBps: capability.referrer.feeBps,
+            }
+          : {};
+      const referrerInjected = "referrer" in referrerArgs;
 
       const creator = input.creator ?? client.signer;
       let signature: string;
@@ -146,7 +143,7 @@ export function useHire(): UseHireResult {
         const ix = await facade.hireFromListingHumanless({
           ...input,
           creator,
-          // NOTE: P6.2 referrer fields would spread here under capability.live.
+          ...referrerArgs,
         } as Parameters<typeof facadeNs.hireFromListingHumanless>[0]);
         ({ signature } = await client.send([ix]));
       } else {
@@ -156,7 +153,7 @@ export function useHire(): UseHireResult {
           ...input,
           authority,
           creator,
-          // NOTE: P6.2 referrer fields would spread here under capability.live.
+          ...referrerArgs,
         } as Parameters<typeof facadeNs.hireFromListing>[0]);
         signature = result.signature;
       }

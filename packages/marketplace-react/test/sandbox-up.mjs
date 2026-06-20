@@ -49,6 +49,7 @@
  * idempotent). `stop()` is safe to call when nothing is running.
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -64,6 +65,10 @@ const SEED_SCRIPT = path.join(
   "packages/sdk-ts/scripts/seed-devnet-sandbox.mjs",
 );
 const ENV_FILE = path.join(REPO_ROOT, ".localnet/env.json");
+const PROGRAM_SO = path.join(
+  REPO_ROOT,
+  "programs/agenc-coordination/target/deploy/agenc_coordination.so",
+);
 
 /** Default RPC port for the sandbox validator (websocket is always port+1). */
 export const SANDBOX_PORT = 8899;
@@ -75,6 +80,10 @@ async function fileExists(p) {
   } catch {
     return false;
   }
+}
+
+async function hashFile(p) {
+  return createHash("sha256").update(await readFile(p)).digest("hex");
 }
 
 /**
@@ -128,11 +137,22 @@ export async function readSandboxEnv(envFile = ENV_FILE) {
   const env = await readLocalnetEnv(envFile);
   if (env === null) return null;
   const fixtures = await readSandboxFixtures(env.fixturesPath);
+  const currentProgramSha256 = (await fileExists(PROGRAM_SO))
+    ? await hashFile(PROGRAM_SO)
+    : null;
+  const envProgramSha256 =
+    typeof env.programSha256 === "string" ? env.programSha256 : null;
   return {
     cluster: env.cluster,
     rpcUrl: env.rpcUrl,
     rpcSubscriptionsUrl: env.rpcSubscriptionsUrl,
     programId: env.programId,
+    programSha256: envProgramSha256,
+    currentProgramSha256,
+    programCurrent:
+      currentProgramSha256 !== null &&
+      envProgramSha256 !== null &&
+      envProgramSha256 === currentProgramSha256,
     envFile,
     fixturesPath: env.fixturesPath ?? null,
     fixtures,
@@ -208,10 +228,6 @@ export async function stop(options = {}) {
 
 /** Fail fast with an actionable message if a prerequisite is missing. */
 async function assertPrereqs() {
-  const so = path.join(
-    REPO_ROOT,
-    "programs/agenc-coordination/target/deploy/agenc_coordination.so",
-  );
   const sdkDist = path.join(REPO_ROOT, "packages/sdk-ts/dist/index.js");
   if (!(await fileExists(LOCALNET_UP))) {
     throw new Error(`missing ${LOCALNET_UP} (repo layout changed?)`);
@@ -219,9 +235,9 @@ async function assertPrereqs() {
   if (!(await fileExists(SEED_SCRIPT))) {
     throw new Error(`missing ${SEED_SCRIPT} (repo layout changed?)`);
   }
-  if (!(await fileExists(so))) {
+  if (!(await fileExists(PROGRAM_SO))) {
     throw new Error(
-      `program binary missing: ${so}\n  Run \`anchor build\` from the repo root first.`,
+      `program binary missing: ${PROGRAM_SO}\n  Run \`anchor build\` from the repo root first.`,
     );
   }
   if (!(await fileExists(sdkDist))) {

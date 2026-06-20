@@ -2,8 +2,8 @@
  * `<HireCheckoutModal>` — the embeddable money path (PLAN_2 A3).
  *
  * The accessible, themable checkout dialog: it shows the price, the moderation
- * attestation badge, the escrow-funding explanation, the referrer disclosure
- * (P6.2-gated), and walks the buyer through idle → confirming → funded /
+ * attestation badge, the escrow-funding explanation, the referrer disclosure,
+ * and walks the buyer through idle → confirming → funded /
  * error confirmation states.
  *
  * ## Accessibility (STRUCTURAL — this is published to third parties)
@@ -13,12 +13,11 @@
  * transaction), ARIA dialog roles, and live-region status announcements for
  * the confirming/funded/error transitions.
  *
- * ## The P6.2 referrer gate
+ * ## Referrer disclosure
  *
- * The disclosure renders when a `referrer` is configured, with the pending-
- * support copy until `referrerLive` is true (always false today). The modal
- * NEVER computes or claims a fee was charged — it discloses configured intent
- * only. Injection/earnings stay in the hooks, blocked on P6.2.
+ * The disclosure renders when a `referrer` is configured. The modal never
+ * computes earnings; injection lives in `useHire()` and aggregate earnings live
+ * in `useReferrerEarnings()`.
  *
  * ## Wiring
  *
@@ -79,8 +78,8 @@ export interface HireCheckoutModalProps {
    */
   referrer?: ValidatedReferrerConfig | null;
   /**
-   * Whether referral settlement is live (P6.2). Always false today. Drives the
-   * disclosure copy only; never implies a fee was charged.
+   * Whether referral settlement is active for this hire. Drives the disclosure
+   * copy only; never computes earnings.
    */
   referrerLive?: boolean;
   /** Whether a signer/wallet is connected (gates the confirm button). */

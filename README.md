@@ -94,7 +94,7 @@ live outside the public trust surface.
 | Package | Path | What |
 |---------|------|------|
 | `@tetsuo-ai/protocol` | `packages/protocol` | The committed canonical IDL + TS types + manifest. The supported way for downstream repos to consume the protocol contract. Derived from `artifacts/anchor/*`. |
-| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | The embeddable marketplace SDK: a **Codama-generated `@solana/kit` client** for all 80 instructions + an ergonomic facade (78/80 wrapped). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | The embeddable marketplace SDK: a **Codama-generated `@solana/kit` client** for all 84 instructions + an ergonomic facade. The facade intentionally omits only `claim_task` (fail-closed) and `complete_task_private` (ZK gated). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
 
 ## Build, test & validate
 
@@ -145,9 +145,11 @@ these) rather than assuming `target/` or runtime-vendored copies are canonical. 
 
 ## Mainnet deploy gates (human-owned)
 
-> The full-surface upgrade gated by these requirements was **completed on 2026-06-11**
-> (see [docs/MAINNET_ROLLOUT_RUNBOOK.md](docs/MAINNET_ROLLOUT_RUNBOOK.md)). The list below
-> remains the standing policy for any **future** mainnet deploy/upgrade.
+> The full-surface upgrade was **completed on 2026-06-11**
+> (see [docs/MAINNET_ROLLOUT_RUNBOOK.md](docs/MAINNET_ROLLOUT_RUNBOOK.md)). The runbook records
+> what was satisfied, skipped, or deferred for that execution; the list below remains the
+> standing policy for any **future** mainnet deploy/upgrade. Do not represent an
+> external audit as complete unless the final report is published under `docs/audit/`.
 
 Before any mainnet deploy that changes the deployed surface or account layout:
 
@@ -176,14 +178,14 @@ artifacts (PLAN.md Phase 8):
   fail-closed moderation are core money-safety properties — see
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md) and
   [docs/audit/THREAT_MODEL.md](docs/audit/THREAT_MODEL.md).
-- **Upgrade authority:** `HJsZ…` is upgradeable; custody and the multisig
-  migration runbook are tracked under PLAN.md P8.5.
+- **Upgrade authority:** `HJsZ…` is upgradeable; custody has been moved to a
+  2-of-3 multisig. See [docs/UPGRADE_AUTHORITY.md](docs/UPGRADE_AUTHORITY.md).
 - **Credible-exit test** — "the operator vanishes and it still works." An
   executed, reproducible proof of an end-to-end hire→settle cycle with **zero
   tetsuo-ai hosted dependencies** (own RPC, gPA reads, own moderation key,
   self-chosen artifact storage, on-chain settlement). The runtime independence
-  is proven; the source-availability / third-party-verifiable-build /
-  multisig-custody pillars are honestly flagged as deferred. See
+  is proven; the source-availability / third-party-verifiable-build pillars
+  remain honestly flagged as deferred. See
   [docs/CREDIBLE_EXIT.md](docs/CREDIBLE_EXIT.md) (run it:
   `node scripts/credible-exit.mjs`).
 

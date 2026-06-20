@@ -17230,7 +17230,7 @@ export type AgencCoordination = {
             "name": "reputation",
             "docs": [
               "Agent reputation score (0-10000)",
-              "Initial value: 5000 (neutral starting point)",
+              "Initial value: 3000 (probationary starting point)",
               "Can be adjusted via protocol config in future versions"
             ],
             "type": "u16"

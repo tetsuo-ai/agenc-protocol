@@ -60,14 +60,14 @@ A **fresh full-surface deploy** (dev/devnet) stamps `SURFACE_REVISION_FULL` in
 
 | Program build | Live surface | Cluster | `surface_revision` | SDK semver | `getDeployedSurface().listings` |
 |---|---|---|---|---|---|
-| full | **84 ix** | **mainnet** (live as of 2026-06-11) | `1` (FULL) | `@tetsuo-ai/marketplace-sdk` ≥ 0.4.0 | `true` |
-| full | 84 ix | devnet / localnet | `1` | ≥ 0.4.0 | `true` |
+| full | **84 ix** | **mainnet** (live as of 2026-06-11) | `1` (FULL) | `@tetsuo-ai/marketplace-sdk` ≥ 0.6.0 | `true` |
+| full | 84 ix | devnet / localnet | `1` | ≥ 0.6.0 | `true` |
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` (fallback) |
 
-Current published versions at the time of writing: `@tetsuo-ai/protocol` `0.2.1`,
-`@tetsuo-ai/marketplace-sdk` `0.4.0`. The surface-versioning facade
-(`getDeployedSurface`, `SurfaceNotDeployedError`, `CapabilitySet`) lands in the SDK
-minor that ships P6.5; bump this row when it is published.
+Current local release targets at the time of writing: `@tetsuo-ai/protocol` `0.2.2`,
+`@tetsuo-ai/marketplace-sdk` `0.6.0`. The full-surface SDK includes
+`getDeployedSurface`, the 84-instruction generated client, and referrer fields on
+the hire/create facades.
 
 ## Release runbook — `anchor idl init` per cluster (fetchable on-chain IDL)
 

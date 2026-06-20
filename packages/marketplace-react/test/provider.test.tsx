@@ -1,6 +1,6 @@
 /**
  * Structural tests for the foundation slice: provider render, referrer
- * validation + the P6.2 capability gate, the read-transport override slot, and
+ * validation + the referrer capability, the read-transport override slot, and
  * the write-client override slot.
  *
  * These use a mock `ReadTransport` (the `queryTransport` slot) and a stub write
@@ -151,7 +151,7 @@ describe("referrer validation", () => {
   });
 });
 
-describe("resolveReferrerCapability (the P6.2 gate)", () => {
+describe("resolveReferrerCapability", () => {
   it("returns not-live with a reason when no referrer is configured", () => {
     const cap = resolveReferrerCapability(null);
     expect(cap.live).toBe(false);
@@ -159,14 +159,15 @@ describe("resolveReferrerCapability (the P6.2 gate)", () => {
     expect(cap.referrer).toBeUndefined();
   });
 
-  it("returns not-live even WITH a valid referrer (P6.2 unbuilt)", () => {
+  it("returns live with a valid referrer", () => {
     const validated = validateReferrerConfig({ wallet: VALID_WALLET, feeBps: 250 });
     const cap = resolveReferrerCapability(validated);
-    expect(cap.live).toBe(false);
+    expect(cap.live).toBe(true);
+    expect(cap.reason).toBeUndefined();
     expect(cap.referrer).toEqual(validated);
   });
 
-  it("is reachable from context and is not-live", () => {
+  it("is reachable from context and is live when configured", () => {
     const { result } = renderHook(() => useAgencContext(), {
       wrapper: wrapper({
         network: "mainnet",
@@ -175,7 +176,7 @@ describe("resolveReferrerCapability (the P6.2 gate)", () => {
       }),
     });
     const cap = result.current.resolveReferrerCapability();
-    expect(cap.live).toBe(false);
+    expect(cap.live).toBe(true);
     expect(result.current.referrer).not.toBeNull();
   });
 });

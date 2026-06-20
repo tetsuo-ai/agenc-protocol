@@ -314,7 +314,7 @@ task-extra, listing-mod-dispute), each with a real-effect positive assertion and
 guard negative; authored by an orchestrated workflow, each file self-verified green and
 independently reviewed for meaningfulness (revert-sensitivity probed).
 
-Coverage now: **72/77 instructions exercised directly in litesvm.** The remaining 5 are
+Historical coverage at the time of this pack: **72/77 instructions exercised directly in litesvm.** The then-remaining 5 were
 covered otherwise or are structurally not litesvm-testable: `complete_task_private` (needs
 a ZK prover), `execute_proposal` / `migrate_protocol` / `update_launch_controls` (Rust unit
 tests), and `initialize_protocol` (runs in every harness setup; its real initializer needs
@@ -490,13 +490,13 @@ are **design-approved, build-deferred** until there is real dispute/abuse volume
   `dispute-accountable-ruling`, `dispute-vote-retired`); **~390 SDK** (`marketplace-sdk
   0.5.0`).
 - clippy `--lib -D warnings` + `--features mainnet-canary` clean; `anchor build` +
-  `npm run artifacts:check` clean; `npm run canary:check-idl` confirms the live surface
-  is **exactly 25 instructions**; full IDL is **82**.
+  `npm run artifacts:check` clean; `npm run canary:check-idl` confirmed the historical
+  canary surface was **exactly 25 instructions**; current full IDL is **84**.
 
 ## 5. Residual deploy gates (Phase 6, unchanged in spirit from Batch 2/3)
 
 1. **§11.5 human go/no-go** — owns the whole embeddable track incl. Phase 6.
-2. **Professional external audit** of the **full 82-instruction surface + both
+2. **Professional external audit** of the **full 84-instruction surface + both
    migrations** (`migrate_protocol` realloc + the per-`Task` `migrate_task` realloc).
    All internal adversarial findings are fixed (0 open); this is independent
    confirmation. **[HUMAN: commissions]** — see `docs/audit/AUDITOR_HANDOFF.md`.

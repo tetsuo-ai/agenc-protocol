@@ -3,8 +3,8 @@
  *
  * Covers: the format helpers (lamport→SOL, address truncation, listing decode),
  * the moderation/verified badge state mapping, the canonical loading/empty/
- * error states, the P6.2 referrer disclosure copy (the money-safety surface —
- * NEVER claims a live fee while not live), the checkout confirmation states,
+ * error states, the referrer disclosure copy (the money-safety surface never
+ * claims a live fee while not live), the checkout confirmation states,
  * the focus-trap behavior of the modal, and the timeline stage logic.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -149,13 +149,12 @@ describe("ListingGrid", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THE P6.2 REFERRER GATE — disclosure copy is the money-safety surface
+// REFERRER DISCLOSURE — copy is the money-safety surface
 // ---------------------------------------------------------------------------
-describe("ReferrerDisclosure (P6.2 gate)", () => {
-  it("shows the PENDING copy while not live (never claims a charged fee)", () => {
+describe("ReferrerDisclosure", () => {
+  it("shows neutral copy while not live (never claims a charged fee)", () => {
     render(<ReferrerDisclosure referrer={referrer} live={false} />);
-    // The disclosure must include the pending-support qualifier.
-    expect(screen.getByText(/pending protocol support/i)).toBeTruthy();
+    expect(screen.getByText(/not active/i)).toBeTruthy();
     // It must NOT show the unqualified "earns a referral fee." present-tense
     // assertion as a standalone (the live copy) while not live.
     expect(screen.queryByText("This site earns a referral fee.")).toBeNull();
@@ -165,14 +164,12 @@ describe("ReferrerDisclosure (P6.2 gate)", () => {
   it("shows the live copy only when live is true", () => {
     render(<ReferrerDisclosure referrer={referrer} live />);
     expect(screen.getByText("This site earns a referral fee.")).toBeTruthy();
-    expect(screen.queryByText(/pending protocol support/i)).toBeNull();
+    expect(screen.queryByText(/not active/i)).toBeNull();
   });
 
-  it("defaults to NOT live (the gate's safe default)", () => {
-    // No `live` prop → pending copy. This is the revert-sensitive invariant:
-    // if the default ever flipped to live, this test goes red.
+  it("defaults to not live", () => {
     render(<ReferrerDisclosure referrer={referrer} />);
-    expect(screen.getByText(/pending protocol support/i)).toBeTruthy();
+    expect(screen.getByText(/not active/i)).toBeTruthy();
   });
 });
 
@@ -280,7 +277,7 @@ describe("HireCheckoutModal", () => {
     expect(screen.getByText(/connect a wallet/i)).toBeTruthy();
   });
 
-  it("shows the referrer disclosure (pending) when a referrer is configured", () => {
+  it("shows the referrer disclosure when a referrer is configured but inactive", () => {
     render(
       <HireCheckoutModal
         open
@@ -291,7 +288,7 @@ describe("HireCheckoutModal", () => {
         referrerLive={false}
       />,
     );
-    expect(screen.getByText(/pending protocol support/i)).toBeTruthy();
+    expect(screen.getByText(/not active/i)).toBeTruthy();
   });
 });
 

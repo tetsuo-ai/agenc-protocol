@@ -98,7 +98,7 @@ export type AgentRegistration = {
   totalEarned: bigint;
   /**
    * Agent reputation score (0-10000)
-   * Initial value: 5000 (neutral starting point)
+   * Initial value: 3000 (probationary starting point)
    * Can be adjusted via protocol config in future versions
    */
   reputation: number;
@@ -171,7 +171,7 @@ export type AgentRegistrationArgs = {
   totalEarned: number | bigint;
   /**
    * Agent reputation score (0-10000)
-   * Initial value: 5000 (neutral starting point)
+   * Initial value: 3000 (probationary starting point)
    * Can be adjusted via protocol config in future versions
    */
   reputation: number;

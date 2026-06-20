@@ -5,9 +5,10 @@ program. The program **custodies escrow, completion bonds, and reputation stakes
 this is a money-safety audit first. Read this file top-to-bottom; every section links
 to the ground-truth code/doc.
 
-> **Status of this pack:** AI-assembled (P8.2). The external audit itself is
-> **[HUMAN: commissions]**. When the report lands, it goes under `docs/audit/` with a
-> per-finding remediation log — see ["When the report arrives"](#when-the-report-arrives).
+> **Status of this pack:** AI-assembled (P8.2). Treat it as the handoff material for
+> an external audit, not the final external audit report. When a professional report
+> lands, it goes under `docs/audit/` with a per-finding remediation log — see
+> ["When the report arrives"](#when-the-report-arrives).
 
 ---
 
@@ -36,7 +37,7 @@ the migration was executed 2026-06-11 against the then-169 live tasks (0 failure
 
 ### In scope (primary)
 
-- **The full 82-instruction surface** — `programs/agenc-coordination/src/` (the
+- **The full 84-instruction surface** — `programs/agenc-coordination/src/` (the
   `#[cfg(not(feature = "mainnet-canary"))]` module). This is the surface the audit must
   clear before Phase 9 widens the live deployment beyond the canary.
 - **The two migrations** — `programs/agenc-coordination/src/instructions/migrate.rs`:
@@ -84,10 +85,10 @@ the migration was executed 2026-06-11 against the then-169 live tasks (0 failure
 
 ### Surface counting note (be precise)
 
-The full IDL is **82 instructions** (`artifacts/anchor/idl/agenc_coordination.json`).
-The spec/docs sometimes say "80" — the 82 includes the two `bid_book` /
-`bid_marketplace` initializers and `update_min_version`. `vote_dispute` was **retired**
-(P6.3) and is not in the IDL. The **canary surface is exactly 25** instructions,
+The full IDL is **84 instructions** (`artifacts/anchor/idl/agenc_coordination.json`).
+Older historical docs may say "77", "80", or "82"; those counts predate the final
+mainnet full-surface cut. `vote_dispute` was **retired** (P6.3) and is not in the
+IDL. The **canary surface is exactly 25** instructions,
 enforced by `scripts/check-canary-idl.mjs` (`npm run canary:check-idl`).
 
 ---
@@ -281,13 +282,11 @@ exit paths use `_for_exit` and stay open regardless. Both migrations are **idemp
 (re-runnable) and **multisig/upgrade-authority gated** (not permissionless). The strict
 size preconditions (§2 #8) ensure a corrupt/unexpected account is never reallocated.
 
-**Custody context the auditor should note:** the mainnet upgrade authority is currently a
-**single key** (`HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh` — confirm on-chain via
-`solana program show HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`;
-`docs/MAINNET_MAINLINE.md` records the live program id + branch policy). Moving the
-authority to a multisig (e.g. Squads) is a tracked human action (`PLAN.md` P8.5). Flag
-the single-key upgrade authority as a centralization risk in the report if warranted —
-it is a known, documented item, not a discovery.
+**Custody context the auditor should note:** the mainnet upgrade authority was moved
+to a **2-of-3 multisig** during the 2026-06-11 rollout. Confirm on-chain via
+`solana program show HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`; `docs/MAINNET_MAINLINE.md`
+records the live program id + branch policy and `docs/UPGRADE_AUTHORITY.md` records the
+custody runbook/status.
 
 ---
 
@@ -307,7 +306,7 @@ npm run artifacts:refresh && npm run artifacts:check
 # litesvm integration (runs the real .so)
 cd tests-integration && node --test
 
-# canary surface coherence (live surface == 25 instructions)
+# historical canary surface coherence (canary build == 25 instructions; no longer live on mainnet)
 npm run canary:build && npm run canary:idl && npm run canary:check-idl
 
 # SDK
@@ -329,7 +328,7 @@ cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test
 
 ## When the report arrives
 
-The external audit is **[HUMAN: commissions]**. When the report lands:
+When the external audit report lands:
 
 1. Place the report PDF/markdown under `docs/audit/` (e.g.
    `docs/audit/<firm>-<date>-report.md`).

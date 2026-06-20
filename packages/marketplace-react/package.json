@@ -1,7 +1,7 @@
 {
   "name": "@tetsuo-ai/marketplace-react",
   "version": "0.1.1",
-  "description": "Headless React hooks + themable components for the AgenC marketplace — provider, indexer-first read transport, and the P6.2-gated referrer config",
+  "description": "Headless React hooks + themable components for the AgenC marketplace — provider, indexer-first read transport, and live referrer config",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

@@ -41,15 +41,17 @@ export const EN_STRINGS = {
   "provider.missingSigner":
     "No signer is configured on <AgencProvider>. Connect a wallet or pass config.signer.",
 
-  // Referrer config validation (the P6.2 gate surface).
+  // Referrer config validation / capability surface.
   "referrer.invalidWallet":
     "Referrer wallet is not a valid base58 Solana address: {wallet}.",
   "referrer.invalidFeeBps":
     "Referrer feeBps must be an integer between {min} and {max} (basis points); got {feeBps}.",
   "referrer.notLive":
-    "This site earns a referral fee (pending protocol support).",
+    "Referral fee is not active for this hire.",
   "referrer.notLiveReason":
-    "Referral settlement is not yet deployed on this cluster (PLAN.md P6.2). Referrer config is accepted and validated but not injected into hires.",
+    "No referrer is configured for this provider.",
+  "referrer.earningsNotLiveReason":
+    "Referral settlement is live, but aggregated referrer earnings are not yet exposed by the indexer.",
 
   // Read transport.
   "transport.noReadSource":

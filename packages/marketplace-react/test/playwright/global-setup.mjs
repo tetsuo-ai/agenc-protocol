@@ -71,11 +71,11 @@ async function rpcHealthy(rpcUrl) {
 export default async function globalSetup() {
   // 1) Boot/converge the sandbox. Existing env files do NOT prove the validator
   // is up (e.g. after `down --purge`, env.json/fixtures.json survive but the
-  // ledger is wiped), so health-check the RPC and (re)boot when it is down or
-  // unseeded.
+  // ledger is wiped), so health-check the RPC and (re)boot when it is down,
+  // unseeded, or still running a stale repo-built program binary.
   let env = await readSandboxEnv();
   const healthy = env !== null && (await rpcHealthy(env.rpcUrl));
-  if (env === null || env.fixtures === null || !healthy) {
+  if (env === null || env.fixtures === null || !healthy || !env.programCurrent) {
     env = await start({ quiet: true });
   }
   const rpc = kit.createSolanaRpc(env.rpcUrl);

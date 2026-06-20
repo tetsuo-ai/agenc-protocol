@@ -10,8 +10,9 @@
  * - writes call the right client method with task-bound / signer-defaulted
  *   input and surface typed errors untouched (useHire, useSubmissionReview,
  *   useDispute);
- * - the P6.2 gate: useHire never injects a referrer and useReferrerEarnings
- *   returns the not-live zero state regardless of configured referrer;
+ * - referrers: useHire injects configured referrer terms and
+ *   useReferrerEarnings returns the not-live zero state until the earnings
+ *   indexer ships;
  * - useTaskStatus / useDispute read via their injected reader seam.
  */
 import { address, createNoopSigner } from "@solana/kit";
@@ -278,7 +279,7 @@ describe("useAgentTrackRecord", () => {
 });
 
 // ----------------------------------------------------------------------------
-// useHire (the P6.2 gate)
+// useHire
 // ----------------------------------------------------------------------------
 describe("useHire", () => {
   const hireArgs = {
@@ -304,7 +305,7 @@ describe("useHire", () => {
     expect(res.taskPda).toBeTruthy();
   });
 
-  it("NEVER injects a referrer (P6.2 gate): referrerInjected is false even with referrer configured", async () => {
+  it("injects a configured referrer into the hire input", async () => {
     const client = stubClient();
     const { result } = renderHook(() => useHire(), {
       wrapper: wrapper({
@@ -315,12 +316,11 @@ describe("useHire", () => {
       }),
     });
     const res = await result.current.hire(hireArgs);
-    expect(res.referrerInjected).toBe(false);
-    // The input passed to the client must carry NO referrer field.
+    expect(res.referrerInjected).toBe(true);
     const passed = (client.hireFromListing as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
-    expect(passed).not.toHaveProperty("referrer");
-    expect(passed).not.toHaveProperty("referrerFeeBps");
+    expect(passed).toHaveProperty("referrer", VALID_WALLET);
+    expect(passed).toHaveProperty("referrerFeeBps", 250);
   });
 
   it("surfaces a typed AgencError untouched", async () => {
@@ -517,9 +517,9 @@ describe("useWalletSigner", () => {
 });
 
 // ----------------------------------------------------------------------------
-// useReferrerEarnings (STRICT P6.2 gate)
+// useReferrerEarnings (indexer gate)
 // ----------------------------------------------------------------------------
-describe("useReferrerEarnings (P6.2 gate)", () => {
+describe("useReferrerEarnings (indexer gate)", () => {
   it("returns the not-live zero state and makes no request", () => {
     const { result } = renderHook(() => useReferrerEarnings(VALID_WALLET), {
       wrapper: wrapper({
