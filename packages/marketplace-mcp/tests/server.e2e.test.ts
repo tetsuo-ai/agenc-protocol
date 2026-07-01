@@ -196,12 +196,12 @@ describe("MCP server: tool registration", () => {
     }
   });
 
-  it("mutation opt-in adds the keyless prepare_* lifecycle tools (17 total)", async () => {
+  it("mutation opt-in adds the keyless prepare_* lifecycle tools (18 total)", async () => {
     const { client, close } = await connectClient({ enableMutations: true });
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name);
-      expect(names).toHaveLength(17);
+      expect(names).toHaveLength(18);
       expect(names).toContain("prepare_hire");
       expect(names).toContain("prepare_hire_humanless");
       expect(names).toContain("prepare_set_task_job_spec");
@@ -213,6 +213,7 @@ describe("MCP server: tool registration", () => {
       expect(names).toContain("prepare_cancel_task");
       expect(names).toContain("prepare_close_task");
       expect(names).toContain("prepare_rate_hire");
+      expect(names).toContain("prepare_create_service_listing");
       // prepare tools are not readOnly but are non-destructive (build, not send).
       const claim = tools.find((t) => t.name === "prepare_claim");
       expect(claim?.annotations?.readOnlyHint).toBe(false);

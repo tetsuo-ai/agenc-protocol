@@ -111,6 +111,7 @@ Cluster default RPCs: `mainnet` → `https://api.mainnet-beta.solana.com`, `devn
 | `prepare_cancel_task` | Build an **unsigned** cancel/refund transaction for eligible tasks. |
 | `prepare_close_task` | Build an **unsigned** close transaction for terminal tasks and listing-capacity cleanup. |
 | `prepare_rate_hire` | Build an **unsigned** buyer rating transaction for completed hires. |
+| `prepare_create_service_listing` | Build an **unsigned** `create_service_listing` transaction for provider supply. |
 
 Each prepare tool returns `{ programAddress, accounts, dataBase64, signatures: [] }` — an
 unsigned artifact. The empty `signatures` is the contract: the server signed nothing.
