@@ -16,6 +16,7 @@
 //    accept settles to the worker.
 // Plus a forced deterministic on-chain failure asserting AgencError hydration.
 import { describe, it, expect } from "vitest";
+import type { Address } from "@solana/kit";
 import {
   facade,
   findAgentPda,
@@ -30,6 +31,7 @@ import {
   findTaskJobSpecPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  getAgentRegistrationDecoder,
   getHireRecordDecoder,
   getHireRatingDecoder,
   getServiceListingDecoder,
@@ -54,6 +56,49 @@ import {
   accountData,
 } from "./harness.js";
 import { createLiteSvmTransport } from "./litesvm-transport.js";
+
+const BPS_DIVISOR = 10_000n;
+
+function balance(svm: ReturnType<typeof freshSvm>, account: Address): bigint {
+  return svm.getBalance(account) ?? 0n;
+}
+
+function expectLamportDelta(
+  svm: ReturnType<typeof freshSvm>,
+  account: Address,
+  before: bigint,
+  expected: bigint,
+) {
+  expect(balance(svm, account) - before).toBe(expected);
+}
+
+function advanceClockPast(
+  svm: ReturnType<typeof freshSvm>,
+  unixTimestamp: bigint,
+) {
+  const clock = svm.getClock();
+  clock.unixTimestamp = unixTimestamp + 1n;
+  svm.setClock(clock);
+}
+
+function calculateSettlementDeltas(input: {
+  amount: bigint;
+  effectiveProtocolFeeBps: number;
+  operatorFeeBps: number;
+  referrerFeeBps: number;
+}) {
+  const amount = input.amount;
+  const protocolFee =
+    (amount * BigInt(input.effectiveProtocolFeeBps)) / BPS_DIVISOR;
+  const operatorFee = (amount * BigInt(input.operatorFeeBps)) / BPS_DIVISOR;
+  const referrerFee = (amount * BigInt(input.referrerFeeBps)) / BPS_DIVISOR;
+  return {
+    protocolFee,
+    operatorFee,
+    referrerFee,
+    workerReward: amount - protocolFee - operatorFee - referrerFee,
+  };
+}
 
 describe("e2e: createMarketplaceClient drives the real program end-to-end", () => {
   it("runs the full hire flow — register x2, list, moderate, hire, claim, bond, settle — through client methods only", async () => {
@@ -465,10 +510,28 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(Array.from(submitted.proofHash)).toEqual(Array.from(proofHash));
     expect(Array.from(submitted.resultData)).toEqual(Array.from(resultData));
 
-    const workerBalBefore = svm.getBalance(provider.address) ?? 0n;
-    const treasuryBalBefore = svm.getBalance(admin.address) ?? 0n;
-    const operatorBalBefore = svm.getBalance(operator.address) ?? 0n;
-    const referrerBalBefore = svm.getBalance(referrer.address) ?? 0n;
+    const settlingTask = getTaskDecoder().decode(accountData(svm, task)!);
+    const expectedPayouts = calculateSettlementDeltas({
+      amount: settlingTask.rewardAmount,
+      // Fresh workers start below reputation discount tiers in this fixture.
+      effectiveProtocolFeeBps: settlingTask.protocolFeeBps,
+      operatorFeeBps: settlingTask.operatorFeeBps,
+      referrerFeeBps: settlingTask.referrerFeeBps,
+    });
+    expect(expectedPayouts.protocolFee).toBe(1_000_000n);
+    expect(expectedPayouts.operatorFee).toBe(5_000_000n);
+    expect(expectedPayouts.referrerFee).toBe(2_500_000n);
+    expect(expectedPayouts.workerReward).toBe(91_500_000n);
+
+    const workerAgentBeforeAccept = getAgentRegistrationDecoder().decode(
+      accountData(svm, providerAgent)!,
+    );
+    expect(workerAgentBeforeAccept.activeTasks).toBe(1);
+    const claimRentBefore = balance(svm, claim);
+    const workerBalBefore = balance(svm, provider.address);
+    const treasuryBalBefore = balance(svm, admin.address);
+    const operatorBalBefore = balance(svm, operator.address);
+    const referrerBalBefore = balance(svm, referrer.address);
     await buyerClient.acceptTaskResult({
       task,
       worker: providerAgent,
@@ -488,17 +551,39 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     ).toBe(SubmissionStatus.Accepted);
     expect(accountData(svm, claim)).toBeNull();
     expect(accountData(svm, escrow)).toBeNull();
-    expect(svm.getBalance(provider.address) ?? 0n).toBeGreaterThan(
+    expectLamportDelta(
+      svm,
+      provider.address,
       workerBalBefore,
+      expectedPayouts.workerReward + claimRentBefore,
     );
-    expect(svm.getBalance(admin.address) ?? 0n).toBeGreaterThan(
+    expectLamportDelta(
+      svm,
+      admin.address,
       treasuryBalBefore,
+      expectedPayouts.protocolFee,
     );
-    expect(svm.getBalance(operator.address) ?? 0n).toBeGreaterThan(
+    expectLamportDelta(
+      svm,
+      operator.address,
       operatorBalBefore,
+      expectedPayouts.operatorFee,
     );
-    expect(svm.getBalance(referrer.address) ?? 0n).toBeGreaterThan(
+    expectLamportDelta(
+      svm,
+      referrer.address,
       referrerBalBefore,
+      expectedPayouts.referrerFee,
+    );
+    const workerAgentAfterAccept = getAgentRegistrationDecoder().decode(
+      accountData(svm, providerAgent)!,
+    );
+    expect(workerAgentAfterAccept.activeTasks).toBe(0);
+    expect(workerAgentAfterAccept.tasksCompleted).toBe(
+      workerAgentBeforeAccept.tasksCompleted + 1n,
+    );
+    expect(workerAgentAfterAccept.totalEarned).toBe(
+      workerAgentBeforeAccept.totalEarned + expectedPayouts.workerReward,
     );
 
     await buyerClient.rateHire({
@@ -867,6 +952,399 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     ).toBe(SubmissionStatus.Accepted);
     expect(svm.getBalance(worker.address) ?? 0n).toBeGreaterThan(
       workerBalBefore,
+    );
+  });
+
+  it("rejects a CreatorReview submission without paying out escrow", async () => {
+    const svm = freshSvm();
+    const admin = await fundedSigner(svm);
+    const modAuth = await fundedSigner(svm);
+    const creator = await fundedSigner(svm);
+    const worker = await fundedSigner(svm);
+    await seedProtocolConfig(svm, admin.address);
+    await seedModerationConfig(svm, admin.address, modAuth.address, true);
+
+    const transport = createLiteSvmTransport(svm);
+    const creatorClient = createMarketplaceClient({ transport, signer: creator });
+    const workerClient = createMarketplaceClient({ transport, signer: worker });
+    const modClient = createMarketplaceClient({ transport, signer: modAuth });
+
+    const creatorAgentId = new Uint8Array(32).fill(111);
+    await creatorClient.registerAgent({
+      authority: creator,
+      agentId: creatorAgentId,
+      capabilities: 1n,
+      endpoint: "http://reject-creator.test",
+      metadataUri: null,
+      stakeAmount: 0n,
+    });
+    const [creatorAgent] = await findAgentPda({ agentId: creatorAgentId });
+
+    const workerAgentId = new Uint8Array(32).fill(112);
+    await workerClient.registerAgent({
+      authority: worker,
+      agentId: workerAgentId,
+      capabilities: 1n,
+      endpoint: "http://reject-worker.test",
+      metadataUri: null,
+      stakeAmount: 0n,
+    });
+    const [workerAgent] = await findAgentPda({ agentId: workerAgentId });
+
+    const taskId = new Uint8Array(32).fill(113);
+    const reward = 3_000_000n;
+    const now = svm.getClock().unixTimestamp;
+    await creatorClient.send([
+      await facade.createTask({
+        authority: creator,
+        creator,
+        creatorAgent,
+        taskId,
+        requiredCapabilities: 1n,
+        description: new Uint8Array(64).fill(114, 0, 32),
+        rewardAmount: reward,
+        maxWorkers: 1,
+        deadline: now + 3600n,
+        taskType: 0,
+        constraintHash: null,
+        minReputation: 0,
+        rewardMintArg: null,
+      }),
+    ]);
+    const [task] = await findTaskPda({ creator: creator.address, taskId });
+    const [escrow] = await findEscrowPda({ task });
+    const [hireRecord] = await findHireRecordPda({ task });
+    await creatorClient.send([
+      await facade.configureTaskValidation({
+        task,
+        creator,
+        hireRecord,
+        mode: 1,
+        reviewWindowSecs: 3600n,
+        validatorQuorum: 0,
+        attestor: null,
+      }),
+    ]);
+
+    const jobSpecHash = new Uint8Array(32).fill(115);
+    await modClient.send([
+      await facade.recordTaskModeration({
+        task,
+        moderator: modAuth,
+        jobSpecHash,
+        status: 0,
+        riskScore: 0,
+        categoryMask: 0n,
+        policyHash: new Uint8Array(32).fill(116),
+        scannerHash: new Uint8Array(32).fill(117),
+        expiresAt: 0n,
+      }),
+    ]);
+    await creatorClient.setTaskJobSpec({
+      task,
+      creator,
+      jobSpecHash,
+      jobSpecUri: "agenc://job-spec/sha256/reject",
+    });
+    await workerClient.claimTaskWithJobSpec({
+      task,
+      worker: workerAgent,
+      authority: worker,
+    });
+    await workerClient.submitTaskResult({
+      task,
+      worker: workerAgent,
+      authority: worker,
+      proofHash: new Uint8Array(32).fill(118),
+      resultData: new Uint8Array(64).fill(119),
+    });
+
+    const [claim] = await findClaimPda({ task, bidder: workerAgent });
+    const [submission] = await findTaskSubmissionPda({ claim });
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.PendingValidation,
+    );
+    expect(
+      getTaskSubmissionDecoder().decode(accountData(svm, submission)!).status,
+    ).toBe(SubmissionStatus.Submitted);
+    expect(
+      getAgentRegistrationDecoder().decode(accountData(svm, workerAgent)!)
+        .activeTasks,
+    ).toBe(1);
+
+    const escrowBefore = getTaskEscrowDecoder().decode(
+      accountData(svm, escrow)!,
+    );
+    const workerBalBefore = balance(svm, worker.address);
+    const treasuryBalBefore = balance(svm, admin.address);
+    const claimRentBefore = balance(svm, claim);
+    const rejectionHash = new Uint8Array(32).fill(120);
+    await creatorClient.rejectTaskResult({
+      task,
+      claim,
+      worker: workerAgent,
+      creator,
+      workerAuthority: worker.address,
+      rejectionHash,
+    });
+
+    const rejectedTask = getTaskDecoder().decode(accountData(svm, task)!);
+    expect(rejectedTask.status).toBe(TaskStatus.Open);
+    expect(rejectedTask.currentWorkers).toBe(0);
+    const rejectedSubmission = getTaskSubmissionDecoder().decode(
+      accountData(svm, submission)!,
+    );
+    expect(rejectedSubmission.status).toBe(SubmissionStatus.Rejected);
+    expect(Array.from(rejectedSubmission.rejectionHash)).toEqual(
+      Array.from(rejectionHash),
+    );
+    expect(accountData(svm, claim)).toBeNull();
+    const escrowAfter = getTaskEscrowDecoder().decode(accountData(svm, escrow)!);
+    expect(escrowAfter.amount).toBe(escrowBefore.amount);
+    expect(escrowAfter.distributed).toBe(escrowBefore.distributed);
+    expect(escrowAfter.isClosed).toBe(false);
+    expectLamportDelta(svm, worker.address, workerBalBefore, claimRentBefore);
+    expectLamportDelta(svm, admin.address, treasuryBalBefore, 0n);
+    const workerAgentAfterReject = getAgentRegistrationDecoder().decode(
+      accountData(svm, workerAgent)!,
+    );
+    expect(workerAgentAfterReject.activeTasks).toBe(0);
+    expect(workerAgentAfterReject.tasksCompleted).toBe(0n);
+    expect(workerAgentAfterReject.totalEarned).toBe(0n);
+  });
+
+  it("auto-accepts a humanless hire after review timeout with the same fee split", async () => {
+    const svm = freshSvm();
+    const admin = await fundedSigner(svm);
+    const moderator = await fundedSigner(svm);
+    const provider = await fundedSigner(svm);
+    const buyer = await fundedSigner(svm);
+    const operator = await fundedSigner(svm);
+    const referrer = await fundedSigner(svm);
+    const settler = await fundedSigner(svm);
+    await seedProtocolConfig(svm, admin.address);
+    await seedModerationConfig(svm, admin.address, moderator.address, true);
+
+    const transport = createLiteSvmTransport(svm);
+    const providerClient = createMarketplaceClient({
+      transport,
+      signer: provider,
+    });
+    const buyerClient = createMarketplaceClient({ transport, signer: buyer });
+    const moderatorClient = createMarketplaceClient({
+      transport,
+      signer: moderator,
+    });
+    const settlerClient = createMarketplaceClient({
+      transport,
+      signer: settler,
+    });
+
+    const providerAgentId = new Uint8Array(32).fill(121);
+    await providerClient.registerAgent({
+      authority: provider,
+      agentId: providerAgentId,
+      capabilities: 1n,
+      endpoint: "http://auto-provider.test",
+      metadataUri: null,
+      stakeAmount: 0n,
+    });
+    const [providerAgent] = await findAgentPda({ agentId: providerAgentId });
+
+    const listingId = new Uint8Array(32).fill(122);
+    const listingSpecHash = new Uint8Array(32).fill(123);
+    const price = 100_000_000n;
+    await providerClient.createServiceListing({
+      providerAgent,
+      authority: provider,
+      listingId,
+      name: "Timeout review",
+      category: "automation",
+      tags: ["auto", "review"],
+      specHash: listingSpecHash,
+      specUri: "agenc://job-spec/sha256/auto-listing",
+      price,
+      priceMint: null,
+      requiredCapabilities: 1n,
+      defaultDeadlineSecs: 3600n,
+      maxOpenJobs: 1,
+      operator: operator.address,
+      operatorFeeBps: 500,
+    });
+    const [listing] = await facade.findListingPda({ providerAgent, listingId });
+    await moderatorClient.send([
+      await facade.recordListingModeration({
+        moderator,
+        listing,
+        jobSpecHash: listingSpecHash,
+        status: 0,
+        riskScore: 0,
+        categoryMask: 0n,
+        policyHash: new Uint8Array(32).fill(124),
+        scannerHash: new Uint8Array(32).fill(125),
+        expiresAt: 0n,
+      }),
+    ]);
+
+    const taskId = new Uint8Array(32).fill(126);
+    await buyerClient.hireFromListingHumanless({
+      listing,
+      creator: buyer,
+      taskId,
+      expectedPrice: price,
+      expectedVersion: 1n,
+      reviewWindowSecs: 10n,
+      listingSpecHash,
+      referrer: referrer.address,
+      referrerFeeBps: 250,
+    });
+    const [task] = await findTaskPda({ creator: buyer.address, taskId });
+    const [escrow] = await findEscrowPda({ task });
+    const [hireRecord] = await findHireRecordPda({ task });
+    const [claim] = await findClaimPda({ task, bidder: providerAgent });
+
+    const jobSpecHash = new Uint8Array(32).fill(127);
+    await moderatorClient.send([
+      await facade.recordTaskModeration({
+        moderator,
+        task,
+        jobSpecHash,
+        status: 0,
+        riskScore: 0,
+        categoryMask: 0n,
+        policyHash: new Uint8Array(32).fill(128),
+        scannerHash: new Uint8Array(32).fill(129),
+        expiresAt: 0n,
+      }),
+    ]);
+    await buyerClient.setTaskJobSpec({
+      task,
+      creator: buyer,
+      jobSpecHash,
+      jobSpecUri: "agenc://job-spec/sha256/auto-task",
+    });
+    await providerClient.claimTaskWithJobSpec({
+      task,
+      worker: providerAgent,
+      authority: provider,
+    });
+    await providerClient.submitTaskResult({
+      task,
+      worker: providerAgent,
+      authority: provider,
+      proofHash: new Uint8Array(32).fill(130),
+      resultData: new Uint8Array(64).fill(131),
+    });
+
+    const [submission] = await findTaskSubmissionPda({ claim });
+    const submitted = getTaskSubmissionDecoder().decode(
+      accountData(svm, submission)!,
+    );
+    expect(submitted.status).toBe(SubmissionStatus.Submitted);
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.PendingValidation,
+    );
+    expect(
+      getAgentRegistrationDecoder().decode(accountData(svm, providerAgent)!)
+        .activeTasks,
+    ).toBe(1);
+
+    const tooEarly = await settlerClient
+      .autoAcceptTaskResult({
+        task,
+        worker: providerAgent,
+        treasury: admin.address,
+        creator: buyer.address,
+        workerAuthority: provider.address,
+        authority: settler,
+        hireRecord,
+        operator: operator.address,
+        referrer: referrer.address,
+      })
+      .catch((error: unknown) => error);
+    expect(tooEarly).toBeInstanceOf(AgencError);
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.PendingValidation,
+    );
+    expect(
+      getTaskSubmissionDecoder().decode(accountData(svm, submission)!).status,
+    ).toBe(SubmissionStatus.Submitted);
+
+    advanceClockPast(svm, submitted.reviewDeadlineAt);
+    svm.expireBlockhash();
+    const settlingTask = getTaskDecoder().decode(accountData(svm, task)!);
+    const expectedPayouts = calculateSettlementDeltas({
+      amount: settlingTask.rewardAmount,
+      // Fresh workers start below reputation discount tiers in this fixture.
+      effectiveProtocolFeeBps: settlingTask.protocolFeeBps,
+      operatorFeeBps: settlingTask.operatorFeeBps,
+      referrerFeeBps: settlingTask.referrerFeeBps,
+    });
+    expect(expectedPayouts.protocolFee).toBe(1_000_000n);
+    expect(expectedPayouts.operatorFee).toBe(5_000_000n);
+    expect(expectedPayouts.referrerFee).toBe(2_500_000n);
+    expect(expectedPayouts.workerReward).toBe(91_500_000n);
+    const workerAgentBeforeAccept = getAgentRegistrationDecoder().decode(
+      accountData(svm, providerAgent)!,
+    );
+    const claimRentBefore = balance(svm, claim);
+    const workerBalBefore = balance(svm, provider.address);
+    const treasuryBalBefore = balance(svm, admin.address);
+    const operatorBalBefore = balance(svm, operator.address);
+    const referrerBalBefore = balance(svm, referrer.address);
+    await settlerClient.autoAcceptTaskResult({
+      task,
+      worker: providerAgent,
+      treasury: admin.address,
+      creator: buyer.address,
+      workerAuthority: provider.address,
+      authority: settler,
+      hireRecord,
+      operator: operator.address,
+      referrer: referrer.address,
+    });
+
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.Completed,
+    );
+    expect(
+      getTaskSubmissionDecoder().decode(accountData(svm, submission)!).status,
+    ).toBe(SubmissionStatus.Accepted);
+    expect(accountData(svm, claim)).toBeNull();
+    expect(accountData(svm, escrow)).toBeNull();
+    expectLamportDelta(
+      svm,
+      provider.address,
+      workerBalBefore,
+      expectedPayouts.workerReward + claimRentBefore,
+    );
+    expectLamportDelta(
+      svm,
+      admin.address,
+      treasuryBalBefore,
+      expectedPayouts.protocolFee,
+    );
+    expectLamportDelta(
+      svm,
+      operator.address,
+      operatorBalBefore,
+      expectedPayouts.operatorFee,
+    );
+    expectLamportDelta(
+      svm,
+      referrer.address,
+      referrerBalBefore,
+      expectedPayouts.referrerFee,
+    );
+    const workerAgentAfterAccept = getAgentRegistrationDecoder().decode(
+      accountData(svm, providerAgent)!,
+    );
+    expect(workerAgentAfterAccept.activeTasks).toBe(0);
+    expect(workerAgentAfterAccept.tasksCompleted).toBe(
+      workerAgentBeforeAccept.tasksCompleted + 1n,
+    );
+    expect(workerAgentAfterAccept.totalEarned).toBe(
+      workerAgentBeforeAccept.totalEarned + expectedPayouts.workerReward,
     );
   });
 
