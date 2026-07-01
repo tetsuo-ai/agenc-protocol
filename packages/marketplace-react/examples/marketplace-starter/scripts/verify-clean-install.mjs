@@ -221,7 +221,7 @@ async function assertInstalledFromPackageArtifacts(appDir) {
   );
   if (manifest.version === "0.1.1") {
     throw new Error(
-      "Clean starter requires an unpublished marketplace-react artifact newer than 0.1.1.",
+      "Clean starter requires a marketplace-react lifecycle artifact newer than 0.1.1.",
     );
   }
 }

@@ -159,11 +159,9 @@ aliases, rewrites the two AgenC dependencies to those package tarballs, asserts
 the expected package exports, then runs install, typecheck, tests, and build
 from the copied app. It proves the starter can consume package artifacts instead
 of private `agenc.ag` app internals. It does not prove public npm registry
-installability until the React package version containing the lifecycle hooks is
-published, and it does not perform a live wallet/devnet lifecycle.
+installability or a live wallet/devnet lifecycle.
 
-After publishing the React lifecycle package, verify the same starter against the
-public npm registry:
+Verify the same starter against the public npm registry:
 
 ```bash
 npm run verify:registry
@@ -175,9 +173,8 @@ versions, removes source aliases, rejects local/private references, asserts the
 installed packages resolve from `https://registry.npmjs.org/` with integrity
 metadata, checks the lifecycle hook declarations/exports, then runs install,
 typecheck, tests, and build. By default it expects the local package versions to
-exist on npm. Until `@tetsuo-ai/marketplace-react@0.2.0` or later is published,
-this command should fail early and is the release gate that keeps registry
-installability unclaimed.
+exist on npm. This is the post-publish release gate for public registry
+installability, and it still does not perform a live wallet/devnet lifecycle.
 
 ## Type Check In This Monorepo
 
