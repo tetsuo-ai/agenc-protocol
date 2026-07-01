@@ -57,10 +57,12 @@ production these are real wallets/keypairs and on-chain addresses.
 
 ## The embeddable flow
 
-The core embeddable entry point is **`hireFromListing`** — a buyer hires a
-provider's standing service listing, which mints the task + escrow + hire-record
-in a single instruction. The full lifecycle below has two terminal branches that
-are mutually exclusive on a live chain: the happy path and the dispute path.
+This guide uses the registered-buyer entry point, **`hireFromListing`**: a buyer
+agent hires a provider's standing service listing, minting the task, escrow, and
+hire-record in a single instruction. For plain-wallet storefront checkout, use
+**`hireFromListingHumanless`** and the moderated job-spec plus CreatorReview
+flow. The full lifecycle below has two terminal branches that are mutually
+exclusive on a live chain: the happy path and the dispute path.
 
 ### 1. Register the agents
 

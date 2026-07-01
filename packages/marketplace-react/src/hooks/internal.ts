@@ -12,7 +12,12 @@
  * @module hooks/internal
  */
 import { t } from "../strings/index.js";
-import type { Address, MarketplaceClient } from "../types.js";
+import type {
+  Address,
+  AgencContextValue,
+  MarketplaceClient,
+  TransactionSigner,
+} from "../types.js";
 
 /** Root namespace for every cache key this package writes. */
 export const QUERY_KEY_ROOT = "agenc" as const;
@@ -64,7 +69,74 @@ export function requireClient(
   return client;
 }
 
+export type MutationStatus = "idle" | "pending" | "success" | "error";
+
+export function mutationStatusOf(mutation: {
+  isPending: boolean;
+  isError: boolean;
+  isSuccess: boolean;
+}): MutationStatus {
+  if (mutation.isPending) return "pending";
+  if (mutation.isError) return "error";
+  if (mutation.isSuccess) return "success";
+  return "idle";
+}
+
 /** Coerce an `Address | string` to its string form for use as a cache key. */
 export function pdaKey(pda: Address | string): string {
   return String(pda);
+}
+
+export interface ReferrerArgs {
+  referrer?: Address;
+  referrerFeeBps?: number;
+}
+
+export interface ResolvedReferrerArgs {
+  referrerArgs: ReferrerArgs;
+  referrerInjected: boolean;
+}
+
+export function resolveReferrerArgs(
+  ctx: Pick<AgencContextValue, "resolveReferrerCapability">,
+): ResolvedReferrerArgs {
+  const capability = ctx.resolveReferrerCapability();
+  if (!capability.live || !capability.referrer) {
+    return { referrerArgs: {}, referrerInjected: false };
+  }
+  return {
+    referrerArgs: {
+      referrer: capability.referrer.wallet,
+      referrerFeeBps: capability.referrer.feeBps,
+    },
+    referrerInjected: true,
+  };
+}
+
+export type SignerOrAddress = TransactionSigner | Address;
+
+export function signerAddress(signerOrAddress: SignerOrAddress): Address {
+  if (typeof signerOrAddress === "string") {
+    return signerOrAddress;
+  }
+  if (
+    typeof signerOrAddress === "object" &&
+    signerOrAddress !== null &&
+    "address" in signerOrAddress &&
+    typeof signerOrAddress.address === "string"
+  ) {
+    return signerOrAddress.address;
+  }
+  throw new Error("Expected a TransactionSigner or Address with an address field.");
+}
+
+export function withoutReferrerArgs<T extends object>(
+  input: T,
+): Omit<T, "referrer" | "referrerFeeBps"> {
+  const {
+    referrer: _referrer,
+    referrerFeeBps: _referrerFeeBps,
+    ...rest
+  } = input as T & { referrer?: unknown; referrerFeeBps?: unknown };
+  return rest;
 }

@@ -751,6 +751,29 @@ describe("custom program error hex-prefix parsing", () => {
   });
 });
 
+describe("MarketplaceClient first-party lifecycle surface", () => {
+  it("exposes humanless hire, activation, review, cleanup, and rating methods", async () => {
+    const transport = fakeTransport();
+    const signer = await generateKeyPairSigner();
+    const client = createMarketplaceClient({ transport, signer });
+
+    for (const name of [
+      "hireFromListingHumanless",
+      "setTaskJobSpec",
+      "claimTaskWithJobSpec",
+      "submitTaskResult",
+      "acceptTaskResult",
+      "rejectTaskResult",
+      "autoAcceptTaskResult",
+      "cancelTask",
+      "closeTask",
+      "rateHire",
+    ] as const) {
+      expect(typeof client[name]).toBe("function");
+    }
+  });
+});
+
 describe("withReferrerDefault (P6.2 demand-side referral default)", () => {
   const REF = address("11111111111111111111111111111112");
   const OTHER = address("11111111111111111111111111111113");

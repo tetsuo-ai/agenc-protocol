@@ -158,9 +158,10 @@ export async function main() {
   // The listing PDA the buyer will hire from (derived from provider + listingId).
   const [listing] = await facade.findListingPda({ providerAgent, listingId });
 
-  // -- 3. Buyer hires from the listing ------------------------------------
-  // hire_from_listing is the core embeddable entry point: it mints the task +
-  // escrow + hire-record in ONE instruction. Pass `listingSpecHash` so the
+  // -- 3. Registered buyer hires from the listing -------------------------
+  // hire_from_listing is the registered-agent buyer path: it mints the task +
+  // escrow + hire-record in ONE instruction. Use hire_from_listing_humanless
+  // for plain-wallet storefront checkout. Pass `listingSpecHash` so the
   // facade derives the moderation attestation PDA (fail-closed gate); omit it
   // only when the gate is disabled. `authority` must equal `creator` (#375).
   const hireIx = await facade.hireFromListing({

@@ -1,7 +1,8 @@
 # @tetsuo-ai/marketplace-sdk
 
-Embeddable TypeScript SDK for the **AgenC marketplace** — a Solana program for hiring agents,
-escrowed task settlement, completion bonds, and dispute resolution. Built on
+Embeddable TypeScript SDK for the **AgenC marketplace** — a Solana program for
+agent service listings, humanless checkout, moderated job specs, claims,
+CreatorReview settlement, close/rate cleanup, and payout routing. Built on
 [`@solana/kit`](https://github.com/anza-xyz/kit).
 
 - **Generated core** — instruction builders, account decoders, PDA helpers, and error codes
@@ -38,10 +39,14 @@ const ix = await facade.registerAgent({
 // ...append to a transaction message, sign, and send with your RPC.
 ```
 
-The full embeddable flow (register → create listing → hire → post bond →
-submit/accept, plus the dispute path) is in
+The full embeddable core flow (register → create listing → humanless hire →
+pin a moderated job spec → claim → submit → accept/close/rate) is in
 [`examples/embeddable-marketplace.ts`](./examples/embeddable-marketplace.ts), and the
 getting-started guide is in [`docs/guides/quickstart.md`](./docs/guides/quickstart.md).
+Advanced program primitives such as completion bonds, disputes, bids,
+governance, reputation staking, and ZK are available through the facade or
+generated client where implemented; treat them as advanced integration surfaces
+unless your product adds matching UX, policy, and tests.
 
 ## Local sandbox — `@tetsuo-ai/marketplace-sdk/testing`
 
@@ -273,7 +278,7 @@ localhost with **zero code changes**. The same seam later retargets to devnet
 | Path | What |
 |------|------|
 | `src/generated/` | Codama output — `@solana/kit` client (instructions, accounts, pdas, errors). Do not edit. |
-| `src/facade/` | Hand-written ergonomic wrappers (agents, listings, tasks, bonds, disputes, moderation, bids, governance, reputation). |
+| `src/facade/` | Hand-written ergonomic wrappers for the core lifecycle, plus advanced wrappers for bonds, disputes, moderation, bids, governance, and reputation where implemented. |
 | `tests/` | Structural tests (program address, account order, data round-trip). |
 | `tests-e2e/` | Real on-chain tests — execute the compiled program in [litesvm](https://github.com/LiteSVM/litesvm). |
 | `examples/` | Compiled, type-checked usage examples. |
@@ -298,9 +303,11 @@ the diff; CI (`.github/workflows/sdk.yml`) runs the drift gate, typecheck, and t
 
 ## Status
 
-Pre-1.0. The generated client covers all program instructions; the facade wraps every
-instruction except the intentionally-omitted `claim_task` (fail-closed in the program) and
-`complete_task_private` (ZK). On-chain coverage is via litesvm e2e tests.
+Pre-1.0. The generated client covers all program instructions; the facade wraps the
+core marketplace lifecycle and most advanced instruction groups. It intentionally
+omits legacy `claim_task` (fail-closed in the program) and keeps
+`complete_task_private` on the lower-level generated surface until ZK product
+configuration is enabled. On-chain coverage is via litesvm e2e tests.
 
 ## License
 

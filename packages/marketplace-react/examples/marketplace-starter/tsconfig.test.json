@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "react": ["../../../../node_modules/react/index.js"],
+      "react/jsx-runtime": ["../../../../node_modules/react/jsx-runtime.js"],
+      "react-dom": ["../../../../node_modules/react-dom/index.js"],
+      "react-dom/client": ["../../../../node_modules/react-dom/client.js"],
+      "react-dom/test-utils": ["../../../../node_modules/react-dom/test-utils.js"],
+      "@tetsuo-ai/marketplace-react": ["../../src/index.ts"],
+      "@tetsuo-ai/marketplace-react/hooks": ["../../src/hooks/index.ts"],
+      "@tetsuo-ai/marketplace-react/signers": ["../../src/signers/index.ts"],
+      "@tetsuo-ai/marketplace-sdk": ["../../../sdk-ts/src/index.ts"]
+    }
+  }
+}

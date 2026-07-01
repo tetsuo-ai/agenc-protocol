@@ -63,6 +63,49 @@ export {
   type UseSubmissionReviewResult,
 } from "./useSubmissionReview.js";
 export {
+  useTaskActivation,
+  type TaskActivationInput,
+  type TaskActivationStatus,
+  type UseTaskActivationResult,
+} from "./useTaskActivation.js";
+export {
+  useHumanlessHireFlow,
+  type HumanlessHireFlowActivationInput,
+  type HumanlessHireFlowCreator,
+  type HumanlessHireFlowHireInput,
+  type HumanlessHireFlowHost,
+  type HumanlessHireFlowHostInput,
+  type HumanlessHireFlowInput,
+  type HumanlessHireFlowJobSpecHash,
+  type HumanlessHireFlowModerationResult,
+  type HumanlessHireFlowPhase,
+  type HumanlessHireFlowProgress,
+  type HumanlessHireFlowResult,
+  type HumanlessHireFlowStatus,
+  type UseHumanlessHireFlowResult,
+} from "./useHumanlessHireFlow.js";
+export {
+  useTaskWork,
+  type ClaimTaskInput,
+  type SubmitTaskResultInput,
+  type TaskWorkStatus,
+  type UseTaskWorkResult,
+} from "./useTaskWork.js";
+export {
+  useTaskLifecycle,
+  type AutoAcceptTaskResultInput,
+  type CancelTaskInput,
+  type CloseTaskInput,
+  type TaskLifecycleStatus,
+  type UseTaskLifecycleResult,
+} from "./useTaskLifecycle.js";
+export {
+  useRateHire,
+  type RateHireInput,
+  type RateHireStatus,
+  type UseRateHireResult,
+} from "./useRateHire.js";
+export {
   useDispute,
   type DisputeReader,
   type DisputeStatus,

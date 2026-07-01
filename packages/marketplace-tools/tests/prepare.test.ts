@@ -68,11 +68,49 @@ describe("prepare_hire handler", () => {
   });
 });
 
+describe("prepare_hire_humanless handler", () => {
+  it("returns an unsigned humanless hire instruction and exposes the buyer signer meta", async () => {
+    const ix = (await getTool("prepare_hire_humanless")!.handler(
+      {
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        taskId: HEX32,
+        expectedPrice: "50000000",
+        expectedVersion: "4",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.signatures).toEqual([]);
+    const buyer = ix.accounts.find((a) => a.address === A_AUTHORITY);
+    expect(buyer?.role.signer).toBe(true);
+  });
+});
+
+describe("prepare_set_task_job_spec handler", () => {
+  it("returns an unsigned activation instruction", async () => {
+    const ix = (await getTool("prepare_set_task_job_spec")!.handler(
+      {
+        task: A_TASK_PDA,
+        creator: A_AUTHORITY,
+        jobSpecHash: HEX32,
+        jobSpecUri: "agenc://job-spec/sha256/test",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.signatures).toEqual([]);
+    const creator = ix.accounts.find((a) => a.address === A_AUTHORITY);
+    expect(creator?.role.signer).toBe(true);
+  });
+});
+
 describe("prepare_claim handler", () => {
   it("returns an unsigned claim instruction with no signatures", async () => {
     const ix = (await getTool("prepare_claim")!.handler(
       {
         task: A_TASK_PDA,
+        claim: A_TASK_PDA,
         worker: A_PROVIDER,
         workerAuthority: A_AUTHORITY,
       },
@@ -82,6 +120,57 @@ describe("prepare_claim handler", () => {
     expect(ix.signatures).toEqual([]);
     const auth = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(auth!.role.signer).toBe(true);
+  });
+});
+
+describe("review/cleanup/rating prepare handlers", () => {
+  it.each([
+    [
+      "prepare_accept_task_result",
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        treasury: A_AUTHORITY,
+        creator: A_AUTHORITY,
+      },
+    ],
+    [
+      "prepare_reject_task_result",
+      {
+        task: A_TASK_PDA,
+        claim: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        creator: A_AUTHORITY,
+        rejectionHash: HEX32,
+      },
+    ],
+    [
+      "prepare_auto_accept_task_result",
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        treasury: A_AUTHORITY,
+        creator: A_AUTHORITY,
+        authority: A_AUTHORITY,
+      },
+    ],
+    ["prepare_cancel_task", { task: A_TASK_PDA, authority: A_AUTHORITY }],
+    ["prepare_close_task", { task: A_TASK_PDA, authority: A_AUTHORITY }],
+    [
+      "prepare_rate_hire",
+      { task: A_TASK_PDA, listing: A_LISTING_PDA, buyer: A_AUTHORITY, score: 5 },
+    ],
+  ])("%s returns an unsigned instruction", async (toolName, args) => {
+    const ix = (await getTool(toolName)!.handler(
+      args as never,
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.signatures).toEqual([]);
+    expect(ix.dataBase64.length).toBeGreaterThan(0);
   });
 });
 

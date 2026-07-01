@@ -19,16 +19,31 @@ import { describe, it, expect } from "vitest";
 import {
   facade,
   findAgentPda,
+  findEscrowPda,
   findTaskPda,
   findHireRecordPda,
+  findHireRatingPda,
   findCompletionBondPda,
+  findCreatorCompletionBondPda,
+  findWorkerCompletionBondPda,
   findClaimPda,
+  findTaskJobSpecPda,
   findTaskSubmissionPda,
+  findTaskValidationConfigPda,
+  getHireRecordDecoder,
+  getHireRatingDecoder,
+  getServiceListingDecoder,
+  getTaskClaimDecoder,
   getTaskDecoder,
+  getTaskEscrowDecoder,
+  getTaskJobSpecDecoder,
   getTaskSubmissionDecoder,
+  getTaskValidationConfigDecoder,
   TaskStatus,
   SubmissionStatus,
+  ValidationMode,
   AGENC_COORDINATION_ERROR__INVALID_CAPABILITIES,
+  AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED,
 } from "../src/index.js";
 import { AgencError, createMarketplaceClient } from "../src/client/index.js";
 import {
@@ -214,6 +229,506 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     // both bonds were refunded + closed at settlement
     expect(accountData(svm, creatorBond)).toBeNull();
     expect(accountData(svm, workerBond)).toBeNull();
+  });
+
+  it("runs the humanless listing hire CreatorReview flow through accept, rate, and close", async () => {
+    const svm = freshSvm();
+    const admin = await fundedSigner(svm);
+    const moderator = await fundedSigner(svm);
+    const provider = await fundedSigner(svm);
+    const buyer = await fundedSigner(svm);
+    const operator = await fundedSigner(svm);
+    const referrer = await fundedSigner(svm);
+    await seedProtocolConfig(svm, admin.address);
+    await seedModerationConfig(svm, admin.address, moderator.address, true);
+
+    const transport = createLiteSvmTransport(svm);
+    const providerClient = createMarketplaceClient({
+      transport,
+      signer: provider,
+    });
+    const buyerClient = createMarketplaceClient({ transport, signer: buyer });
+    const moderatorClient = createMarketplaceClient({
+      transport,
+      signer: moderator,
+    });
+
+    const providerAgentId = new Uint8Array(32).fill(51);
+    await providerClient.registerAgent({
+      authority: provider,
+      agentId: providerAgentId,
+      capabilities: 1n,
+      endpoint: "http://humanless-provider.test",
+      metadataUri: null,
+      stakeAmount: 0n,
+    });
+    const [providerAgent] = await findAgentPda({ agentId: providerAgentId });
+
+    const listingId = new Uint8Array(32).fill(52);
+    const listingSpecHash = new Uint8Array(32).fill(53);
+    const price = 100_000_000n;
+    await providerClient.createServiceListing({
+      providerAgent,
+      authority: provider,
+      listingId,
+      name: "Humanless review",
+      category: "automation",
+      tags: ["humanless", "review"],
+      specHash: listingSpecHash,
+      specUri: "agenc://job-spec/sha256/humanless-listing",
+      price,
+      priceMint: null,
+      requiredCapabilities: 1n,
+      defaultDeadlineSecs: 3600n,
+      maxOpenJobs: 1,
+      operator: operator.address,
+      operatorFeeBps: 500,
+    });
+    const [listing] = await facade.findListingPda({ providerAgent, listingId });
+
+    await moderatorClient.send([
+      await facade.recordListingModeration({
+        moderator,
+        listing,
+        jobSpecHash: listingSpecHash,
+        status: 0,
+        riskScore: 0,
+        categoryMask: 0n,
+        policyHash: new Uint8Array(32).fill(54),
+        scannerHash: new Uint8Array(32).fill(55),
+        expiresAt: 0n,
+      }),
+    ]);
+
+    const taskId = new Uint8Array(32).fill(56);
+    await buyerClient.hireFromListingHumanless({
+      listing,
+      creator: buyer,
+      taskId,
+      expectedPrice: price,
+      expectedVersion: 1n,
+      reviewWindowSecs: 3600n,
+      listingSpecHash,
+      referrer: referrer.address,
+      referrerFeeBps: 250,
+    });
+
+    const [task] = await findTaskPda({ creator: buyer.address, taskId });
+    const [escrow] = await findEscrowPda({ task });
+    const [hireRecord] = await findHireRecordPda({ task });
+    const [claim] = await findClaimPda({ task, bidder: providerAgent });
+    const [taskJobSpec] = await findTaskJobSpecPda({ task });
+    const [taskValidationConfig] = await findTaskValidationConfigPda({ task });
+
+    let decodedTask = getTaskDecoder().decode(accountData(svm, task)!);
+    expect(decodedTask.status).toBe(TaskStatus.Open);
+    expect(decodedTask.creator).toBe(buyer.address);
+    expect(decodedTask.rewardAmount).toBe(price);
+    expect(decodedTask.maxWorkers).toBe(1);
+    expect(decodedTask.operator).toBe(operator.address);
+    expect(decodedTask.operatorFeeBps).toBe(500);
+    expect(decodedTask.referrer).toBe(referrer.address);
+    expect(decodedTask.referrerFeeBps).toBe(250);
+
+    const decodedEscrow = getTaskEscrowDecoder().decode(
+      accountData(svm, escrow)!,
+    );
+    expect(decodedEscrow.task).toBe(task);
+    expect(decodedEscrow.amount).toBe(price);
+    expect(decodedEscrow.distributed).toBe(0n);
+    expect(decodedEscrow.isClosed).toBe(false);
+
+    const decodedValidation = getTaskValidationConfigDecoder().decode(
+      accountData(svm, taskValidationConfig)!,
+    );
+    expect(decodedValidation.task).toBe(task);
+    expect(decodedValidation.creator).toBe(buyer.address);
+    expect(decodedValidation.mode).toBe(ValidationMode.CreatorReview);
+    expect(decodedValidation.reviewWindowSecs).toBe(3600n);
+
+    let decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.openJobs).toBe(1);
+    expect(decodedListing.totalHires).toBe(1n);
+    expect(decodedListing.totalRating).toBe(0n);
+    expect(decodedListing.ratingCount).toBe(0);
+
+    const capacityBlocked = await buyerClient
+      .hireFromListingHumanless({
+        listing,
+        creator: buyer,
+        taskId: new Uint8Array(32).fill(62),
+        expectedPrice: price,
+        expectedVersion: decodedListing.version,
+        reviewWindowSecs: 3600n,
+        listingSpecHash,
+      })
+      .catch((error: unknown) => error);
+    expect(capacityBlocked).toBeInstanceOf(AgencError);
+
+    const decodedHireRecord = getHireRecordDecoder().decode(
+      accountData(svm, hireRecord)!,
+    );
+    expect(decodedHireRecord.task).toBe(task);
+    expect(decodedHireRecord.listing).toBe(listing);
+    expect(decodedHireRecord.operator).toBe(operator.address);
+    expect(decodedHireRecord.operatorFeeBps).toBe(500);
+    expect(decodedHireRecord.referrer).toBe(referrer.address);
+    expect(decodedHireRecord.referrerFeeBps).toBe(250);
+
+    const prematureClaim = await providerClient
+      .claimTaskWithJobSpec({
+        task,
+        worker: providerAgent,
+        authority: provider,
+      })
+      .catch((error: unknown) => error);
+    expect(prematureClaim).toBeInstanceOf(AgencError);
+    if (prematureClaim instanceof AgencError) {
+      const isMissingJobSpecPointer =
+        prematureClaim.code === AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED ||
+        prematureClaim.logs.join("\n").includes("AccountNotInitialized");
+      expect(isMissingJobSpecPointer).toBe(true);
+    }
+    decodedTask = getTaskDecoder().decode(accountData(svm, task)!);
+    expect(decodedTask.status).toBe(TaskStatus.Open);
+    expect(decodedTask.currentWorkers).toBe(0);
+    expect(accountData(svm, claim)).toBeNull();
+
+    const jobSpecHash = new Uint8Array(32).fill(57);
+    const jobSpecUri = "agenc://job-spec/sha256/humanless-task";
+    await moderatorClient.send([
+      await facade.recordTaskModeration({
+        moderator,
+        task,
+        jobSpecHash,
+        status: 0,
+        riskScore: 0,
+        categoryMask: 0n,
+        policyHash: new Uint8Array(32).fill(58),
+        scannerHash: new Uint8Array(32).fill(59),
+        expiresAt: 0n,
+      }),
+    ]);
+    await buyerClient.setTaskJobSpec({
+      task,
+      creator: buyer,
+      jobSpecHash,
+      jobSpecUri,
+    });
+    const decodedJobSpec = getTaskJobSpecDecoder().decode(
+      accountData(svm, taskJobSpec)!,
+    );
+    expect(decodedJobSpec.task).toBe(task);
+    expect(decodedJobSpec.creator).toBe(buyer.address);
+    expect(Array.from(decodedJobSpec.jobSpecHash)).toEqual(
+      Array.from(jobSpecHash),
+    );
+    expect(decodedJobSpec.jobSpecUri).toBe(jobSpecUri);
+
+    svm.expireBlockhash();
+    await providerClient.claimTaskWithJobSpec({
+      task,
+      worker: providerAgent,
+      authority: provider,
+    });
+    decodedTask = getTaskDecoder().decode(accountData(svm, task)!);
+    expect(decodedTask.status).toBe(TaskStatus.InProgress);
+    expect(decodedTask.currentWorkers).toBe(1);
+    const decodedClaim = getTaskClaimDecoder().decode(accountData(svm, claim)!);
+    expect(decodedClaim.task).toBe(task);
+    expect(decodedClaim.worker).toBe(providerAgent);
+    expect(decodedClaim.isCompleted).toBe(false);
+    expect(decodedClaim.isValidated).toBe(false);
+
+    const proofHash = new Uint8Array(32).fill(60);
+    const resultData = new Uint8Array(64).fill(61);
+    await providerClient.submitTaskResult({
+      task,
+      worker: providerAgent,
+      authority: provider,
+      proofHash,
+      resultData,
+    });
+    const [submission] = await findTaskSubmissionPda({ claim });
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.PendingValidation,
+    );
+    const submitted = getTaskSubmissionDecoder().decode(
+      accountData(svm, submission)!,
+    );
+    expect(submitted.task).toBe(task);
+    expect(submitted.claim).toBe(claim);
+    expect(submitted.worker).toBe(providerAgent);
+    expect(submitted.status).toBe(SubmissionStatus.Submitted);
+    expect(Array.from(submitted.proofHash)).toEqual(Array.from(proofHash));
+    expect(Array.from(submitted.resultData)).toEqual(Array.from(resultData));
+
+    const workerBalBefore = svm.getBalance(provider.address) ?? 0n;
+    const treasuryBalBefore = svm.getBalance(admin.address) ?? 0n;
+    const operatorBalBefore = svm.getBalance(operator.address) ?? 0n;
+    const referrerBalBefore = svm.getBalance(referrer.address) ?? 0n;
+    await buyerClient.acceptTaskResult({
+      task,
+      worker: providerAgent,
+      creator: buyer,
+      treasury: admin.address,
+      workerAuthority: provider.address,
+      hireRecord,
+      operator: operator.address,
+      referrer: referrer.address,
+    });
+
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.Completed,
+    );
+    expect(
+      getTaskSubmissionDecoder().decode(accountData(svm, submission)!).status,
+    ).toBe(SubmissionStatus.Accepted);
+    expect(accountData(svm, claim)).toBeNull();
+    expect(accountData(svm, escrow)).toBeNull();
+    expect(svm.getBalance(provider.address) ?? 0n).toBeGreaterThan(
+      workerBalBefore,
+    );
+    expect(svm.getBalance(admin.address) ?? 0n).toBeGreaterThan(
+      treasuryBalBefore,
+    );
+    expect(svm.getBalance(operator.address) ?? 0n).toBeGreaterThan(
+      operatorBalBefore,
+    );
+    expect(svm.getBalance(referrer.address) ?? 0n).toBeGreaterThan(
+      referrerBalBefore,
+    );
+
+    await buyerClient.rateHire({
+      task,
+      listing,
+      buyer,
+      score: 5,
+    });
+    const [hireRating] = await findHireRatingPda({ task });
+    const decodedRating = getHireRatingDecoder().decode(
+      accountData(svm, hireRating)!,
+    );
+    expect(decodedRating.task).toBe(task);
+    expect(decodedRating.listing).toBe(listing);
+    expect(decodedRating.buyer).toBe(buyer.address);
+    expect(decodedRating.score).toBe(5);
+
+    decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.totalRating).toBe(5n);
+    expect(decodedListing.ratingCount).toBe(1);
+    expect(decodedListing.openJobs).toBe(1);
+
+    const [creatorCompletionBond] = await findCreatorCompletionBondPda({
+      task,
+      creator: buyer.address,
+    });
+    const [workerCompletionBond] = await findWorkerCompletionBondPda({
+      task,
+      workerAuthority: provider.address,
+    });
+    await buyerClient.closeTask({
+      task,
+      hireRecord,
+      listing,
+      creatorCompletionBond,
+      workerCompletionBond,
+      authority: buyer,
+    });
+
+    decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.openJobs).toBe(0);
+    expect(decodedListing.totalHires).toBe(1n);
+    expect(decodedListing.totalRating).toBe(5n);
+    expect(decodedListing.ratingCount).toBe(1);
+    expect(accountData(svm, hireRecord)).toBeNull();
+    expect(accountData(svm, taskJobSpec)).toBeNull();
+    expect(accountData(svm, task)).toBeNull();
+
+    await buyerClient.hireFromListingHumanless({
+      listing,
+      creator: buyer,
+      taskId: new Uint8Array(32).fill(63),
+      expectedPrice: price,
+      expectedVersion: decodedListing.version,
+      reviewWindowSecs: 3600n,
+      listingSpecHash,
+    });
+    decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.openJobs).toBe(1);
+    expect(decodedListing.totalHires).toBe(2n);
+  });
+
+  it("cancels a funded-but-unactivated humanless hire, then closes it to free listing capacity", async () => {
+    const svm = freshSvm();
+    const admin = await fundedSigner(svm);
+    const moderator = await fundedSigner(svm);
+    const provider = await fundedSigner(svm);
+    const buyer = await fundedSigner(svm);
+    await seedProtocolConfig(svm, admin.address);
+    await seedModerationConfig(svm, admin.address, moderator.address, true);
+
+    const transport = createLiteSvmTransport(svm);
+    const providerClient = createMarketplaceClient({
+      transport,
+      signer: provider,
+    });
+    const buyerClient = createMarketplaceClient({ transport, signer: buyer });
+    const moderatorClient = createMarketplaceClient({
+      transport,
+      signer: moderator,
+    });
+
+    const providerAgentId = new Uint8Array(32).fill(64);
+    await providerClient.registerAgent({
+      authority: provider,
+      agentId: providerAgentId,
+      capabilities: 1n,
+      endpoint: "http://cancel-provider.test",
+      metadataUri: null,
+      stakeAmount: 0n,
+    });
+    const [providerAgent] = await findAgentPda({ agentId: providerAgentId });
+
+    const listingId = new Uint8Array(32).fill(65);
+    const listingSpecHash = new Uint8Array(32).fill(66);
+    const price = 75_000_000n;
+    await providerClient.createServiceListing({
+      providerAgent,
+      authority: provider,
+      listingId,
+      name: "Cancelable humanless hire",
+      category: "automation",
+      tags: ["cancel", "activation"],
+      specHash: listingSpecHash,
+      specUri: "agenc://job-spec/sha256/cancel-listing",
+      price,
+      priceMint: null,
+      requiredCapabilities: 1n,
+      defaultDeadlineSecs: 3600n,
+      maxOpenJobs: 1,
+      operator: null,
+      operatorFeeBps: 0,
+    });
+    const [listing] = await facade.findListingPda({ providerAgent, listingId });
+
+    await moderatorClient.send([
+      await facade.recordListingModeration({
+        moderator,
+        listing,
+        jobSpecHash: listingSpecHash,
+        status: 0,
+        riskScore: 0,
+        categoryMask: 0n,
+        policyHash: new Uint8Array(32).fill(67),
+        scannerHash: new Uint8Array(32).fill(68),
+        expiresAt: 0n,
+      }),
+    ]);
+
+    const taskId = new Uint8Array(32).fill(69);
+    await buyerClient.hireFromListingHumanless({
+      listing,
+      creator: buyer,
+      taskId,
+      expectedPrice: price,
+      expectedVersion: 1n,
+      reviewWindowSecs: 3600n,
+      listingSpecHash,
+    });
+
+    const [task] = await findTaskPda({ creator: buyer.address, taskId });
+    const [escrow] = await findEscrowPda({ task });
+    const [hireRecord] = await findHireRecordPda({ task });
+    const [taskJobSpec] = await findTaskJobSpecPda({ task });
+    const [creatorCompletionBond] = await findCreatorCompletionBondPda({
+      task,
+      creator: buyer.address,
+    });
+
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.Open,
+    );
+    expect(accountData(svm, taskJobSpec)).toBeNull();
+    expect(getTaskEscrowDecoder().decode(accountData(svm, escrow)!).amount).toBe(
+      price,
+    );
+    let decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.openJobs).toBe(1);
+    expect(decodedListing.totalHires).toBe(1n);
+
+    const buyerBalanceBeforeCancel = svm.getBalance(buyer.address) ?? 0n;
+    await buyerClient.cancelTask({
+      task,
+      authority: buyer,
+    });
+
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.Cancelled,
+    );
+    expect(accountData(svm, escrow)).toBeNull();
+    expect(svm.getBalance(buyer.address) ?? 0n).toBeGreaterThan(
+      buyerBalanceBeforeCancel,
+    );
+    decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.openJobs).toBe(1);
+
+    const stillBlocked = await buyerClient
+      .hireFromListingHumanless({
+        listing,
+        creator: buyer,
+        taskId: new Uint8Array(32).fill(70),
+        expectedPrice: price,
+        expectedVersion: decodedListing.version,
+        reviewWindowSecs: 3600n,
+        listingSpecHash,
+      })
+      .catch((error: unknown) => error);
+    expect(stillBlocked).toBeInstanceOf(AgencError);
+
+    await buyerClient.closeTask({
+      task,
+      taskJobSpec: null,
+      hireRecord,
+      listing,
+      creatorCompletionBond,
+      authority: buyer,
+    });
+
+    expect(accountData(svm, task)).toBeNull();
+    expect(accountData(svm, hireRecord)).toBeNull();
+    decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.openJobs).toBe(0);
+    expect(decodedListing.totalHires).toBe(1n);
+
+    await buyerClient.hireFromListingHumanless({
+      listing,
+      creator: buyer,
+      taskId: new Uint8Array(32).fill(71),
+      expectedPrice: price,
+      expectedVersion: decodedListing.version,
+      reviewWindowSecs: 3600n,
+      listingSpecHash,
+    });
+    decodedListing = getServiceListingDecoder().decode(
+      accountData(svm, listing)!,
+    );
+    expect(decodedListing.openJobs).toBe(1);
+    expect(decodedListing.totalHires).toBe(2n);
   });
 
   it("drives a CreatorReview task to acceptance — claim, submit, accept — through client methods only", async () => {

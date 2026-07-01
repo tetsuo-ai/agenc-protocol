@@ -221,6 +221,16 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.hireFromListing>,
     options?: SendOptions,
   ): Promise<SendResult>;
+  /** Build (facade.hireFromListingHumanless) and send a hire_from_listing_humanless transaction. */
+  hireFromListingHumanless(
+    input: FacadeInput<typeof facade.hireFromListingHumanless>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.setTaskJobSpec) and send a set_task_job_spec transaction. */
+  setTaskJobSpec(
+    input: FacadeInput<typeof facade.setTaskJobSpec>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
   /** Build (facade.claimTaskWithJobSpec) and send a claim_task_with_job_spec transaction. */
   claimTaskWithJobSpec(
     input: FacadeInput<typeof facade.claimTaskWithJobSpec>,
@@ -234,6 +244,31 @@ export interface MarketplaceClient {
   /** Build (facade.acceptTaskResult) and send an accept_task_result transaction. */
   acceptTaskResult(
     input: FacadeInput<typeof facade.acceptTaskResult>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.rejectTaskResult) and send a reject_task_result transaction. */
+  rejectTaskResult(
+    input: FacadeInput<typeof facade.rejectTaskResult>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.autoAcceptTaskResult) and send an auto_accept_task_result transaction. */
+  autoAcceptTaskResult(
+    input: FacadeInput<typeof facade.autoAcceptTaskResult>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.cancelTask) and send a cancel_task transaction. */
+  cancelTask(
+    input: FacadeInput<typeof facade.cancelTask>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.closeTask) and send a close_task transaction. */
+  closeTask(
+    input: FacadeInput<typeof facade.closeTask>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.rateHire) and send a rate_hire transaction. */
+  rateHire(
+    input: FacadeInput<typeof facade.rateHire>,
     options?: SendOptions,
   ): Promise<SendResult>;
   /** Build (facade.postCompletionBond) and send a post_completion_bond transaction. */
@@ -515,9 +550,18 @@ export function createMarketplaceClient(
     // P6.2: hires carry the client's configured `referrer` default unless the
     // per-call input overrides it (the embedder's wallet+bps on every job).
     hireFromListing: viaFacadeWithReferral(facade.hireFromListing),
+    hireFromListingHumanless: viaFacadeWithReferral(
+      facade.hireFromListingHumanless,
+    ),
+    setTaskJobSpec: viaFacade(facade.setTaskJobSpec),
     claimTaskWithJobSpec: viaFacade(facade.claimTaskWithJobSpec),
     submitTaskResult: viaFacade(facade.submitTaskResult),
     acceptTaskResult: viaFacade(facade.acceptTaskResult),
+    rejectTaskResult: viaFacade(facade.rejectTaskResult),
+    autoAcceptTaskResult: viaFacade(facade.autoAcceptTaskResult),
+    cancelTask: viaFacade(facade.cancelTask),
+    closeTask: viaFacade(facade.closeTask),
+    rateHire: viaFacade(facade.rateHire),
     postCompletionBond: viaFacade(facade.postCompletionBond),
     initiateDispute: viaFacade(facade.initiateDispute),
     // P6.3: `voteDispute` removed (vote/quorum model retired).

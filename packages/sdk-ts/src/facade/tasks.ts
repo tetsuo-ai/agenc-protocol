@@ -10,6 +10,7 @@
 // expire_claim. complete_task_private (ZK) is intentionally out of scope here.
 //
 // Never import from generated/ internals other than its public exports.
+import { AccountRole, type Address } from "@solana/kit";
 import {
   getCreateTaskInstructionAsync,
   getCreateTaskHumanlessInstructionAsync,
@@ -24,13 +25,15 @@ import {
   getRejectAndFreezeInstructionAsync,
   getCompleteTaskInstructionAsync,
   getCancelTaskInstructionAsync,
-  getCloseTaskInstructionAsync,
+  getCloseTaskInstructionDataEncoder,
   getExpireClaimInstructionAsync,
   getConfigureTaskValidationInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
   findTaskPda,
   findEscrowPda,
   findClaimPda,
+  findHireRecordPda,
   findTaskJobSpecPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
@@ -219,12 +222,81 @@ export async function cancelTask(input: CancelTaskAsyncInput) {
   return getCancelTaskInstructionAsync(input);
 }
 
+export type CloseTaskInput = Omit<
+  CloseTaskAsyncInput,
+  "taskJobSpec" | "escrow" | "listing" | "workerCompletionBond"
+> & {
+  /**
+   * Defaults to the derived task-job-spec PDA because activated tasks should
+   * reclaim that pointer on close. Pass `null` for terminal tasks that never
+   * pinned a job spec.
+   */
+  taskJobSpec?: Address | null;
+  /**
+   * Defaults to `None`: normal terminal settlement paths close escrow before
+   * the task becomes closable. Pass a still-alive, already-drained escrow only
+   * for dispute-expiry cleanup.
+   */
+  escrow?: Address | null;
+  /** Source listing for hired tasks; pass `null` for non-hired tasks. */
+  listing?: Address | null;
+  /** Optional live worker bond to liveness-check before close. */
+  workerCompletionBond?: Address | null;
+};
+
+function optionalAddress(value: Address | null | undefined): Address {
+  return value ?? AGENC_COORDINATION_PROGRAM_ADDRESS;
+}
+
 /**
  * Close a terminal task and reclaim its rent. Auto-derives the optional job-spec
- * pointer and escrow; pass `hireRecord`/`listing` for hired tasks.
+ * pointer by default, omits the normally-closed escrow by default, and derives
+ * the required hire record when omitted. Pass `listing` for hired tasks so
+ * their listing capacity is released.
  */
-export async function closeTask(input: CloseTaskAsyncInput) {
-  return getCloseTaskInstructionAsync(input);
+export async function closeTask(input: CloseTaskInput) {
+  const taskJobSpec =
+    input.taskJobSpec === undefined
+      ? (await findTaskJobSpecPda({ task: input.task }))[0]
+      : optionalAddress(input.taskJobSpec);
+  const hireRecord =
+    input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
+
+  return {
+    programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
+    accounts: [
+      { address: input.task, role: AccountRole.WRITABLE },
+      {
+        address: taskJobSpec,
+        role:
+          input.taskJobSpec === null
+            ? AccountRole.READONLY
+            : AccountRole.WRITABLE,
+      },
+      {
+        address: optionalAddress(input.escrow),
+        role: input.escrow ? AccountRole.WRITABLE : AccountRole.READONLY,
+      },
+      { address: hireRecord, role: AccountRole.WRITABLE },
+      {
+        address: optionalAddress(input.listing),
+        role: input.listing ? AccountRole.WRITABLE : AccountRole.READONLY,
+      },
+      { address: input.creatorCompletionBond, role: AccountRole.READONLY },
+      {
+        address: optionalAddress(input.workerCompletionBond),
+        role: input.workerCompletionBond
+          ? AccountRole.WRITABLE
+          : AccountRole.READONLY,
+      },
+      {
+        address: input.authority.address,
+        role: AccountRole.WRITABLE_SIGNER,
+        signer: input.authority,
+      },
+    ],
+    data: getCloseTaskInstructionDataEncoder().encode({}),
+  };
 }
 
 /**

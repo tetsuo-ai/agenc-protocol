@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { address, createNoopSigner } from "@solana/kit";
+import { AccountRole, address, createNoopSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   getCreateTaskInstructionDataDecoder,
@@ -427,8 +427,10 @@ describe("closeTask facade instruction", () => {
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     const names = ix.accounts.map((a) => a.address);
     expect(names[0]).toBe(A); // task
-    // taskJobSpec, escrow auto-derived; account order shifts with the new bond accounts,
-    // so assert membership rather than fixed indices.
+    // taskJobSpec derives by default, but normal terminal close omits the
+    // already-closed escrow slot unless a still-live drained escrow is passed.
+    expect(names[2]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.accounts[2]?.role).toBe(AccountRole.READONLY);
     expect(names).toContain(B); // hireRecord
     expect(names).toContain(C); // listing
     expect(names).toContain(D); // creatorCompletionBond

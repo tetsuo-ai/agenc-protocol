@@ -17,8 +17,16 @@ const EXPECTED_NAMES = [
   "get_agent_track_record",
   "search",
   "prepare_hire",
+  "prepare_hire_humanless",
+  "prepare_set_task_job_spec",
   "prepare_claim",
   "prepare_submit",
+  "prepare_accept_task_result",
+  "prepare_reject_task_result",
+  "prepare_auto_accept_task_result",
+  "prepare_cancel_task",
+  "prepare_close_task",
+  "prepare_rate_hire",
 ];
 
 /** A minimal structural validator for the JSON-Schema subset the tools emit. */
@@ -74,8 +82,16 @@ describe("tool registry", () => {
     ]);
     expect(prepareTools.map((t) => t.name)).toEqual([
       "prepare_hire",
+      "prepare_hire_humanless",
+      "prepare_set_task_job_spec",
       "prepare_claim",
       "prepare_submit",
+      "prepare_accept_task_result",
+      "prepare_reject_task_result",
+      "prepare_auto_accept_task_result",
+      "prepare_cancel_task",
+      "prepare_close_task",
+      "prepare_rate_hire",
     ]);
     for (const t of readonlyTools) expect(t.kind).toBe("readonly");
     for (const t of prepareTools) expect(t.kind).toBe("prepare");

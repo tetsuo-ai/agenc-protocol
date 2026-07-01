@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "types": ["node"],
+    "noEmit": true,
+    "paths": {
+      "@tetsuo-ai/marketplace-react": ["../../src/index.ts"],
+      "@tetsuo-ai/marketplace-react/hooks": ["../../src/hooks/index.ts"],
+      "@tetsuo-ai/marketplace-react/signers": ["../../src/signers/index.ts"],
+      "@tetsuo-ai/marketplace-sdk": ["../../../sdk-ts/src/index.ts"]
+    }
+  },
+  "include": ["src", "server", "scripts", "test", "vite.config.ts"]
+}
