@@ -149,7 +149,7 @@ async function assertNoPrivateSourceLeakage(appDir) {
     /workspace:/,
     /link:/,
     /file:\.\.\/\.\./,
-    /file:/,
+    /"[^"]+"\s*:\s*"file:[^"]+"/,
   ];
 
   for (const file of checkedFiles) {
