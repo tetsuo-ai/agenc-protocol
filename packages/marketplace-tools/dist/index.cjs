@@ -403,6 +403,140 @@ function hex32(value, field, tool) {
   }
   return out;
 }
+var MAX_FEE_BPS = 2e3;
+var MAX_U16 = 65535;
+function assertFeeBps(value, field, tool) {
+  if (value === void 0) return;
+  if (!Number.isInteger(value) || value < 0 || value > MAX_FEE_BPS) {
+    throw new MarketplaceToolError(
+      "BAD_FEE_BPS",
+      `${tool}: ${field} must be an integer from 0 to ${MAX_FEE_BPS}`,
+      tool
+    );
+  }
+}
+function assertU16(value, field, tool) {
+  if (!Number.isInteger(value) || value < 0 || value > MAX_U16) {
+    throw new MarketplaceToolError(
+      "BAD_U16",
+      `${tool}: ${field} must be an integer from 0 to ${MAX_U16}`,
+      tool
+    );
+  }
+}
+function assertPayeeForFee(payee, feeBps, payeeField, feeField, tool) {
+  assertFeeBps(feeBps, feeField, tool);
+  if (feeBps !== void 0 && feeBps > 0 && payee === void 0) {
+    throw new MarketplaceToolError(
+      "MISSING_FEE_PAYEE",
+      `${tool}: ${feeField} is non-zero, so ${payeeField} must be provided`,
+      tool
+    );
+  }
+}
+var prepareCreateServiceListing = defineTool({
+  name: "prepare_create_service_listing",
+  kind: "prepare",
+  description: "Build an UNSIGNED create_service_listing instruction for a provider storefront. It publishes listing supply only; buyers still hire through the separate hire tools. The returned instruction is NOT signed and NOT sent.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "providerAgent",
+      "authority",
+      "listingId",
+      "name",
+      "category",
+      "tags",
+      "specHash",
+      "specUri",
+      "price",
+      "requiredCapabilities",
+      "defaultDeadlineSecs",
+      "maxOpenJobs"
+    ],
+    properties: {
+      providerAgent: { type: "string", description: "Provider AgentRegistration PDA." },
+      authority: { type: "string", description: "Provider wallet that signs listing creation." },
+      listingId: { type: "string", description: "32-byte listing id as 64 hex chars." },
+      name: { type: "string", description: "Listing display name, encoded by LISTING_METADATA v1." },
+      category: {
+        type: "string",
+        description: "Canonical LISTING_METADATA v1 category.",
+        enum: import_marketplace_sdk3.values.LISTING_CATEGORIES
+      },
+      tags: {
+        type: "array",
+        description: "Lowercase-kebab LISTING_METADATA v1 tag tokens.",
+        items: { type: "string", description: "One lowercase-kebab tag." }
+      },
+      specHash: { type: "string", description: "Listing spec hash as 64 hex chars." },
+      specUri: { type: "string", description: "Hosted listing spec URI." },
+      price: { type: "string", description: "Listing price in lamports as a decimal u64 string." },
+      priceMint: {
+        type: "string",
+        description: "Optional SPL token mint. Omit for SOL listings."
+      },
+      requiredCapabilities: {
+        type: "string",
+        description: "Capability bitmask as a decimal u64 string."
+      },
+      defaultDeadlineSecs: {
+        type: "string",
+        description: "Default deadline in seconds as a decimal i64 string."
+      },
+      maxOpenJobs: {
+        type: "integer",
+        description: "Maximum concurrent open hired jobs. Use 0 for uncapped.",
+        minimum: 0,
+        maximum: MAX_U16
+      },
+      operator: { type: "string", description: "Optional operator payout wallet." },
+      operatorFeeBps: {
+        type: "integer",
+        description: "Optional operator fee bps. Non-zero requires operator.",
+        minimum: 0,
+        maximum: MAX_FEE_BPS,
+        default: 0
+      }
+    }
+  },
+  async handler(args) {
+    if (!import_marketplace_sdk3.values.isListingCategory(args.category)) {
+      throw new MarketplaceToolError(
+        "BAD_CATEGORY",
+        "prepare_create_service_listing: category must be a canonical LISTING_METADATA v1 category",
+        "prepare_create_service_listing"
+      );
+    }
+    assertU16(args.maxOpenJobs, "maxOpenJobs", "prepare_create_service_listing");
+    assertPayeeForFee(
+      args.operator,
+      args.operatorFeeBps,
+      "operator",
+      "operatorFeeBps",
+      "prepare_create_service_listing"
+    );
+    const ix = await import_marketplace_sdk3.facade.createServiceListing({
+      providerAgent: args.providerAgent,
+      authority: (0, import_kit.createNoopSigner)(args.authority),
+      listingId: hex32(args.listingId, "listingId", "prepare_create_service_listing"),
+      name: args.name,
+      category: args.category,
+      tags: args.tags,
+      specHash: hex32(args.specHash, "specHash", "prepare_create_service_listing"),
+      specUri: args.specUri,
+      price: BigInt(args.price),
+      priceMint: args.priceMint ? args.priceMint : null,
+      requiredCapabilities: BigInt(args.requiredCapabilities),
+      defaultDeadlineSecs: BigInt(args.defaultDeadlineSecs),
+      maxOpenJobs: args.maxOpenJobs,
+      operator: args.operator ? args.operator : null,
+      operatorFeeBps: args.operatorFeeBps ?? 0
+    });
+    return projectInstruction(ix);
+  }
+});
 var prepareHire = defineTool({
   name: "prepare_hire",
   kind: "prepare",
@@ -447,10 +581,18 @@ var prepareHire = defineTool({
       listingModeration: {
         type: "string",
         description: "Explicit listing-moderation attestation PDA (base58). Alternative to listingSpecHash."
+      },
+      referrer: { type: "string", description: "Optional referrer wallet." },
+      referrerFeeBps: {
+        type: "integer",
+        description: "Optional referrer fee bps. Non-zero requires referrer.",
+        minimum: 0,
+        maximum: MAX_FEE_BPS
       }
     }
   },
   async handler(args) {
+    assertPayeeForFee(args.referrer, args.referrerFeeBps, "referrer", "referrerFeeBps", "prepare_hire");
     const buyer = (0, import_kit.createNoopSigner)(args.buyer);
     const input = {
       listing: args.listing,
@@ -471,6 +613,8 @@ var prepareHire = defineTool({
     if (args.listingModeration !== void 0) {
       input.listingModeration = args.listingModeration;
     }
+    if (args.referrer !== void 0) input.referrer = args.referrer;
+    if (args.referrerFeeBps !== void 0) input.referrerFeeBps = args.referrerFeeBps;
     const ix = await import_marketplace_sdk3.facade.hireFromListing(input);
     return projectInstruction(ix);
   }
@@ -493,10 +637,22 @@ var prepareHireHumanless = defineTool({
       listingModeration: { type: "string", description: "Explicit listing moderation PDA." },
       reviewWindowSecs: { type: "string", description: "CreatorReview window in seconds." },
       referrer: { type: "string", description: "Optional referrer wallet." },
-      referrerFeeBps: { type: "integer", description: "Optional referrer fee bps." }
+      referrerFeeBps: {
+        type: "integer",
+        description: "Optional referrer fee bps. Non-zero requires referrer.",
+        minimum: 0,
+        maximum: MAX_FEE_BPS
+      }
     }
   },
   async handler(args) {
+    assertPayeeForFee(
+      args.referrer,
+      args.referrerFeeBps,
+      "referrer",
+      "referrerFeeBps",
+      "prepare_hire_humanless"
+    );
     const buyer = (0, import_kit.createNoopSigner)(args.buyer);
     const input = {
       listing: args.listing,
@@ -835,7 +991,8 @@ var prepareTools = [
   prepareAutoAccept,
   prepareCancel,
   prepareClose,
-  prepareRateHire
+  prepareRateHire,
+  prepareCreateServiceListing
 ];
 
 // src/tools/index.ts

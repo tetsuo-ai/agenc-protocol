@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { describe, it, expect } from "vitest";
 import {
   getTool,
@@ -5,12 +6,17 @@ import {
   type MarketplaceToolContext,
   type UnsignedInstructionView,
 } from "../src/index.js";
-import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "@tetsuo-ai/marketplace-sdk";
+import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
+  getCreateServiceListingInstructionDataDecoder,
+  getHireFromListingInstructionDataDecoder,
+} from "@tetsuo-ai/marketplace-sdk";
 import {
   A_LISTING_PDA,
   A_TASK_PDA,
   A_PROVIDER,
   A_AUTHORITY,
+  A_CREATOR,
 } from "./fixtures.js";
 
 // prepare-* tools build instructions purely from args; no transport needed.
@@ -21,6 +27,78 @@ const ctx: MarketplaceToolContext = { read: { async getProgramAccounts() {
 const HEX32 = "07".repeat(32);
 /** A valid fixed 64-byte resultData payload (128 hex chars). */
 const HEX64 = "ab".repeat(64);
+
+function decodeDataBase64(ix: UnsignedInstructionView): Uint8Array {
+  return Buffer.from(ix.dataBase64, "base64");
+}
+
+describe("prepare_create_service_listing handler", () => {
+  it("returns an unsigned create listing instruction and encodes listing terms", async () => {
+    const ix = (await getTool("prepare_create_service_listing")!.handler(
+      {
+        providerAgent: A_PROVIDER,
+        authority: A_AUTHORITY,
+        listingId: HEX32,
+        name: "Research Summary",
+        category: "research",
+        tags: ["solana", "analysis"],
+        specHash: HEX32,
+        specUri: "agenc://job-spec/sha256/" + HEX32,
+        price: "50000000",
+        requiredCapabilities: "7",
+        defaultDeadlineSecs: "3600",
+        maxOpenJobs: 5,
+        operator: A_CREATOR,
+        operatorFeeBps: 250,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.signatures).toEqual([]);
+    const authority = ix.accounts.find((a) => a.address === A_AUTHORITY);
+    expect(authority?.role.signer).toBe(true);
+
+    const decoded = getCreateServiceListingInstructionDataDecoder().decode(
+      decodeDataBase64(ix),
+    );
+    expect(Array.from(decoded.listingId)).toEqual(Array(32).fill(7));
+    expect(Array.from(decoded.specHash)).toEqual(Array(32).fill(7));
+    expect(decoded.specUri).toBe("agenc://job-spec/sha256/" + HEX32);
+    expect(decoded.price).toBe(50_000_000n);
+    expect(decoded.priceMint.__option).toBe("None");
+    expect(decoded.requiredCapabilities).toBe(7n);
+    expect(decoded.defaultDeadlineSecs).toBe(3600n);
+    expect(decoded.maxOpenJobs).toBe(5);
+    expect(decoded.operatorFeeBps).toBe(250);
+    expect(decoded.operator.__option).toBe("Some");
+    if (decoded.operator.__option !== "Some") throw new Error("expected operator");
+    expect(decoded.operator.value).toBe(A_CREATOR);
+  });
+
+  it("rejects non-zero operatorFeeBps without an operator payee", async () => {
+    await expect(
+      getTool("prepare_create_service_listing")!.handler(
+        {
+          providerAgent: A_PROVIDER,
+          authority: A_AUTHORITY,
+          listingId: HEX32,
+          name: "Research Summary",
+          category: "research",
+          tags: ["solana"],
+          specHash: HEX32,
+          specUri: "agenc://job-spec/sha256/" + HEX32,
+          price: "50000000",
+          requiredCapabilities: "7",
+          defaultDeadlineSecs: "3600",
+          maxOpenJobs: 5,
+          operatorFeeBps: 250,
+        },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(MarketplaceToolError);
+  });
+});
 
 describe("prepare_hire handler", () => {
   it("returns an UNSIGNED instruction targeting the agenc program with no signatures", async () => {
@@ -49,6 +127,47 @@ describe("prepare_hire handler", () => {
     const buyerMeta = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(buyerMeta, "buyer is an account meta").toBeDefined();
     expect(buyerMeta!.role.signer).toBe(true);
+  });
+
+  it("encodes an optional referrer leg for registered-agent hires", async () => {
+    const ix = (await getTool("prepare_hire")!.handler(
+      {
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        creatorAgent: A_PROVIDER,
+        taskId: HEX32,
+        expectedPrice: "50000000",
+        expectedVersion: "4",
+        referrer: A_CREATOR,
+        referrerFeeBps: 500,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+
+    const decoded = getHireFromListingInstructionDataDecoder().decode(
+      decodeDataBase64(ix),
+    );
+    expect(decoded.referrerFeeBps).toBe(500);
+    expect(decoded.referrer.__option).toBe("Some");
+    if (decoded.referrer.__option !== "Some") throw new Error("expected referrer");
+    expect(decoded.referrer.value).toBe(A_CREATOR);
+  });
+
+  it("rejects non-zero referrerFeeBps without a referrer payee", async () => {
+    await expect(
+      getTool("prepare_hire")!.handler(
+        {
+          listing: A_LISTING_PDA,
+          buyer: A_AUTHORITY,
+          creatorAgent: A_PROVIDER,
+          taskId: HEX32,
+          expectedPrice: "1",
+          expectedVersion: "1",
+          referrerFeeBps: 500,
+        },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(MarketplaceToolError);
   });
 
   it("rejects a taskId that is not 64 hex chars", async () => {
@@ -84,6 +203,22 @@ describe("prepare_hire_humanless handler", () => {
     expect(ix.signatures).toEqual([]);
     const buyer = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(buyer?.role.signer).toBe(true);
+  });
+
+  it("rejects non-zero referrerFeeBps without a referrer payee", async () => {
+    await expect(
+      getTool("prepare_hire_humanless")!.handler(
+        {
+          listing: A_LISTING_PDA,
+          buyer: A_AUTHORITY,
+          taskId: HEX32,
+          expectedPrice: "50000000",
+          expectedVersion: "4",
+          referrerFeeBps: 500,
+        },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(MarketplaceToolError);
   });
 });
 

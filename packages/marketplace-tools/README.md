@@ -2,8 +2,8 @@
 
 Framework-neutral **tool definitions** for AI agents to discover, inspect, and prepare
 operations on the **AgenC marketplace** — a Solana program for service listings,
-humanless checkout, moderated job specs, claims, CreatorReview settlement,
-close/rate cleanup, and payout routing. Advanced primitives such as bonds and
+listing publication, humanless checkout, moderated job specs, claims,
+CreatorReview settlement, close/rate cleanup, and payout routing. Advanced primitives such as bonds and
 disputes remain available as protocol/package surfaces where implemented.
 
 This is the **single source of truth** for marketplace agent tools. It is consumed by the
@@ -58,6 +58,7 @@ These need only a **read transport** in the context: a `@solana/kit` RPC or any
 | `prepare_cancel_task` | An **unsigned** cancel/refund instruction for eligible tasks. |
 | `prepare_close_task` | An **unsigned** close instruction for terminal tasks and listing-capacity cleanup. |
 | `prepare_rate_hire` | An **unsigned** buyer rating instruction for completed hires. |
+| `prepare_create_service_listing` | An **unsigned** `create_service_listing` instruction for provider supply. |
 
 > **The prepare-\* tools never sign and never send.** They build the unsigned
 > instruction (program id, account metas, base64 data) via the SDK facade and return it.

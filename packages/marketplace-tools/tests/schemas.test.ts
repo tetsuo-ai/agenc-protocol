@@ -27,6 +27,7 @@ const EXPECTED_NAMES = [
   "prepare_cancel_task",
   "prepare_close_task",
   "prepare_rate_hire",
+  "prepare_create_service_listing",
 ];
 
 /** A minimal structural validator for the JSON-Schema subset the tools emit. */
@@ -92,6 +93,7 @@ describe("tool registry", () => {
       "prepare_cancel_task",
       "prepare_close_task",
       "prepare_rate_hire",
+      "prepare_create_service_listing",
     ]);
     for (const t of readonlyTools) expect(t.kind).toBe("readonly");
     for (const t of prepareTools) expect(t.kind).toBe("prepare");
