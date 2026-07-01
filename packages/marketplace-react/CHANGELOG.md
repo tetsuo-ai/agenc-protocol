@@ -1,5 +1,20 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.2.0
+
+### Minor Changes
+
+- Add the humanless marketplace lifecycle hook surface under `./hooks`, including
+  `useHumanlessHireFlow`, task activation, worker submission, buyer review,
+  task close, and hire rating helpers for escrow-backed service-listing flows.
+- Add the marketplace starter example with a self-hosted job-spec activation
+  route, setup-readiness checks, clean package-artifact verification, public
+  registry verification, and a UI lifecycle smoke covering hire, activation,
+  claim, submit, accept, rate, and close with injected seams.
+- Extend lifecycle tests, signer exports, and referrer handling so builders can
+  exercise the same listing-to-settlement path through public SDK and React
+  package surfaces.
+
 ## 0.1.1
 
 ### Patch Changes
