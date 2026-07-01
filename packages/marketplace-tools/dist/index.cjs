@@ -987,7 +987,7 @@ function listingToAgentCard(decoded, options = {}) {
       // x402 is design-only today (docs/X402_FAST_PATH.md); escrow is the only
       // built engagement path.
       recommendedTier: "escrow",
-      instruction: `To hire: POST the hire parameters (buyer wallet, listing=${listingPda}, expectedPrice=${account.price.toString()}, expectedVersion=${account.version.toString()}, listingSpecHash=${specHash}, creatorAgent) to the hosted POST /v1/hires transaction-builder, sign the returned unsigned transaction locally, and broadcast it. The hire mints a Task + escrow on program ${String(import_marketplace_sdk4.AGENC_COORDINATION_PROGRAM_ADDRESS)}.`
+      instruction: `To hire: prepare a humanless hire transaction (buyer wallet, listing=${listingPda}, expectedPrice=${account.price.toString()}, expectedVersion=${account.version.toString()}, listingSpecHash=${specHash}) with the SDK facade, MCP prepare tools, or your operator transaction builder, sign the unsigned transaction locally, and broadcast it. The humanless hire mints a Task + escrow on program ${String(import_marketplace_sdk4.AGENC_COORDINATION_PROGRAM_ADDRESS)}.`
     },
     a2a: {
       schemaVersion: A2A_SCHEMA_VERSION,

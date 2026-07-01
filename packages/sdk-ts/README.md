@@ -58,8 +58,8 @@ no validator, no RPC, no faucet, no secrets. Node-only; requires the optional pe
 npm i -D litesvm
 ```
 
-The complete copy-paste quickstart (register → list → attest → hire → claim →
-complete, with on-chain assertions):
+The complete copy-paste quickstart (register → list → attest → hire → activate
+→ claim → submit → accept → rate → close, with on-chain assertions):
 
 ```js
 // quickstart.mjs — completes in well under a second
@@ -67,8 +67,9 @@ import { startLocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";
 import {
   facade,
   findAgentPda,
-  findTaskPda,
+  findCreatorCompletionBondPda,
   findHireRecordPda,
+  findTaskPda,
   getTaskDecoder,
   TaskStatus,
 } from "@tetsuo-ai/marketplace-sdk";
@@ -82,7 +83,7 @@ const buyer = await market.fundedSigner(); // hires it (creator)
 const providerClient = market.clientFor(provider);
 const buyerClient = market.clientFor(buyer);
 
-// 1) Register both agents.
+// 1) Register the provider/worker agent. The buyer is just a wallet.
 const providerAgentId = new Uint8Array(32).fill(1);
 await providerClient.registerAgent({
   authority: provider,
@@ -93,17 +94,6 @@ await providerClient.registerAgent({
   stakeAmount: 0n,
 });
 const [providerAgent] = await findAgentPda({ agentId: providerAgentId });
-
-const buyerAgentId = new Uint8Array(32).fill(2);
-await buyerClient.registerAgent({
-  authority: buyer,
-  agentId: buyerAgentId,
-  capabilities: 1n,
-  endpoint: "https://buyer.example",
-  metadataUri: null,
-  stakeAmount: 0n,
-});
-const [buyerAgent] = await findAgentPda({ agentId: buyerAgentId });
 
 // 2) Provider lists a service.
 const listingId = new Uint8Array(32).fill(3);
@@ -132,19 +122,19 @@ const [listing] = await facade.findListingPda({ providerAgent, listingId });
 //    is fail-closed exactly like mainnet, and this is what lets the hire pass.
 await market.moderator.attestListing(listing, listingSpecHash);
 
-// 4) Buyer hires the listing -> Task + escrow + HireRecord in one instruction.
+// 4) Human buyer hires the listing -> Task + escrow + HireRecord.
 const taskId = new Uint8Array(32).fill(8);
-await buyerClient.hireFromListing({
+await buyerClient.hireFromListingHumanless({
   listing,
-  creatorAgent: buyerAgent,
-  authority: buyer,
   creator: buyer,
   taskId,
   expectedPrice: price,
   expectedVersion: 1n,
+  reviewWindowSecs: 86_400n,
   listingSpecHash,
 });
 const [task] = await findTaskPda({ creator: buyer.address, taskId });
+const [hireRecord] = await findHireRecordPda({ task });
 
 // 5) CLEAN task attestation, then the creator pins the job spec.
 const jobSpecHash = new Uint8Array(32).fill(9);
@@ -158,35 +148,58 @@ await buyerClient.send([
   }),
 ]);
 
-// 6) Provider claims, does the work, completes -> the escrow pays the worker.
+// 6) Provider claims, submits proof, then the buyer accepts.
 await providerClient.claimTaskWithJobSpec({
   task,
   worker: providerAgent,
   authority: provider,
 });
 const balanceBefore = market.svm.getBalance(provider.address) ?? 0n;
-const [hireRecord] = await findHireRecordPda({ task });
-await providerClient.send([
-  await facade.completeTask({
-    task,
-    creator: buyer.address,
-    worker: providerAgent,
-    treasury: market.admin.address,
-    authority: provider,
-    hireRecord,
-    proofHash: new Uint8Array(32).fill(10),
-    resultData: null,
-  }),
-]);
+await providerClient.submitTaskResult({
+  task,
+  worker: providerAgent,
+  authority: provider,
+  proofHash: new Uint8Array(32).fill(10),
+  resultData: null,
+});
+await buyerClient.acceptTaskResult({
+  task,
+  worker: providerAgent,
+  treasury: market.admin.address,
+  creator: buyer,
+  workerAuthority: provider.address,
+  hireRecord,
+});
 
-// On-chain end state: the Task is Completed and the worker actually got paid.
+// On-chain settlement: the Task is Completed and the worker actually got paid.
 const taskAccount = market.svm.getAccount(task);
 const { status } = getTaskDecoder().decode(Uint8Array.from(taskAccount.data));
 if (status !== TaskStatus.Completed) throw new Error("task not completed");
 const paid = (market.svm.getBalance(provider.address) ?? 0n) - balanceBefore;
+
+// 7) Buyer rates and closes so listing capacity is released.
+await buyerClient.rateHire({
+  task,
+  listing,
+  buyer,
+  score: 5,
+});
+const [creatorCompletionBond] = await findCreatorCompletionBondPda({
+  task,
+  creator: buyer.address,
+});
+await buyerClient.closeTask({
+  task,
+  hireRecord,
+  listing,
+  creatorCompletionBond,
+  workerCompletionBond: null,
+  authority: buyer,
+});
+
 const elapsed = (Date.now() - started) / 1000;
 console.log(
-  `register -> list -> hire -> claim -> complete: worker paid ${paid} lamports in ${elapsed.toFixed(2)}s`,
+  `register -> list -> hire -> activate -> claim -> submit -> accept -> rate -> close: worker paid ${paid} lamports in ${elapsed.toFixed(2)}s`,
 );
 if (elapsed >= 30) throw new Error(`took ${elapsed.toFixed(2)}s (limit 30s)`);
 ```
@@ -195,10 +208,9 @@ Also available from the subpath: `clientFor(signer)` (one client per actor),
 `fundedSigner(lamports?)`, `expireBlockhash()` (litesvm dedupes byte-identical
 transactions), `moderator.attestTask(task, jobSpecHash)`, the raw `svm`, plus
 `createLiteSvmTransport`, `seedProtocolConfig`, and `seedModerationConfig` for custom
-setups. CreatorReview tasks (`createTask` → `configureTaskValidation` → claim →
-`submitTaskResult` → `acceptTaskResult`) work the same way — if you have the
-`agenc-protocol` repo checked out, `tests-e2e/testing.e2e.test.ts` has the full recipe
-(repo-only: `tests-e2e/` and `docs/` are not shipped in the npm tarball).
+setups. The repo also has deeper lifecycle coverage in
+`tests-e2e/client.e2e.test.ts` and `tests-e2e/testing.e2e.test.ts` (repo-only:
+`tests-e2e/` and `docs/` are not shipped in the npm tarball).
 
 ## Devnet sandbox — `@tetsuo-ai/marketplace-sdk/sandbox`
 
@@ -256,10 +268,10 @@ change. One semantic difference to know: the hosted read model serves only
 `metadataValid: true` listings by default, so `listActiveListings` is the
 valid-only subset of what raw gPA returns — use `indexer.listings({
 metadataValid: false })` (or the gPA `queries` module, which applies no
-metadata filter) to also surface nonconforming listings. The indexer also
-exposes the no-RPC write path (`POST /v1/hires`
-builds an unsigned hire transaction server-side — you sign locally and
-broadcast through your own RPC) plus webhooks
+metadata filter) to also surface nonconforming listings. For writes, build
+unsigned transactions with the SDK facade, React hooks, MCP prepare tools, or
+your own transaction-builder backend, then sign locally and broadcast through
+your own RPC. The indexer client also includes webhook helpers
 (`verifyAgencWebhookSignature`) so polling loops can go away entirely.
 
 **Local development: the localnet stack.** Don't burn devnet rate limits

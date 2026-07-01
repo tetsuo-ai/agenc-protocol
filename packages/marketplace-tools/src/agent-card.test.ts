@@ -113,7 +113,8 @@ describe("listingToAgentCard", () => {
     expect(card.hire.specUri).toBe("agenc://job-spec/sha256/abc123");
     expect(card.hire.defaultDeadlineSecs).toBe("3600");
     expect(card.hire.recommendedTier).toBe("escrow");
-    expect(card.hire.instruction).toContain("POST /v1/hires");
+    expect(card.hire.instruction).toContain("SDK facade");
+    expect(card.hire.instruction).toContain("MCP prepare tools");
     expect(card.hire.instruction).toContain(LISTING_PDA);
 
     // a2a projection

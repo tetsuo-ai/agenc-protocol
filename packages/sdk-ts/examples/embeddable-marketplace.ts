@@ -1,26 +1,28 @@
-// Embeddable AgenC marketplace — end-to-end instruction-building walkthrough.
+// Embeddable AgenC marketplace — first-run instruction-building walkthrough.
 //
-// This file is a REAL, COMPILING example: it type-checks against the published
-// facade + generated builders (see `examples:check`). It assembles every
-// instruction in the embeddable flow but never touches an RPC — signers are
+// This file is a REAL, COMPILING example: it type-checks against the public
+// facade + generated builders (see `examples:check`). It assembles the normal
+// marketplace lifecycle but never touches an RPC — signers are
 // `createNoopSigner(...)` and every other account is an `address(...)`
 // placeholder, exactly like the structural tests in tests/*.test.ts.
 //
-// To actually broadcast, you would swap the noop signers for real
-// `TransactionSigner`s (e.g. a keypair or wallet adapter), pre-derive the PDAs
-// you need to read, and feed each instruction into a transaction message built
-// with @solana/kit (`createTransactionMessage`, `appendTransactionMessageInstructions`,
-// `signAndSendTransaction`, ...). Instruction shapes do not change.
+// To actually broadcast, swap the noop signers for real `TransactionSigner`s
+// (a keypair, wallet adapter, or signer service), pre-derive or read any PDAs
+// you need to display, and feed each instruction into a transaction message
+// built with @solana/kit. Instruction shapes do not change.
 //
 // Flow covered:
-//   1. register a provider agent and a buyer agent
+//   1. provider registers the worker agent
 //   2. provider creates a standing service listing
-//   3. buyer hires from the listing  (mints task + escrow in one instruction)
-//   4. worker claims the task
-//   5. both sides post a completion bond
-//   6a. HAPPY PATH:  worker submits result -> creator accepts (settles escrow)
-//   6b. DISPUTE PATH: creator rejects-and-freezes -> initiate dispute ->
-//       resolve dispute with bond forfeiture -> reclaim the surviving bond
+//   3. human buyer hires the listing (mints task + escrow + HireRecord)
+//   4. buyer activates the task by pinning a moderated job spec
+//   5. provider agent claims with claim_task_with_job_spec
+//   6. worker submits an artifact proof
+//   7. buyer accepts, rates the hire, and closes the task to free capacity
+//
+// Advanced registered-agent hire, bonds, disputes, bids, governance, and ZK
+// are available elsewhere in the facade/generated surface. They are not the
+// first-run storefront path shown here.
 //
 // Everything below comes from the package's public entry point
 // (`@tetsuo-ai/marketplace-sdk`); in-repo it resolves through `../src/index.js`.
@@ -28,30 +30,29 @@ import { address, createNoopSigner } from "@solana/kit";
 import {
   // facade: ergonomic, named instruction builders
   facade,
-  // generated: PDA helpers used to pre-derive the addresses a hire mints
-  findTaskPda,
-  findEscrowPda,
+  // generated: PDA helpers used to pre-derive addresses the flow mints/uses
+  findCreatorCompletionBondPda,
   findHireRecordPda,
-  findClaimPda,
+  findTaskPda,
 } from "../src/index.js";
 // values: domain-value helpers — random 32-byte ids, NFC description hashing,
 // LISTING_METADATA v1 field codecs, and the kit-compatible json-stable-v1
 // job-spec hash. (In a published integration: the `values` module of
 // `@tetsuo-ai/marketplace-sdk`.)
 import {
+  canonicalJobSpecHash,
+  descriptionHash,
+  encodeListingCategory,
+  encodeListingName,
+  encodeListingTags,
   randomId32,
   sha256,
-  descriptionHash,
-  canonicalJobSpecHash,
-  encodeListingName,
-  encodeListingCategory,
-  encodeListingTags,
 } from "../src/values/index.js";
 
 // ---------------------------------------------------------------------------
 // Placeholders. In a live integration these come from real keypairs / wallets
 // and on-chain reads; here they are valid base58 addresses + noop signers so the
-// builders produce a fully-typed instruction without an RPC.
+// builders produce fully-typed instructions without an RPC.
 // ---------------------------------------------------------------------------
 
 // Signers (would be real wallets / keypairs in production).
@@ -61,26 +62,18 @@ const providerAuthority = createNoopSigner(
 const buyerAuthority = createNoopSigner(
   address("So11111111111111111111111111111111111111112"),
 );
-const workerAuthority = createNoopSigner(
-  address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-);
 
-// Plain (non-signer) account placeholders. In a real flow these are the agent
-// PDAs returned by `findAgentPda`, the worker's agent registration, the
-// protocol treasury, etc.
+// Plain (non-signer) account placeholders. In a real flow this is the
+// AgentRegistration PDA returned by `findAgentPda`; the provider agent is also
+// the worker that claims and submits the hired task.
 const providerAgent = address("4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB");
-const buyerAgent = address("9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA");
-const workerAgent = address("Stake11111111111111111111111111111111111111");
 const treasury = address("SysvarRent111111111111111111111111111111111");
-const bondTreasury = address("SysvarC1ock11111111111111111111111111111111");
 
-// 32-byte ids (caller-chosen): fresh CSPRNG output via the values module —
+// 32-byte ids (caller-chosen): fresh CSPRNG output via the values module.
 // ids seed PDAs, so they must never collide.
 const providerAgentId = randomId32();
-const buyerAgentId = randomId32();
 const listingId = randomId32();
 const taskId = randomId32();
-const disputeId = randomId32();
 
 // Fixed-width LISTING_METADATA v1 fields, encoded from plain strings (UTF-8,
 // NUL-padded, length-checked — overflow and invalid kebab-case throw).
@@ -89,47 +82,45 @@ const listingCategory = encodeListingCategory("translation");
 const listingTags = encodeListingTags(["english-to-french", "docs"]);
 
 /**
- * Build every instruction in the embeddable flow and return them. Optionally
- * logs a count. No RPC: the point is that this assembles & type-checks against
- * the real facade API.
+ * Build every instruction in the first-run marketplace flow and return them.
+ * Optionally logs a count. No RPC: the point is that this assembles and
+ * type-checks against the real facade API.
  */
 export async function main() {
   // -- 0. Content hashes (values module) -----------------------------------
-  // The listing's spec hash commits to the off-chain spec document with the
-  // kit-compatible json-stable-v1 canonical-JSON hash, so the same payload
-  // hashed by the marketplace kit / explorer verifies bit-for-bit.
-  const { bytes: specHash } = await canonicalJobSpecHash({
+  // The listing's spec hash commits to the off-chain service document with the
+  // kit-compatible json-stable-v1 canonical-JSON hash. The marketplace must
+  // moderate this listing spec before a hire can pass the fail-closed gate.
+  const { bytes: listingSpecHash } = await canonicalJobSpecHash({
     schemaVersion: 1,
-    title: "Translate the API reference to French",
+    title: "Translate technical documentation",
     deliverables: ["French markdown translation"],
   });
-  // Free-text / URI commitments use the documented NFC + UTF-8 + SHA-256
-  // description-hash convention; generic content (artifact bytes, result
-  // payloads) uses plain sha256.
-  const proofHash = await sha256("artifact:sha256:translated-docs-bundle-v1");
-  const rejectionHash = await descriptionHash(
-    "Sections 3-4 are missing from the delivered translation",
-  );
-  const evidenceHash = await descriptionHash("ipfs://dispute-evidence");
 
-  // -- 1. Register the provider + buyer agents ----------------------------
+  // The buyer's per-hire job spec is pinned only after escrow funding. The
+  // marketplace/operator hosts it, moderates it, and records TaskModeration
+  // before the buyer signs set_task_job_spec.
+  const { bytes: jobSpecHash } = await canonicalJobSpecHash({
+    schemaVersion: 1,
+    title: "Translate the API reference to French",
+    deliverables: ["French markdown translation", "Glossary of key terms"],
+    acceptanceCriteria: ["All sections translated", "Markdown links preserved"],
+  });
+
+  // Generic content commitments use plain sha256; written review text uses the
+  // documented description-hash convention.
+  const proofHash = await sha256("artifact:sha256:translated-docs-bundle-v1");
+  const reviewHash = await descriptionHash("Great translation; links preserved.");
+
+  // -- 1. Provider registers the worker agent ------------------------------
   // The agent PDA auto-derives from agentId; only `authority` signs. In a live
   // flow you would derive the resulting PDA with `facade.findAgentPda` and read
-  // it back, then reuse it as `providerAgent` / `buyerAgent` below.
+  // it back, then reuse it as `providerAgent` below.
   const registerProviderIx = await facade.registerAgent({
     authority: providerAuthority,
     agentId: providerAgentId,
     capabilities: 7n,
     endpoint: "https://provider.example/agent",
-    metadataUri: null,
-    stakeAmount: 0n,
-  });
-
-  const registerBuyerIx = await facade.registerAgent({
-    authority: buyerAuthority,
-    agentId: buyerAgentId,
-    capabilities: 0n,
-    endpoint: "https://buyer.example/agent",
     metadataUri: null,
     stakeAmount: 0n,
   });
@@ -144,7 +135,7 @@ export async function main() {
     name: listingName,
     category: listingCategory,
     tags: listingTags,
-    specHash,
+    specHash: listingSpecHash,
     specUri: "ipfs://listing-spec",
     price: 1_000_000n, // lamports for a SOL-priced listing
     priceMint: null, // null = native SOL; pass a mint Address for SPL tokens
@@ -158,158 +149,107 @@ export async function main() {
   // The listing PDA the buyer will hire from (derived from provider + listingId).
   const [listing] = await facade.findListingPda({ providerAgent, listingId });
 
-  // -- 3. Registered buyer hires from the listing -------------------------
-  // hire_from_listing is the registered-agent buyer path: it mints the task +
-  // escrow + hire-record in ONE instruction. Use hire_from_listing_humanless
-  // for plain-wallet storefront checkout. Pass `listingSpecHash` so the
-  // facade derives the moderation attestation PDA (fail-closed gate); omit it
-  // only when the gate is disabled. `authority` must equal `creator` (#375).
-  const hireIx = await facade.hireFromListing({
+  // -- 3. Human buyer hires from the listing -------------------------------
+  // hire_from_listing_humanless is the plain-wallet storefront checkout path:
+  // it mints the task + escrow + hire-record and forces CreatorReview so the
+  // buyer reviews before funds release. Escrow funding alone does not make the
+  // task claimable; activation happens in the next signed action.
+  const hireIx = await facade.hireFromListingHumanless({
     listing,
-    creatorAgent: buyerAgent,
-    authority: buyerAuthority,
     creator: buyerAuthority,
     taskId,
     expectedPrice: 1_000_000n,
     expectedVersion: 1n,
-    listingSpecHash: specHash,
+    reviewWindowSecs: 86_400n,
+    listingSpecHash,
   });
 
-  // The hire mints a task whose PDA is seeded by (creator wallet, taskId). The
-  // escrow and hire-record derive from that task; pre-derive them so the later
-  // settlement instructions can reference the right accounts.
+  // The hire mints a task whose PDA is seeded by (buyer wallet, taskId). The
+  // hire-record links the task back to the listing; close_task uses it to
+  // release listing capacity after terminal settlement.
   const [task] = await findTaskPda({ creator: buyerAuthority.address, taskId });
-  const [escrow] = await findEscrowPda({ task });
   const [hireRecord] = await findHireRecordPda({ task });
-  // The worker's claim PDA (seeded by task + the worker's *agent* account).
-  const [claim] = await findClaimPda({ task, bidder: workerAgent });
-  void escrow; // escrow/protocolConfig auto-derive inside the settle builders.
+  const [creatorCompletionBond] = await findCreatorCompletionBondPda({
+    task,
+    creator: buyerAuthority.address,
+  });
 
-  // -- 4. Worker claims the task ------------------------------------------
-  // claim_task_with_job_spec pins the job-spec pointer (plain claim_task is
-  // fail-closed). taskJobSpec, claim, and protocolConfig auto-derive.
+  // -- 4. Buyer activates by pinning the moderated job spec ----------------
+  // The task-moderation record must already exist for (task, jobSpecHash) with
+  // the configured moderation authority. The facade derives taskJobSpec and
+  // taskModeration from task/hash.
+  const activateIx = await facade.setTaskJobSpec({
+    task,
+    creator: buyerAuthority,
+    jobSpecHash,
+    jobSpecUri: "agenc://job-spec/sha256/example",
+  });
+
+  // -- 5. Provider claims the activated task -------------------------------
+  // claim_task_with_job_spec ties the claim to the pinned job-spec pointer
+  // (plain claim_task is fail-closed).
   const claimIx = await facade.claimTaskWithJobSpec({
     task,
-    worker: workerAgent,
-    authority: workerAuthority,
+    worker: providerAgent,
+    authority: providerAuthority,
   });
 
-  // -- 5. Both parties post a completion bond -----------------------------
-  // The bond PDA is keyed by the SIGNING wallet, so each side gets a distinct
-  // PDA. `role` identifies the party (worker vs creator) per the program enum.
-  const WORKER_ROLE = 0;
-  const CREATOR_ROLE = 1;
-  const workerBondIx = await facade.postCompletionBond({
-    task,
-    authority: workerAuthority,
-    role: WORKER_ROLE,
-  });
-  const creatorBondIx = await facade.postCompletionBond({
-    task,
-    authority: buyerAuthority,
-    role: CREATOR_ROLE,
-  });
-
-  // === 6a. HAPPY PATH: submit -> accept ==================================
-  // Worker submits a result (proof hash + optional result blob). Claim,
-  // validation config, submission, and protocol config auto-derive.
+  // -- 6. Worker submits an artifact proof --------------------------------
+  // The proof hash is required and non-zero. `resultData` can carry a compact
+  // pointer such as ag://a/<base64url-32B>; null is accepted by the program but
+  // gives the buyer nothing to fetch.
   const submitIx = await facade.submitTaskResult({
     task,
-    worker: workerAgent,
-    authority: workerAuthority,
+    worker: providerAgent,
+    authority: providerAuthority,
     proofHash,
     resultData: null,
   });
 
-  // Creator accepts the result and settles the escrow to the worker. Caller
-  // supplies the settlement parties; claim/escrow/submission/protocol PDAs
-  // auto-derive. (For an SPL-token task you'd also pass the token accounts.)
+  // -- 7. Buyer reviews, accepts, rates, and closes ------------------------
+  // accept_task_result settles escrow to the worker authority. The required
+  // bond PDAs are auto-derived by the generated builder even when no bonds were
+  // posted.
   const acceptIx = await facade.acceptTaskResult({
     task,
-    worker: workerAgent,
+    worker: providerAgent,
     treasury,
     creator: buyerAuthority,
-    workerAuthority: workerAuthority.address,
-  });
-
-  // === 6b. DISPUTE PATH: reject-and-freeze -> dispute -> resolve -> reclaim
-  // (Mutually exclusive with the happy path on a live chain — shown here so the
-  // example demonstrates assembling both branches.)
-  //
-  // Creator rejects-and-freezes the submission pending dispute. Validation
-  // config, submission, and protocol config auto-derive from task/claim.
-  const rejectAndFreezeIx = await facade.rejectAndFreeze({
-    task,
-    claim,
-    creator: buyerAuthority,
-    rejectionHash,
-  });
-
-  // The frozen task is escalated to a dispute. The dispute, rate-limit,
-  // protocol-config, and initiator-claim PDAs auto-derive. Here the creator is
-  // the initiator, so they name the worker agent + claim being disputed.
-  const initiateDisputeIx = await facade.initiateDispute({
-    task,
-    agent: buyerAgent,
-    authority: buyerAuthority,
-    disputeId,
-    taskId,
-    evidenceHash,
-    resolutionType: 1,
-    evidence: "ipfs://dispute-evidence",
-    workerAgent,
-    workerClaim: claim,
-  });
-  const [dispute] = await facade.findDisputePda({ disputeId });
-
-  // Resolve the dispute. `approve` is the resolver's decision (the protocol
-  // authority, or an assigned dispute resolver, signs as `authority`): `true`
-  // upholds the initiator's requested resolution_type, `false` refunds the creator.
-  // The facade derives BOTH completion-bond PDAs (seeded by [task, creator] and
-  // [task, worker-authority]) so the bond forfeit cannot be bypassed; the bond
-  // treasury that receives forfeited bonds is explicit.
-  const resolveDisputeIx = await facade.resolveDispute({
-    dispute,
-    task,
-    authority: buyerAuthority,
-    approve: true,
-    // P6.4 accountable rulings: a reasoned ruling is required — `rationaleHash` is a
-    // 32-byte content hash of the off-chain rationale; `rationaleUri` points at it
-    // (empty string is allowed when the hash stands alone).
-    rationaleHash: new Uint8Array(32).fill(7),
-    rationaleUri: "agenc://ruling/sha256/example",
-    creator: buyerAuthority.address,
-    worker: workerAgent,
-    workerWallet: workerAuthority.address,
-    workerClaim: claim,
+    workerAuthority: providerAuthority.address,
     hireRecord,
-    bondTreasury,
   });
 
-  // After resolution the prevailing party reclaims their surviving completion
-  // bond. The reclaim flow derives its bond PDA from (task, party).
-  const reclaimWorkerBondIx = await facade.reclaimCompletionBond({
+  const rateIx = await facade.rateHire({
     task,
-    party: workerAuthority.address,
-    role: WORKER_ROLE,
+    listing,
+    buyer: buyerAuthority,
+    score: 5,
+    reviewHash,
+    reviewUri: "agenc://review/sha256/example",
+  });
+
+  // close_task reclaims terminal task rent and decrements listing open_jobs.
+  // Pass `listing` for hired tasks and `creatorCompletionBond` even when no
+  // creator bond was posted; the program seeds-checks that PDA.
+  const closeIx = await facade.closeTask({
+    task,
+    hireRecord,
+    listing,
+    creatorCompletionBond,
+    workerCompletionBond: null,
+    authority: buyerAuthority,
   });
 
   const instructions = [
     registerProviderIx,
-    registerBuyerIx,
     createListingIx,
     hireIx,
+    activateIx,
     claimIx,
-    workerBondIx,
-    creatorBondIx,
-    // happy path
     submitIx,
     acceptIx,
-    // dispute path
-    rejectAndFreezeIx,
-    initiateDisputeIx,
-    resolveDisputeIx,
-    reclaimWorkerBondIx,
+    rateIx,
+    closeIx,
   ];
 
   // eslint-disable-next-line no-console

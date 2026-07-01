@@ -458,9 +458,10 @@ interface AgentCardTrust {
     specHash: string;
 }
 /**
- * The hire instruction shape — what an agent must POST to engage the listing
- * over the hosted no-RPC write path (P3.2 `POST /v1/hires`). This is the
- * "instruction" half of the AgentCard: the machine-actionable next step.
+ * The hire instruction shape — the fields an agent/runtime needs to prepare a
+ * humanless listing hire through the SDK, MCP prepare tools, or an operator-run
+ * transaction builder. This is the "instruction" half of the AgentCard: the
+ * machine-actionable next step.
  */
 interface AgentCardHire {
     /** The on-chain program the engagement settles on. */
@@ -497,9 +498,9 @@ interface AgentCardHire {
      */
     recommendedTier: "escrow" | "x402";
     /**
-     * Human/agent-readable instruction: how to actually engage. Points at the
-     * hosted transaction-builder (P3.2) — build an unsigned hire tx, sign locally,
-     * broadcast. No key or RPC stack required to *request* the unsigned tx.
+     * Human/agent-readable instruction: how to actually engage. Build an unsigned
+     * humanless hire transaction with the SDK facade, MCP prepare tools, or your
+     * operator backend; sign locally; broadcast through your own RPC.
      */
     instruction: string;
 }
