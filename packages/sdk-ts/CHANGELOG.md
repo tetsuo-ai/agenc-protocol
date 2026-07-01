@@ -1,5 +1,17 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.6.1
+
+### Patch Changes
+
+- Publish the current marketplace lifecycle facade surface used by the React
+  starter, including the `closeTask` input shape that accepts an explicit
+  `creatorCompletionBond` and handles optional hired-task close accounts for
+  terminal cleanup.
+- Include the current generated protocol surface and SDK lifecycle tests so
+  public registry consumers match the merged source used by
+  `@tetsuo-ai/marketplace-react@0.2.0`.
+
 ## 0.6.0
 
 ### Minor Changes
