@@ -18,11 +18,16 @@
  */
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
-import { facade, findTaskPda } from "@tetsuo-ai/marketplace-sdk";
+import { findTaskPda } from "@tetsuo-ai/marketplace-sdk";
 import type { facade as facadeNs } from "@tetsuo-ai/marketplace-sdk";
 import { useAgencContext } from "../provider/context.js";
 import type { Address } from "../types.js";
-import { requireClient } from "./internal.js";
+import {
+  requireClient,
+  resolveReferrerArgs,
+  signerAddress,
+  withoutReferrerArgs,
+} from "./internal.js";
 
 /**
  * Input to a standard `hire(...)` — a buyer that has a registered marketplace
@@ -36,7 +41,7 @@ import { requireClient } from "./internal.js";
  */
 export type HireInput = Omit<
   Parameters<typeof facadeNs.hireFromListing>[0],
-  "authority" | "creator"
+  "authority" | "creator" | "referrer" | "referrerFeeBps"
 > & {
   /** Standard hire (default). */
   humanless?: false;
@@ -56,7 +61,7 @@ export type HireInput = Omit<
  */
 export type HumanlessHireInput = Omit<
   Parameters<typeof facadeNs.hireFromListingHumanless>[0],
-  "creator"
+  "creator" | "referrer" | "referrerFeeBps"
 > & {
   /** Discriminates the humanless storefront-visitor hire. */
   humanless: true;
@@ -124,15 +129,8 @@ export function useHire(): UseHireResult {
 
       // Resolve fresh per hire so a provider referrer config change cannot leak
       // stale referral terms into a new transaction.
-      const capability = ctx.resolveReferrerCapability();
-      const referrerArgs =
-        capability.live && capability.referrer
-          ? {
-              referrer: capability.referrer.wallet,
-              referrerFeeBps: capability.referrer.feeBps,
-            }
-          : {};
-      const referrerInjected = "referrer" in referrerArgs;
+      const { referrerArgs, referrerInjected } = resolveReferrerArgs(ctx);
+      const hireInput = withoutReferrerArgs(input);
 
       const creator = input.creator ?? client.signer;
       let signature: string;
@@ -140,17 +138,17 @@ export function useHire(): UseHireResult {
       if (input.humanless === true) {
         // Storefront-visitor hire: no creator agent; CreatorReview-pinned, so
         // it settles via the buyer review path (useSubmissionReview).
-        const ix = await facade.hireFromListingHumanless({
-          ...input,
+        const result = await client.hireFromListingHumanless({
+          ...hireInput,
           creator,
           ...referrerArgs,
         } as Parameters<typeof facadeNs.hireFromListingHumanless>[0]);
-        ({ signature } = await client.send([ix]));
+        signature = result.signature;
       } else {
         // Standard hire: authority == creator == buyer (the buyer has an agent).
         const authority = input.authority ?? client.signer;
         const result = await client.hireFromListing({
-          ...input,
+          ...hireInput,
           authority,
           creator,
           ...referrerArgs,
@@ -160,10 +158,7 @@ export function useHire(): UseHireResult {
 
       // Derive the minted Task PDA from (creator, taskId).
       const [taskPda] = await findTaskPda({
-        creator:
-          typeof creator === "object" && creator !== null && "address" in creator
-            ? creator.address
-            : (creator as Address),
+        creator: signerAddress(creator),
         taskId: input.taskId,
       });
 

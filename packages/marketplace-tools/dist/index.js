@@ -357,7 +357,7 @@ var readonlyTools = [
 
 // src/tools/prepare.ts
 import { createNoopSigner, none, some } from "@solana/kit";
-import { facade as facade2 } from "@tetsuo-ai/marketplace-sdk";
+import { facade as facade2, findCreatorCompletionBondPda } from "@tetsuo-ai/marketplace-sdk";
 function hex32(value, field, tool) {
   const clean = value.startsWith("0x") ? value.slice(2) : value;
   if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
@@ -376,7 +376,7 @@ function hex32(value, field, tool) {
 var prepareHire = defineTool({
   name: "prepare_hire",
   kind: "prepare",
-  description: "Build an UNSIGNED hire_from_listing instruction (the buyer hires an agent from a standing listing, funding an escrowed task). Returns the unsigned instruction (program id, account metas, base64 data) \u2014 it is NOT signed and NOT sent. The caller must sign with the buyer wallet behind their own policy gate and broadcast it. Pass expectedPrice/expectedVersion from the listing as compare-and-swap guards.",
+  description: "Build an UNSIGNED registered-agent hire_from_listing instruction (the buyer hires an agent from a standing listing, funding an escrowed task). Returns the unsigned instruction (program id, account metas, base64 data) \u2014 it is NOT signed and NOT sent. The caller must sign with the buyer wallet behind their own policy gate and broadcast it. Pass expectedPrice/expectedVersion from the listing as compare-and-swap guards.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -442,6 +442,78 @@ var prepareHire = defineTool({
       input.listingModeration = args.listingModeration;
     }
     const ix = await facade2.hireFromListing(input);
+    return projectInstruction(ix);
+  }
+});
+var prepareHireHumanless = defineTool({
+  name: "prepare_hire_humanless",
+  kind: "prepare",
+  description: "Build an UNSIGNED hire_from_listing_humanless instruction for a plain-wallet buyer. This is the storefront visitor checkout path: it funds escrow and creates a task that still requires set_task_job_spec activation before a worker can claim. The returned instruction is NOT signed and NOT sent.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["listing", "buyer", "taskId", "expectedPrice", "expectedVersion"],
+    properties: {
+      listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
+      buyer: { type: "string", description: "Plain buyer wallet that signs and funds escrow." },
+      taskId: { type: "string", description: "32-byte task id as 64 hex chars." },
+      expectedPrice: { type: "string", description: "Expected listing price in lamports." },
+      expectedVersion: { type: "string", description: "Expected listing version." },
+      listingSpecHash: { type: "string", description: "Listing spec hash as 64 hex chars." },
+      listingModeration: { type: "string", description: "Explicit listing moderation PDA." },
+      reviewWindowSecs: { type: "string", description: "CreatorReview window in seconds." },
+      referrer: { type: "string", description: "Optional referrer wallet." },
+      referrerFeeBps: { type: "integer", description: "Optional referrer fee bps." }
+    }
+  },
+  async handler(args) {
+    const buyer = createNoopSigner(args.buyer);
+    const input = {
+      listing: args.listing,
+      creator: buyer,
+      taskId: hex32(args.taskId, "taskId", "prepare_hire_humanless"),
+      expectedPrice: BigInt(args.expectedPrice),
+      expectedVersion: BigInt(args.expectedVersion),
+      reviewWindowSecs: args.reviewWindowSecs ? BigInt(args.reviewWindowSecs) : 86400n
+    };
+    if (args.listingSpecHash !== void 0) {
+      input.listingSpecHash = hex32(
+        args.listingSpecHash,
+        "listingSpecHash",
+        "prepare_hire_humanless"
+      );
+    }
+    if (args.listingModeration !== void 0) {
+      input.listingModeration = args.listingModeration;
+    }
+    if (args.referrer !== void 0) input.referrer = args.referrer;
+    if (args.referrerFeeBps !== void 0) input.referrerFeeBps = args.referrerFeeBps;
+    const ix = await facade2.hireFromListingHumanless(input);
+    return projectInstruction(ix);
+  }
+});
+var prepareSetTaskJobSpec = defineTool({
+  name: "prepare_set_task_job_spec",
+  kind: "prepare",
+  description: "Build an UNSIGNED set_task_job_spec instruction. This is the activation step after humanless hire: the buyer pins a moderated job spec so the task becomes claimable.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "creator", "jobSpecHash", "jobSpecUri"],
+    properties: {
+      task: { type: "string", description: "Task PDA to activate." },
+      creator: { type: "string", description: "Task creator/buyer wallet that signs." },
+      jobSpecHash: { type: "string", description: "Moderated job spec hash as 64 hex chars." },
+      jobSpecUri: { type: "string", description: "Hosted job spec URI." }
+    }
+  },
+  async handler(args) {
+    const ix = await facade2.setTaskJobSpec({
+      task: args.task,
+      creator: createNoopSigner(args.creator),
+      jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_set_task_job_spec"),
+      jobSpecUri: args.jobSpecUri
+    });
     return projectInstruction(ix);
   }
 });
@@ -524,6 +596,181 @@ var prepareSubmit = defineTool({
     return projectInstruction(ix);
   }
 });
+var prepareAccept = defineTool({
+  name: "prepare_accept_task_result",
+  kind: "prepare",
+  description: "Build an UNSIGNED accept_task_result instruction for CreatorReview settlement.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "worker", "workerAuthority", "treasury", "creator"],
+    properties: {
+      task: { type: "string", description: "Task PDA in creator review." },
+      worker: { type: "string", description: "Worker agent PDA." },
+      workerAuthority: { type: "string", description: "Worker payout authority wallet." },
+      treasury: { type: "string", description: "Protocol treasury account." },
+      creator: { type: "string", description: "Task creator wallet that signs." },
+      operator: { type: "string", description: "Optional operator payee." },
+      referrer: { type: "string", description: "Optional referrer payee." }
+    }
+  },
+  async handler(args) {
+    const ix = await facade2.acceptTaskResult({
+      task: args.task,
+      worker: args.worker,
+      workerAuthority: args.workerAuthority,
+      treasury: args.treasury,
+      creator: createNoopSigner(args.creator),
+      ...args.operator ? { operator: args.operator } : {},
+      ...args.referrer ? { referrer: args.referrer } : {}
+    });
+    return projectInstruction(ix);
+  }
+});
+var prepareReject = defineTool({
+  name: "prepare_reject_task_result",
+  kind: "prepare",
+  description: "Build an UNSIGNED reject_task_result instruction for CreatorReview rejection.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "claim", "worker", "workerAuthority", "creator", "rejectionHash"],
+    properties: {
+      task: { type: "string", description: "Task PDA in creator review." },
+      claim: { type: "string", description: "TaskClaim PDA for this task/worker." },
+      worker: { type: "string", description: "Worker agent PDA." },
+      workerAuthority: { type: "string", description: "Worker authority wallet." },
+      creator: { type: "string", description: "Task creator wallet that signs." },
+      rejectionHash: { type: "string", description: "32-byte rejection reason hash." }
+    }
+  },
+  async handler(args) {
+    const ix = await facade2.rejectTaskResult({
+      task: args.task,
+      claim: args.claim,
+      worker: args.worker,
+      workerAuthority: args.workerAuthority,
+      creator: createNoopSigner(args.creator),
+      rejectionHash: hex32(args.rejectionHash, "rejectionHash", "prepare_reject_task_result")
+    });
+    return projectInstruction(ix);
+  }
+});
+var prepareAutoAccept = defineTool({
+  name: "prepare_auto_accept_task_result",
+  kind: "prepare",
+  description: "Build an UNSIGNED auto_accept_task_result instruction after the CreatorReview window elapses.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "worker", "workerAuthority", "treasury", "creator", "authority"],
+    properties: {
+      task: { type: "string", description: "Task PDA in creator review." },
+      worker: { type: "string", description: "Worker agent PDA." },
+      workerAuthority: { type: "string", description: "Worker payout authority wallet." },
+      treasury: { type: "string", description: "Protocol treasury account." },
+      creator: { type: "string", description: "Task creator wallet." },
+      authority: { type: "string", description: "Permissionless caller wallet that signs." },
+      operator: { type: "string", description: "Optional operator payee." },
+      referrer: { type: "string", description: "Optional referrer payee." }
+    }
+  },
+  async handler(args) {
+    const ix = await facade2.autoAcceptTaskResult({
+      task: args.task,
+      worker: args.worker,
+      workerAuthority: args.workerAuthority,
+      treasury: args.treasury,
+      creator: args.creator,
+      authority: createNoopSigner(args.authority),
+      ...args.operator ? { operator: args.operator } : {},
+      ...args.referrer ? { referrer: args.referrer } : {}
+    });
+    return projectInstruction(ix);
+  }
+});
+var prepareCancel = defineTool({
+  name: "prepare_cancel_task",
+  kind: "prepare",
+  description: "Build an UNSIGNED cancel_task instruction to refund an open/unclaimed task.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "authority"],
+    properties: {
+      task: { type: "string", description: "Task PDA to cancel." },
+      authority: { type: "string", description: "Task creator wallet that signs." }
+    }
+  },
+  async handler(args) {
+    const ix = await facade2.cancelTask({
+      task: args.task,
+      authority: createNoopSigner(args.authority)
+    });
+    return projectInstruction(ix);
+  }
+});
+var prepareClose = defineTool({
+  name: "prepare_close_task",
+  kind: "prepare",
+  description: "Build an UNSIGNED close_task instruction for terminal tasks. Pass hireRecord/listing for hired tasks to free listing capacity.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "authority"],
+    properties: {
+      task: { type: "string", description: "Terminal task PDA to close." },
+      authority: { type: "string", description: "Task creator wallet that signs." },
+      hireRecord: { type: "string", description: "Optional HireRecord PDA for hired tasks." },
+      listing: { type: "string", description: "Optional source listing PDA for hired tasks." }
+    }
+  },
+  async handler(args) {
+    const task = args.task;
+    const authority = createNoopSigner(args.authority);
+    const [creatorCompletionBond] = await findCreatorCompletionBondPda({
+      task,
+      creator: authority.address
+    });
+    const ix = await facade2.closeTask({
+      task,
+      authority,
+      creatorCompletionBond,
+      ...args.hireRecord ? { hireRecord: args.hireRecord } : {},
+      ...args.listing ? { listing: args.listing } : {}
+    });
+    return projectInstruction(ix);
+  }
+});
+var prepareRateHire = defineTool({
+  name: "prepare_rate_hire",
+  kind: "prepare",
+  description: "Build an UNSIGNED rate_hire instruction for a completed listing hire.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["task", "listing", "buyer", "score"],
+    properties: {
+      task: { type: "string", description: "Completed task PDA." },
+      listing: { type: "string", description: "Source listing PDA from the HireRecord." },
+      buyer: { type: "string", description: "Task creator/buyer wallet that signs." },
+      score: { type: "integer", description: "Rating score, 1 through 5." },
+      reviewHash: { type: "string", description: "Optional 32-byte review hash." },
+      reviewUri: { type: "string", description: "Optional written review URI." }
+    }
+  },
+  async handler(args) {
+    const ix = await facade2.rateHire({
+      task: args.task,
+      listing: args.listing,
+      buyer: createNoopSigner(args.buyer),
+      score: args.score,
+      ...args.reviewHash ? { reviewHash: hex32(args.reviewHash, "reviewHash", "prepare_rate_hire") } : {},
+      ...args.reviewUri ? { reviewUri: args.reviewUri } : {}
+    });
+    return projectInstruction(ix);
+  }
+});
 var RESULT_DATA_BYTES = 64;
 function hexFixed(value, bytes, field, tool, code) {
   const clean = value.startsWith("0x") ? value.slice(2) : value;
@@ -549,8 +796,16 @@ function hexFixed(value, bytes, field, tool, code) {
 }
 var prepareTools = [
   prepareHire,
+  prepareHireHumanless,
+  prepareSetTaskJobSpec,
   prepareClaim,
-  prepareSubmit
+  prepareSubmit,
+  prepareAccept,
+  prepareReject,
+  prepareAutoAccept,
+  prepareCancel,
+  prepareClose,
+  prepareRateHire
 ];
 
 // src/tools/index.ts
@@ -706,7 +961,7 @@ function listingToAgentCard(decoded, options = {}) {
       // x402 is design-only today (docs/X402_FAST_PATH.md); escrow is the only
       // built engagement path.
       recommendedTier: "escrow",
-      instruction: `To hire: POST the hire parameters (buyer wallet, listing=${listingPda}, expectedPrice=${account.price.toString()}, expectedVersion=${account.version.toString()}, listingSpecHash=${specHash}, creatorAgent) to the hosted POST /v1/hires transaction-builder, sign the returned unsigned transaction locally, and broadcast it. The hire mints a Task + escrow on program ${String(AGENC_COORDINATION_PROGRAM_ADDRESS)}.`
+      instruction: `To hire: prepare a humanless hire transaction (buyer wallet, listing=${listingPda}, expectedPrice=${account.price.toString()}, expectedVersion=${account.version.toString()}, listingSpecHash=${specHash}) with the SDK facade, MCP prepare tools, or your operator transaction builder, sign the unsigned transaction locally, and broadcast it. The humanless hire mints a Task + escrow on program ${String(AGENC_COORDINATION_PROGRAM_ADDRESS)}.`
     },
     a2a: {
       schemaVersion: A2A_SCHEMA_VERSION,

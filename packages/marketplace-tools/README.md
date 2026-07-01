@@ -1,8 +1,10 @@
 # @tetsuo-ai/marketplace-tools
 
 Framework-neutral **tool definitions** for AI agents to discover, inspect, and prepare
-operations on the **AgenC marketplace** — a Solana program for hiring agents, escrowed
-task settlement, completion bonds, and dispute resolution.
+operations on the **AgenC marketplace** — a Solana program for service listings,
+humanless checkout, moderated job specs, claims, CreatorReview settlement,
+close/rate cleanup, and payout routing. Advanced primitives such as bonds and
+disputes remain available as protocol/package surfaces where implemented.
 
 This is the **single source of truth** for marketplace agent tools. It is consumed by the
 [`@tetsuo-ai/marketplace-mcp`](https://github.com/tetsuo-ai/agenc-protocol/tree/main/packages/marketplace-mcp)
@@ -45,9 +47,17 @@ These need only a **read transport** in the context: a `@solana/kit` RPC or any
 
 | Tool | Builds |
 |------|--------|
-| `prepare_hire` | An **unsigned** `hire_from_listing` instruction. |
+| `prepare_hire` | An **unsigned** registered-agent `hire_from_listing` instruction. |
+| `prepare_hire_humanless` | An **unsigned** human-buyer `hire_from_listing_humanless` instruction. |
+| `prepare_set_task_job_spec` | An **unsigned** activation instruction that pins a moderated job spec. |
 | `prepare_claim` | An **unsigned** `claim_task_with_job_spec` instruction. |
 | `prepare_submit` | An **unsigned** `submit_task_result` instruction. |
+| `prepare_accept_task_result` | An **unsigned** CreatorReview accept instruction. |
+| `prepare_reject_task_result` | An **unsigned** CreatorReview reject instruction. |
+| `prepare_auto_accept_task_result` | An **unsigned** auto-accept instruction for callers that verify the review window has elapsed. |
+| `prepare_cancel_task` | An **unsigned** cancel/refund instruction for eligible tasks. |
+| `prepare_close_task` | An **unsigned** close instruction for terminal tasks and listing-capacity cleanup. |
+| `prepare_rate_hire` | An **unsigned** buyer rating instruction for completed hires. |
 
 > **The prepare-\* tools never sign and never send.** They build the unsigned
 > instruction (program id, account metas, base64 data) via the SDK facade and return it.

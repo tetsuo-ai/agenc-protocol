@@ -9,7 +9,7 @@ the published API.
 
 | File | What it shows |
 |------|---------------|
-| [`embeddable-marketplace.ts`](./embeddable-marketplace.ts) | The full embeddable flow as instruction-building only (no RPC): register a provider + buyer agent, create a service listing, hire from it, post completion bonds, then **both** the happy path (submit → accept) and the dispute path (reject-and-freeze → initiate → resolve-with-bonds → reclaim). |
+| [`embeddable-marketplace.ts`](./embeddable-marketplace.ts) | The first-run marketplace flow as instruction-building only (no RPC): register a provider agent, create a service listing, humanless buyer hire, job-spec activation, claim, submit, accept, rate, and close. |
 
 ## Running
 

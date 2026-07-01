@@ -1,0 +1,32 @@
+{
+  "name": "agenc-marketplace-starter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --tsconfig tsconfig.test.json --test \"test/*.test.ts\" \"test/*.test.tsx\"",
+    "check:setup": "tsx scripts/check-setup.ts",
+    "verify:clean": "node scripts/verify-clean-install.mjs",
+    "verify:registry": "node scripts/verify-registry-install.mjs"
+  },
+  "dependencies": {
+    "@solana/kit": "^6.9.0",
+    "@tetsuo-ai/marketplace-react": "file:../..",
+    "@tetsuo-ai/marketplace-sdk": "file:../../../sdk-ts",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^20.18.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "jsdom": "^25.0.1",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.0"
+  }
+}

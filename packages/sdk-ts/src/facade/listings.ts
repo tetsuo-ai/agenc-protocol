@@ -3,9 +3,10 @@
 // signatures, defaults, and (for multi-PDA flows) bundling. Never import from generated/
 // internals other than its public exports.
 //
-// Domain: service-listing lifecycle (create / update / set-state) + direct hire.
-// hire_from_listing is the core embeddable entry point: a buyer hires a provider's
-// standing listing, which mints the task + escrow in one instruction.
+// Domain: service-listing lifecycle (create / update / set-state) + listing hire.
+// `hire_from_listing` is the registered-buyer path. `hire_from_listing_humanless`
+// is the human-wallet storefront checkout path used by the reference marketplace.
+// Both mint the task + escrow in one instruction.
 import {
   getCreateServiceListingInstructionAsync,
   getUpdateServiceListingInstructionAsync,
@@ -192,7 +193,7 @@ export type HireFromListingInput = Omit<
 };
 
 /**
- * Build a hire_from_listing instruction — the core embeddable entry point.
+ * Build a hire_from_listing instruction — the registered-buyer entry point.
  *
  * The async builder auto-derives task, escrow, hireRecord, protocolConfig,
  * moderationConfig, authorityRateLimit, and systemProgram. The caller must

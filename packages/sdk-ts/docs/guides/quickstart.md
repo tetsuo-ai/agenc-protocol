@@ -14,11 +14,11 @@ Both are re-exported from the package root. The facade is namespaced under
 `facade`; the generated symbols (PDA helpers, decoders, the program address) are
 top-level.
 
-> The code blocks in "The embeddable flow" below are copied verbatim from
+> The code blocks in "The embeddable flow" below are adapted from
 > [`examples/embeddable-marketplace.ts`](../../examples/embeddable-marketplace.ts),
 > which is type-checked in CI (`npm run examples:check`). If the API changes, the
-> example stops compiling and these snippets get updated — they cannot silently
-> drift. (The "Local sandbox" section notes its own provenance.)
+> example stops compiling and these snippets get updated with it. (The "Local
+> sandbox" section notes its own provenance.)
 
 ## Install
 
@@ -40,11 +40,10 @@ import { address, createNoopSigner } from "@solana/kit";
 import {
   // facade: ergonomic, named instruction builders
   facade,
-  // generated: PDA helpers used to pre-derive the addresses a hire mints
+  // generated: PDA helpers used to pre-derive addresses the flow mints/uses
+  findCreatorCompletionBondPda,
   findTaskPda,
-  findEscrowPda,
   findHireRecordPda,
-  findClaimPda,
 } from "@tetsuo-ai/marketplace-sdk";
 ```
 
@@ -57,15 +56,21 @@ production these are real wallets/keypairs and on-chain addresses.
 
 ## The embeddable flow
 
-The core embeddable entry point is **`hireFromListing`** — a buyer hires a
-provider's standing service listing, which mints the task + escrow + hire-record
-in a single instruction. The full lifecycle below has two terminal branches that
-are mutually exclusive on a live chain: the happy path and the dispute path.
+This guide uses the storefront entry point, **`hireFromListingHumanless`**: a
+plain wallet buyer hires a provider's standing service listing, minting the task,
+escrow, and hire record in a single instruction. The buyer then activates the
+funded task with **`setTaskJobSpec`**, which pins a moderated job spec before any
+worker can claim it. That is the normal operator-marketplace path: list, hire,
+activate, claim, submit, accept, rate, and close.
 
-### 1. Register the agents
+Registered-agent hire, completion bonds, disputes, bids, governance, reputation,
+and ZK are advanced protocol/package surfaces. Use them when your product has
+the matching UX, policy, and tests; they are not the first-run storefront flow.
 
-The agent PDA auto-derives from `agentId`; only `authority` signs. Pass
-`metadataUri: null` to omit metadata.
+### 1. Register the provider agent
+
+The agent PDA auto-derives from `agentId`; only `authority` signs. A human buyer
+does **not** need an AgentRegistration for `hireFromListingHumanless`.
 
 ```ts
 const registerProviderIx = await facade.registerAgent({
@@ -79,7 +84,7 @@ const registerProviderIx = await facade.registerAgent({
 ```
 
 Derive the resulting PDA with `facade.findAgentPda` when you need to reference it
-as `providerAgent` / `creatorAgent` later.
+as `providerAgent` later.
 
 ### 2. Provider publishes a service listing
 
@@ -110,43 +115,57 @@ const createListingIx = await facade.createServiceListing({
 const [listing] = await facade.findListingPda({ providerAgent, listingId });
 ```
 
-### 3. Buyer hires from the listing
+### 3. Human buyer hires from the listing
 
-`hireFromListing` mints the task, escrow, and hire-record in one instruction.
-Pass `listingSpecHash` so the facade derives the moderation attestation PDA (the
-moderation gate is fail-closed); omit it only when the gate is disabled.
-`authority` must equal `creator`.
+`hireFromListingHumanless` mints the task, escrow, hire-record, and CreatorReview
+validation config in one instruction. Pass `listingSpecHash` so the facade
+derives the listing moderation attestation PDA. Escrow funding alone does not
+make the task claimable; the buyer activates it in the next signed step.
 
 ```ts
-const hireIx = await facade.hireFromListing({
+const hireIx = await facade.hireFromListingHumanless({
   listing,
-  creatorAgent: buyerAgent,
-  authority: buyerAuthority,
   creator: buyerAuthority,
   taskId,
   expectedPrice: 1_000_000n,
   expectedVersion: 1n,
+  reviewWindowSecs: 86_400n,
   listingSpecHash: specHash,
 });
 ```
 
 The hire mints a task whose PDA is seeded by `(creator wallet, taskId)`. Pre-derive
-the task, escrow, hire-record, and the worker's claim so later instructions can
-reference them:
+the task, hire-record, and creator bond PDA so later review/close instructions
+can reference them:
 
 ```ts
 const [task] = await findTaskPda({ creator: buyerAuthority.address, taskId });
-const [escrow] = await findEscrowPda({ task });
 const [hireRecord] = await findHireRecordPda({ task });
-// The worker's claim PDA (seeded by task + the worker's *agent* account).
-const [claim] = await findClaimPda({ task, bidder: workerAgent });
+const [creatorCompletionBond] = await findCreatorCompletionBondPda({
+  task,
+  creator: buyerAuthority.address,
+});
 ```
 
-### 4. Worker claims the task
+### 4. Buyer activates the task
 
-`claimTaskWithJobSpec` pins the job-spec pointer (plain `claim_task` is
-fail-closed in the program). The job-spec pointer, claim, and protocol config
-auto-derive.
+The marketplace/operator hosts the buyer's job spec, records a passing
+TaskModeration attestation for `(task, jobSpecHash)`, then the buyer signs
+`setTaskJobSpec`. Only after this step can a worker claim.
+
+```ts
+const activateIx = await facade.setTaskJobSpec({
+  task,
+  creator: buyerAuthority,
+  jobSpecHash,
+  jobSpecUri: "agenc://job-spec/sha256/example",
+});
+```
+
+### 5. Provider claims the activated task
+
+`claimTaskWithJobSpec` ties the claim to the pinned job-spec pointer. Plain
+`claim_task` is fail-closed in the program.
 
 ```ts
 const claimIx = await facade.claimTaskWithJobSpec({
@@ -156,30 +175,11 @@ const claimIx = await facade.claimTaskWithJobSpec({
 });
 ```
 
-### 5. Both parties post a completion bond
+### 6. Worker submits, buyer reviews
 
-The bond PDA is keyed by the **signing wallet**, so each side gets a distinct
-PDA. `role` identifies the party (worker vs creator) per the program enum.
-
-```ts
-const WORKER_ROLE = 0;
-const CREATOR_ROLE = 1;
-const workerBondIx = await facade.postCompletionBond({
-  task,
-  authority: workerAuthority,
-  role: WORKER_ROLE,
-});
-const creatorBondIx = await facade.postCompletionBond({
-  task,
-  authority: buyerAuthority,
-  role: CREATOR_ROLE,
-});
-```
-
-### 6a. Happy path — submit then accept
-
-The worker submits a result (a proof hash plus an optional result blob). Claim,
-validation config, submission, and protocol config auto-derive.
+The worker submits a proof hash plus an optional result pointer. The buyer
+verifies the artifact off-chain against the submitted proof hash, then accepts.
+`acceptTaskResult` settles escrow to the worker authority.
 
 ```ts
 const submitIx = await facade.submitTaskResult({
@@ -189,82 +189,40 @@ const submitIx = await facade.submitTaskResult({
   proofHash,
   resultData: null,
 });
-```
 
-The creator accepts the result and settles the escrow to the worker. You supply
-the settlement parties; the claim/escrow/submission/protocol PDAs auto-derive.
-(For an SPL-token task, also pass the token accounts.)
-
-```ts
 const acceptIx = await facade.acceptTaskResult({
   task,
-  worker: workerAgent,
+  workerAgent,
   treasury,
   creator: buyerAuthority,
   workerAuthority: workerAuthority.address,
-});
-```
-
-### 6b. Dispute path — reject-and-freeze, dispute, resolve, reclaim
-
-When the creator is unhappy, they reject-and-freeze the submission pending a
-dispute. Validation config, submission, and protocol config auto-derive.
-
-```ts
-const rejectAndFreezeIx = await facade.rejectAndFreeze({
-  task,
-  claim,
-  creator: buyerAuthority,
-  rejectionHash,
-});
-```
-
-The frozen task is escalated to a dispute. The dispute, rate-limit,
-protocol-config, and initiator-claim PDAs auto-derive. Here the creator is the
-initiator, so they name the worker agent + claim being disputed.
-
-```ts
-const initiateDisputeIx = await facade.initiateDispute({
-  task,
-  agent: buyerAgent,
-  authority: buyerAuthority,
-  disputeId,
-  taskId,
-  evidenceHash,
-  resolutionType: 1,
-  evidence: "ipfs://dispute-evidence",
-  workerAgent,
-  workerClaim: claim,
-});
-const [dispute] = await facade.findDisputePda({ disputeId });
-```
-
-Resolve the dispute. The facade derives **both** completion-bond PDAs (seeded by
-`[task, creator]` and `[task, worker-authority]`) so the bond forfeit cannot be
-bypassed; the `bondTreasury` that receives forfeited bonds is explicit.
-
-```ts
-const resolveDisputeIx = await facade.resolveDispute({
-  dispute,
-  task,
-  authority: buyerAuthority,
-  creator: buyerAuthority.address,
-  worker: workerAgent,
-  workerWallet: workerAuthority.address,
-  workerClaim: claim,
   hireRecord,
-  bondTreasury,
 });
 ```
 
-After resolution, the prevailing party reclaims their surviving completion bond.
-The reclaim flow derives its bond PDA from `(task, party)`.
+### 7. Buyer rates and closes
+
+Rating updates the listing aggregate. Closing a terminal hired task reclaims
+rent and decrements the listing's `open_jobs` counter, which releases capacity
+for the next hire.
 
 ```ts
-const reclaimWorkerBondIx = await facade.reclaimCompletionBond({
+const rateIx = await facade.rateHire({
   task,
-  party: workerAuthority.address,
-  role: WORKER_ROLE,
+  listing,
+  buyer: buyerAuthority,
+  score: 5,
+  reviewHash,
+  reviewUri: "agenc://review/sha256/example",
+});
+
+const closeIx = await facade.closeTask({
+  task,
+  hireRecord,
+  listing,
+  creatorCompletionBond,
+  workerCompletionBond: null,
+  authority: buyerAuthority,
 });
 ```
 
@@ -291,8 +249,9 @@ import { startLocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";
 import {
   facade,
   findAgentPda,
-  findTaskPda,
+  findCreatorCompletionBondPda,
   findHireRecordPda,
+  findTaskPda,
   getTaskDecoder,
   TaskStatus,
 } from "@tetsuo-ai/marketplace-sdk";
@@ -306,7 +265,7 @@ const buyer = await market.fundedSigner(); // hires it (creator)
 const providerClient = market.clientFor(provider);
 const buyerClient = market.clientFor(buyer);
 
-// 1) Register both agents.
+// 1) Register the provider/worker agent. The buyer is just a wallet.
 const providerAgentId = new Uint8Array(32).fill(1);
 await providerClient.registerAgent({
   authority: provider,
@@ -317,17 +276,6 @@ await providerClient.registerAgent({
   stakeAmount: 0n,
 });
 const [providerAgent] = await findAgentPda({ agentId: providerAgentId });
-
-const buyerAgentId = new Uint8Array(32).fill(2);
-await buyerClient.registerAgent({
-  authority: buyer,
-  agentId: buyerAgentId,
-  capabilities: 1n,
-  endpoint: "https://buyer.example",
-  metadataUri: null,
-  stakeAmount: 0n,
-});
-const [buyerAgent] = await findAgentPda({ agentId: buyerAgentId });
 
 // 2) Provider lists a service.
 const listingId = new Uint8Array(32).fill(3);
@@ -356,19 +304,19 @@ const [listing] = await facade.findListingPda({ providerAgent, listingId });
 //    is fail-closed exactly like mainnet, and this is what lets the hire pass.
 await market.moderator.attestListing(listing, listingSpecHash);
 
-// 4) Buyer hires the listing -> Task + escrow + HireRecord in one instruction.
+// 4) Human buyer hires the listing -> Task + escrow + HireRecord.
 const taskId = new Uint8Array(32).fill(8);
-await buyerClient.hireFromListing({
+await buyerClient.hireFromListingHumanless({
   listing,
-  creatorAgent: buyerAgent,
-  authority: buyer,
   creator: buyer,
   taskId,
   expectedPrice: price,
   expectedVersion: 1n,
+  reviewWindowSecs: 86_400n,
   listingSpecHash,
 });
 const [task] = await findTaskPda({ creator: buyer.address, taskId });
+const [hireRecord] = await findHireRecordPda({ task });
 
 // 5) CLEAN task attestation, then the creator pins the job spec.
 const jobSpecHash = new Uint8Array(32).fill(9);
@@ -382,35 +330,58 @@ await buyerClient.send([
   }),
 ]);
 
-// 6) Provider claims, does the work, completes -> the escrow pays the worker.
+// 6) Provider claims, submits proof, then the buyer accepts.
 await providerClient.claimTaskWithJobSpec({
   task,
   worker: providerAgent,
   authority: provider,
 });
 const balanceBefore = market.svm.getBalance(provider.address) ?? 0n;
-const [hireRecord] = await findHireRecordPda({ task });
-await providerClient.send([
-  await facade.completeTask({
-    task,
-    creator: buyer.address,
-    worker: providerAgent,
-    treasury: market.admin.address,
-    authority: provider,
-    hireRecord,
-    proofHash: new Uint8Array(32).fill(10),
-    resultData: null,
-  }),
-]);
+await providerClient.submitTaskResult({
+  task,
+  worker: providerAgent,
+  authority: provider,
+  proofHash: new Uint8Array(32).fill(10),
+  resultData: null,
+});
+await buyerClient.acceptTaskResult({
+  task,
+  worker: providerAgent,
+  treasury: market.admin.address,
+  creator: buyer,
+  workerAuthority: provider.address,
+  hireRecord,
+});
 
-// On-chain end state: the Task is Completed and the worker actually got paid.
+// On-chain settlement: the Task is Completed and the worker actually got paid.
 const taskAccount = market.svm.getAccount(task);
 const { status } = getTaskDecoder().decode(Uint8Array.from(taskAccount.data));
 if (status !== TaskStatus.Completed) throw new Error("task not completed");
 const paid = (market.svm.getBalance(provider.address) ?? 0n) - balanceBefore;
+
+// 7) Buyer rates and closes so listing capacity is released.
+await buyerClient.rateHire({
+  task,
+  listing,
+  buyer,
+  score: 5,
+});
+const [creatorCompletionBond] = await findCreatorCompletionBondPda({
+  task,
+  creator: buyer.address,
+});
+await buyerClient.closeTask({
+  task,
+  hireRecord,
+  listing,
+  creatorCompletionBond,
+  workerCompletionBond: null,
+  authority: buyer,
+});
+
 const elapsed = (Date.now() - started) / 1000;
 console.log(
-  `register -> list -> hire -> claim -> complete: worker paid ${paid} lamports in ${elapsed.toFixed(2)}s`,
+  `register -> list -> hire -> activate -> claim -> submit -> accept -> rate -> close: worker paid ${paid} lamports in ${elapsed.toFixed(2)}s`,
 );
 if (elapsed >= 30) throw new Error(`took ${elapsed.toFixed(2)}s (limit 30s)`);
 ```
@@ -419,9 +390,8 @@ Also available from the subpath: `clientFor(signer)` (one client per actor),
 `fundedSigner(lamports?)`, `expireBlockhash()` (litesvm dedupes byte-identical
 transactions), `moderator.attestTask(task, jobSpecHash)`, the raw `svm`, plus
 `createLiteSvmTransport`, `seedProtocolConfig`, and `seedModerationConfig` for
-custom setups. CreatorReview tasks (`createTask` → `configureTaskValidation` →
-claim → `submitTaskResult` → `acceptTaskResult`) work the same way — see
-`tests-e2e/testing.e2e.test.ts` (in this repo) for the full recipe.
+custom setups. The repo also has deeper lifecycle coverage in
+`tests-e2e/client.e2e.test.ts` and `tests-e2e/testing.e2e.test.ts`.
 
 ## Next steps
 

@@ -95,7 +95,7 @@ beforeAll(async () => {
       creatorAgent,
       taskId,
       requiredCapabilities: taskCapabilities,
-      description: new Uint8Array(64).fill(7),
+      description: new Uint8Array(64).fill(7, 0, 32),
       rewardAmount: taskReward,
       maxWorkers: 1,
       deadline: now + 3600n,
@@ -196,15 +196,23 @@ describe("MCP server: tool registration", () => {
     }
   });
 
-  it("mutation opt-in adds the 3 keyless prepare_* tools (9 total)", async () => {
+  it("mutation opt-in adds the keyless prepare_* lifecycle tools (17 total)", async () => {
     const { client, close } = await connectClient({ enableMutations: true });
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name);
-      expect(names).toHaveLength(9);
+      expect(names).toHaveLength(17);
       expect(names).toContain("prepare_hire");
+      expect(names).toContain("prepare_hire_humanless");
+      expect(names).toContain("prepare_set_task_job_spec");
       expect(names).toContain("prepare_claim");
       expect(names).toContain("prepare_submit");
+      expect(names).toContain("prepare_accept_task_result");
+      expect(names).toContain("prepare_reject_task_result");
+      expect(names).toContain("prepare_auto_accept_task_result");
+      expect(names).toContain("prepare_cancel_task");
+      expect(names).toContain("prepare_close_task");
+      expect(names).toContain("prepare_rate_hire");
       // prepare tools are not readOnly but are non-destructive (build, not send).
       const claim = tools.find((t) => t.name === "prepare_claim");
       expect(claim?.annotations?.readOnlyHint).toBe(false);

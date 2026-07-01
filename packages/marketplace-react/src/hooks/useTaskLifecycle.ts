@@ -1,0 +1,110 @@
+import { useMutation } from "@tanstack/react-query";
+import { useCallback } from "react";
+import type { facade as facadeNs } from "@tetsuo-ai/marketplace-sdk";
+import { useAgencContext } from "../provider/context.js";
+import {
+  mutationStatusOf,
+  requireClient,
+  type MutationStatus,
+} from "./internal.js";
+
+export type CancelTaskInput = Omit<
+  Parameters<typeof facadeNs.cancelTask>[0],
+  "task" | "authority"
+> & {
+  authority?: Parameters<typeof facadeNs.cancelTask>[0]["authority"];
+};
+export type CloseTaskInput = Omit<
+  Parameters<typeof facadeNs.closeTask>[0],
+  "task" | "authority"
+> & {
+  authority?: Parameters<typeof facadeNs.closeTask>[0]["authority"];
+};
+export type AutoAcceptTaskResultInput = Omit<
+  Parameters<typeof facadeNs.autoAcceptTaskResult>[0],
+  "task" | "authority"
+> & {
+  authority?: Parameters<typeof facadeNs.autoAcceptTaskResult>[0]["authority"];
+};
+export type TaskLifecycleStatus = MutationStatus;
+
+export interface UseTaskLifecycleResult {
+  cancel: (input?: CancelTaskInput) => Promise<string>;
+  close: (input?: CloseTaskInput) => Promise<string>;
+  autoAccept: (input: AutoAcceptTaskResultInput) => Promise<string>;
+  status: TaskLifecycleStatus;
+  signature: string | null;
+  error: Error | null;
+  isPending: boolean;
+  reset: () => void;
+}
+
+export function useTaskLifecycle(
+  taskPda: Parameters<typeof facadeNs.cancelTask>[0]["task"],
+): UseTaskLifecycleResult {
+  const ctx = useAgencContext();
+  const cancelMut = useMutation<string, Error, CancelTaskInput | undefined>({
+    mutationFn: async (input) => {
+      const client = requireClient(ctx.client);
+      const { signature } = await client.cancelTask({
+        ...(input ?? {}),
+        task: taskPda,
+        authority: input?.authority ?? client.signer,
+      } as Parameters<typeof facadeNs.cancelTask>[0]);
+      return signature;
+    },
+  });
+  const closeMut = useMutation<string, Error, CloseTaskInput | undefined>({
+    mutationFn: async (input) => {
+      const client = requireClient(ctx.client);
+      const { signature } = await client.closeTask({
+        ...(input ?? {}),
+        task: taskPda,
+        authority: input?.authority ?? client.signer,
+      } as Parameters<typeof facadeNs.closeTask>[0]);
+      return signature;
+    },
+  });
+  const autoAcceptMut = useMutation<string, Error, AutoAcceptTaskResultInput>({
+    mutationFn: async (input) => {
+      const client = requireClient(ctx.client);
+      const { signature } = await client.autoAcceptTaskResult({
+        ...input,
+        task: taskPda,
+        authority: input.authority ?? client.signer,
+      } as Parameters<typeof facadeNs.autoAcceptTaskResult>[0]);
+      return signature;
+    },
+  });
+
+  const cancel = useCallback(
+    (input?: CancelTaskInput) => cancelMut.mutateAsync(input),
+    [cancelMut],
+  );
+  const close = useCallback(
+    (input?: CloseTaskInput) => closeMut.mutateAsync(input),
+    [closeMut],
+  );
+  const autoAccept = useCallback(
+    (input: AutoAcceptTaskResultInput) => autoAcceptMut.mutateAsync(input),
+    [autoAcceptMut],
+  );
+  const active = cancelMut.isPending || closeMut.isPending || autoAcceptMut.isPending;
+  const latest =
+    [cancelMut, closeMut, autoAcceptMut].find((m) => m.isError || m.isSuccess) ?? cancelMut;
+
+  return {
+    cancel,
+    close,
+    autoAccept,
+    status: active ? "pending" : mutationStatusOf(latest),
+    signature: latest.data ?? null,
+    error: cancelMut.error ?? closeMut.error ?? autoAcceptMut.error ?? null,
+    isPending: active,
+    reset: () => {
+      cancelMut.reset();
+      closeMut.reset();
+      autoAcceptMut.reset();
+    },
+  };
+}

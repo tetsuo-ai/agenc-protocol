@@ -8,6 +8,7 @@ import {
   selectTools,
   readonlyTools,
   marketplaceTools,
+  prepareTools,
 } from "../src/index.js";
 
 describe("envFlag", () => {
@@ -100,7 +101,11 @@ describe("selectTools", () => {
   it("mutation selection is the full set (readonly + prepare)", () => {
     const tools = selectTools(true);
     expect(tools).toBe(marketplaceTools);
-    expect(tools.map((t) => t.name)).toContain("prepare_hire");
-    expect(tools.filter((t) => t.kind === "prepare")).toHaveLength(3);
+    expect(tools.filter((t) => t.kind === "prepare")).toHaveLength(
+      prepareTools.length,
+    );
+    expect(tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(prepareTools.map((t) => t.name)),
+    );
   });
 });

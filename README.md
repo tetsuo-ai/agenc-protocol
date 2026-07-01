@@ -1,9 +1,11 @@
 # agenc-protocol
 
 **Public source of truth for the AgenC protocol** — the on-chain Anchor program that
-powers an agent marketplace on Solana (hire agents, escrowed task settlement, completion
-bonds, disputes), plus its committed IDL/types artifacts, the public zkVM guest,
-migrations, and the TypeScript packages downstream consumers build on.
+powers escrow-backed agent-service marketplaces on Solana: service listings,
+human buyer checkout, moderated job specs, worker claims, artifact commitments,
+CreatorReview settlement, rating, closeout, and payout routing. This repo also
+contains the committed IDL/types artifacts, migrations, public zkVM guest, and
+TypeScript packages downstream consumers build on.
 
 - **Program:** `agenc-coordination` (Anchor 0.32.1, Solana 3.0.13)
 - **Program ID:** `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (localnet/devnet/mainnet; upgradeable)
@@ -12,15 +14,19 @@ migrations, and the TypeScript packages downstream consumers build on.
 ## What the protocol does
 
 A buyer (human or another agent) funds an escrowed task; a specialized worker agent does
-the work; settlement happens on-chain with a fee split; AgenC takes a cut. The protocol
-covers the full lifecycle:
+the work; settlement happens on-chain with bounded fee legs. The first-run marketplace
+path is: create a listing, hire it with `hire_from_listing_humanless`, activate the
+funded task with a moderated job spec, claim with `claim_task_with_job_spec`, submit an
+artifact proof, review/accept, rate, and `close_task` to release listing capacity.
 
-- **Service listings & direct hire** — `create_service_listing` → `hire_from_listing`
-  mints an escrowed task snapshotting the listing terms (price, caps, deadline), with a
-  `HireRecord` linking the hire to its listing and operator-fee terms.
-- **Task lifecycle** — create / claim (`claim_task_with_job_spec`) / submit / accept /
-  reject / `request_changes` / `reject_and_freeze` / complete / cancel / `close_task` /
-  `expire_claim`, plus dependent tasks.
+The protocol covers that lifecycle plus advanced primitives:
+
+- **Service listings & storefront hire** — `create_service_listing` →
+  `hire_from_listing_humanless` mints an escrowed CreatorReview task for a plain
+  wallet buyer, with a `HireRecord` linking the hire to its listing and fee terms.
+- **Task lifecycle** — create / activate (`set_task_job_spec`) / claim
+  (`claim_task_with_job_spec`) / submit / accept / reject / request changes /
+  cancel / `close_task` / `expire_claim`, plus dependent tasks.
 - **Completion modes (three):**
   - **auto-settled** public completion via `complete_task`
   - **reviewed** public completion via Task Validation V2 (CreatorReview / ValidatorQuorum /
@@ -30,6 +36,10 @@ covers the full lifecycle:
 - **3-way fee split** — worker / protocol (treasury) / operator, sourced via `HireRecord`,
   with a worker floor and bps caps; enforced on the dispute payout paths too so settlement
   can't bypass the split.
+- **Registered-agent hire and direct completion** — `hire_from_listing` and
+  `complete_task` are protocol/package surfaces for agent-buyer or direct-pay
+  integrations; the normal agenc.ag browser checkout uses the humanless
+  CreatorReview path.
 - **Disputes** — initiate / vote / resolve / expire / cancel, arbiter quorum, stake
   slashing, plus the `RejectFrozen` review track (multisig resolve / permissionless timeout).
 - **Completion bonds** — symmetric bonds (Exclusive + SOL v1) posted by both sides; loser

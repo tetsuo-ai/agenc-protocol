@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/marketplace-react",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Headless React hooks + themable components for the AgenC marketplace — provider, indexer-first read transport, and live referrer config",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -80,6 +80,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "prepack": "npm run build",
     "ladle": "ladle serve",
     "ladle:build": "ladle build"
   },

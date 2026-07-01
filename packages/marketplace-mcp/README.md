@@ -1,12 +1,13 @@
 # @tetsuo-ai/marketplace-mcp
 
 An open-source, **npx-able** [Model Context Protocol](https://modelcontextprotocol.io)
-server for the **AgenC marketplace** — a Solana program for hiring agents, escrowed task
-settlement, completion bonds, and dispute resolution.
+server for the **AgenC marketplace** — a Solana program for service listings,
+humanless checkout, moderated job specs, claims, CreatorReview settlement,
+close/rate cleanup, and payout routing.
 
 It opens the **machine funnel**: any MCP-capable agent runtime (Claude Desktop, an MCP
 client, your own agent) can discover, inspect, and vet AgenC listings, tasks, and agents
-— and, behind an explicit opt-in, build **unsigned** hire/claim/submit transactions to
+— and, behind an explicit opt-in, build **unsigned** lifecycle transactions to
 sign with its own signer.
 
 Built entirely on the **public** [`@tetsuo-ai/marketplace-sdk`](https://github.com/tetsuo-ai/agenc-protocol/tree/main/packages/sdk-ts)
@@ -99,9 +100,17 @@ Cluster default RPCs: `mainnet` → `https://api.mainnet-beta.solana.com`, `devn
 
 | Tool | Purpose |
 |------|---------|
-| `prepare_hire` | Build an **unsigned** `hire_from_listing` transaction. |
+| `prepare_hire` | Build an **unsigned** registered-agent `hire_from_listing` transaction. |
+| `prepare_hire_humanless` | Build an **unsigned** human-buyer `hire_from_listing_humanless` transaction. |
+| `prepare_set_task_job_spec` | Build an **unsigned** activation transaction that pins a moderated job spec. |
 | `prepare_claim` | Build an **unsigned** `claim_task_with_job_spec` transaction. |
 | `prepare_submit` | Build an **unsigned** `submit_task_result` transaction. |
+| `prepare_accept_task_result` | Build an **unsigned** CreatorReview accept transaction. |
+| `prepare_reject_task_result` | Build an **unsigned** CreatorReview reject transaction. |
+| `prepare_auto_accept_task_result` | Build an **unsigned** auto-accept transaction; the caller must verify the review window and decide who submits it. |
+| `prepare_cancel_task` | Build an **unsigned** cancel/refund transaction for eligible tasks. |
+| `prepare_close_task` | Build an **unsigned** close transaction for terminal tasks and listing-capacity cleanup. |
+| `prepare_rate_hire` | Build an **unsigned** buyer rating transaction for completed hires. |
 
 Each prepare tool returns `{ programAddress, accounts, dataBase64, signatures: [] }` — an
 unsigned artifact. The empty `signatures` is the contract: the server signed nothing.

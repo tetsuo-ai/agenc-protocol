@@ -4,11 +4,11 @@ Headless React hooks + themable components for the **AgenC marketplace** — bui
 on [`@tetsuo-ai/marketplace-sdk`](../sdk-ts). SSR-safe, tree-shakeable, and zero
 required CSS imports for headless use.
 
-> Status: **foundation layer** (PLAN.md P4.2 / PLAN_2 Part A). This package
-> currently ships `<AgencProvider>`, the read-transport abstraction, the
-> live referrer config, the `--agenc-*` theme contract, and the string
-> catalog. Hooks (`useListings`, `useHire`, …) and components (`ListingCard`, …)
-> land in the next phases and bind to the context exposed here.
+> Status: **early marketplace kit**. This package ships `<AgencProvider>`,
+> read transport, validated referrer config, headless lifecycle hooks including
+> a humanless hire-plus-activation flow, themable components, the `--agenc-*`
+> theme contract, and the string catalog. Live wallet/RPC settlement still
+> depends on the integrator's signer, RPC, and self-hosted moderation boundary.
 
 ## Install
 
@@ -78,6 +78,26 @@ return parity shapes by SDK design, so callers never branch on which is live.
 `listingHires` / `agentTrackRecord` are indexer-native; the gPA fallback rejects
 them with a typed `ReadTransportUnsupportedError`.
 
+## Lifecycle hooks
+
+Hooks are imported from `@tetsuo-ai/marketplace-react/hooks`:
+
+| Hook | Kind | What it gives you |
+|---|---|---|
+| `useListings` / `useListing` | read | active listing discovery and listing detail |
+| `useAgentTrackRecord` | read | completion rate, dispute rate, and slash history |
+| `useTaskStatus` | read | task status with off-path terminal states |
+| `useHire` | write | registered-agent hire and humanless buyer hire; injects validated referrer terms when live |
+| `useHumanlessHireFlow` | write | humanless buyer hire, self-hosted job-spec moderation/hosting, and `set_task_job_spec` activation in one tracked flow |
+| `useTaskActivation` | write | `set_task_job_spec` activation after moderation |
+| `useTaskWork` | write | `claim_task_with_job_spec` and `submit_task_result` |
+| `useSubmissionReview` | write | CreatorReview accept/reject |
+| `useTaskLifecycle` | write | cancel, close, and caller-submitted auto-accept |
+| `useRateHire` | write | buyer rating for completed hires |
+| `useDispute` | advanced write | dispute read/initiate with a host-supplied dispute reader |
+| `useWalletSigner` | wallet | browser wallet to kit `TransactionSigner` bridge |
+| `useReferrerEarnings` | read | indexer-gated earnings status; no fabricated totals |
+
 ## Referrers
 
 Referral settlement is live on the full 84-instruction protocol surface. When
@@ -86,7 +106,18 @@ Referral settlement is live on the full 84-instruction protocol surface. When
 - the provider validates and stores it (bad base58 throws; out-of-range basis
   points are rejected);
 - `resolveReferrerCapability()` returns `{ live: true, referrer }`;
-- `useHire()` injects the referrer fields into standard and humanless hires.
+- `useHire()` injects the referrer fields into standard and humanless hires;
+- `useHumanlessHireFlow()` injects the same provider-level referrer terms and
+  does not accept per-call referrer overrides.
+
+`useHumanlessHireFlow()` is the starter-level buyer checkout helper. It signs
+the humanless hire first, then calls your `hostAndModerateJobSpec` backend seam
+with the derived `taskPda`, `taskId`, listing, job spec, hire signature, and
+referrer audit flag. It signs `set_task_job_spec` only when that backend returns
+`moderationAttested: true`, a 32-byte `Uint8Array` `jobSpecHash`, and a non-empty
+`jobSpecUri`. If hosting, moderation, or activation fails, `progress` preserves
+the completed phase data so the UI can recover or offer refund/activation
+options without pretending the task is claimable.
 
 Aggregated referrer earnings are a separate indexer feature. Until the indexer
 publishes `GET /api/explorer/referrers/:wallet/hires`, `useReferrerEarnings()`

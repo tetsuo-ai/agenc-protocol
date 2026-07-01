@@ -19,13 +19,14 @@ import { address, createNoopSigner } from "@solana/kit";
 import {
   AgencError,
   TaskStatus,
+  findTaskPda,
   type Dispute,
   type IndexerAgentTrackRecord,
   type ServiceListing,
   type Task,
 } from "@tetsuo-ai/marketplace-sdk";
 import { QueryClient } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -42,6 +43,7 @@ import {
   useAgentTrackRecord,
   useDispute,
   useHire,
+  useHumanlessHireFlow,
   useListing,
   useListings,
   useReferrerEarnings,
@@ -105,7 +107,22 @@ function stubClient(overrides: Partial<MarketplaceClient> = {}): MarketplaceClie
     transport: {} as MarketplaceClient["transport"],
     send: vi.fn(async () => ({ signature: "sig-send", logs: [] })),
     hireFromListing: vi.fn(async () => ({ signature: "sig-hire", logs: [] })),
+    hireFromListingHumanless: vi.fn(async () => ({
+      signature: "sig-humanless",
+      logs: [],
+    })),
+    setTaskJobSpec: vi.fn(async () => ({ signature: "sig-activate", logs: [] })),
+    claimTaskWithJobSpec: vi.fn(async () => ({ signature: "sig-claim", logs: [] })),
+    submitTaskResult: vi.fn(async () => ({ signature: "sig-submit", logs: [] })),
     acceptTaskResult: vi.fn(async () => ({ signature: "sig-accept", logs: [] })),
+    rejectTaskResult: vi.fn(async () => ({ signature: "sig-reject", logs: [] })),
+    autoAcceptTaskResult: vi.fn(async () => ({
+      signature: "sig-autoaccept",
+      logs: [],
+    })),
+    cancelTask: vi.fn(async () => ({ signature: "sig-cancel", logs: [] })),
+    closeTask: vi.fn(async () => ({ signature: "sig-close", logs: [] })),
+    rateHire: vi.fn(async () => ({ signature: "sig-rate", logs: [] })),
     initiateDispute: vi.fn(async () => ({ signature: "sig-dispute", logs: [] })),
     ...overrides,
   } as unknown as MarketplaceClient;
@@ -305,6 +322,28 @@ describe("useHire", () => {
     expect(res.taskPda).toBeTruthy();
   });
 
+  it("calls client.hireFromListingHumanless for storefront-visitor hires", async () => {
+    const client = stubClient();
+    const { result } = renderHook(() => useHire(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+    const res = await result.current.hire({
+      listing: PROVIDER_AGENT,
+      taskId: new Uint8Array(32).fill(8),
+      expectedPrice: 1_000_000n,
+      expectedVersion: 1n,
+      listingSpecHash: new Uint8Array(32).fill(9),
+      humanless: true,
+    } as never);
+    expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
+    expect(res.signature).toBe("sig-humanless");
+    expect(res.taskPda).toBeTruthy();
+  });
+
   it("injects a configured referrer into the hire input", async () => {
     const client = stubClient();
     const { result } = renderHook(() => useHire(), {
@@ -321,6 +360,30 @@ describe("useHire", () => {
       .calls[0]![0];
     expect(passed).toHaveProperty("referrer", VALID_WALLET);
     expect(passed).toHaveProperty("referrerFeeBps", 250);
+  });
+
+  it("does not forward per-call referrer fields when provider referrer is absent", async () => {
+    const client = stubClient();
+    const { result } = renderHook(() => useHire(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+    await result.current.hire({
+      listing: PROVIDER_AGENT,
+      creatorAgent: PROVIDER_AGENT,
+      taskId: new Uint8Array(32).fill(7),
+      expectedPrice: 1_000_000n,
+      expectedVersion: 1n,
+      referrer: PROVIDER_AGENT,
+      referrerFeeBps: 999,
+    } as never);
+    const passed = (client.hireFromListing as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0];
+    expect(passed).not.toHaveProperty("referrer");
+    expect(passed).not.toHaveProperty("referrerFeeBps");
   });
 
   it("surfaces a typed AgencError untouched", async () => {
@@ -349,6 +412,399 @@ describe("useHire", () => {
     await expect(result.current.hire(hireArgs)).rejects.toThrowError(
       /No write client/,
     );
+  });
+});
+
+// ----------------------------------------------------------------------------
+// useHumanlessHireFlow
+// ----------------------------------------------------------------------------
+describe("useHumanlessHireFlow", () => {
+  const flowTaskId = new Uint8Array(32).fill(8);
+  const flowHash = new Uint8Array(32).fill(13);
+  const flowJobSpec = { title: "Ship a marketplace audit" };
+  const flowHire = {
+    listing: PROVIDER_AGENT,
+    taskId: flowTaskId,
+    expectedPrice: 1_000_000n,
+    expectedVersion: 1n,
+    reviewWindowSecs: 3600n,
+    listingSpecHash: new Uint8Array(32).fill(9),
+  };
+
+  async function expectedFlowTaskPda() {
+    const [taskPda] = await findTaskPda({
+      creator: address(VALID_WALLET),
+      taskId: flowTaskId,
+    });
+    return taskPda;
+  }
+
+  it("hires, hosts a moderated job spec, and activates the same task", async () => {
+    const client = stubClient();
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/flow.json",
+      moderationAttested: true,
+      moderation: { verdict: "allow" },
+    }));
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    const res = await result.current.hireAndActivate({
+      hire: flowHire,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    });
+    const taskPda = await expectedFlowTaskPda();
+
+    expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
+    expect(hostAndModerateJobSpec).toHaveBeenCalledWith({
+      taskPda,
+      taskId: flowTaskId,
+      listing: PROVIDER_AGENT,
+      jobSpec: flowJobSpec,
+      hireSignature: "sig-humanless",
+      referrerInjected: false,
+    });
+    expect(client.setTaskJobSpec).toHaveBeenCalledTimes(1);
+    const activation = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0];
+    expect(activation.task).toBe(taskPda);
+    expect(activation.creator).toBe(client.signer);
+    expect(activation.jobSpecHash).toBe(flowHash);
+    expect(activation.jobSpecUri).toBe("https://example.test/specs/flow.json");
+    expect(res).toMatchObject({
+      taskPda,
+      hireSignature: "sig-humanless",
+      activationSignature: "sig-activate",
+      jobSpecUri: "https://example.test/specs/flow.json",
+      referrerInjected: false,
+      moderation: { verdict: "allow" },
+    });
+    await waitFor(() => expect(result.current.phase).toBe("activated"));
+    expect(result.current.progress.activationSignature).toBe("sig-activate");
+  });
+
+  it("injects provider referrer config and reports it to the backend seam", async () => {
+    const client = stubClient();
+    const hostAndModerateJobSpec = vi.fn(
+      async (_input: { referrerInjected: boolean }) => ({
+        jobSpecHash: flowHash,
+        jobSpecUri: "https://example.test/specs/referrer.json",
+        moderationAttested: true,
+      }),
+    );
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+        referrer: { wallet: VALID_WALLET, feeBps: 250 },
+      }),
+    });
+
+    const res = await result.current.hireAndActivate({
+      hire: flowHire,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    });
+
+    const hireInput = (client.hireFromListingHumanless as ReturnType<typeof vi.fn>)
+      .mock.calls[0]![0];
+    expect(hireInput).toHaveProperty("referrer", VALID_WALLET);
+    expect(hireInput).toHaveProperty("referrerFeeBps", 250);
+    expect(hostAndModerateJobSpec.mock.calls[0]![0].referrerInjected).toBe(true);
+    expect(res.referrerInjected).toBe(true);
+  });
+
+  it("strips unsafe per-call referrer fields from the flow hire input", async () => {
+    const client = stubClient();
+    const hostAndModerateJobSpec = vi.fn(
+      async (_input: { referrerInjected: boolean }) => ({
+        jobSpecHash: flowHash,
+        jobSpecUri: "https://example.test/specs/no-referrer.json",
+        moderationAttested: true,
+      }),
+    );
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    const res = await result.current.hireAndActivate({
+      hire: {
+        ...flowHire,
+        referrer: PROVIDER_AGENT,
+        referrerFeeBps: 999,
+      } as never,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    });
+
+    const hireInput = (client.hireFromListingHumanless as ReturnType<typeof vi.fn>)
+      .mock.calls[0]![0];
+    expect(hireInput).not.toHaveProperty("referrer");
+    expect(hireInput).not.toHaveProperty("referrerFeeBps");
+    expect(hostAndModerateJobSpec.mock.calls[0]![0].referrerInjected).toBe(false);
+    expect(res.referrerInjected).toBe(false);
+  });
+
+  it("preserves hire progress when the backend moderation request fails", async () => {
+    const backendError = new Error("moderation backend offline");
+    const client = stubClient();
+    const hostAndModerateJobSpec = vi.fn(async () => {
+      throw backendError;
+    });
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    await expect(
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    ).rejects.toBe(backendError);
+
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.progress.taskPda).toBeTruthy();
+    expect(result.current.progress.hireSignature).toBe("sig-humanless");
+    expect(result.current.progress.activationSignature).toBeNull();
+    expect(client.setTaskJobSpec).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-attested moderation before signing activation", async () => {
+    const client = stubClient();
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/rejected.json",
+      moderationAttested: false,
+    }));
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    await expect(
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    ).rejects.toThrow(/not attested/);
+
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.progress.taskPda).toBeTruthy();
+    expect(result.current.progress.hireSignature).toBe("sig-humanless");
+    expect(result.current.progress.jobSpecHash).toBeNull();
+    expect(client.setTaskJobSpec).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid moderation hash and empty URI before activation", async () => {
+    const invalidHashClient = stubClient();
+    const invalidHashHost = vi.fn(async () => ({
+      jobSpecHash: new Uint8Array(31),
+      jobSpecUri: "https://example.test/specs/invalid-hash.json",
+      moderationAttested: true,
+    }));
+    const invalidHash = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client: invalidHashClient,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    await expect(
+      invalidHash.result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec: invalidHashHost,
+      }),
+    ).rejects.toThrow(/invalid jobSpecHash/);
+    expect(invalidHashClient.setTaskJobSpec).not.toHaveBeenCalled();
+
+    const emptyUriClient = stubClient();
+    const emptyUriHost = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "   ",
+      moderationAttested: true,
+    }));
+    const emptyUri = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client: emptyUriClient,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    await expect(
+      emptyUri.result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec: emptyUriHost,
+      }),
+    ).rejects.toThrow(/empty jobSpecUri/);
+    expect(emptyUriClient.setTaskJobSpec).not.toHaveBeenCalled();
+  });
+
+  it("preserves moderation progress when activation signing fails", async () => {
+    const activationError = new AgencError("activation failed", { code: 7001 });
+    const client = stubClient({
+      setTaskJobSpec: vi.fn(async () => {
+        throw activationError;
+      }),
+    });
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/activation-fail.json",
+      moderationAttested: true,
+    }));
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    await expect(
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    ).rejects.toBe(activationError);
+
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.progress.taskPda).toBeTruthy();
+    expect(result.current.progress.hireSignature).toBe("sig-humanless");
+    expect(result.current.progress.jobSpecHash).toBe(flowHash);
+    expect(result.current.progress.jobSpecUri).toBe(
+      "https://example.test/specs/activation-fail.json",
+    );
+    expect(result.current.progress.activationSignature).toBeNull();
+  });
+
+  it("rejects overlapping flow runs so recovery state cannot mix paid hires", async () => {
+    let resolveHost:
+      | ((value: {
+          jobSpecHash: Uint8Array;
+          jobSpecUri: string;
+          moderationAttested: true;
+        }) => void)
+      | undefined;
+    const client = stubClient();
+    const hostAndModerateJobSpec = vi.fn(
+      () =>
+        new Promise<{
+          jobSpecHash: Uint8Array;
+          jobSpecUri: string;
+          moderationAttested: true;
+        }>((resolve) => {
+          resolveHost = resolve;
+        }),
+    );
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    const first = result.current.hireAndActivate({
+      hire: flowHire,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    });
+    await waitFor(() => expect(result.current.phase).toBe("moderating"));
+
+    await expect(
+      result.current.hireAndActivate({
+        hire: { ...flowHire, taskId: new Uint8Array(32).fill(10) },
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    ).rejects.toThrow(/already in progress/);
+
+    expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
+    expect(resolveHost).toBeTypeOf("function");
+    resolveHost?.({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/overlap.json",
+      moderationAttested: true,
+    });
+    await expect(first).resolves.toMatchObject({
+      activationSignature: "sig-activate",
+    });
+  });
+
+  it("errors clearly when no write client is configured", async () => {
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }),
+    });
+
+    await expect(
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec: vi.fn(),
+      }),
+    ).rejects.toThrowError(/No write client/);
+    await waitFor(() => expect(result.current.phase).toBe("idle"));
+  });
+
+  it("reset clears progress and result", async () => {
+    const client = stubClient();
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/reset.json",
+      moderationAttested: true,
+    }));
+    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    await result.current.hireAndActivate({
+      hire: flowHire,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    });
+    await waitFor(() => expect(result.current.phase).toBe("activated"));
+
+    act(() => result.current.reset());
+
+    expect(result.current.phase).toBe("idle");
+    expect(result.current.result).toBeNull();
+    expect(result.current.progress).toMatchObject({
+      taskPda: null,
+      hireSignature: null,
+      activationSignature: null,
+      jobSpecHash: null,
+      jobSpecUri: null,
+      referrerInjected: false,
+    });
   });
 });
 
