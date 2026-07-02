@@ -5,6 +5,18 @@ All notable changes to `@tetsuo-ai/marketplace-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0
+
+### Minor Changes (breaking against pre-A1 programs)
+
+- Rebuild on `@tetsuo-ai/marketplace-sdk@^0.7.0` +
+  `@tetsuo-ai/marketplace-tools@^0.3.0` (WP-A1 roster-gate IDL) so the
+  `prepare_*` tools emit instructions the upgraded mainnet program accepts
+  (the 2026-07-02 upgrade added the optional `moderation_attestor` account to
+  the three moderation consumption gates). 0.2.0 prepares are rejected
+  fail-closed by the deployed program. The 13-prepare-tool surface (19 total
+  with mutations enabled) and the readonly-by-default posture are unchanged.
+
 ## 0.2.0
 
 ### Minor Changes

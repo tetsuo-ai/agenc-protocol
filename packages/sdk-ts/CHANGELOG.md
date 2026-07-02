@@ -1,5 +1,22 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.7.0
+
+### Minor Changes (breaking against pre-A1 programs)
+
+- WP-A1 roster-gate IDL: the three moderation consumption gates gain an
+  optional `moderation_attestor` account — `set_task_job_spec` (7→8 accounts),
+  `hire_from_listing` (12→13), `hire_from_listing_humanless` (11→12) — so
+  attestations signed by a registered, non-revoked `ModerationAttestor` are
+  accepted alongside the global `moderation_authority`. Matches the mainnet
+  program as upgraded 2026-07-02 (program
+  `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`).
+- Breaking: Anchor 0.32 requires optional accounts to be present in the
+  account list (as the program ID sentinel when unset), so sdk 0.6.x-built
+  instructions are rejected (fail-closed) by the upgraded program, and 0.7.0
+  instructions are rejected by pre-A1 deployments. All first-party consumers
+  must move to `^0.7.0` together.
+
 ## 0.6.1
 
 ### Patch Changes
