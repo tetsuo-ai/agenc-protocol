@@ -31,6 +31,22 @@ export const SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL = "ws://127.0.0.1:8900";
 export const DEFAULT_SANDBOX_ATTESTOR_URL =
   "https://sandbox.agenc.tech/api/sandbox/attest";
 
+/**
+ * Shipped default for the hosted marketplace moderation API — the open,
+ * self-hostable service in `github.com/tetsuo-ai/agenc-moderation-api`
+ * (WP-C1/P1.5), deployed at `attest.agenc.ag`. It accepts the same request
+ * body this client sends (`{ spec | specUri, listing? }`) and returns
+ * `{ verdict, riskScore, specHash, attestation, policyHash }`.
+ *
+ * This is the LISTING moderation route. Applies only when nothing else
+ * resolves and the cluster is NOT localnet/devnet — a local sandbox points at
+ * its own attestor via `.localnet/env.json`'s `moderationUrl` /
+ * `AGENC_SANDBOX_MODERATION_URL`. Override for any cluster with that env var
+ * or the `endpoint` option.
+ */
+export const DEFAULT_HOSTED_MODERATION_LISTINGS_URL =
+  "https://attest.agenc.ag/v1/moderation/listings";
+
 /** The clusters the sandbox environment seam can describe. */
 export const SANDBOX_CLUSTERS = ["localnet", "devnet", "mainnet"] as const;
 
@@ -339,10 +355,15 @@ export async function resolveSandboxEnvironment(
   const attestorUrl =
     options.attestorUrl ?? envAttestorUrl ?? DEFAULT_SANDBOX_ATTESTOR_URL;
 
-  // No shipped default: the hosted moderation API (P3.4) is deploy-gated, so
-  // an unset endpoint resolves to null and callers fail with a descriptive
-  // error instead of dialing a dead URL.
-  const moderationUrl = options.moderationUrl ?? envModerationUrl ?? null;
+  // Moderation endpoint resolution: explicit option > env var > shipped hosted
+  // default (mainnet only) > null. The hosted default is the live, open
+  // marketplace moderation API (WP-C1); localnet/devnet resolve to null unless
+  // their env-file/env-var names a local attestor, so a sandbox never silently
+  // dials the mainnet service.
+  const moderationUrl =
+    options.moderationUrl ??
+    envModerationUrl ??
+    (cluster === "mainnet" ? DEFAULT_HOSTED_MODERATION_LISTINGS_URL : null);
 
   const fixtures =
     options.fixtures ??
