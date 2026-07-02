@@ -176,15 +176,19 @@ describe("hireFromListing (facade)", () => {
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // 12 accounts in declared order; only listing/creatorAgent/authority/creator
+    // 13 accounts in declared order; only listing/creatorAgent/authority/creator
     // are caller-supplied, the rest are derived.
-    expect(ix.accounts.length).toBe(12);
+    expect(ix.accounts.length).toBe(13);
     const accts = ix.accounts.map((a) => a.address);
     expect(accts[3]).toBe(listing);
-    expect(accts[7]).toBe(creatorAgent);
-    expect(accts[9]).toBe(authority.address);
-    expect(accts[10]).toBe(creator.address);
-    expect(accts[11]).toBe(SYSTEM_PROGRAM);
+    // WP-A1 inserts the OPTIONAL moderationAttestor roster account (7) right after
+    // listingModeration (6); omitted here -> program-id placeholder, shifting
+    // creatorAgent/authority/creator/systemProgram down one slot.
+    expect(accts[7]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // moderationAttestor omitted
+    expect(accts[8]).toBe(creatorAgent);
+    expect(accts[10]).toBe(authority.address);
+    expect(accts[11]).toBe(creator.address);
+    expect(accts[12]).toBe(SYSTEM_PROGRAM);
 
     const decoded = getHireFromListingInstructionDataDecoder().decode(ix.data);
     expect(decoded.expectedPrice).toBe(1000n);
@@ -234,13 +238,17 @@ describe("hireFromListingHumanless (facade)", () => {
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // 11 accounts in declared order (no creatorAgent — the buyer is a plain
+    // 12 accounts in declared order (no creatorAgent — the buyer is a plain
     // wallet); only listing/creator are caller-supplied, the rest are derived.
-    expect(ix.accounts.length).toBe(11);
+    expect(ix.accounts.length).toBe(12);
     const accts = ix.accounts.map((a) => a.address);
     expect(accts[4]).toBe(listing);
-    expect(accts[9]).toBe(creator.address);
-    expect(accts[10]).toBe(SYSTEM_PROGRAM);
+    // WP-A1 inserts the OPTIONAL moderationAttestor roster account (8) right after
+    // listingModeration (7); omitted here -> program-id placeholder, shifting
+    // creator/systemProgram down one slot.
+    expect(accts[8]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // moderationAttestor omitted
+    expect(accts[10]).toBe(creator.address);
+    expect(accts[11]).toBe(SYSTEM_PROGRAM);
 
     const decoded =
       getHireFromListingHumanlessInstructionDataDecoder().decode(ix.data);

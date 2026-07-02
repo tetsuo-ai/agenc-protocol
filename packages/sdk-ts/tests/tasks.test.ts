@@ -503,9 +503,12 @@ describe("setTaskJobSpec facade instruction", () => {
     const names = ix.accounts.map((a) => a.address);
     // protocolConfig auto-derived (0).
     expect(names[1]).toBe(A); // task
-    // moderationConfig, taskModeration, taskJobSpec auto-derived (2..4).
-    expect(names[5]).toBe(signerA.address); // creator
-    expect(names[6]).toBe(SYSTEM_PROGRAM);
+    // moderationConfig, taskModeration auto-derived (2..3). WP-A1 inserts the OPTIONAL
+    // moderationAttestor roster account (4); omitted here -> program-id placeholder,
+    // which shifts taskJobSpec (5), creator (6), systemProgram (7) down one slot.
+    expect(names[4]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // moderationAttestor omitted
+    expect(names[6]).toBe(signerA.address); // creator
+    expect(names[7]).toBe(SYSTEM_PROGRAM);
 
     const decoded = getSetTaskJobSpecInstructionDataDecoder().decode(ix.data);
     expect(Array.from(decoded.jobSpecHash)).toEqual(Array.from(HASH32));

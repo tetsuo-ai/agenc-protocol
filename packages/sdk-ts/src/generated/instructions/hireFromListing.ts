@@ -77,6 +77,7 @@ export type HireFromListingInstruction<
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountListingModeration extends string | AccountMeta<string> = string,
+  TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountCreatorAgent extends string | AccountMeta<string> = string,
   TAccountAuthorityRateLimit extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
@@ -109,6 +110,9 @@ export type HireFromListingInstruction<
       TAccountListingModeration extends string
         ? ReadonlyAccount<TAccountListingModeration>
         : TAccountListingModeration,
+      TAccountModerationAttestor extends string
+        ? ReadonlyAccount<TAccountModerationAttestor>
+        : TAccountModerationAttestor,
       TAccountCreatorAgent extends string
         ? ReadonlyAccount<TAccountCreatorAgent>
         : TAccountCreatorAgent,
@@ -190,6 +194,7 @@ export type HireFromListingAsyncInput<
   TAccountProtocolConfig extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
+  TAccountModerationAttestor extends string = string,
   TAccountCreatorAgent extends string = string,
   TAccountAuthorityRateLimit extends string = string,
   TAccountAuthority extends string = string,
@@ -220,6 +225,17 @@ export type HireFromListingAsyncInput<
    * bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
    */
   listingModeration?: Address<TAccountListingModeration>;
+  /**
+   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
+   * gate when `listing_moderation` was authored by a non-global-authority attestor.
+   * Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+   * canonical-PDA + moderator binding is enforced in the handler via
+   * `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
+   * is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
+   * Only needed for the roster path; the global-authority path passes with this absent
+   * (`None`), byte-unchanged.
+   */
+  moderationAttestor?: Address<TAccountModerationAttestor>;
   /** Buyer's agent registration for identity/authorization (mirrors create_task). */
   creatorAgent: Address<TAccountCreatorAgent>;
   /** Wallet-scoped task/dispute rate limit state shared across all agents. */
@@ -247,6 +263,7 @@ export async function getHireFromListingInstructionAsync<
   TAccountProtocolConfig extends string,
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
+  TAccountModerationAttestor extends string,
   TAccountCreatorAgent extends string,
   TAccountAuthorityRateLimit extends string,
   TAccountAuthority extends string,
@@ -262,6 +279,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
+    TAccountModerationAttestor,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -279,6 +297,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
+    TAccountModerationAttestor,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -303,6 +322,10 @@ export async function getHireFromListingInstructionAsync<
     },
     listingModeration: {
       value: input.listingModeration ?? null,
+      isWritable: false,
+    },
+    moderationAttestor: {
+      value: input.moderationAttestor ?? null,
       isWritable: false,
     },
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
@@ -377,6 +400,7 @@ export async function getHireFromListingInstructionAsync<
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
+      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("authorityRateLimit", accounts.authorityRateLimit),
       getAccountMeta("authority", accounts.authority),
@@ -396,6 +420,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
+    TAccountModerationAttestor,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -412,6 +437,7 @@ export type HireFromListingInput<
   TAccountProtocolConfig extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
+  TAccountModerationAttestor extends string = string,
   TAccountCreatorAgent extends string = string,
   TAccountAuthorityRateLimit extends string = string,
   TAccountAuthority extends string = string,
@@ -442,6 +468,17 @@ export type HireFromListingInput<
    * bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
    */
   listingModeration?: Address<TAccountListingModeration>;
+  /**
+   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
+   * gate when `listing_moderation` was authored by a non-global-authority attestor.
+   * Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+   * canonical-PDA + moderator binding is enforced in the handler via
+   * `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
+   * is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
+   * Only needed for the roster path; the global-authority path passes with this absent
+   * (`None`), byte-unchanged.
+   */
+  moderationAttestor?: Address<TAccountModerationAttestor>;
   /** Buyer's agent registration for identity/authorization (mirrors create_task). */
   creatorAgent: Address<TAccountCreatorAgent>;
   /** Wallet-scoped task/dispute rate limit state shared across all agents. */
@@ -469,6 +506,7 @@ export function getHireFromListingInstruction<
   TAccountProtocolConfig extends string,
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
+  TAccountModerationAttestor extends string,
   TAccountCreatorAgent extends string,
   TAccountAuthorityRateLimit extends string,
   TAccountAuthority extends string,
@@ -484,6 +522,7 @@ export function getHireFromListingInstruction<
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
+    TAccountModerationAttestor,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -500,6 +539,7 @@ export function getHireFromListingInstruction<
   TAccountProtocolConfig,
   TAccountModerationConfig,
   TAccountListingModeration,
+  TAccountModerationAttestor,
   TAccountCreatorAgent,
   TAccountAuthorityRateLimit,
   TAccountAuthority,
@@ -523,6 +563,10 @@ export function getHireFromListingInstruction<
     },
     listingModeration: {
       value: input.listingModeration ?? null,
+      isWritable: false,
+    },
+    moderationAttestor: {
+      value: input.moderationAttestor ?? null,
       isWritable: false,
     },
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
@@ -558,6 +602,7 @@ export function getHireFromListingInstruction<
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
+      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("authorityRateLimit", accounts.authorityRateLimit),
       getAccountMeta("authority", accounts.authority),
@@ -577,6 +622,7 @@ export function getHireFromListingInstruction<
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
+    TAccountModerationAttestor,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -615,18 +661,29 @@ export type ParsedHireFromListingInstruction<
      * bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
      */
     listingModeration?: TAccountMetas[6] | undefined;
+    /**
+     * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
+     * gate when `listing_moderation` was authored by a non-global-authority attestor.
+     * Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+     * canonical-PDA + moderator binding is enforced in the handler via
+     * `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
+     * is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
+     * Only needed for the roster path; the global-authority path passes with this absent
+     * (`None`), byte-unchanged.
+     */
+    moderationAttestor?: TAccountMetas[7] | undefined;
     /** Buyer's agent registration for identity/authorization (mirrors create_task). */
-    creatorAgent: TAccountMetas[7];
+    creatorAgent: TAccountMetas[8];
     /** Wallet-scoped task/dispute rate limit state shared across all agents. */
-    authorityRateLimit: TAccountMetas[8];
+    authorityRateLimit: TAccountMetas[9];
     /** The authority that owns the buyer's agent. */
-    authority: TAccountMetas[9];
+    authority: TAccountMetas[10];
     /**
      * The buyer who pays for and owns the hired task.
      * Must match authority to prevent social-engineering attacks (#375).
      */
-    creator: TAccountMetas[10];
-    systemProgram: TAccountMetas[11];
+    creator: TAccountMetas[11];
+    systemProgram: TAccountMetas[12];
   };
   data: HireFromListingInstructionData;
 };
@@ -639,12 +696,12 @@ export function parseHireFromListingInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedHireFromListingInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 12) {
+  if (instruction.accounts.length < 13) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 12,
+        expectedAccountMetas: 13,
       },
     );
   }
@@ -670,6 +727,7 @@ export function parseHireFromListingInstruction<
       protocolConfig: getNextAccount(),
       moderationConfig: getNextAccount(),
       listingModeration: getNextOptionalAccount(),
+      moderationAttestor: getNextOptionalAccount(),
       creatorAgent: getNextAccount(),
       authorityRateLimit: getNextAccount(),
       authority: getNextAccount(),
