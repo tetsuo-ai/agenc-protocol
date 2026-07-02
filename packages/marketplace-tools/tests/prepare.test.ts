@@ -241,6 +241,55 @@ describe("prepare_set_task_job_spec handler", () => {
   });
 });
 
+describe("A1 roster-gate account shapes (sdk ^0.7.0 cutover pin)", () => {
+  // The 2026-07-02 mainnet upgrade (WP-A1) added an optional
+  // moderation_attestor account to the three moderation consumption gates.
+  // Anchor 0.32 requires optional accounts present (program-id sentinel when
+  // unset), so the deployed program rejects the old 7/12/11 shapes outright.
+  // These exact counts fail against sdk 0.6.x — they pin the cutover.
+  it("prepare_set_task_job_spec emits the 8-account post-A1 shape", async () => {
+    const ix = (await getTool("prepare_set_task_job_spec")!.handler(
+      {
+        task: A_TASK_PDA,
+        creator: A_AUTHORITY,
+        jobSpecHash: HEX32,
+        jobSpecUri: "agenc://job-spec/sha256/test",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.accounts).toHaveLength(8);
+  });
+
+  it("prepare_hire emits the 13-account post-A1 shape", async () => {
+    const ix = (await getTool("prepare_hire")!.handler(
+      {
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        creatorAgent: A_PROVIDER,
+        taskId: HEX32,
+        expectedPrice: "50000000",
+        expectedVersion: "4",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.accounts).toHaveLength(13);
+  });
+
+  it("prepare_hire_humanless emits the 12-account post-A1 shape", async () => {
+    const ix = (await getTool("prepare_hire_humanless")!.handler(
+      {
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        taskId: HEX32,
+        expectedPrice: "50000000",
+        expectedVersion: "4",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.accounts).toHaveLength(12);
+  });
+});
+
 describe("prepare_claim handler", () => {
   it("returns an unsigned claim instruction with no signatures", async () => {
     const ix = (await getTool("prepare_claim")!.handler(

@@ -5,6 +5,18 @@ All notable changes to `@tetsuo-ai/marketplace-tools` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0
+
+### Minor Changes (breaking against pre-A1 programs)
+
+- Rebuild on `@tetsuo-ai/marketplace-sdk@^0.7.0` (WP-A1 roster-gate IDL) so
+  prepared instructions match the mainnet program as upgraded 2026-07-02:
+  `prepare_set_task_job_spec` and the hire prepares now emit the optional
+  `moderation_attestor` account (the gates are 8/13/12 accounts). 0.2.0
+  (sdk 0.6.x) instructions are rejected fail-closed by the upgraded program —
+  all consumers should move to 0.3.0. The 13-prepare-tool surface (19 total
+  with mutations enabled) is unchanged.
+
 ## 0.2.0
 
 ### Minor Changes

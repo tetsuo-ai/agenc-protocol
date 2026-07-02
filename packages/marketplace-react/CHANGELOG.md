@@ -1,5 +1,17 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.3.0
+
+### Minor Changes (breaking against pre-A1 programs)
+
+- Require `@tetsuo-ai/marketplace-sdk@^0.7.0` as the peer dependency (was
+  `^0.4.0 || ^0.5.0 || ^0.6.0`). The mainnet program was upgraded 2026-07-02
+  with the WP-A1 roster moderation gates (breaking IDL: an optional
+  `moderation_attestor` account on `set_task_job_spec` /
+  `hire_from_listing` / `hire_from_listing_humanless`); hooks driving those
+  instructions through an older sdk are rejected fail-closed by the deployed
+  program, so the old peer range would resolve to broken installs.
+
 ## 0.2.0
 
 ### Minor Changes
