@@ -9,7 +9,8 @@
     "packages/sdk-ts",
     "packages/marketplace-react",
     "packages/marketplace-tools",
-    "packages/marketplace-mcp"
+    "packages/marketplace-mcp",
+    "packages/marketplace-moderation"
   ],
   "scripts": {
     "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs && npm run sync:artifacts",
