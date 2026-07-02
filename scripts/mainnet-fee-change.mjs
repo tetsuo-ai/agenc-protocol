@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 // Mainnet protocol-fee change via on-chain governance (FeeChange proposal).
 //
-// THE FEE IS NOT CHANGEABLE BY THE AUTHORITY DIRECTLY: after initialization the
-// only path to a new protocol_fee_bps is the governance pipeline —
+// TWO PATHS exist to change protocol_fee_bps; this script drives the second:
+//
+//   A. Direct `update_protocol_fee` — requires the on-chain multisig
+//      configured in ProtocolConfig (threshold >= 2 enforced in
+//      utils/multisig.rs:require_multisig_threshold; it hard-fails when no
+//      owners are configured). Live mainnet decode 2026-07-02:
+//      multisig_owners_len=3, threshold=2 — so this path IS operable with
+//      2-of-3 signatures. Not what this script does.
+//
+//   B. The governance FeeChange pipeline (this script; field-proven — the
+//      live 100→500 bps change ran through it, total_proposals=1 on-chain) —
 //
 //   0. initialize_governance   (ONE-TIME; signed by ProtocolConfig.authority.
 //                               PARAMETERS ARE PERMANENT — there is no
