@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   posture: run remote/HTTP connectors readonly; local `stdio` MCP + CLI is the
   keyless write (unsigned-`prepare_*`) path.
 
+  `prepare_register_agent` also guards the one fixed on-chain invariant it can
+  cheaply catch: it rejects a `capabilities` of `0` up-front with
+  `INVALID_CAPABILITIES` (`register_agent` enforces `capabilities != 0`), so a
+  doomed instruction never reaches signing. Its schema now also documents that
+  `stakeAmount` must meet the deployment's `config.min_agent_stake` (mainnet
+  default `1_000_000` lamports), which the keyless builder cannot read and so
+  does not guard.
+
 - 68df233: Add keyless prepare support for service-listing creation and registered-hire referrer arguments.
 
 ## [0.1.0] - 2026-06-10
