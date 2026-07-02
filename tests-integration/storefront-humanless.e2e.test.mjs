@@ -46,7 +46,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
     .hireFromListingHumanless(arr(taskId), new BN(price), new BN(1), new BN(3600), null, 0)
     .accounts({
       task, escrow, hireRecord, taskValidationConfig: validation, listing: w.listing,
-      protocolConfig: w.protocolPda, moderationConfig: w.modCfg, listingModeration: listingMod,
+      protocolConfig: w.protocolPda, moderationConfig: w.modCfg, listingModeration: listingMod, moderationAttestor: null,
       authorityRateLimit: rateLimit, creator: human.publicKey, systemProgram: SystemProgram.programId,
     })
     .instruction(), [human]), "store:hire-humanless");
@@ -72,7 +72,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
 
   expectOk(send(w.svm, await humanProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: human.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: human.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [human]), "store:publish (human creator, no agent)");
 
   expectOk(send(w.svm, await w.providerProg.methods
