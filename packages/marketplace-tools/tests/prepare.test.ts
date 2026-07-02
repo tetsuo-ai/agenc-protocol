@@ -475,4 +475,30 @@ describe("prepare_register_agent handler", () => {
       ),
     ).rejects.toBeInstanceOf(MarketplaceToolError);
   });
+
+  it("rejects a zero capabilities bitmask up-front (fixed on-chain invariant)", async () => {
+    // register_agent.rs: require!(capabilities != 0, InvalidCapabilities).
+    // capabilities == 0 is never valid under any config, so the prepare tool
+    // must reject it client-side instead of returning a doomed instruction.
+    // REVERT PROOF: delete the `capabilities === 0n` guard in the handler and
+    // this test goes red (the tool builds and returns an instruction instead).
+    const err = await getTool("prepare_register_agent")!
+      .handler(
+        {
+          authority: A_AUTHORITY,
+          agentId: HEX32,
+          capabilities: "0",
+          endpoint: "http://agent.test",
+        },
+        ctx,
+      )
+      .then(
+        () => {
+          throw new Error("expected a throw, got a built instruction");
+        },
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(MarketplaceToolError);
+    expect((err as MarketplaceToolError).code).toBe("INVALID_CAPABILITIES");
+  });
 });

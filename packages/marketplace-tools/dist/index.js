@@ -946,7 +946,7 @@ var prepareRegisterAgent = defineTool({
       },
       capabilities: {
         type: "string",
-        description: "Capability bitmask this agent advertises, as a decimal u64 string."
+        description: "Capability bitmask this agent advertises, as a NON-ZERO decimal u64 string. register_agent rejects 0 on-chain (CoordinationError::InvalidCapabilities), so this tool rejects it up-front rather than returning a doomed instruction."
       },
       endpoint: {
         type: "string",
@@ -958,15 +958,23 @@ var prepareRegisterAgent = defineTool({
       },
       stakeAmount: {
         type: "string",
-        description: 'Optional stake in lamports as a decimal u64 string. Omit (or "0") for no stake.'
+        description: "Optional stake in lamports as a decimal u64 string. Omit (defaults to 0) for no stake. NOTE: register_agent requires stakeAmount >= the on-chain config.min_agent_stake (mainnet default 1_000_000 lamports = 0.001 SOL); the default 0 is rejected at broadcast whenever a non-zero minimum stake is configured. This tool cannot read the live minimum (keyless prepare-only builder), so it does not guard it \u2014 supply a stake that meets the deployment's minimum."
       }
     }
   },
   async handler(args) {
+    const capabilities = BigInt(args.capabilities);
+    if (capabilities === 0n) {
+      throw new MarketplaceToolError(
+        "INVALID_CAPABILITIES",
+        "prepare_register_agent: capabilities must be a non-zero decimal u64 bitmask \u2014 register_agent enforces capabilities != 0 on-chain (CoordinationError::InvalidCapabilities)",
+        "prepare_register_agent"
+      );
+    }
     const ix = await facade2.registerAgent({
       authority: createNoopSigner(args.authority),
       agentId: hex32(args.agentId, "agentId", "prepare_register_agent"),
-      capabilities: BigInt(args.capabilities),
+      capabilities,
       endpoint: args.endpoint,
       metadataUri: args.metadataUri ?? null,
       stakeAmount: BigInt(args.stakeAmount ?? "0")
