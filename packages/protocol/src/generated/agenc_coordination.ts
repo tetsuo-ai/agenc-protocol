@@ -6439,6 +6439,20 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "moderationAttestor",
+          "docs": [
+            "OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire",
+            "gate when `listing_moderation` was authored by a non-global-authority attestor.",
+            "Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the",
+            "canonical-PDA + moderator binding is enforced in the handler via",
+            "`resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry",
+            "is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).",
+            "Only needed for the roster path; the global-authority path passes with this absent",
+            "(`None`), byte-unchanged."
+          ],
+          "optional": true
+        },
+        {
           "name": "creatorAgent",
           "docs": [
             "Buyer's agent registration for identity/authorization (mirrors create_task)."
@@ -6821,6 +6835,18 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire",
+            "gate when `listing_moderation` was authored by a non-global-authority attestor. Bound",
+            "to the STORED `listing_moderation.moderator` in the handler via `resolve_listing_attestor`",
+            "(Anchor cannot seed off the optional `listing_moderation`). `Account<ModerationAttestor>`",
+            "guarantees the entry is program-owned and non-revoked. Global-authority path passes with",
+            "this absent (`None`), byte-unchanged."
+          ],
+          "optional": true
         },
         {
           "name": "authorityRateLimit",
@@ -11466,6 +11492,54 @@ export type AgencCoordination = {
               {
                 "kind": "arg",
                 "path": "jobSpecHash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationAttestor",
+          "docs": [
+            "OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the",
+            "publish gate when the task-moderation was authored by a non-global-authority",
+            "attestor. Bound by seeds to `task_moderation.moderator` (the STORED moderator, not",
+            "the signer/creator) with `attestor == task_moderation.moderator`, so Anchor enforces",
+            "the canonical roster PDA — a forged/mismatched entry fails account resolution, and a",
+            "REVOKED attestor's PDA is closed and fails to load (cannot unlock). Only needed when",
+            "`task_moderation.moderator != moderation_config.moderation_authority`; the global",
+            "authority path passes with this account absent (`None`), byte-unchanged. Full-surface",
+            "only — gated so the frozen canary account list for `set_task_job_spec` is unchanged."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task_moderation.moderator",
+                "account": "taskModeration"
               }
             ]
           }
@@ -22178,6 +22252,18 @@ export type AgencCoordination = {
             "type": "u16"
           },
           {
+            "name": "moderationAttestor",
+            "docs": [
+              "WP-A1 roster telemetry: the registered `ModerationAttestor` wallet whose",
+              "listing attestation unlocked this hire, or `None` when the listing-moderation",
+              "was authored by the global `ModerationConfig.moderation_authority` (or when",
+              "moderation is disabled)."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
             "name": "timestamp",
             "type": "i64"
           }
@@ -23781,6 +23867,17 @@ export type AgencCoordination = {
           {
             "name": "jobSpecUri",
             "type": "string"
+          },
+          {
+            "name": "moderationAttestor",
+            "docs": [
+              "WP-A1 roster telemetry: the registered `ModerationAttestor` wallet whose",
+              "attestation unlocked this publish, or `None` when the task-moderation was",
+              "authored by the global `ModerationConfig.moderation_authority`."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
           },
           {
             "name": "timestamp",

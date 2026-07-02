@@ -100,7 +100,7 @@ async function setupSubmittedManual(w) {
     .instruction(), [w.modAuth]), "trk:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/trk")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "trk:publish");
 
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
@@ -217,7 +217,7 @@ async function hireClaimDispute(w, { resolutionType }) {
     .instruction(), [w.modAuth]), "disp-trk:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/disp")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "disp-trk:publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()

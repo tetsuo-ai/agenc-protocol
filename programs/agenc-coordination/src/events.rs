@@ -87,6 +87,10 @@ pub struct TaskJobSpecSet {
     pub creator: Pubkey,
     pub job_spec_hash: [u8; HASH_SIZE],
     pub job_spec_uri: String,
+    /// WP-A1 roster telemetry: the registered `ModerationAttestor` wallet whose
+    /// attestation unlocked this publish, or `None` when the task-moderation was
+    /// authored by the global `ModerationConfig.moderation_authority`.
+    pub moderation_attestor: Option<Pubkey>,
     pub timestamp: i64,
 }
 
@@ -893,6 +897,11 @@ pub struct ServiceListingHired {
     pub total_hires: u64,
     /// Concurrent open hires after this one (capacity counter).
     pub open_jobs: u16,
+    /// WP-A1 roster telemetry: the registered `ModerationAttestor` wallet whose
+    /// listing attestation unlocked this hire, or `None` when the listing-moderation
+    /// was authored by the global `ModerationConfig.moderation_authority` (or when
+    /// moderation is disabled).
+    pub moderation_attestor: Option<Pubkey>,
     pub timestamp: i64,
 }
 

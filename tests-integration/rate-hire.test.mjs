@@ -63,7 +63,7 @@ async function hireToCompleted(w) {
     .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0)
     .accounts({
       task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
-      moderationConfig: w.modCfg, listingModeration: listingMod,
+      moderationConfig: w.modCfg, listingModeration: listingMod, moderationAttestor: null,
       creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey,
       creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,
     })
@@ -82,7 +82,7 @@ async function hireToCompleted(w) {
 
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "rate-hire:publish");
 
   expectOk(send(w.svm, await w.providerProg.methods

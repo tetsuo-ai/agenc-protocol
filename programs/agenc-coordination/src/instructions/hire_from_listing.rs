@@ -31,8 +31,8 @@ use crate::instructions::task_init_helpers::{
 };
 use crate::state::{
     is_publishable_task_moderation_status, AgentRegistration, AuthorityRateLimit, HireRecord,
-    ListingModeration, ListingState, ModerationConfig, ProtocolConfig, ServiceListing, Task,
-    TaskEscrow, TaskType, TASK_MODERATION_RISK_SCORE_MAX,
+    ListingModeration, ListingState, ModerationAttestor, ModerationConfig, ProtocolConfig,
+    ServiceListing, Task, TaskEscrow, TaskType, TASK_MODERATION_RISK_SCORE_MAX,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -127,23 +127,32 @@ pub(crate) fn validate_listing_spec_hash(spec_hash: &[u8; 32]) -> Result<()> {
 
 /// Hire-time moderation gate (spec §6). When `ModerationConfig.enabled`, a hire may
 /// only mint a live task if the listing's pinned `spec_hash` carries a publishable
-/// attestation (CLEAN | HUMAN_APPROVED, unexpired) recorded by the moderation
-/// authority. Pure + revert-sensitive; mirrors
+/// attestation (CLEAN | HUMAN_APPROVED, unexpired) authored by an authorized moderator.
+/// Pure + revert-sensitive; mirrors
 /// `set_task_job_spec::validate_task_moderation_for_job_spec` but listing/spec-keyed
 /// (the task-bound `TaskModeration` PDA can't exist before the task is minted).
+///
+/// WP-A1: the attestation's `moderator` is accepted when it is EITHER the global
+/// `ModerationConfig.moderation_authority` OR a registered, non-revoked
+/// `ModerationAttestor` (signalled by `attestor_supplied`). `attestor_supplied` is proven
+/// by the caller in the handler via `resolve_listing_attestor` (canonical roster PDA for
+/// `listing_moderation.moderator` + `attestor == moderator`); a revoked attestor's PDA is
+/// closed and cannot be supplied. Every other attestation check is unchanged, so a roster
+/// attestor can only unlock a genuinely publishable, correctly-bound listing attestation.
 pub(crate) fn validate_listing_moderation_for_hire(
     moderation_config: &ModerationConfig,
     listing_moderation: &ListingModeration,
     listing_key: Pubkey,
     listing_spec_hash: &[u8; 32],
     now: i64,
+    attestor_supplied: bool,
 ) -> Result<()> {
     require!(
         moderation_config.moderation_authority != Pubkey::default(),
         CoordinationError::InvalidTaskModerationAuthority
     );
     require!(
-        listing_moderation.moderator == moderation_config.moderation_authority,
+        listing_moderation.moderator == moderation_config.moderation_authority || attestor_supplied,
         CoordinationError::UnauthorizedTaskModerator
     );
     require!(
@@ -167,6 +176,45 @@ pub(crate) fn validate_listing_moderation_for_hire(
         CoordinationError::TaskModerationExpired
     );
     Ok(())
+}
+
+/// WP-A1: resolve whether an optional `ModerationAttestor` roster entry authorizes a hire
+/// whose listing attestation was authored by `moderator`.
+///
+/// The hire instructions cannot bind the optional attestor account to
+/// `listing_moderation.moderator` with Anchor seeds (Anchor cannot seed one optional
+/// account off another optional account's field), so the roster binding is enforced here:
+///   1. `attestor_wallet == moderator` — the passed roster entry is the moderator's OWN
+///      entry, which also proves the moderator is STILL on the roster at hire time (a
+///      revoked attestor's PDA is closed and cannot be supplied, so its `Account`
+///      deserialization would already have failed). Passing some *other* still-valid
+///      attestor's entry can never satisfy this.
+///   2. `attestor_pda == find_program_address(["moderation_attestor", moderator])` — pins
+///      the canonical roster PDA (defense-in-depth; `assign_moderation_attestor` always
+///      stores `attestor == seed`, so (1) already implies this).
+///
+/// Returns `Ok(Some(attestor_wallet))` for the roster path, `Ok(None)` for the
+/// global-authority path (no attestor supplied). Pure + revert-sensitive.
+pub(crate) fn resolve_listing_attestor(
+    attestor_wallet: Option<Pubkey>,
+    attestor_pda: Option<Pubkey>,
+    moderator: Pubkey,
+) -> Result<Option<Pubkey>> {
+    match (attestor_wallet, attestor_pda) {
+        (Some(wallet), Some(pda)) => {
+            require!(
+                wallet == moderator,
+                CoordinationError::ModerationAttestorMismatch
+            );
+            let (expected, _bump) = Pubkey::find_program_address(
+                &[b"moderation_attestor", moderator.as_ref()],
+                &crate::ID,
+            );
+            require!(pda == expected, CoordinationError::ModerationAttestorMismatch);
+            Ok(Some(wallet))
+        }
+        _ => Ok(None),
+    }
 }
 
 #[derive(Accounts)]
@@ -230,6 +278,16 @@ pub struct HireFromListing<'info> {
         bump = listing_moderation.bump
     )]
     pub listing_moderation: Option<Box<Account<'info, ListingModeration>>>,
+
+    /// OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
+    /// gate when `listing_moderation` was authored by a non-global-authority attestor.
+    /// Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+    /// canonical-PDA + moderator binding is enforced in the handler via
+    /// `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
+    /// is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
+    /// Only needed for the roster path; the global-authority path passes with this absent
+    /// (`None`), byte-unchanged.
+    pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
 
     /// Buyer's agent registration for identity/authorization (mirrors create_task).
     #[account(
@@ -313,18 +371,30 @@ pub fn handler(
     // account, so an unconfigured marketplace can't hire. When enabled, the hire
     // must present a publishable listing-level attestation for the pinned spec_hash.
     // When disabled, keep Model-A (the existing set_task_job_spec path gates go-live).
+    //
+    // WP-A1 roster-honored gate: the listing attestation may be authored by the global
+    // moderation authority OR a registered, non-revoked ModerationAttestor. The optional
+    // attestor account is bound to the STORED `lm.moderator` in the handler (Anchor cannot
+    // seed it off an optional account) and only matters for the roster path.
+    let mut unlocking_attestor: Option<Pubkey> = None;
     if ctx.accounts.moderation_config.enabled {
         let lm = ctx
             .accounts
             .listing_moderation
             .as_ref()
             .ok_or(CoordinationError::TaskModerationRequired)?;
+        unlocking_attestor = resolve_listing_attestor(
+            ctx.accounts.moderation_attestor.as_ref().map(|a| a.attestor),
+            ctx.accounts.moderation_attestor.as_ref().map(|a| a.key()),
+            lm.moderator,
+        )?;
         validate_listing_moderation_for_hire(
             ctx.accounts.moderation_config.as_ref(),
             lm.as_ref(),
             listing_key,
             &listing_spec_hash,
             clock.unix_timestamp,
+            unlocking_attestor.is_some(),
         )?;
     }
 
@@ -477,6 +547,7 @@ pub fn handler(
         price: reward_amount,
         total_hires,
         open_jobs,
+        moderation_attestor: unlocking_attestor,
         timestamp: clock.unix_timestamp,
     });
 
@@ -610,7 +681,7 @@ mod tests {
     fn moderation_allows_clean_or_human_approved() {
         for status in [0u8 /*CLEAN*/, 4u8 /*HUMAN_APPROVED*/] {
             let (c, m, l, h) = mod_case(status, 0);
-            assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_ok());
+            assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100, false).is_ok());
         }
     }
 
@@ -619,7 +690,7 @@ mod tests {
     fn moderation_rejects_unpublishable_status() {
         for status in [1u8, 2u8, 3u8, 5u8] {
             let (c, m, l, h) = mod_case(status, 0);
-            assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_err());
+            assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100, false).is_err());
         }
     }
 
@@ -628,35 +699,115 @@ mod tests {
         let (c, m, l, _h) = mod_case(0, 0);
         let mut other = [0u8; 32];
         other[0] = 9;
-        assert!(validate_listing_moderation_for_hire(&c, &m, l, &other, 100).is_err());
+        assert!(validate_listing_moderation_for_hire(&c, &m, l, &other, 100, false).is_err());
     }
 
     #[test]
     fn moderation_rejects_listing_mismatch() {
         let (c, m, _l, h) = mod_case(0, 0);
-        assert!(
-            validate_listing_moderation_for_hire(&c, &m, Pubkey::new_unique(), &h, 100).is_err()
-        );
+        assert!(validate_listing_moderation_for_hire(
+            &c,
+            &m,
+            Pubkey::new_unique(),
+            &h,
+            100,
+            false
+        )
+        .is_err());
     }
 
     #[test]
     fn moderation_rejects_expired() {
         let (c, m, l, h) = mod_case(0, 99);
-        assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_err());
+        assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100, false).is_err());
         // unexpired (expires_at >= now) is fine
         let (c2, m2, l2, h2) = mod_case(0, 100);
-        assert!(validate_listing_moderation_for_hire(&c2, &m2, l2, &h2, 100).is_ok());
+        assert!(validate_listing_moderation_for_hire(&c2, &m2, l2, &h2, 100, false).is_ok());
     }
 
     #[test]
     fn moderation_rejects_wrong_moderator_and_zero_authority() {
         let (c, mut m, l, h) = mod_case(0, 0);
         m.moderator = Pubkey::new_unique(); // not the moderation authority
-        assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100).is_err());
+        assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100, false).is_err());
 
         let (mut c2, m2, l2, h2) = mod_case(0, 0);
         c2.moderation_authority = Pubkey::default();
-        assert!(validate_listing_moderation_for_hire(&c2, &m2, l2, &h2, 100).is_err());
+        assert!(validate_listing_moderation_for_hire(&c2, &m2, l2, &h2, 100, false).is_err());
+    }
+
+    // WP-A1 revert-sensitive: a registered roster attestor (moderator != global authority)
+    // unlocks the hire gate. Against the pre-fix predicate (`moderator == authority`) this
+    // errors, turning the test red.
+    #[test]
+    fn moderation_allows_registered_roster_attestor() {
+        let (c, mut m, l, h) = mod_case(0, 0);
+        m.moderator = Pubkey::new_unique(); // authored by a roster attestor, not the authority
+        assert_ne!(m.moderator, c.moderation_authority);
+        assert!(validate_listing_moderation_for_hire(&c, &m, l, &h, 100, true).is_ok());
+    }
+
+    // WP-A1 fail-closed guard: a non-authority moderator with NO roster entry supplied is
+    // rejected (the gate never fails open).
+    #[test]
+    fn moderation_rejects_non_authority_without_attestor() {
+        let (c, mut m, l, h) = mod_case(0, 0);
+        m.moderator = Pubkey::new_unique();
+        let err = validate_listing_moderation_for_hire(&c, &m, l, &h, 100, false).unwrap_err();
+        assert_eq!(err, CoordinationError::UnauthorizedTaskModerator.into());
+    }
+
+    // WP-A1: a supplied roster entry does NOT bypass the other attestation invariants — a
+    // blocked status still fails even for a roster attestor.
+    #[test]
+    fn roster_attestor_cannot_hire_blocked_listing() {
+        let (c, mut m, l, h) = mod_case(2 /*BLOCKED*/, 0);
+        m.moderator = Pubkey::new_unique();
+        let err = validate_listing_moderation_for_hire(&c, &m, l, &h, 100, true).unwrap_err();
+        assert_eq!(err, CoordinationError::TaskModerationRejected.into());
+    }
+
+    // WP-A1 roster binding (resolve_listing_attestor): the passed entry must be the
+    // moderator's OWN canonical roster PDA.
+    #[test]
+    fn resolve_listing_attestor_accepts_canonical_entry() {
+        let moderator = Pubkey::new_unique();
+        let (pda, _bump) = Pubkey::find_program_address(
+            &[b"moderation_attestor", moderator.as_ref()],
+            &crate::ID,
+        );
+        // Roster entry for `moderator`, canonical PDA -> unlocks, returns the attestor wallet.
+        assert_eq!(
+            resolve_listing_attestor(Some(moderator), Some(pda), moderator).unwrap(),
+            Some(moderator)
+        );
+        // No entry supplied -> global-authority path (None).
+        assert_eq!(
+            resolve_listing_attestor(None, None, moderator).unwrap(),
+            None
+        );
+    }
+
+    // WP-A1 security: passing SOME OTHER attestor's entry (wallet != moderator) is rejected,
+    // so a revoked moderator cannot be substituted by an unrelated still-valid attestor.
+    #[test]
+    fn resolve_listing_attestor_rejects_foreign_entry() {
+        let moderator = Pubkey::new_unique();
+        let other = Pubkey::new_unique();
+        let (other_pda, _bump) =
+            Pubkey::find_program_address(&[b"moderation_attestor", other.as_ref()], &crate::ID);
+        let err = resolve_listing_attestor(Some(other), Some(other_pda), moderator).unwrap_err();
+        assert_eq!(err, CoordinationError::ModerationAttestorMismatch.into());
+    }
+
+    // WP-A1 security: a wallet that matches the moderator but a non-canonical PDA (defense
+    // in depth) is rejected.
+    #[test]
+    fn resolve_listing_attestor_rejects_non_canonical_pda() {
+        let moderator = Pubkey::new_unique();
+        let err = resolve_listing_attestor(Some(moderator), Some(Pubkey::new_unique()), moderator)
+            .unwrap_err();
+        assert_eq!(err, CoordinationError::ModerationAttestorMismatch.into());
     }
 
     #[test]

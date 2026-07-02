@@ -10,11 +10,13 @@ import {
   getAddressDecoder,
   getBytesDecoder,
   getI64Decoder,
+  getOptionDecoder,
   getStructDecoder,
   getU32Decoder,
   getUtf8Decoder,
   type Address,
   type Decoder,
+  type Option,
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
@@ -29,6 +31,12 @@ export type TaskJobSpecSetEventData = {
   creator: Address;
   jobSpecHash: ReadonlyUint8Array;
   jobSpecUri: string;
+  /**
+   * WP-A1 roster telemetry: the registered `ModerationAttestor` wallet whose
+   * attestation unlocked this publish, or `None` when the task-moderation was
+   * authored by the global `ModerationConfig.moderation_authority`.
+   */
+  moderationAttestor: Option<Address>;
   timestamp: bigint;
 };
 
@@ -42,6 +50,7 @@ export function getTaskJobSpecSetEventDecoder(): Decoder<TaskJobSpecSetEventData
     ["creator", getAddressDecoder()],
     ["jobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["jobSpecUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["moderationAttestor", getOptionDecoder(getAddressDecoder())],
     ["timestamp", getI64Decoder()],
   ]);
 }

@@ -19,8 +19,8 @@ use crate::errors::CoordinationError;
 use crate::events::{ServiceListingHired, TaskCreated};
 use crate::instructions::completion_helpers::resolve_referrer_snapshot;
 use crate::instructions::hire_from_listing::{
-    hire_deadline_offset, validate_hire_terms, validate_listing_capacity,
-    validate_listing_moderation_for_hire, validate_listing_spec_hash,
+    hire_deadline_offset, resolve_listing_attestor, validate_hire_terms,
+    validate_listing_capacity, validate_listing_moderation_for_hire, validate_listing_spec_hash,
 };
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
@@ -29,9 +29,9 @@ use crate::instructions::task_init_helpers::{
 };
 use crate::instructions::task_validation_helpers::validate_review_window_for_mode;
 use crate::state::{
-    AuthorityRateLimit, HireRecord, ListingModeration, ModerationConfig, ProtocolConfig,
-    ServiceListing, Task, TaskEscrow, TaskType, TaskValidationConfig, ValidationMode,
-    MANUAL_VALIDATION_SENTINEL,
+    AuthorityRateLimit, HireRecord, ListingModeration, ModerationAttestor, ModerationConfig,
+    ProtocolConfig, ServiceListing, Task, TaskEscrow, TaskType, TaskValidationConfig,
+    ValidationMode, MANUAL_VALIDATION_SENTINEL,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -106,6 +106,14 @@ pub struct HireFromListingHumanless<'info> {
     )]
     pub listing_moderation: Option<Box<Account<'info, ListingModeration>>>,
 
+    /// OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
+    /// gate when `listing_moderation` was authored by a non-global-authority attestor. Bound
+    /// to the STORED `listing_moderation.moderator` in the handler via `resolve_listing_attestor`
+    /// (Anchor cannot seed off the optional `listing_moderation`). `Account<ModerationAttestor>`
+    /// guarantees the entry is program-owned and non-revoked. Global-authority path passes with
+    /// this absent (`None`), byte-unchanged.
+    pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
+
     /// Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent).
     #[account(
         init_if_needed,
@@ -172,19 +180,28 @@ pub fn handler(
     )?;
     validate_listing_capacity(listing.open_jobs, listing.max_open_jobs)?;
 
-    // Hire-time moderation gate (§6), fail-closed.
+    // Hire-time moderation gate (§6), fail-closed. WP-A1: the listing attestation may be
+    // authored by the global moderation authority OR a registered, non-revoked
+    // ModerationAttestor (bound to the STORED `lm.moderator` via `resolve_listing_attestor`).
+    let mut unlocking_attestor: Option<Pubkey> = None;
     if ctx.accounts.moderation_config.enabled {
         let lm = ctx
             .accounts
             .listing_moderation
             .as_ref()
             .ok_or(CoordinationError::TaskModerationRequired)?;
+        unlocking_attestor = resolve_listing_attestor(
+            ctx.accounts.moderation_attestor.as_ref().map(|a| a.attestor),
+            ctx.accounts.moderation_attestor.as_ref().map(|a| a.key()),
+            lm.moderator,
+        )?;
         validate_listing_moderation_for_hire(
             ctx.accounts.moderation_config.as_ref(),
             lm.as_ref(),
             listing_key,
             &listing_spec_hash,
             clock.unix_timestamp,
+            unlocking_attestor.is_some(),
         )?;
     }
 
@@ -334,6 +351,7 @@ pub fn handler(
         price: reward_amount,
         total_hires,
         open_jobs,
+        moderation_attestor: unlocking_attestor,
         timestamp: clock.unix_timestamp,
     });
 

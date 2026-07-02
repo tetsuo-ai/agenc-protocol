@@ -82,7 +82,7 @@ async function moderatePublishClaim(w, task, tag) {
     .instruction(), [w.modAuth]), `${tag}:mod`);
   expectOk(send(w.svm, await w.buyerProg.methods
     .setTaskJobSpec(arr(jobHash), `agenc://job-spec/sha256/${tag}`)
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), `${tag}:job-spec`);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods

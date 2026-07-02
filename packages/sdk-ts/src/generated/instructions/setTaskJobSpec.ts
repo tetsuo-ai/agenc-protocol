@@ -67,6 +67,7 @@ export type SetTaskJobSpecInstruction<
   TAccountTask extends string | AccountMeta<string> = string,
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountTaskModeration extends string | AccountMeta<string> = string,
+  TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountTaskJobSpec extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
@@ -88,6 +89,9 @@ export type SetTaskJobSpecInstruction<
       TAccountTaskModeration extends string
         ? ReadonlyAccount<TAccountTaskModeration>
         : TAccountTaskModeration,
+      TAccountModerationAttestor extends string
+        ? ReadonlyAccount<TAccountModerationAttestor>
+        : TAccountModerationAttestor,
       TAccountTaskJobSpec extends string
         ? WritableAccount<TAccountTaskJobSpec>
         : TAccountTaskJobSpec,
@@ -147,6 +151,7 @@ export type SetTaskJobSpecAsyncInput<
   TAccountTask extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountTaskModeration extends string = string,
+  TAccountModerationAttestor extends string = string,
   TAccountTaskJobSpec extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
@@ -155,6 +160,18 @@ export type SetTaskJobSpecAsyncInput<
   task: Address<TAccountTask>;
   moderationConfig?: Address<TAccountModerationConfig>;
   taskModeration?: Address<TAccountTaskModeration>;
+  /**
+   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the
+   * publish gate when the task-moderation was authored by a non-global-authority
+   * attestor. Bound by seeds to `task_moderation.moderator` (the STORED moderator, not
+   * the signer/creator) with `attestor == task_moderation.moderator`, so Anchor enforces
+   * the canonical roster PDA — a forged/mismatched entry fails account resolution, and a
+   * REVOKED attestor's PDA is closed and fails to load (cannot unlock). Only needed when
+   * `task_moderation.moderator != moderation_config.moderation_authority`; the global
+   * authority path passes with this account absent (`None`), byte-unchanged. Full-surface
+   * only — gated so the frozen canary account list for `set_task_job_spec` is unchanged.
+   */
+  moderationAttestor?: Address<TAccountModerationAttestor>;
   taskJobSpec?: Address<TAccountTaskJobSpec>;
   creator: TransactionSigner<TAccountCreator>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -167,6 +184,7 @@ export async function getSetTaskJobSpecInstructionAsync<
   TAccountTask extends string,
   TAccountModerationConfig extends string,
   TAccountTaskModeration extends string,
+  TAccountModerationAttestor extends string,
   TAccountTaskJobSpec extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
@@ -177,6 +195,7 @@ export async function getSetTaskJobSpecInstructionAsync<
     TAccountTask,
     TAccountModerationConfig,
     TAccountTaskModeration,
+    TAccountModerationAttestor,
     TAccountTaskJobSpec,
     TAccountCreator,
     TAccountSystemProgram
@@ -189,6 +208,7 @@ export async function getSetTaskJobSpecInstructionAsync<
     TAccountTask,
     TAccountModerationConfig,
     TAccountTaskModeration,
+    TAccountModerationAttestor,
     TAccountTaskJobSpec,
     TAccountCreator,
     TAccountSystemProgram
@@ -207,6 +227,10 @@ export async function getSetTaskJobSpecInstructionAsync<
       isWritable: false,
     },
     taskModeration: { value: input.taskModeration ?? null, isWritable: false },
+    moderationAttestor: {
+      value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
@@ -258,6 +282,7 @@ export async function getSetTaskJobSpecInstructionAsync<
       getAccountMeta("task", accounts.task),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("taskModeration", accounts.taskModeration),
+      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
@@ -272,6 +297,7 @@ export async function getSetTaskJobSpecInstructionAsync<
     TAccountTask,
     TAccountModerationConfig,
     TAccountTaskModeration,
+    TAccountModerationAttestor,
     TAccountTaskJobSpec,
     TAccountCreator,
     TAccountSystemProgram
@@ -283,6 +309,7 @@ export type SetTaskJobSpecInput<
   TAccountTask extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountTaskModeration extends string = string,
+  TAccountModerationAttestor extends string = string,
   TAccountTaskJobSpec extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
@@ -291,6 +318,18 @@ export type SetTaskJobSpecInput<
   task: Address<TAccountTask>;
   moderationConfig: Address<TAccountModerationConfig>;
   taskModeration: Address<TAccountTaskModeration>;
+  /**
+   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the
+   * publish gate when the task-moderation was authored by a non-global-authority
+   * attestor. Bound by seeds to `task_moderation.moderator` (the STORED moderator, not
+   * the signer/creator) with `attestor == task_moderation.moderator`, so Anchor enforces
+   * the canonical roster PDA — a forged/mismatched entry fails account resolution, and a
+   * REVOKED attestor's PDA is closed and fails to load (cannot unlock). Only needed when
+   * `task_moderation.moderator != moderation_config.moderation_authority`; the global
+   * authority path passes with this account absent (`None`), byte-unchanged. Full-surface
+   * only — gated so the frozen canary account list for `set_task_job_spec` is unchanged.
+   */
+  moderationAttestor?: Address<TAccountModerationAttestor>;
   taskJobSpec: Address<TAccountTaskJobSpec>;
   creator: TransactionSigner<TAccountCreator>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -303,6 +342,7 @@ export function getSetTaskJobSpecInstruction<
   TAccountTask extends string,
   TAccountModerationConfig extends string,
   TAccountTaskModeration extends string,
+  TAccountModerationAttestor extends string,
   TAccountTaskJobSpec extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
@@ -313,6 +353,7 @@ export function getSetTaskJobSpecInstruction<
     TAccountTask,
     TAccountModerationConfig,
     TAccountTaskModeration,
+    TAccountModerationAttestor,
     TAccountTaskJobSpec,
     TAccountCreator,
     TAccountSystemProgram
@@ -324,6 +365,7 @@ export function getSetTaskJobSpecInstruction<
   TAccountTask,
   TAccountModerationConfig,
   TAccountTaskModeration,
+  TAccountModerationAttestor,
   TAccountTaskJobSpec,
   TAccountCreator,
   TAccountSystemProgram
@@ -341,6 +383,10 @@ export function getSetTaskJobSpecInstruction<
       isWritable: false,
     },
     taskModeration: { value: input.taskModeration ?? null, isWritable: false },
+    moderationAttestor: {
+      value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
@@ -366,6 +412,7 @@ export function getSetTaskJobSpecInstruction<
       getAccountMeta("task", accounts.task),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("taskModeration", accounts.taskModeration),
+      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
@@ -380,6 +427,7 @@ export function getSetTaskJobSpecInstruction<
     TAccountTask,
     TAccountModerationConfig,
     TAccountTaskModeration,
+    TAccountModerationAttestor,
     TAccountTaskJobSpec,
     TAccountCreator,
     TAccountSystemProgram
@@ -396,9 +444,21 @@ export type ParsedSetTaskJobSpecInstruction<
     task: TAccountMetas[1];
     moderationConfig: TAccountMetas[2];
     taskModeration: TAccountMetas[3];
-    taskJobSpec: TAccountMetas[4];
-    creator: TAccountMetas[5];
-    systemProgram: TAccountMetas[6];
+    /**
+     * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the
+     * publish gate when the task-moderation was authored by a non-global-authority
+     * attestor. Bound by seeds to `task_moderation.moderator` (the STORED moderator, not
+     * the signer/creator) with `attestor == task_moderation.moderator`, so Anchor enforces
+     * the canonical roster PDA — a forged/mismatched entry fails account resolution, and a
+     * REVOKED attestor's PDA is closed and fails to load (cannot unlock). Only needed when
+     * `task_moderation.moderator != moderation_config.moderation_authority`; the global
+     * authority path passes with this account absent (`None`), byte-unchanged. Full-surface
+     * only — gated so the frozen canary account list for `set_task_job_spec` is unchanged.
+     */
+    moderationAttestor?: TAccountMetas[4] | undefined;
+    taskJobSpec: TAccountMetas[5];
+    creator: TAccountMetas[6];
+    systemProgram: TAccountMetas[7];
   };
   data: SetTaskJobSpecInstructionData;
 };
@@ -411,12 +471,12 @@ export function parseSetTaskJobSpecInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedSetTaskJobSpecInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 7) {
+  if (instruction.accounts.length < 8) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 7,
+        expectedAccountMetas: 8,
       },
     );
   }
@@ -426,6 +486,12 @@ export function parseSetTaskJobSpecInstruction<
     accountIndex += 1;
     return accountMeta;
   };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
+  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
@@ -433,6 +499,7 @@ export function parseSetTaskJobSpecInstruction<
       task: getNextAccount(),
       moderationConfig: getNextAccount(),
       taskModeration: getNextAccount(),
+      moderationAttestor: getNextOptionalAccount(),
       taskJobSpec: getNextAccount(),
       creator: getNextAccount(),
       systemProgram: getNextAccount(),

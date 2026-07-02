@@ -3,6 +3,8 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskJobSpecSet;
 use crate::instructions::launch_controls::require_task_type_enabled;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::ModerationAttestor;
 use crate::state::{
     is_publishable_task_moderation_status, ModerationConfig, ProtocolConfig, Task, TaskJobSpec,
     TaskModeration, TaskStatus, HASH_SIZE, TASK_JOB_SPEC_URI_MAX_LEN,
@@ -44,6 +46,24 @@ pub struct SetTaskJobSpec<'info> {
     )]
     pub task_moderation: Account<'info, TaskModeration>,
 
+    /// OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the
+    /// publish gate when the task-moderation was authored by a non-global-authority
+    /// attestor. Bound by seeds to `task_moderation.moderator` (the STORED moderator, not
+    /// the signer/creator) with `attestor == task_moderation.moderator`, so Anchor enforces
+    /// the canonical roster PDA — a forged/mismatched entry fails account resolution, and a
+    /// REVOKED attestor's PDA is closed and fails to load (cannot unlock). Only needed when
+    /// `task_moderation.moderator != moderation_config.moderation_authority`; the global
+    /// authority path passes with this account absent (`None`), byte-unchanged. Full-surface
+    /// only — gated so the frozen canary account list for `set_task_job_spec` is unchanged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        seeds = [b"moderation_attestor", task_moderation.moderator.as_ref()],
+        bump = moderation_attestor.bump,
+        constraint = moderation_attestor.attestor == task_moderation.moderator
+            @ CoordinationError::ModerationAttestorMismatch
+    )]
+    pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
+
     #[account(
         init_if_needed,
         payer = creator,
@@ -72,6 +92,20 @@ pub fn handler(
     let task = &ctx.accounts.task;
     require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     validate_task_job_spec_mutable(task)?;
+
+    // WP-A1 roster-honored gate: the task-moderation may be authored by the global
+    // moderation authority OR any registered (non-revoked) attestor. In the canary build
+    // there is no attestor account, so `attestor_supplied` is always false and the gate
+    // collapses to the original global-authority-only check (canary surface frozen).
+    #[cfg(not(feature = "mainnet-canary"))]
+    let unlocking_attestor: Option<Pubkey> = ctx
+        .accounts
+        .moderation_attestor
+        .as_ref()
+        .map(|entry| entry.attestor);
+    #[cfg(feature = "mainnet-canary")]
+    let unlocking_attestor: Option<Pubkey> = None;
+
     validate_task_moderation_for_job_spec(
         &ctx.accounts.moderation_config,
         &ctx.accounts.task_moderation,
@@ -79,6 +113,7 @@ pub fn handler(
         task,
         &job_spec_hash,
         clock.unix_timestamp,
+        unlocking_attestor.is_some(),
     )?;
     let task_job_spec = &mut ctx.accounts.task_job_spec;
 
@@ -108,6 +143,7 @@ pub fn handler(
         creator: task.creator,
         job_spec_hash,
         job_spec_uri,
+        moderation_attestor: unlocking_attestor,
         timestamp: clock.unix_timestamp,
     });
 
@@ -143,6 +179,18 @@ pub fn validate_task_job_spec_inputs(
     Ok(())
 }
 
+/// Validate a task-level moderation attestation at job-spec publish time.
+///
+/// WP-A1: the attestation's `moderator` is accepted when it is EITHER the global
+/// `ModerationConfig.moderation_authority` OR a registered, non-revoked
+/// `ModerationAttestor` (signalled by `attestor_supplied`). `attestor_supplied` is `true`
+/// only when the caller passed a `ModerationAttestor` PDA that Anchor already validated by
+/// canonical seeds off `task_moderation.moderator` AND `attestor == task_moderation.moderator`
+/// — so this helper does not re-derive that binding; presence is proof. A revoked attestor
+/// cannot reach here with `attestor_supplied == true` because its PDA is closed and fails to
+/// load at account resolution. All other attestation checks (task/creator/hash binding,
+/// publishable status, risk score, expiry) are unchanged, so a roster attestor can only
+/// unlock a genuinely publishable, correctly-bound attestation.
 pub fn validate_task_moderation_for_job_spec(
     moderation_config: &ModerationConfig,
     task_moderation: &TaskModeration,
@@ -150,6 +198,7 @@ pub fn validate_task_moderation_for_job_spec(
     task: &Task,
     job_spec_hash: &[u8; HASH_SIZE],
     now: i64,
+    attestor_supplied: bool,
 ) -> Result<()> {
     require!(
         moderation_config.enabled,
@@ -160,7 +209,7 @@ pub fn validate_task_moderation_for_job_spec(
         CoordinationError::InvalidTaskModerationAuthority
     );
     require!(
-        task_moderation.moderator == moderation_config.moderation_authority,
+        task_moderation.moderator == moderation_config.moderation_authority || attestor_supplied,
         CoordinationError::UnauthorizedTaskModerator
     );
     require!(
@@ -353,10 +402,69 @@ mod tests {
                 task_key,
                 &task,
                 &hash,
-                100
+                100,
+                false,
             )
             .is_ok());
         }
+    }
+
+    // WP-A1 revert-sensitive: a registered attestor (moderator != global authority) unlocks
+    // the publish gate. Against the pre-fix predicate (`moderator == authority`) this errors,
+    // turning the test red.
+    #[test]
+    fn allows_registered_roster_attestor_moderator() {
+        let (mut config, mut moderation, task_key, task, hash) =
+            moderation_case(task_moderation_status::CLEAN, 0);
+        // The attestation was authored by a roster attestor, NOT the global authority.
+        config.moderation_authority = Pubkey::new_unique();
+        moderation.moderator = Pubkey::new_unique();
+        assert_ne!(moderation.moderator, config.moderation_authority);
+
+        assert!(validate_task_moderation_for_job_spec(
+            &config,
+            &moderation,
+            task_key,
+            &task,
+            &hash,
+            100,
+            true, // a valid ModerationAttestor roster entry was supplied
+        )
+        .is_ok());
+    }
+
+    // WP-A1 fail-closed guard: a non-authority moderator WITHOUT a roster entry is rejected
+    // (the gate never fails open).
+    #[test]
+    fn rejects_non_authority_moderator_without_attestor() {
+        let (mut config, mut moderation, task_key, task, hash) =
+            moderation_case(task_moderation_status::CLEAN, 0);
+        config.moderation_authority = Pubkey::new_unique();
+        moderation.moderator = Pubkey::new_unique();
+
+        let err = validate_task_moderation_for_job_spec(
+            &config, &moderation, task_key, &task, &hash, 100, false,
+        )
+        .unwrap_err();
+
+        assert_eq!(err, CoordinationError::UnauthorizedTaskModerator.into());
+    }
+
+    // WP-A1: a supplied roster entry does NOT bypass the other attestation invariants — a
+    // blocked status still fails even for a roster attestor.
+    #[test]
+    fn roster_attestor_cannot_publish_blocked_status() {
+        let (mut config, mut moderation, task_key, task, hash) =
+            moderation_case(task_moderation_status::BLOCKED, 0);
+        config.moderation_authority = Pubkey::new_unique();
+        moderation.moderator = Pubkey::new_unique();
+
+        let err = validate_task_moderation_for_job_spec(
+            &config, &moderation, task_key, &task, &hash, 100, true,
+        )
+        .unwrap_err();
+
+        assert_eq!(err, CoordinationError::TaskModerationRejected.into());
     }
 
     #[test]
@@ -375,6 +483,7 @@ mod tests {
                 &task,
                 &hash,
                 100,
+                false,
             )
             .unwrap_err();
 
@@ -393,6 +502,7 @@ mod tests {
             &task,
             &hash,
             100,
+            false,
         )
         .unwrap_err();
 

@@ -358,7 +358,7 @@ export async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilit
 /// Build (but don't send) a hire_from_listing instruction for `buyer`.
 /// P6.2: pass `referrer` (PublicKey) + `referrerFeeBps` to attach the demand-side
 /// referral leg; both default to no-leg (null / 0).
-export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null, referrer = null, referrerFeeBps = 0 } = {}) {
+export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null, moderationAttestor = null, referrer = null, referrerFeeBps = 0 } = {}) {
   const signer = asProvider ? w.provider : w.buyer;
   const agent = asProvider ? w.providerAgent : w.buyerAgent;
   const prog = asProvider ? w.providerProg : w.buyerProg;
@@ -371,7 +371,7 @@ export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProv
     .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps)
     .accounts({
       task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
-      moderationConfig: w.modCfg, listingModeration,
+      moderationConfig: w.modCfg, listingModeration, moderationAttestor,
       creatorAgent: agent, authorityRateLimit, authority: signer.publicKey,
       creator: signer.publicKey, systemProgram: SystemProgram.programId,
     })

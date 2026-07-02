@@ -7,11 +7,13 @@
 import {
   getAddressDecoder,
   getI64Decoder,
+  getOptionDecoder,
   getStructDecoder,
   getU16Decoder,
   getU64Decoder,
   type Address,
   type Decoder,
+  type Option,
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
@@ -33,6 +35,13 @@ export type ServiceListingHiredEventData = {
   totalHires: bigint;
   /** Concurrent open hires after this one (capacity counter). */
   openJobs: number;
+  /**
+   * WP-A1 roster telemetry: the registered `ModerationAttestor` wallet whose
+   * listing attestation unlocked this hire, or `None` when the listing-moderation
+   * was authored by the global `ModerationConfig.moderation_authority` (or when
+   * moderation is disabled).
+   */
+  moderationAttestor: Option<Address>;
   timestamp: bigint;
 };
 
@@ -49,6 +58,7 @@ export function getServiceListingHiredEventDecoder(): Decoder<ServiceListingHire
     ["price", getU64Decoder()],
     ["totalHires", getU64Decoder()],
     ["openJobs", getU16Decoder()],
+    ["moderationAttestor", getOptionDecoder(getAddressDecoder())],
     ["timestamp", getI64Decoder()],
   ]);
 }
