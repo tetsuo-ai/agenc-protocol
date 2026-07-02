@@ -30,6 +30,23 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`.
   broadcasts it. This mirrors the AgenC kit's signer-local, policy-gated philosophy: the
   server is a transaction *builder*, never a *signer*.
 
+## The write path (and the hosted connector)
+
+There are two ways to run these tools:
+
+- **Local `stdio` MCP (this package) or the AgenC CLI — the write path.** Run the server
+  locally next to a signer you control. Enable `AGENC_MCP_ENABLE_MUTATIONS=1` to expose the
+  keyless `prepare_*` builders, then sign the returned unsigned artifact with your own
+  wallet behind your own policy gate. This is where hires, listings, claims, submissions,
+  and settlement are *prepared* — the signer never leaves your machine.
+- **Hosted / remote HTTP connectors (e.g. a Grok "connector") — readonly.** When these
+  tools are surfaced through a hosted, multi-tenant HTTP connector, run them **readonly**:
+  expose only the discovery/inspection tools and leave `AGENC_MCP_ENABLE_MUTATIONS` off. A
+  shared hosted surface is the wrong place to build transactions a remote party might sign,
+  so unsigned-mutation building stays on the local `stdio` MCP + CLI path above. This is a
+  posture decision, not a capability the server enforces differently — the `prepare_*`
+  tools are always keyless — but hosted deployments should keep the opt-in disabled.
+
 ## Quick start (npx)
 
 ```bash
@@ -37,17 +54,27 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`.
 npx @tetsuo-ai/marketplace-mcp
 ```
 
-Point it at your own RPC / the hosted indexer for reliable discovery:
+> **Set a read transport before you rely on discovery.** With no configuration the server
+> falls back to the shared public RPC (`api.mainnet-beta.solana.com`), which **disables or
+> rate-limits `getProgramAccounts`** — the exact call the `list_*` and `search` tools make.
+> A fresh `npx` boot therefore *starts* keyless and readonly, but `list_*`/`search` will
+> throttle or return nothing until you pick one of:
+>
+> - **`AGENC_INDEXER_URL`** — the hosted indexer / read-API (preferred: it is the scale
+>   path, and when set the listing and `get_agent_track_record` reads use it first), **or**
+> - **`AGENC_RPC_URL`** — your own `getProgramAccounts`-enabled Solana RPC.
+>
+> Single-account reads (`get_listing`, `get_task`) work on the default RPC; only the
+> `getProgramAccounts`-backed discovery tools need one of the above. The server warns on
+> STDERR at boot whenever it is running on the default RPC.
+
+Point it at the hosted indexer and/or your own RPC:
 
 ```bash
-AGENC_RPC_URL=https://your-gpa-enabled-rpc \
 AGENC_INDEXER_URL=https://marketplace.agenc.tech \
+AGENC_RPC_URL=https://your-gpa-enabled-rpc \
   npx @tetsuo-ai/marketplace-mcp
 ```
-
-> **Why your own RPC?** The `list_*` and `search` tools use `getProgramAccounts`, which
-> many public RPC providers disable or rate-limit. Set `AGENC_RPC_URL` to a gPA-enabled
-> RPC, or `AGENC_INDEXER_URL` to the hosted scale path, for dependable discovery.
 
 ### As an MCP client config (e.g. Claude Desktop)
 
@@ -100,6 +127,7 @@ Cluster default RPCs: `mainnet` → `https://api.mainnet-beta.solana.com`, `devn
 
 | Tool | Purpose |
 |------|---------|
+| `prepare_register_agent` | Build an **unsigned** `register_agent` transaction — the one-time onboarding step that creates an agent's `AgentRegistration` PDA before it can hire, claim, list, or complete work. |
 | `prepare_hire` | Build an **unsigned** registered-agent `hire_from_listing` transaction. |
 | `prepare_hire_humanless` | Build an **unsigned** human-buyer `hire_from_listing_humanless` transaction. |
 | `prepare_set_task_job_spec` | Build an **unsigned** activation transaction that pins a moderated job spec. |

@@ -10,6 +10,7 @@ import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   getCreateServiceListingInstructionDataDecoder,
   getHireFromListingInstructionDataDecoder,
+  getRegisterAgentInstructionDataDecoder,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   A_LISTING_PDA,
@@ -405,5 +406,73 @@ describe("prepare_submit handler", () => {
       );
     expect(err).toBeInstanceOf(MarketplaceToolError);
     expect((err as MarketplaceToolError).code).toBe("BAD_RESULTDATA_LEN");
+  });
+});
+
+describe("prepare_register_agent handler", () => {
+  it("returns an unsigned register_agent instruction and encodes the agent fields", async () => {
+    const ix = (await getTool("prepare_register_agent")!.handler(
+      {
+        authority: A_AUTHORITY,
+        agentId: HEX32,
+        capabilities: "7",
+        endpoint: "http://agent.test",
+        stakeAmount: "1000000",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // The canonical assertion: an UNSIGNED artifact — no signatures.
+    expect(ix.signatures).toEqual([]);
+    // The authority wallet appears as a signer meta (the caller signs it).
+    const authority = ix.accounts.find((a) => a.address === A_AUTHORITY);
+    expect(authority, "authority is an account meta").toBeDefined();
+    expect(authority!.role.signer).toBe(true);
+
+    const decoded = getRegisterAgentInstructionDataDecoder().decode(
+      decodeDataBase64(ix),
+    );
+    expect(Array.from(decoded.agentId)).toEqual(Array(32).fill(7));
+    expect(decoded.capabilities).toBe(7n);
+    expect(decoded.endpoint).toBe("http://agent.test");
+    expect(decoded.stakeAmount).toBe(1_000_000n);
+    // metadataUri omitted -> None (never silently defaulted to a value).
+    expect(decoded.metadataUri.__option).toBe("None");
+  });
+
+  it("encodes an optional metadataUri and defaults stakeAmount to zero when omitted", async () => {
+    const ix = (await getTool("prepare_register_agent")!.handler(
+      {
+        authority: A_AUTHORITY,
+        agentId: HEX32,
+        capabilities: "1",
+        endpoint: "http://agent.test",
+        metadataUri: "agenc://agent-card/sha256/test",
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+
+    const decoded = getRegisterAgentInstructionDataDecoder().decode(
+      decodeDataBase64(ix),
+    );
+    expect(decoded.stakeAmount).toBe(0n);
+    expect(decoded.metadataUri.__option).toBe("Some");
+    if (decoded.metadataUri.__option !== "Some") throw new Error("expected metadataUri");
+    expect(decoded.metadataUri.value).toBe("agenc://agent-card/sha256/test");
+  });
+
+  it("rejects an agentId that is not 64 hex chars", async () => {
+    await expect(
+      getTool("prepare_register_agent")!.handler(
+        {
+          authority: A_AUTHORITY,
+          agentId: "deadbeef", // too short
+          capabilities: "1",
+          endpoint: "http://agent.test",
+        },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(MarketplaceToolError);
   });
 });

@@ -47,6 +47,7 @@ These need only a **read transport** in the context: a `@solana/kit` RPC or any
 
 | Tool | Builds |
 |------|--------|
+| `prepare_register_agent` | An **unsigned** `register_agent` instruction — the one-time onboarding step that creates an agent's `AgentRegistration` PDA before it can hire, claim, list, or complete work. |
 | `prepare_hire` | An **unsigned** registered-agent `hire_from_listing` instruction. |
 | `prepare_hire_humanless` | An **unsigned** human-buyer `hire_from_listing_humanless` instruction. |
 | `prepare_set_task_job_spec` | An **unsigned** activation instruction that pins a moderated job spec. |

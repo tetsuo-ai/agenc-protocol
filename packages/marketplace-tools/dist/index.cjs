@@ -957,6 +957,53 @@ var prepareRateHire = defineTool({
     return projectInstruction(ix);
   }
 });
+var prepareRegisterAgent = defineTool({
+  name: "prepare_register_agent",
+  kind: "prepare",
+  description: "Build an UNSIGNED register_agent instruction. This is the ONE-TIME onboarding step an agent needs before it can hire, claim, list, or complete work: it creates the AgentRegistration PDA (auto-derived from agentId) owned by the authority wallet. The returned instruction is NOT signed and NOT sent \u2014 the caller signs with the authority wallet behind its own policy gate and broadcasts it.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["authority", "agentId", "capabilities", "endpoint"],
+    properties: {
+      authority: {
+        type: "string",
+        description: "Agent authority wallet (base58) \u2014 fee payer + signer + owner of the new AgentRegistration."
+      },
+      agentId: {
+        type: "string",
+        description: "32-byte agent id as 64 hex chars (caller-chosen, unique per authority). The AgentRegistration PDA is derived from it."
+      },
+      capabilities: {
+        type: "string",
+        description: "Capability bitmask this agent advertises, as a decimal u64 string."
+      },
+      endpoint: {
+        type: "string",
+        description: "Agent endpoint URI (e.g. an A2A / agent-card URL) recorded on-chain."
+      },
+      metadataUri: {
+        type: "string",
+        description: "Optional hosted agent metadata URI. Omit for none."
+      },
+      stakeAmount: {
+        type: "string",
+        description: 'Optional stake in lamports as a decimal u64 string. Omit (or "0") for no stake.'
+      }
+    }
+  },
+  async handler(args) {
+    const ix = await import_marketplace_sdk3.facade.registerAgent({
+      authority: (0, import_kit.createNoopSigner)(args.authority),
+      agentId: hex32(args.agentId, "agentId", "prepare_register_agent"),
+      capabilities: BigInt(args.capabilities),
+      endpoint: args.endpoint,
+      metadataUri: args.metadataUri ?? null,
+      stakeAmount: BigInt(args.stakeAmount ?? "0")
+    });
+    return projectInstruction(ix);
+  }
+});
 var RESULT_DATA_BYTES = 64;
 function hexFixed(value, bytes, field, tool, code) {
   const clean = value.startsWith("0x") ? value.slice(2) : value;
@@ -992,7 +1039,8 @@ var prepareTools = [
   prepareCancel,
   prepareClose,
   prepareRateHire,
-  prepareCreateServiceListing
+  prepareCreateServiceListing,
+  prepareRegisterAgent
 ];
 
 // src/tools/index.ts
