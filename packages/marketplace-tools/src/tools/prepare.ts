@@ -801,6 +801,78 @@ const prepareRateHire = defineTool<PrepareRateHireArgs, UnsignedInstructionView>
   },
 });
 
+// ===========================================================================
+// prepare_register_agent
+// ===========================================================================
+
+interface PrepareRegisterAgentArgs {
+  authority: string;
+  agentId: string;
+  capabilities: string;
+  endpoint: string;
+  metadataUri?: string;
+  stakeAmount?: string;
+}
+
+const prepareRegisterAgent = defineTool<
+  PrepareRegisterAgentArgs,
+  UnsignedInstructionView
+>({
+  name: "prepare_register_agent",
+  kind: "prepare",
+  description:
+    "Build an UNSIGNED register_agent instruction. This is the ONE-TIME onboarding step " +
+    "an agent needs before it can hire, claim, list, or complete work: it creates the " +
+    "AgentRegistration PDA (auto-derived from agentId) owned by the authority wallet. The " +
+    "returned instruction is NOT signed and NOT sent — the caller signs with the authority " +
+    "wallet behind its own policy gate and broadcasts it.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["authority", "agentId", "capabilities", "endpoint"],
+    properties: {
+      authority: {
+        type: "string",
+        description:
+          "Agent authority wallet (base58) — fee payer + signer + owner of the new AgentRegistration.",
+      },
+      agentId: {
+        type: "string",
+        description:
+          "32-byte agent id as 64 hex chars (caller-chosen, unique per authority). The AgentRegistration PDA is derived from it.",
+      },
+      capabilities: {
+        type: "string",
+        description: "Capability bitmask this agent advertises, as a decimal u64 string.",
+      },
+      endpoint: {
+        type: "string",
+        description: "Agent endpoint URI (e.g. an A2A / agent-card URL) recorded on-chain.",
+      },
+      metadataUri: {
+        type: "string",
+        description: "Optional hosted agent metadata URI. Omit for none.",
+      },
+      stakeAmount: {
+        type: "string",
+        description:
+          'Optional stake in lamports as a decimal u64 string. Omit (or "0") for no stake.',
+      },
+    },
+  },
+  async handler(args) {
+    const ix = await facade.registerAgent({
+      authority: createNoopSigner(args.authority as Address),
+      agentId: hex32(args.agentId, "agentId", "prepare_register_agent"),
+      capabilities: BigInt(args.capabilities),
+      endpoint: args.endpoint,
+      metadataUri: args.metadataUri ?? null,
+      stakeAmount: BigInt(args.stakeAmount ?? "0"),
+    });
+    return projectInstruction(ix as unknown as BuiltInstructionLike);
+  },
+});
+
 /**
  * Width (in bytes) of the protocol's fixed `submit_task_result.resultData`
  * field. The generated encoder is
@@ -864,4 +936,5 @@ export const prepareTools: ReadonlyArray<MarketplaceTool> = [
   prepareClose,
   prepareRateHire,
   prepareCreateServiceListing,
+  prepareRegisterAgent,
 ];

@@ -78,7 +78,7 @@ var import_server = require("@modelcontextprotocol/sdk/server/index.js");
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 var import_marketplace_tools = require("@tetsuo-ai/marketplace-tools");
 var SERVER_NAME = "@tetsuo-ai/marketplace-mcp";
-var SERVER_VERSION = "0.1.0";
+var SERVER_VERSION = "0.2.0";
 function selectTools(enableMutations) {
   return enableMutations ? import_marketplace_tools.marketplaceTools : import_marketplace_tools.readonlyTools;
 }

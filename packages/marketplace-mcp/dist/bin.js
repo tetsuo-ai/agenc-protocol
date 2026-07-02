@@ -3,7 +3,7 @@ import {
   buildToolContext,
   createMarketplaceMcpServer,
   resolveMcpConfig
-} from "./chunk-KDJFKXBI.js";
+} from "./chunk-OSV4TJGF.js";
 
 // src/bin.ts
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

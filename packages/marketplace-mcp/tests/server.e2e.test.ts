@@ -196,12 +196,13 @@ describe("MCP server: tool registration", () => {
     }
   });
 
-  it("mutation opt-in adds the keyless prepare_* lifecycle tools (18 total)", async () => {
+  it("mutation opt-in adds the keyless prepare_* lifecycle tools (19 total)", async () => {
     const { client, close } = await connectClient({ enableMutations: true });
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name);
-      expect(names).toHaveLength(18);
+      expect(names).toHaveLength(19);
+      expect(names).toContain("prepare_register_agent");
       expect(names).toContain("prepare_hire");
       expect(names).toContain("prepare_hire_humanless");
       expect(names).toContain("prepare_set_task_job_spec");

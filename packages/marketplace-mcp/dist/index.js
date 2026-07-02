@@ -10,7 +10,7 @@ import {
   readonlyTools,
   resolveMcpConfig,
   selectTools
-} from "./chunk-KDJFKXBI.js";
+} from "./chunk-OSV4TJGF.js";
 export {
   DEFAULT_RPC_URL,
   SERVER_NAME,
