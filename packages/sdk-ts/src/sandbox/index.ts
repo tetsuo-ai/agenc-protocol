@@ -39,6 +39,7 @@ export {
 } from "./fixtures.js";
 export {
   DEFAULT_SANDBOX_ATTESTOR_URL,
+  DEFAULT_HOSTED_MODERATION_LISTINGS_URL,
   resolveSandboxEnvironment,
   SANDBOX_CLUSTERS,
   SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL,

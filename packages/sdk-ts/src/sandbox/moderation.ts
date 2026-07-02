@@ -225,11 +225,12 @@ export async function requestListingModeration(
     });
     if (moderationUrl === null) {
       throw new Error(
-        "requestListingModeration: no moderation endpoint configured — pass " +
-          "the `endpoint` option or set the AGENC_SANDBOX_MODERATION_URL " +
-          "environment variable (the localnet stack's .localnet/env.json " +
-          "carries it as `moderationUrl`). There is no shipped default while " +
-          "the hosted moderation API (PLAN.md P3.4) is not deployed.",
+        "requestListingModeration: no moderation endpoint configured for this " +
+          "cluster — pass the `endpoint` option or set the " +
+          "AGENC_SANDBOX_MODERATION_URL environment variable (the localnet " +
+          "stack's .localnet/env.json carries it as `moderationUrl`). Mainnet " +
+          "ships a default (attest.agenc.ag); localnet/devnet point at your " +
+          "own attestor.",
       );
     }
     endpoint = moderationUrl;

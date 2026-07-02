@@ -36,6 +36,7 @@ import {
   createSandboxClient,
   DEFAULT_SANDBOX_AIRDROP_LAMPORTS,
   DEFAULT_SANDBOX_ATTESTOR_URL,
+  DEFAULT_HOSTED_MODERATION_LISTINGS_URL,
   requestSandboxAttestation,
   resolveSandboxEnvironment,
   SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL,
@@ -871,14 +872,34 @@ describe("resolveSandboxEnvironment", () => {
     expect(env.moderationUrl).toBeNull();
   });
 
-  it("resolves moderationUrl: option > AGENC_SANDBOX_MODERATION_URL > null", async () => {
-    // Default: null (no shipped endpoint while P3.4 is deploy-gated).
+  it("resolves moderationUrl: option > AGENC_SANDBOX_MODERATION_URL > hosted-default(mainnet)/null", async () => {
+    // Default on devnet/localnet: null (point at your own attestor).
     expect((await resolveSandboxEnvironment()).moderationUrl).toBeNull();
-    // Env var rung.
+    expect(
+      (await resolveSandboxEnvironment({ cluster: "localnet" })).moderationUrl,
+    ).toBeNull();
+    // Default on mainnet: the shipped hosted moderation API (WP-C1).
+    expect(
+      (
+        await resolveSandboxEnvironment({
+          cluster: "mainnet",
+          rpcUrl: "https://rpc.example.com",
+        })
+      ).moderationUrl,
+    ).toBe(DEFAULT_HOSTED_MODERATION_LISTINGS_URL);
+    // Env var rung (beats the hosted default even on mainnet).
     vi.stubEnv("AGENC_SANDBOX_MODERATION_URL", "http://env.example/mod");
     expect((await resolveSandboxEnvironment()).moderationUrl).toBe(
       "http://env.example/mod",
     );
+    expect(
+      (
+        await resolveSandboxEnvironment({
+          cluster: "mainnet",
+          rpcUrl: "https://rpc.example.com",
+        })
+      ).moderationUrl,
+    ).toBe("http://env.example/mod");
     // Explicit option beats the env var.
     expect(
       (

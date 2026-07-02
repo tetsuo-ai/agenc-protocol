@@ -1,5 +1,19 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.7.1
+
+### Patch Changes
+
+- Ship a default hosted moderation endpoint (WP-C1/P1.5). The moderation
+  environment seam previously resolved `moderationUrl` to `null` with no
+  shipped default, so `requestListingModeration()` threw unless an endpoint
+  was configured. It now defaults (mainnet only) to the open, self-hostable
+  marketplace moderation API at `https://attest.agenc.ag/v1/moderation/listings`
+  (`github.com/tetsuo-ai/agenc-moderation-api`); localnet/devnet still resolve
+  to `null` so a sandbox never silently dials the mainnet service, and the
+  `AGENC_SANDBOX_MODERATION_URL` env var / `endpoint` option still override on
+  any cluster. Exposes `DEFAULT_HOSTED_MODERATION_LISTINGS_URL`.
+
 ## 0.7.0
 
 ### Minor Changes (breaking against pre-A1 programs)
