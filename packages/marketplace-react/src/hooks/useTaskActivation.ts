@@ -7,6 +7,7 @@ import {
   requireClient,
   type MutationStatus,
 } from "./internal.js";
+import { resolveActivationModerationAttestor } from "./moderation-attestor.js";
 
 export type TaskActivationInput = Omit<
   Parameters<typeof facadeNs.setTaskJobSpec>[0],
@@ -33,8 +34,20 @@ export function useTaskActivation(
   const mutation = useMutation<string, Error, TaskActivationInput>({
     mutationFn: async (input) => {
       const client = requireClient(ctx.client);
+      // WP-A1: when the task moderation was authored by a roster attestor
+      // (not the global authority), the publish gate only unlocks if the
+      // attestor's roster-entry PDA is attached. Resolve it automatically
+      // unless the caller supplied one.
+      const moderationAttestor =
+        input.moderationAttestor ??
+        (await resolveActivationModerationAttestor({
+          rpcUrl: ctx.rpcUrl,
+          task: taskPda,
+          jobSpecHash: input.jobSpecHash,
+        }));
       const { signature } = await client.setTaskJobSpec({
         ...input,
+        ...(moderationAttestor !== undefined ? { moderationAttestor } : {}),
         task: taskPda,
         creator: input.creator ?? client.signer,
       } as Parameters<typeof facadeNs.setTaskJobSpec>[0]);

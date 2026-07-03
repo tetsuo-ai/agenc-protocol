@@ -149,10 +149,21 @@ export function AgencProvider(props: AgencProviderProps): ReactNode {
     const read = buildReadTransport(config);
     const client = buildWriteClient(config, network);
 
+    // The resolved HTTP RPC endpoint, exposed so hooks can make single-account
+    // reads (e.g. resolving the WP-A1 roster-attestor account at activation)
+    // without an indexer. Not a gPA source — the read transport owns list
+    // queries.
+    const { rpcUrl } = resolveEndpoints(
+      network,
+      config.rpcUrl,
+      config.rpcSubscriptionsUrl,
+    );
+
     return {
       network,
       read,
       client,
+      rpcUrl: rpcUrl ?? null,
       signer: config.signer ?? null,
       referrer,
       resolveReferrerCapability: () => resolveReferrerCapabilityImpl(referrer),

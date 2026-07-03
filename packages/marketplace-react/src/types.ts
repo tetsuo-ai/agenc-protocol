@@ -198,6 +198,13 @@ export interface AgencContextValue {
    * was supplied. Mutating hooks surface a clear error in that case.
    */
   client: MarketplaceClient | null;
+  /**
+   * The resolved HTTP RPC endpoint (config override or the network default),
+   * or `null` when none resolves. Hooks use it for single-account reads —
+   * e.g. resolving the WP-A1 `moderation_attestor` roster account during
+   * activation. NOT a gPA/list-query source; the read transport owns those.
+   */
+  rpcUrl: string | null;
   /** The configured signer, or `null`. */
   signer: TransactionSigner | null;
   /** Validated referrer config, or `null` when none was supplied. */
