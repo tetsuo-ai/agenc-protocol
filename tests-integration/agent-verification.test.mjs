@@ -1,26 +1,29 @@
 // In-process litesvm integration tests for P7.3 agent domain verification.
 //   - record_agent_verification   (recordAgentVerification)  via the global moderator key
-//   - record_agent_verification   (recordAgentVerification)  via a registered attestor
 //   - revoke_agent_verification   (revokeAgentVerification)
 //
-// Executes the COMPILED program (target/deploy/agenc_coordination.so) end-to-end. The
-// authorization path is the EXACT mirror of record_*_moderation (same trusted roster), so
-// this reuses the moderation-attestor world setup.
+// Executes the COMPILED program (target/deploy/agenc_coordination.so) end-to-end.
+//
+// P1.2 (hardened open roster) DECOUPLED agent verification from the moderation-attestor
+// roster: the `moderation_attestor` account was removed from both instructions and ONLY
+// the global moderation authority may sign. A roster attestor is now rejected exactly
+// like any other stranger (fail-closed proof below).
 //
 // In the test world, ModerationConfig is injected with:
 //   authority            = admin   (owns the roster: assign/revoke signer)
 //   moderation_authority = modAuth (the single global recorder)
 //
-// REVERT-SENSITIVE INTENT — each negative isolates exactly one new guard:
-//   - "stranger cannot record (no attestor entry)"  -> handler require_moderation_authorized
-//        (UnauthorizedModerationAttestor). The same OR-branch that gates moderation.
+// REVERT-SENSITIVE INTENT — each negative isolates exactly one guard:
+//   - "stranger cannot record (no attestor entry)"  -> handler authority check
+//        (UnauthorizedModerationAttestor).
+//   - "a ROSTER attestor cannot record"             -> P1.2 decoupling: roster entries
+//        no longer authorize agent verification (UnauthorizedModerationAttestor).
 //   - "empty / malformed / too-long domain rejected" -> validate_verified_domain
 //        (InvalidVerifiedDomain).
 //   - "unknown method rejected"                      -> is_valid_agent_verification_method
 //        (InvalidAgentVerificationMethod).
-// The positives prove the global authority AND a registered attestor (who is NOT the global
-// moderation authority) can record, re-verification overwrites in place, and revoke marks
-// the record revoked.
+// The positives prove the global authority can record, re-verification overwrites in
+// place, and revoke marks the record revoked.
 //
 // NOTE: requires the rebuilt .so + regenerated IDL (the integrator runs anchor build +
 // artifacts:refresh first). It references the to-be-generated `recordAgentVerification` /
@@ -64,10 +67,12 @@ async function assign(w, attestor) {
   );
 }
 
-// Build a record_agent_verification ix from `recorder`, optionally passing the attestor PDA.
+// Build a record_agent_verification ix from `recorder`. P1.2 removed the
+// `moderation_attestor` account from the struct — the recorder is passed only as the
+// signing `attestor`, and the handler accepts ONLY the global moderation authority.
 async function recordVerification(
   w,
-  { recorder, domain, method = METHOD_TXT_RECORD, expiresAt = 0, attestorEntry = null },
+  { recorder, domain, method = METHOD_TXT_RECORD, expiresAt = 0 },
 ) {
   const [verification] = verificationPda(w.providerAgent);
   return {
@@ -79,7 +84,6 @@ async function recordVerification(
         agent: w.providerAgent,
         agentVerification: verification,
         attestor: recorder.publicKey,
-        moderationAttestor: attestorEntry,
         systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -112,28 +116,29 @@ test("record_agent_verification: the global moderation authority records a verif
 });
 
 // ---------------------------------------------------------------------------
-// Positive: a registered attestor (not the global authority) records
+// Negative (P1.2 INVERSION): a registered roster attestor can NO LONGER record.
+// Pre-P1.2 this was the positive "roster attestor records" proof; the hardened
+// open roster decoupled agent verification from the roster, so the exact same
+// call must now fail closed even though the attestor's roster entry exists.
 // ---------------------------------------------------------------------------
 
-test("record_agent_verification: a registered attestor (not the global authority) records", async () => {
+test("record_agent_verification: a registered roster attestor is REJECTED (verification decoupled from the roster)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const attestor = Keypair.generate();
   w.svm.airdrop(attestor.publicKey, BigInt(10e9));
-  const [entry] = attestorPda(attestor.publicKey);
   expectOk(await assign(w, attestor.publicKey), "assign attestor");
 
   const { verification, ix } = await recordVerification(w, {
     recorder: attestor,
     domain: "agent.operators.example.io",
     method: METHOD_WELL_KNOWN,
-    attestorEntry: entry,
   });
-  expectOk(send(w.svm, ix, [attestor]), "registered attestor records verification");
-
-  const v = decode(w.svm, "AgentVerification", verification);
-  assert.equal(v.verified_by.toBase58(), attestor.publicKey.toBase58(), "recorded by the attestor");
-  assert.equal(v.verified_domain, "agent.operators.example.io", "domain recorded");
-  assert.equal(v.method, METHOD_WELL_KNOWN, "well-known method recorded");
+  expectFail(
+    send(w.svm, ix, [attestor]),
+    "UnauthorizedModerationAttestor",
+    "roster attestor records agent verification",
+  );
+  assert.ok(isClosed(w.svm, verification), "no AgentVerification created by the rejected roster attestor");
 });
 
 // ---------------------------------------------------------------------------
@@ -246,7 +251,6 @@ test("revoke_agent_verification: the global authority marks a verification revok
           moderationConfig: w.modCfg,
           agentVerification: verification,
           attestor: w.modAuth.publicKey,
-          moderationAttestor: null,
         })
         .instruction(),
       [w.modAuth],
@@ -280,7 +284,6 @@ test("revoke_agent_verification: a stranger cannot revoke", async () => {
           moderationConfig: w.modCfg,
           agentVerification: verification,
           attestor: stranger.publicKey,
-          moderationAttestor: null,
         })
         .instruction(),
       [stranger],

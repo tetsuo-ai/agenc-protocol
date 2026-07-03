@@ -8,7 +8,6 @@
 
 import {
   fixEncoderSize,
-  getAddressEncoder,
   getBytesEncoder,
   getProgramDerivedAddress,
   type Address,
@@ -16,14 +15,12 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
-export type TaskModerationSeeds = {
-  task: Address;
-  jobSpecHash: ReadonlyUint8Array;
-  moderator: Address;
+export type ModerationBlockSeeds = {
+  contentHash: ReadonlyUint8Array;
 };
 
-export async function findTaskModerationPda(
-  seeds: TaskModerationSeeds,
+export async function findModerationBlockPda(
+  seeds: ModerationBlockSeeds,
   config: { programAddress?: Address | undefined } = {},
 ): Promise<ProgramDerivedAddress> {
   const {
@@ -34,13 +31,11 @@ export async function findTaskModerationPda(
     seeds: [
       getBytesEncoder().encode(
         new Uint8Array([
-          116, 97, 115, 107, 95, 109, 111, 100, 101, 114, 97, 116, 105, 111,
-          110, 95, 118, 50,
+          109, 111, 100, 101, 114, 97, 116, 105, 111, 110, 95, 98, 108, 111, 99,
+          107,
         ]),
       ),
-      getAddressEncoder().encode(seeds.task),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.jobSpecHash),
-      getAddressEncoder().encode(seeds.moderator),
+      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.contentHash),
     ],
   });
 }

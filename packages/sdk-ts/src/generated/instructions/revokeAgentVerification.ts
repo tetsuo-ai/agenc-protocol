@@ -34,10 +34,9 @@ import {
 } from "@solana/kit";
 import {
   getAccountMetaFactory,
-  getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findModerationAttestorPda, findModerationConfigPda } from "../pdas";
+import { findModerationConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const REVOKE_AGENT_VERIFICATION_DISCRIMINATOR: ReadonlyUint8Array =
@@ -54,7 +53,6 @@ export type RevokeAgentVerificationInstruction<
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountAgentVerification extends string | AccountMeta<string> = string,
   TAccountAttestor extends string | AccountMeta<string> = string,
-  TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -70,9 +68,6 @@ export type RevokeAgentVerificationInstruction<
         ? WritableSignerAccount<TAccountAttestor> &
             AccountSignerMeta<TAccountAttestor>
         : TAccountAttestor,
-      TAccountModerationAttestor extends string
-        ? ReadonlyAccount<TAccountModerationAttestor>
-        : TAccountModerationAttestor,
       ...TRemainingAccounts,
     ]
   >;
@@ -113,36 +108,27 @@ export type RevokeAgentVerificationAsyncInput<
   TAccountModerationConfig extends string = string,
   TAccountAgentVerification extends string = string,
   TAccountAttestor extends string = string,
-  TAccountModerationAttestor extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   /** The verification to revoke, pinned to its canonical PDA (seeded by the stored agent). */
   agentVerification: Address<TAccountAgentVerification>;
   /**
-   * The recording signer. Authorization (global moderation authority OR a registered
-   * attestor) is checked in the handler, mirroring `record_*_moderation`.
+   * The revoking signer. P1.2 §4.6: must be the GLOBAL moderation authority
+   * (checked in the handler; the roster no longer authorizes this).
    */
   attestor: TransactionSigner<TAccountAttestor>;
-  /**
-   * OPTIONAL: a registered moderation-attestor roster entry (same semantics as
-   * `record_agent_verification`). Canonical-PDA + `attestor == signer` bound; a revoked
-   * attestor's PDA is closed and fails to load.
-   */
-  moderationAttestor?: Address<TAccountModerationAttestor>;
 };
 
 export async function getRevokeAgentVerificationInstructionAsync<
   TAccountModerationConfig extends string,
   TAccountAgentVerification extends string,
   TAccountAttestor extends string,
-  TAccountModerationAttestor extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RevokeAgentVerificationAsyncInput<
     TAccountModerationConfig,
     TAccountAgentVerification,
-    TAccountAttestor,
-    TAccountModerationAttestor
+    TAccountAttestor
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -150,8 +136,7 @@ export async function getRevokeAgentVerificationInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountAgentVerification,
-    TAccountAttestor,
-    TAccountModerationAttestor
+    TAccountAttestor
   >
 > {
   // Program address.
@@ -169,10 +154,6 @@ export async function getRevokeAgentVerificationInstructionAsync<
       isWritable: true,
     },
     attestor: { value: input.attestor ?? null, isWritable: true },
-    moderationAttestor: {
-      value: input.moderationAttestor ?? null,
-      isWritable: false,
-    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -183,14 +164,6 @@ export async function getRevokeAgentVerificationInstructionAsync<
   if (!accounts.moderationConfig.value) {
     accounts.moderationConfig.value = await findModerationConfigPda();
   }
-  if (!accounts.moderationAttestor.value) {
-    accounts.moderationAttestor.value = await findModerationAttestorPda({
-      attestor: getAddressFromResolvedInstructionAccount(
-        "attestor",
-        accounts.attestor.value,
-      ),
-    });
-  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -198,7 +171,6 @@ export async function getRevokeAgentVerificationInstructionAsync<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("agentVerification", accounts.agentVerification),
       getAccountMeta("attestor", accounts.attestor),
-      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
     ],
     data: getRevokeAgentVerificationInstructionDataEncoder().encode({}),
     programAddress,
@@ -206,8 +178,7 @@ export async function getRevokeAgentVerificationInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountAgentVerification,
-    TAccountAttestor,
-    TAccountModerationAttestor
+    TAccountAttestor
   >);
 }
 
@@ -215,44 +186,34 @@ export type RevokeAgentVerificationInput<
   TAccountModerationConfig extends string = string,
   TAccountAgentVerification extends string = string,
   TAccountAttestor extends string = string,
-  TAccountModerationAttestor extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   /** The verification to revoke, pinned to its canonical PDA (seeded by the stored agent). */
   agentVerification: Address<TAccountAgentVerification>;
   /**
-   * The recording signer. Authorization (global moderation authority OR a registered
-   * attestor) is checked in the handler, mirroring `record_*_moderation`.
+   * The revoking signer. P1.2 §4.6: must be the GLOBAL moderation authority
+   * (checked in the handler; the roster no longer authorizes this).
    */
   attestor: TransactionSigner<TAccountAttestor>;
-  /**
-   * OPTIONAL: a registered moderation-attestor roster entry (same semantics as
-   * `record_agent_verification`). Canonical-PDA + `attestor == signer` bound; a revoked
-   * attestor's PDA is closed and fails to load.
-   */
-  moderationAttestor?: Address<TAccountModerationAttestor>;
 };
 
 export function getRevokeAgentVerificationInstruction<
   TAccountModerationConfig extends string,
   TAccountAgentVerification extends string,
   TAccountAttestor extends string,
-  TAccountModerationAttestor extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RevokeAgentVerificationInput<
     TAccountModerationConfig,
     TAccountAgentVerification,
-    TAccountAttestor,
-    TAccountModerationAttestor
+    TAccountAttestor
   >,
   config?: { programAddress?: TProgramAddress },
 ): RevokeAgentVerificationInstruction<
   TProgramAddress,
   TAccountModerationConfig,
   TAccountAgentVerification,
-  TAccountAttestor,
-  TAccountModerationAttestor
+  TAccountAttestor
 > {
   // Program address.
   const programAddress =
@@ -269,10 +230,6 @@ export function getRevokeAgentVerificationInstruction<
       isWritable: true,
     },
     attestor: { value: input.attestor ?? null, isWritable: true },
-    moderationAttestor: {
-      value: input.moderationAttestor ?? null,
-      isWritable: false,
-    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -285,7 +242,6 @@ export function getRevokeAgentVerificationInstruction<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("agentVerification", accounts.agentVerification),
       getAccountMeta("attestor", accounts.attestor),
-      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
     ],
     data: getRevokeAgentVerificationInstructionDataEncoder().encode({}),
     programAddress,
@@ -293,8 +249,7 @@ export function getRevokeAgentVerificationInstruction<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountAgentVerification,
-    TAccountAttestor,
-    TAccountModerationAttestor
+    TAccountAttestor
   >);
 }
 
@@ -308,16 +263,10 @@ export type ParsedRevokeAgentVerificationInstruction<
     /** The verification to revoke, pinned to its canonical PDA (seeded by the stored agent). */
     agentVerification: TAccountMetas[1];
     /**
-     * The recording signer. Authorization (global moderation authority OR a registered
-     * attestor) is checked in the handler, mirroring `record_*_moderation`.
+     * The revoking signer. P1.2 §4.6: must be the GLOBAL moderation authority
+     * (checked in the handler; the roster no longer authorizes this).
      */
     attestor: TAccountMetas[2];
-    /**
-     * OPTIONAL: a registered moderation-attestor roster entry (same semantics as
-     * `record_agent_verification`). Canonical-PDA + `attestor == signer` bound; a revoked
-     * attestor's PDA is closed and fails to load.
-     */
-    moderationAttestor?: TAccountMetas[3] | undefined;
   };
   data: RevokeAgentVerificationInstructionData;
 };
@@ -330,12 +279,12 @@ export function parseRevokeAgentVerificationInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRevokeAgentVerificationInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 4) {
+  if (instruction.accounts.length < 3) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 4,
+        expectedAccountMetas: 3,
       },
     );
   }
@@ -345,19 +294,12 @@ export function parseRevokeAgentVerificationInstruction<
     accountIndex += 1;
     return accountMeta;
   };
-  const getNextOptionalAccount = () => {
-    const accountMeta = getNextAccount();
-    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
-      ? undefined
-      : accountMeta;
-  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
       moderationConfig: getNextAccount(),
       agentVerification: getNextAccount(),
       attestor: getNextAccount(),
-      moderationAttestor: getNextOptionalAccount(),
     },
     data: getRevokeAgentVerificationInstructionDataDecoder().decode(
       instruction.data,

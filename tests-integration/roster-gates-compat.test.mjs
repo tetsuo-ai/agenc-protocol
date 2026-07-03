@@ -19,6 +19,14 @@
 // position-agnostic (asserts "old truncated call fails, nothing created" rather than a
 // specific Anchor error code) so it stays valid if the optional account is ever repositioned.
 //
+// P1.2 (hardened open roster) update: the program now writes ONLY v2 moderator-keyed
+// records (["task_moderation_v2"/"listing_moderation_v2", ..., moderator]), so a legacy
+// 3-seed record can no longer be fabricated through record_*_moderation. To preserve the
+// original compat intent — a PRE-UPGRADE legacy record authored by the global authority
+// still unlocks the gate when passed at the legacy PDA with moderator = the global
+// authority — this file INJECTS the legacy-seed accounts directly with svm.setAccount
+// (the same byte-layout trick harness.mjs uses for ProtocolConfig/ModerationConfig).
+//
 // Run:  cd agenc-protocol && node --test tests-integration/roster-gates-compat.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -27,7 +35,8 @@ import { Buffer } from "node:buffer";
 import { FailedTransactionMetadata } from "litesvm";
 import {
   enc, arr, pda, id32, makeProgram, send, decode, isClosed,
-  freshWorld, hireIx, BN, SystemProgram, PID,
+  freshWorld, hireIx, moderationBlockPda, coder,
+  BN, SystemProgram, PID,
 } from "./harness.mjs";
 
 const isFail = (res) => res instanceof FailedTransactionMetadata;
@@ -58,34 +67,68 @@ async function createPlainTask(w) {
   return { task };
 }
 
-async function recordTaskModByAuthority(w, task, jobHash) {
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
-  const r = send(w.svm, await makeProgram(w.modAuth).methods
-    .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod,
-      moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId }).instruction(),
-    [w.modAuth]);
-  assert.ok(!isFail(r), "global authority records task moderation");
+// Inject a PRE-UPGRADE legacy-seed TaskModeration (["task_moderation", task, hash]) authored
+// by the global authority. The post-P1.2 program only WRITES v2 moderator-keyed records, so
+// this models a record that already existed on chain before the upgrade.
+async function injectLegacyTaskMod(w, task, jobHash) {
+  const [taskMod, bump] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const record = {
+    task,
+    creator: w.buyer.publicKey,
+    job_spec_hash: arr(jobHash),
+    status: 0, // CLEAN
+    risk_score: 0,
+    category_mask: new BN(0),
+    policy_hash: arr(Buffer.alloc(32, 1)),
+    scanner_hash: arr(Buffer.alloc(32, 2)),
+    recorded_at: new BN(Number(w.svm.getClock().unixTimestamp)),
+    expires_at: new BN(0),
+    moderator: w.modAuth.publicKey,
+    bump,
+    _reserved: Array(7).fill(0),
+  };
+  const data = await coder.accounts.encode("TaskModeration", record);
+  w.svm.setAccount(taskMod, {
+    lamports: Number(w.svm.minimumBalanceForRentExemption(BigInt(data.length))),
+    data, owner: PID, executable: false, rentEpoch: 0,
+  });
   return taskMod;
 }
 
-async function recordListingModByAuthority(w) {
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
-  const r = send(w.svm, await makeProgram(w.modAuth).methods
-    .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-    .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod,
-      moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId }).instruction(),
-    [w.modAuth]);
-  assert.ok(!isFail(r), "global authority records listing moderation");
+// Inject a PRE-UPGRADE legacy-seed ListingModeration (["listing_moderation", listing, hash])
+// authored by the global authority (same rationale as injectLegacyTaskMod).
+async function injectLegacyListingMod(w) {
+  const [listingMod, bump] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const record = {
+    listing: w.listing,
+    provider_agent: w.providerAgent,
+    job_spec_hash: arr(w.specHash),
+    status: 0, // CLEAN
+    risk_score: 0,
+    category_mask: new BN(0),
+    policy_hash: arr(Buffer.alloc(32, 7)),
+    scanner_hash: arr(Buffer.alloc(32, 9)),
+    recorded_at: new BN(Number(w.svm.getClock().unixTimestamp)),
+    expires_at: new BN(0),
+    moderator: w.modAuth.publicKey,
+    bump,
+    _reserved: Array(7).fill(0),
+  };
+  const data = await coder.accounts.encode("ListingModeration", record);
+  w.svm.setAccount(listingMod, {
+    lamports: Number(w.svm.minimumBalanceForRentExemption(BigInt(data.length))),
+    data, owner: PID, executable: false, rentEpoch: 0,
+  });
   return listingMod;
 }
 
 async function buildSetJobSpecIx(w, task, jobHash, taskMod) {
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const ix = await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/compat")
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/compat", w.modAuth.publicKey)
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod,
-      moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+      moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0],
+      taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction();
   return { ix, jobSpec };
 }
@@ -98,21 +141,24 @@ async function buildHumanlessHireIx(w, human, listingMod) {
   const [validation] = pda([enc("task_validation"), task.toBuffer()]);
   const [rateLimit] = pda([enc("authority_rate_limit"), human.publicKey.toBuffer()]);
   const ix = await makeProgram(human).methods
-    .hireFromListingHumanless(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0)
+    .hireFromListingHumanless(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0, w.modAuth.publicKey)
     .accounts({ task, escrow, hireRecord, taskValidationConfig: validation, listing: w.listing,
       protocolConfig: w.protocolPda, moderationConfig: w.modCfg, listingModeration: listingMod,
-      moderationAttestor: null, authorityRateLimit: rateLimit, creator: human.publicKey,
+      moderationAttestor: null, moderationBlock: moderationBlockPda(w.specHash)[0],
+      authorityRateLimit: rateLimit, creator: human.publicKey,
       systemProgram: SystemProgram.programId })
     .instruction();
   return { ix, task };
 }
 
 // GATE 1 — set_task_job_spec
-test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at set_task_job_spec; regenerated client works", async () => {
+test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at set_task_job_spec; legacy record + regenerated client works", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const { task } = await createPlainTask(w);
   const jobHash = id32();
-  const taskMod = await recordTaskModByAuthority(w, task, jobHash);
+  // A PRE-UPGRADE legacy-seed record authored by the global authority (injected — the
+  // post-P1.2 program only writes v2 records).
+  const taskMod = await injectLegacyTaskMod(w, task, jobHash);
 
   // Old client: truncated account list (no moderation_attestor slot) → must abort, nothing written.
   const old = await buildSetJobSpecIx(w, task, jobHash, taskMod);
@@ -120,8 +166,9 @@ test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at se
   assert.ok(isFail(oldRes), "old truncated client MUST fail (interface change is breaking)");
   assert.ok(isClosed(w.svm, old.jobSpec), "fail-closed: no job spec published by the old client");
 
-  // Regenerated client: same call WITH the account present (null placeholder for global authority)
-  // → succeeds. This is the required client action after the upgrade.
+  // Regenerated client: same call WITH the account present (null placeholder for global
+  // authority) and moderator = the global authority → the frozen legacy record still
+  // unlocks the gate at the legacy PDA. This is the required client action after the upgrade.
   w.svm.expireBlockhash();
   const fresh = await buildSetJobSpecIx(w, task, jobHash, taskMod);
   assert.ok(!isFail(send(w.svm, fresh.ix, [w.buyer])), "regenerated client publishes on the global-authority path");
@@ -129,9 +176,9 @@ test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at se
 });
 
 // GATE 2 — hire_from_listing
-test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at hire_from_listing; regenerated client works", async () => {
+test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at hire_from_listing; legacy record + regenerated client works", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const listingMod = await recordListingModByAuthority(w);
+  const listingMod = await injectLegacyListingMod(w);
 
   const oldHire = await hireIx(w, { taskId: id32(), listingModeration: listingMod, moderationAttestor: null });
   const oldRes = send(w.svm, truncateOldClient(oldHire.ix), [w.buyer]);
@@ -145,11 +192,11 @@ test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at hi
 });
 
 // GATE 3 — hire_from_listing_humanless
-test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at hire_from_listing_humanless; regenerated client works", async () => {
+test("compat: pre-WP-A1 client that OMITS moderation_attestor fails CLOSED at hire_from_listing_humanless; legacy record + regenerated client works", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const human = (await import("@solana/web3.js")).Keypair.generate();
   w.svm.airdrop(human.publicKey, BigInt(100e9));
-  const listingMod = await recordListingModByAuthority(w);
+  const listingMod = await injectLegacyListingMod(w);
 
   const old = await buildHumanlessHireIx(w, human, listingMod);
   const oldRes = send(w.svm, truncateOldClient(old.ix), [human]);

@@ -60,8 +60,8 @@ export type RecordTaskModerationInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountTask extends string | AccountMeta<string> = string,
-  TAccountTaskModeration extends string | AccountMeta<string> = string,
   TAccountModerator extends string | AccountMeta<string> = string,
+  TAccountTaskModeration extends string | AccountMeta<string> = string,
   TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
@@ -76,13 +76,13 @@ export type RecordTaskModerationInstruction<
       TAccountTask extends string
         ? ReadonlyAccount<TAccountTask>
         : TAccountTask,
-      TAccountTaskModeration extends string
-        ? WritableAccount<TAccountTaskModeration>
-        : TAccountTaskModeration,
       TAccountModerator extends string
         ? WritableSignerAccount<TAccountModerator> &
             AccountSignerMeta<TAccountModerator>
         : TAccountModerator,
+      TAccountTaskModeration extends string
+        ? WritableAccount<TAccountTaskModeration>
+        : TAccountTaskModeration,
       TAccountModerationAttestor extends string
         ? ReadonlyAccount<TAccountModerationAttestor>
         : TAccountModerationAttestor,
@@ -159,21 +159,30 @@ export function getRecordTaskModerationInstructionDataCodec(): FixedSizeCodec<
 export type RecordTaskModerationAsyncInput<
   TAccountModerationConfig extends string = string,
   TAccountTask extends string = string,
-  TAccountTaskModeration extends string = string,
   TAccountModerator extends string = string,
+  TAccountTaskModeration extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   task: Address<TAccountTask>;
-  taskModeration?: Address<TAccountTaskModeration>;
   /**
    * The recording signer. Authorization is checked in the handler (NOT as an account
    * constraint here) so the registered-attestor OR global-authority branch can be
    * evaluated. In the canary build there is no attestor account, so the handler falls
    * back to the global-authority-only check — the canary surface stays frozen.
+   * Declared BEFORE `task_moderation` in the full build so the v2 seed can reference
+   * it (an IDL account-order change for this batch's regenerated clients).
    */
   moderator: TransactionSigner<TAccountModerator>;
+  /**
+   * P1.2 §4.3 — v2 MODERATOR-KEYED record: each attestor owns an exclusive slot, so
+   * `init_if_needed` is self-re-review only. No attestor can overwrite another's
+   * verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
+   * attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
+   * written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+   */
+  taskModeration?: Address<TAccountTaskModeration>;
   /**
    * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
    * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
@@ -197,8 +206,8 @@ export type RecordTaskModerationAsyncInput<
 export async function getRecordTaskModerationInstructionAsync<
   TAccountModerationConfig extends string,
   TAccountTask extends string,
-  TAccountTaskModeration extends string,
   TAccountModerator extends string,
+  TAccountTaskModeration extends string,
   TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -206,8 +215,8 @@ export async function getRecordTaskModerationInstructionAsync<
   input: RecordTaskModerationAsyncInput<
     TAccountModerationConfig,
     TAccountTask,
-    TAccountTaskModeration,
     TAccountModerator,
+    TAccountTaskModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >,
@@ -217,8 +226,8 @@ export async function getRecordTaskModerationInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountTask,
-    TAccountTaskModeration,
     TAccountModerator,
+    TAccountTaskModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >
@@ -234,8 +243,8 @@ export async function getRecordTaskModerationInstructionAsync<
       isWritable: false,
     },
     task: { value: input.task ?? null, isWritable: false },
-    taskModeration: { value: input.taskModeration ?? null, isWritable: true },
     moderator: { value: input.moderator ?? null, isWritable: true },
+    taskModeration: { value: input.taskModeration ?? null, isWritable: true },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
       isWritable: false,
@@ -264,6 +273,10 @@ export async function getRecordTaskModerationInstructionAsync<
         "jobSpecHash",
         args.jobSpecHash,
       ),
+      moderator: getAddressFromResolvedInstructionAccount(
+        "moderator",
+        accounts.moderator.value,
+      ),
     });
   }
   if (!accounts.systemProgram.value) {
@@ -276,8 +289,8 @@ export async function getRecordTaskModerationInstructionAsync<
     accounts: [
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("task", accounts.task),
-      getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderator", accounts.moderator),
+      getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -289,8 +302,8 @@ export async function getRecordTaskModerationInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountTask,
-    TAccountTaskModeration,
     TAccountModerator,
+    TAccountTaskModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >);
@@ -299,21 +312,30 @@ export async function getRecordTaskModerationInstructionAsync<
 export type RecordTaskModerationInput<
   TAccountModerationConfig extends string = string,
   TAccountTask extends string = string,
-  TAccountTaskModeration extends string = string,
   TAccountModerator extends string = string,
+  TAccountTaskModeration extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   task: Address<TAccountTask>;
-  taskModeration: Address<TAccountTaskModeration>;
   /**
    * The recording signer. Authorization is checked in the handler (NOT as an account
    * constraint here) so the registered-attestor OR global-authority branch can be
    * evaluated. In the canary build there is no attestor account, so the handler falls
    * back to the global-authority-only check — the canary surface stays frozen.
+   * Declared BEFORE `task_moderation` in the full build so the v2 seed can reference
+   * it (an IDL account-order change for this batch's regenerated clients).
    */
   moderator: TransactionSigner<TAccountModerator>;
+  /**
+   * P1.2 §4.3 — v2 MODERATOR-KEYED record: each attestor owns an exclusive slot, so
+   * `init_if_needed` is self-re-review only. No attestor can overwrite another's
+   * verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
+   * attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
+   * written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+   */
+  taskModeration: Address<TAccountTaskModeration>;
   /**
    * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
    * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
@@ -337,8 +359,8 @@ export type RecordTaskModerationInput<
 export function getRecordTaskModerationInstruction<
   TAccountModerationConfig extends string,
   TAccountTask extends string,
-  TAccountTaskModeration extends string,
   TAccountModerator extends string,
+  TAccountTaskModeration extends string,
   TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -346,8 +368,8 @@ export function getRecordTaskModerationInstruction<
   input: RecordTaskModerationInput<
     TAccountModerationConfig,
     TAccountTask,
-    TAccountTaskModeration,
     TAccountModerator,
+    TAccountTaskModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >,
@@ -356,8 +378,8 @@ export function getRecordTaskModerationInstruction<
   TProgramAddress,
   TAccountModerationConfig,
   TAccountTask,
-  TAccountTaskModeration,
   TAccountModerator,
+  TAccountTaskModeration,
   TAccountModerationAttestor,
   TAccountSystemProgram
 > {
@@ -372,8 +394,8 @@ export function getRecordTaskModerationInstruction<
       isWritable: false,
     },
     task: { value: input.task ?? null, isWritable: false },
-    taskModeration: { value: input.taskModeration ?? null, isWritable: true },
     moderator: { value: input.moderator ?? null, isWritable: true },
+    taskModeration: { value: input.taskModeration ?? null, isWritable: true },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
       isWritable: false,
@@ -399,8 +421,8 @@ export function getRecordTaskModerationInstruction<
     accounts: [
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("task", accounts.task),
-      getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderator", accounts.moderator),
+      getAccountMeta("taskModeration", accounts.taskModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -412,8 +434,8 @@ export function getRecordTaskModerationInstruction<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountTask,
-    TAccountTaskModeration,
     TAccountModerator,
+    TAccountTaskModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >);
@@ -427,14 +449,23 @@ export type ParsedRecordTaskModerationInstruction<
   accounts: {
     moderationConfig: TAccountMetas[0];
     task: TAccountMetas[1];
-    taskModeration: TAccountMetas[2];
     /**
      * The recording signer. Authorization is checked in the handler (NOT as an account
      * constraint here) so the registered-attestor OR global-authority branch can be
      * evaluated. In the canary build there is no attestor account, so the handler falls
      * back to the global-authority-only check — the canary surface stays frozen.
+     * Declared BEFORE `task_moderation` in the full build so the v2 seed can reference
+     * it (an IDL account-order change for this batch's regenerated clients).
      */
-    moderator: TAccountMetas[3];
+    moderator: TAccountMetas[2];
+    /**
+     * P1.2 §4.3 — v2 MODERATOR-KEYED record: each attestor owns an exclusive slot, so
+     * `init_if_needed` is self-re-review only. No attestor can overwrite another's
+     * verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
+     * attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
+     * written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+     */
+    taskModeration: TAccountMetas[3];
     /**
      * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
      * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
@@ -484,8 +515,8 @@ export function parseRecordTaskModerationInstruction<
     accounts: {
       moderationConfig: getNextAccount(),
       task: getNextAccount(),
-      taskModeration: getNextAccount(),
       moderator: getNextAccount(),
+      taskModeration: getNextAccount(),
       moderationAttestor: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
     },

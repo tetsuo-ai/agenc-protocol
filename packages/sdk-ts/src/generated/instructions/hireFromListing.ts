@@ -78,6 +78,7 @@ export type HireFromListingInstruction<
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountListingModeration extends string | AccountMeta<string> = string,
   TAccountModerationAttestor extends string | AccountMeta<string> = string,
+  TAccountModerationBlock extends string | AccountMeta<string> = string,
   TAccountCreatorAgent extends string | AccountMeta<string> = string,
   TAccountAuthorityRateLimit extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
@@ -113,6 +114,9 @@ export type HireFromListingInstruction<
       TAccountModerationAttestor extends string
         ? ReadonlyAccount<TAccountModerationAttestor>
         : TAccountModerationAttestor,
+      TAccountModerationBlock extends string
+        ? ReadonlyAccount<TAccountModerationBlock>
+        : TAccountModerationBlock,
       TAccountCreatorAgent extends string
         ? ReadonlyAccount<TAccountCreatorAgent>
         : TAccountCreatorAgent,
@@ -141,6 +145,7 @@ export type HireFromListingInstructionData = {
   expectedVersion: bigint;
   referrer: Option<Address>;
   referrerFeeBps: number;
+  moderator: Address;
 };
 
 export type HireFromListingInstructionDataArgs = {
@@ -149,6 +154,7 @@ export type HireFromListingInstructionDataArgs = {
   expectedVersion: number | bigint;
   referrer: OptionOrNullable<Address>;
   referrerFeeBps: number;
+  moderator: Address;
 };
 
 export function getHireFromListingInstructionDataEncoder(): Encoder<HireFromListingInstructionDataArgs> {
@@ -160,6 +166,7 @@ export function getHireFromListingInstructionDataEncoder(): Encoder<HireFromList
       ["expectedVersion", getU64Encoder()],
       ["referrer", getOptionEncoder(getAddressEncoder())],
       ["referrerFeeBps", getU16Encoder()],
+      ["moderator", getAddressEncoder()],
     ]),
     (value) => ({ ...value, discriminator: HIRE_FROM_LISTING_DISCRIMINATOR }),
   );
@@ -173,6 +180,7 @@ export function getHireFromListingInstructionDataDecoder(): Decoder<HireFromList
     ["expectedVersion", getU64Decoder()],
     ["referrer", getOptionDecoder(getAddressDecoder())],
     ["referrerFeeBps", getU16Decoder()],
+    ["moderator", getAddressDecoder()],
   ]);
 }
 
@@ -195,6 +203,7 @@ export type HireFromListingAsyncInput<
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
   TAccountModerationAttestor extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountCreatorAgent extends string = string,
   TAccountAuthorityRateLimit extends string = string,
   TAccountAuthority extends string = string,
@@ -221,21 +230,37 @@ export type HireFromListingAsyncInput<
    */
   moderationConfig?: Address<TAccountModerationConfig>;
   /**
-   * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`;
-   * bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
+   * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
+   * P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the
+   * moderator sits inside the primary record's derivation), so this arrives
+   * unchecked and the handler re-implements every dropped constraint via
+   * `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy),
+   * `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings.
+   *
    */
   listingModeration?: Address<TAccountListingModeration>;
   /**
-   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-   * gate when `listing_moderation` was authored by a non-global-authority attestor.
-   * Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+   * OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire
+   * gate when the record was authored by a non-global-authority attestor. The
    * canonical-PDA + moderator binding is enforced in the handler via
-   * `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
-   * is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
-   * Only needed for the roster path; the global-authority path passes with this absent
-   * (`None`), byte-unchanged.
+   * `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the
+   * risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>`
+   * still guarantees the entry is program-owned and non-revoked (a revoked entry's
+   * PDA is closed and fails to load — the WP-A1 fail-closed property, preserved).
+   * Only needed for the roster path; the global-authority path passes with `None`.
    */
   moderationAttestor?: Address<TAccountModerationAttestor>;
+  /**
+   * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`.
+   * The handler derives `["moderation_block", listing.spec_hash]` itself and
+   * rejects a mismatched address, so it can be neither omitted nor substituted; a
+   * multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation
+   * presented, and re-minting the same content under a fresh listing PDA is still
+   * blocked (content-hash-keyed).
+   *
+   * (handler-derived canonical PDA; system-owned/empty = pass).
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   /** Buyer's agent registration for identity/authorization (mirrors create_task). */
   creatorAgent: Address<TAccountCreatorAgent>;
   /** Wallet-scoped task/dispute rate limit state shared across all agents. */
@@ -253,6 +278,7 @@ export type HireFromListingAsyncInput<
   expectedVersion: HireFromListingInstructionDataArgs["expectedVersion"];
   referrer: HireFromListingInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
+  moderator: HireFromListingInstructionDataArgs["moderator"];
 };
 
 export async function getHireFromListingInstructionAsync<
@@ -264,6 +290,7 @@ export async function getHireFromListingInstructionAsync<
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
   TAccountModerationAttestor extends string,
+  TAccountModerationBlock extends string,
   TAccountCreatorAgent extends string,
   TAccountAuthorityRateLimit extends string,
   TAccountAuthority extends string,
@@ -280,6 +307,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -298,6 +326,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -326,6 +355,10 @@ export async function getHireFromListingInstructionAsync<
     },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
       isWritable: false,
     },
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
@@ -401,6 +434,7 @@ export async function getHireFromListingInstructionAsync<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("authorityRateLimit", accounts.authorityRateLimit),
       getAccountMeta("authority", accounts.authority),
@@ -421,6 +455,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -438,6 +473,7 @@ export type HireFromListingInput<
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
   TAccountModerationAttestor extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountCreatorAgent extends string = string,
   TAccountAuthorityRateLimit extends string = string,
   TAccountAuthority extends string = string,
@@ -464,21 +500,37 @@ export type HireFromListingInput<
    */
   moderationConfig: Address<TAccountModerationConfig>;
   /**
-   * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`;
-   * bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
+   * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
+   * P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the
+   * moderator sits inside the primary record's derivation), so this arrives
+   * unchecked and the handler re-implements every dropped constraint via
+   * `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy),
+   * `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings.
+   *
    */
   listingModeration?: Address<TAccountListingModeration>;
   /**
-   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-   * gate when `listing_moderation` was authored by a non-global-authority attestor.
-   * Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+   * OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire
+   * gate when the record was authored by a non-global-authority attestor. The
    * canonical-PDA + moderator binding is enforced in the handler via
-   * `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
-   * is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
-   * Only needed for the roster path; the global-authority path passes with this absent
-   * (`None`), byte-unchanged.
+   * `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the
+   * risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>`
+   * still guarantees the entry is program-owned and non-revoked (a revoked entry's
+   * PDA is closed and fails to load — the WP-A1 fail-closed property, preserved).
+   * Only needed for the roster path; the global-authority path passes with `None`.
    */
   moderationAttestor?: Address<TAccountModerationAttestor>;
+  /**
+   * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`.
+   * The handler derives `["moderation_block", listing.spec_hash]` itself and
+   * rejects a mismatched address, so it can be neither omitted nor substituted; a
+   * multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation
+   * presented, and re-minting the same content under a fresh listing PDA is still
+   * blocked (content-hash-keyed).
+   *
+   * (handler-derived canonical PDA; system-owned/empty = pass).
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   /** Buyer's agent registration for identity/authorization (mirrors create_task). */
   creatorAgent: Address<TAccountCreatorAgent>;
   /** Wallet-scoped task/dispute rate limit state shared across all agents. */
@@ -496,6 +548,7 @@ export type HireFromListingInput<
   expectedVersion: HireFromListingInstructionDataArgs["expectedVersion"];
   referrer: HireFromListingInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
+  moderator: HireFromListingInstructionDataArgs["moderator"];
 };
 
 export function getHireFromListingInstruction<
@@ -507,6 +560,7 @@ export function getHireFromListingInstruction<
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
   TAccountModerationAttestor extends string,
+  TAccountModerationBlock extends string,
   TAccountCreatorAgent extends string,
   TAccountAuthorityRateLimit extends string,
   TAccountAuthority extends string,
@@ -523,6 +577,7 @@ export function getHireFromListingInstruction<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -540,6 +595,7 @@ export function getHireFromListingInstruction<
   TAccountModerationConfig,
   TAccountListingModeration,
   TAccountModerationAttestor,
+  TAccountModerationBlock,
   TAccountCreatorAgent,
   TAccountAuthorityRateLimit,
   TAccountAuthority,
@@ -567,6 +623,10 @@ export function getHireFromListingInstruction<
     },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
       isWritable: false,
     },
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
@@ -603,6 +663,7 @@ export function getHireFromListingInstruction<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("authorityRateLimit", accounts.authorityRateLimit),
       getAccountMeta("authority", accounts.authority),
@@ -623,6 +684,7 @@ export function getHireFromListingInstruction<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountCreatorAgent,
     TAccountAuthorityRateLimit,
     TAccountAuthority,
@@ -657,33 +719,49 @@ export type ParsedHireFromListingInstruction<
      */
     moderationConfig: TAccountMetas[5];
     /**
-     * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`;
-     * bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
+     * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
+     * P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the
+     * moderator sits inside the primary record's derivation), so this arrives
+     * unchecked and the handler re-implements every dropped constraint via
+     * `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy),
+     * `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings.
+     *
      */
     listingModeration?: TAccountMetas[6] | undefined;
     /**
-     * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-     * gate when `listing_moderation` was authored by a non-global-authority attestor.
-     * Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+     * OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire
+     * gate when the record was authored by a non-global-authority attestor. The
      * canonical-PDA + moderator binding is enforced in the handler via
-     * `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
-     * is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
-     * Only needed for the roster path; the global-authority path passes with this absent
-     * (`None`), byte-unchanged.
+     * `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the
+     * risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>`
+     * still guarantees the entry is program-owned and non-revoked (a revoked entry's
+     * PDA is closed and fails to load — the WP-A1 fail-closed property, preserved).
+     * Only needed for the roster path; the global-authority path passes with `None`.
      */
     moderationAttestor?: TAccountMetas[7] | undefined;
+    /**
+     * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`.
+     * The handler derives `["moderation_block", listing.spec_hash]` itself and
+     * rejects a mismatched address, so it can be neither omitted nor substituted; a
+     * multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation
+     * presented, and re-minting the same content under a fresh listing PDA is still
+     * blocked (content-hash-keyed).
+     *
+     * (handler-derived canonical PDA; system-owned/empty = pass).
+     */
+    moderationBlock: TAccountMetas[8];
     /** Buyer's agent registration for identity/authorization (mirrors create_task). */
-    creatorAgent: TAccountMetas[8];
+    creatorAgent: TAccountMetas[9];
     /** Wallet-scoped task/dispute rate limit state shared across all agents. */
-    authorityRateLimit: TAccountMetas[9];
+    authorityRateLimit: TAccountMetas[10];
     /** The authority that owns the buyer's agent. */
-    authority: TAccountMetas[10];
+    authority: TAccountMetas[11];
     /**
      * The buyer who pays for and owns the hired task.
      * Must match authority to prevent social-engineering attacks (#375).
      */
-    creator: TAccountMetas[11];
-    systemProgram: TAccountMetas[12];
+    creator: TAccountMetas[12];
+    systemProgram: TAccountMetas[13];
   };
   data: HireFromListingInstructionData;
 };
@@ -696,12 +774,12 @@ export function parseHireFromListingInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedHireFromListingInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 13) {
+  if (instruction.accounts.length < 14) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 13,
+        expectedAccountMetas: 14,
       },
     );
   }
@@ -728,6 +806,7 @@ export function parseHireFromListingInstruction<
       moderationConfig: getNextAccount(),
       listingModeration: getNextOptionalAccount(),
       moderationAttestor: getNextOptionalAccount(),
+      moderationBlock: getNextAccount(),
       creatorAgent: getNextAccount(),
       authorityRateLimit: getNextAccount(),
       authority: getNextAccount(),
