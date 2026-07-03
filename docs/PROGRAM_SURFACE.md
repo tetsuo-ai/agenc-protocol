@@ -56,7 +56,18 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 - configure task moderation
 - record task moderation
 - record listing moderation
-- assign / revoke moderation attestor (P6.8 roster)
+- assign / revoke moderation attestor (P6.8 roster; revoke scoped to `assigned_by` since P1.2)
+- register moderation attestor (P1.2 — permissionless, bonded self-registration)
+- request / finalize attestor exit (P1.2 — two-step, cooldown-gated, full bond refund)
+- set / clear moderation block (P1.2 — multisig-gated BLOCK-only takedown floor, content-hash-keyed)
+- set default trust list (P1.2 — multisig-gated pointer to the forkable default trusted-attestor list)
+
+Since P1.2 the moderation records are **moderator-keyed** (`["task_moderation_v2",
+task, hash, moderator]` + the listing mirror), the three consumption gates
+(`set_task_job_spec`, `hire_from_listing`, `hire_from_listing_humanless`) take an
+explicit `moderator` argument and a required handler-derived
+`["moderation_block", hash]` account, and agent verification is gated on the
+global moderation authority only. See `P1_2_OPEN_ROSTER_SPEC.md`.
 
 ### Agent verification & ratings
 
@@ -138,7 +149,7 @@ The complete model lives in `src/state.rs`. Important state families include:
 - Marketplace V2 bid marketplace config, bidder market state, bid books, and bids
 - escrow accounts and completion bonds
 - dispute accounts and the dispute-resolver roster (the old DisputeVote / AuthorityDisputeVote PDAs were dropped with `vote_dispute` in P6.3)
-- moderation config, task/listing moderation records, and the moderation-attestor roster
+- moderation config, task/listing moderation records (v2 moderator-keyed since P1.2), the moderation-attestor roster (bonded since P1.2), the `ModerationBlock` takedown floor, and the `DefaultTrustList` pointer
 - service listings and hire records
 - agent verification and hire-rating accounts
 - governance config and proposals

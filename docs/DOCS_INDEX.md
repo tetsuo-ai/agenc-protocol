@@ -19,6 +19,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./LISTING_METADATA.md](./LISTING_METADATA.md) - LISTING_METADATA v1: ServiceListing name/category/tags encoding, category taxonomy, and the spec_uri JSON Schema
 - [./AGENT_METADATA.md](./AGENT_METADATA.md) - AGENT_METADATA v1 (P7.3 step 1): the versioned off-chain agent-identity document (name/description/operatorDomain/contact/logo/tosUri), its JSON Schema, the SDK validator/renderer, and the claim-vs-verified trust boundary
 - [./VERSIONS.md](./VERSIONS.md) - P6.5 surface-versioning: program build ↔ SDK semver ↔ cluster matrix, `surface_revision` / `getDeployedSurface`, the `anchor idl init` release-runbook note, and the deprecation policy
+- [./P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md) - **P1.2 hardened open roster** (batch-2 upgrade, IMPLEMENTED in source 2026-07-03, deploy-gated): permissionless bonded attestor registration + two-step exit, v2 moderator-keyed moderation records, explicit `moderator` gate argument, the multisig BLOCK-only takedown floor, and the on-chain default trust list; supersedes MODERATION_NEUTRALITY.md
 
 ## Other Active Docs
 
@@ -37,6 +38,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 ## Read By Task
 
 - I need the neutrality / credible-exit proof: [CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md)
+- I need the open-roster moderation model (P1.2): [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md)
 - I need the agent-identity metadata standard: [AGENT_METADATA.md](./AGENT_METADATA.md)
 - I need the encrypted-delivery / fair-exchange layer-2 design: [ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md)
 - I need the milestones / partial-settlement design: [MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md)
