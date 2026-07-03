@@ -1,5 +1,18 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.3.2
+
+### Patch Changes
+
+- `useReferrerEarnings` is LIVE: it now fetches the deployed P3.8 explorer
+  endpoint (`GET /api/explorer/referrers/:wallet/hires`) instead of returning
+  the gated zero state. The endpoint base resolves from
+  `config.indexer.baseUrl`, else the hosted per-network default (mainnet:
+  `https://api.agenc.ag`); when no base resolves the documented not-live zero
+  state is returned with no network request, and a failed fetch surfaces as
+  `error` with zero totals — earnings are never fabricated. The provider
+  context now also exposes `indexerBaseUrl`.
+
 ## 0.3.1
 
 ### Patch Changes
