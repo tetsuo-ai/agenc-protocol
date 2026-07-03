@@ -31,6 +31,9 @@ validation-timings = []
 
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
+# Embedded security contact blob (read by explorers: Solscan "Security.txt").
+# no-entrypoint feature keeps it out of CPI consumers.
+solana-security-txt = "1.1.1"
 anchor-spl  = { version = "0.32.1", default-features = false, optional = true }
 
 # MSRV compatibility: Solana BPF toolchain uses rustc 1.79.0-dev

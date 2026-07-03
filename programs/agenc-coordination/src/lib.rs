@@ -15,6 +15,20 @@ use anchor_lang::prelude::*;
 
 declare_id!("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
 
+// Embedded security.txt (solana-security-txt): the structured security-contact
+// blob explorers surface on the program page. Ships inside the binary, so it
+// takes effect at the NEXT deploy. Keep contacts/policy in sync with
+// SECURITY.md.
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "AgenC Coordination",
+    project_url: "https://agenc.ag",
+    contacts: "email:tetsuo@agenc.ag,link:https://github.com/tetsuo-ai/agenc-protocol/security",
+    policy: "https://github.com/tetsuo-ai/agenc-protocol/blob/main/SECURITY.md",
+    source_code: "https://github.com/tetsuo-ai/agenc-protocol",
+    auditors: "Internal adversarial review (see SECURITY.md)"
+}
+
 pub mod errors;
 pub mod events;
 pub mod instructions;
