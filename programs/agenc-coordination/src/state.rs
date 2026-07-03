@@ -2055,21 +2055,143 @@ impl ListingModeration {
 pub struct ModerationAttestor {
     /// The wallet authorized to record moderation attestations.
     pub attestor: Pubkey,
-    /// The protocol authority that assigned this attestor (audit trail).
+    /// The wallet that created this entry (audit trail). Authority-deputized entries
+    /// carry the moderation authority; self-registered entries (P1.2) carry the
+    /// attestor itself — `assigned_by == attestor` distinguishes the two.
     pub assigned_by: Pubkey,
     /// Unix timestamp the assignment was created.
     pub assigned_at: i64,
     /// PDA bump.
     pub bump: u8,
+    // === P1.2 open-roster bookkeeping — carved from the former `_reserved: [u8; 32]`
+    // (value-only, size-identical, NO migration; the DisputeResolver P6.4 precedent).
+    // Legacy authority-deputized entries read all three as 0 = unbonded/grandfathered.
+    /// Registration bond deposited on the PDA (`REGISTRATION_BOND_LAMPORTS` at
+    /// self-registration; 0 for authority-deputized/legacy entries). Refunded in full
+    /// at `finalize_attestor_exit` — never confiscatable.
+    pub bond_lamports: u64,
+    /// When the attestor self-registered (0 for authority-deputized/legacy entries).
+    pub registered_at: i64,
+    /// Exit-window start set by `request_attestor_exit` (0 = not exiting). While
+    /// non-zero the attestor is rejected at the record AND consumption gates; the
+    /// window closes at request, not finalize.
+    pub exit_at: i64,
     /// Reserved for future metadata. MUST stay zeroed.
-    pub _reserved: [u8; 32],
+    pub _reserved: [u8; 8],
 }
 
 impl ModerationAttestor {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved == [0u8; 32]
+        self._reserved == [0u8; 8]
+    }
+
+    /// `true` once `request_attestor_exit` has started the exit clock. An exiting
+    /// attestor may no longer record moderation and its attestations no longer unlock
+    /// the consumption gates (spec §4.2, Open Question 6: strict at-request semantics).
+    pub fn is_exiting(&self) -> bool {
+        self.exit_at != 0
+    }
+}
+
+/// Maximum length of a `ModerationBlock.rationale_uri` / `DefaultTrustList.list_uri`.
+/// Matches `TASK_JOB_SPEC_URI_MAX_LEN` (the house content-pointer bound).
+pub const MODERATION_URI_MAX_LEN: usize = 256;
+
+/// Status values for `ModerationBlock.status`.
+pub mod moderation_block_status {
+    /// Block lifted by `clear_moderation_block`; the account stays open as the audit
+    /// trail, and the consumption gates treat the hash as unblocked.
+    pub const CLEARED: u8 = 0;
+    /// Content hash is hard-blocked at all three consumption gates.
+    pub const BLOCKED: u8 = 1;
+}
+
+/// P1.2 §5.2 — the BLOCK-only global takedown floor.
+///
+/// Keyed by CONTENT HASH alone (not task/listing) so a takedown cannot be evaded by
+/// re-minting the same content under a fresh task/listing PDA. REQUIRED on all three
+/// consumption gates (`set_task_job_spec`, `hire_from_listing`,
+/// `hire_from_listing_humanless`), which derive this address in-handler from the same
+/// hash they are already gating — the caller cannot substitute a different account.
+/// An absent (system-owned, empty) account means "no block" — the floor is a
+/// fail-OPEN blacklist: key-death preserves publishing; nothing can be gated *in*
+/// through it. Written only by the multisig-gated `set_moderation_block` /
+/// `clear_moderation_block` (never the single-key moderation-authority path).
+///
+/// PDA seeds: ["moderation_block", content_hash]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct ModerationBlock {
+    /// The blocked job-spec/listing-spec content hash (the PDA seed, stored for gPA).
+    pub content_hash: [u8; HASH_SIZE],
+    /// One of `moderation_block_status::*`.
+    pub status: u8,
+    /// Hash of the written takedown rationale (REQUIRED — the `resolve_dispute`
+    /// precedent; bounds the discretionary power with an auditable record).
+    pub rationale_hash: [u8; HASH_SIZE],
+    /// URI of the rationale document.
+    #[max_len(MODERATION_URI_MAX_LEN)]
+    pub rationale_uri: String,
+    /// When the block was first set.
+    pub set_at: i64,
+    /// Last set/clear transition.
+    pub updated_at: i64,
+    /// The fee-paying signer of the last transition (the multisig approval itself is
+    /// checked via `require_multisig_threshold` over remaining accounts).
+    pub updated_by: Pubkey,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future takedown metadata. MUST stay zeroed.
+    pub _reserved: [u8; 16],
+}
+
+impl ModerationBlock {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 16]
+    }
+
+    pub fn is_blocked(&self) -> bool {
+        self.status == moderation_block_status::BLOCKED
+    }
+}
+
+/// P1.2 §5.1 — on-chain, multisig-governed pointer to the default trusted-attestor
+/// list. A content-addressed pointer (hash + URI), NOT the list itself: the signed,
+/// versioned artifact ships in `@tetsuo-ai/marketplace-moderation` and is forkable by
+/// any surface. Governance is `require_multisig_threshold` (the live 2-of-3), never an
+/// npm publish key. `updated_at` is the deadman signal: a surface can observe staleness
+/// and fall back to its own list.
+///
+/// PDA seeds: ["default_trust_list"]
+#[account]
+#[derive(Default, InitSpace)]
+pub struct DefaultTrustList {
+    /// Content hash of the current list artifact.
+    pub list_hash: [u8; HASH_SIZE],
+    /// URI of the list artifact.
+    #[max_len(MODERATION_URI_MAX_LEN)]
+    pub list_uri: String,
+    /// Monotonic version, bumped on every update (rollback detection).
+    pub version: u64,
+    /// Deadman timestamp: when the list was last updated.
+    pub updated_at: i64,
+    /// The fee-paying signer of the last update.
+    pub updated_by: Pubkey,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved for future trust-list metadata. MUST stay zeroed.
+    pub _reserved: [u8; 16],
+}
+
+impl DefaultTrustList {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 16]
     }
 }
 
@@ -2619,6 +2741,53 @@ mod tests {
             entry.validate_reserved_fields(),
             "a fresh ModerationAttestor must have zeroed reserved bytes"
         );
+    }
+
+    /// P1.2: carving `ModerationAttestor`'s former 32 reserved bytes into
+    /// `bond_lamports: u64` (8) + `registered_at: i64` (8) + `exit_at: i64` (8) +
+    /// `_reserved: [u8; 8]` (8) MUST keep the serialized size identical — a
+    /// value-into-reserved-space write, NOT a layout change and NOT a migration.
+    /// Legacy authority-deputized entries (zeroed reserved bytes) decode as
+    /// bond 0 / registered_at 0 / exit_at 0 = unbonded, grandfathered, not exiting.
+    #[test]
+    fn test_moderation_attestor_size_unchanged() {
+        // attestor(32) + assigned_by(32) + assigned_at(8) + bump(1) + the 32 bytes
+        // formerly reserved, now bond_lamports(8)+registered_at(8)+exit_at(8)+_reserved(8).
+        const EXPECTED_INIT_SPACE: usize = 32 + 32 + 8 + 1 + (8 + 8 + 8 + 8);
+        assert_eq!(
+            <ModerationAttestor as anchor_lang::Space>::INIT_SPACE,
+            EXPECTED_INIT_SPACE,
+            "ModerationAttestor size must be unchanged after carving the reserved bytes (no migration)"
+        );
+    }
+
+    #[test]
+    fn test_moderation_attestor_legacy_zeroed_bytes_are_grandfathered() {
+        let entry = ModerationAttestor::default();
+        assert_eq!(entry.bond_lamports, 0);
+        assert_eq!(entry.registered_at, 0);
+        assert_eq!(entry.exit_at, 0);
+        assert!(
+            !entry.is_exiting(),
+            "a legacy/deputized entry (zeroed reserved bytes) must not read as exiting"
+        );
+    }
+
+    #[test]
+    fn test_moderation_block_size() {
+        test_size_constant!(ModerationBlock);
+    }
+
+    #[test]
+    fn test_moderation_block_default_is_cleared() {
+        let block = ModerationBlock::default();
+        assert!(!block.is_blocked(), "default status must not read as blocked");
+        assert!(block.validate_reserved_fields());
+    }
+
+    #[test]
+    fn test_default_trust_list_size() {
+        test_size_constant!(DefaultTrustList);
     }
 
     #[test]

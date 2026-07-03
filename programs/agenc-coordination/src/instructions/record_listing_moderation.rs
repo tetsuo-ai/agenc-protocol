@@ -31,19 +31,24 @@ pub struct RecordListingModeration<'info> {
     )]
     pub listing: Account<'info, ServiceListing>,
 
+    /// The recording signer. Authorization (global moderation authority OR a registered
+    /// attestor) is checked in the handler, not as an account constraint here. Declared
+    /// before `listing_moderation` so the v2 seed can reference it.
+    #[account(mut)]
+    pub moderator: Signer<'info>,
+
+    /// P1.2 §4.3 — v2 MODERATOR-KEYED record (the listing mirror of
+    /// `task_moderation_v2`): each attestor owns an exclusive slot; `init_if_needed`
+    /// is self-re-review only; no cross-attestor overwrites. Post-upgrade, records are
+    /// written ONLY under v2 seeds — legacy `["listing_moderation", …]` PDAs are frozen.
     #[account(
         init_if_needed,
         payer = moderator,
         space = ListingModeration::SIZE,
-        seeds = [b"listing_moderation", listing.key().as_ref(), job_spec_hash.as_ref()],
+        seeds = [b"listing_moderation_v2", listing.key().as_ref(), job_spec_hash.as_ref(), moderator.key().as_ref()],
         bump
     )]
     pub listing_moderation: Account<'info, ListingModeration>,
-
-    /// The recording signer. Authorization (global moderation authority OR a registered
-    /// attestor) is checked in the handler, not as an account constraint here.
-    #[account(mut)]
-    pub moderator: Signer<'info>,
 
     /// OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
     /// `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
@@ -82,6 +87,12 @@ pub fn handler(
         ctx.accounts.moderation_config.moderation_authority,
         ctx.accounts.moderation_attestor.is_some(),
     )?;
+
+    // P1.2 §4.2: an attestor in its exit window can no longer record — the window
+    // closes at request, not finalize.
+    if let Some(entry) = ctx.accounts.moderation_attestor.as_ref() {
+        require!(!entry.is_exiting(), CoordinationError::AttestorExiting);
+    }
 
     // Reuse the task-moderation input validator (identical field rules).
     validate_record_task_moderation_inputs(&job_spec_hash, status, risk_score, expires_at)?;

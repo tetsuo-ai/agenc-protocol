@@ -4,6 +4,10 @@ use crate::errors::CoordinationError;
 use crate::events::TaskJobSpecSet;
 use crate::instructions::launch_controls::require_task_type_enabled;
 #[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::moderation_gate_helpers::{
+    load_task_moderation_record, require_content_not_blocked,
+};
+#[cfg(not(feature = "mainnet-canary"))]
 use crate::state::ModerationAttestor;
 use crate::state::{
     is_publishable_task_moderation_status, ModerationConfig, ProtocolConfig, Task, TaskJobSpec,
@@ -13,7 +17,11 @@ use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
-#[instruction(job_spec_hash: [u8; HASH_SIZE])]
+#[cfg_attr(
+    not(feature = "mainnet-canary"),
+    instruction(job_spec_hash: [u8; HASH_SIZE], job_spec_uri: String, moderator: Pubkey)
+)]
+#[cfg_attr(feature = "mainnet-canary", instruction(job_spec_hash: [u8; HASH_SIZE]))]
 pub struct SetTaskJobSpec<'info> {
     #[account(
         seeds = [b"protocol"],
@@ -34,6 +42,20 @@ pub struct SetTaskJobSpec<'info> {
     )]
     pub moderation_config: Account<'info, ModerationConfig>,
 
+    /// P1.2 §4.4 — the v2-else-legacy moderation record slot. The v2 seed carries the
+    /// moderator INSIDE the primary record's derivation (circular for Anchor's
+    /// declarative seeds), so this arrives unchecked and the handler re-implements
+    /// every dropped constraint via `load_task_moderation_record`: canonical PDA
+    /// (v2 first, frozen-legacy fallback), `owner == crate::ID`, discriminator, and
+    /// the task/creator/hash/moderator bindings. A wrong-seed account fails CLOSED.
+    ///
+    /// CHECK: validated in the handler by `load_task_moderation_record` (canonical
+    /// v2/legacy PDA + owner + discriminator + field bindings).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub task_moderation: UncheckedAccount<'info>,
+
+    /// Canary build: the FROZEN pre-P1.2 declarative constraints (legacy seed).
+    #[cfg(feature = "mainnet-canary")]
     #[account(
         seeds = [b"task_moderation", task.key().as_ref(), job_spec_hash.as_ref()],
         bump = task_moderation.bump,
@@ -46,23 +68,33 @@ pub struct SetTaskJobSpec<'info> {
     )]
     pub task_moderation: Account<'info, TaskModeration>,
 
-    /// OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the
-    /// publish gate when the task-moderation was authored by a non-global-authority
-    /// attestor. Bound by seeds to `task_moderation.moderator` (the STORED moderator, not
-    /// the signer/creator) with `attestor == task_moderation.moderator`, so Anchor enforces
-    /// the canonical roster PDA — a forged/mismatched entry fails account resolution, and a
-    /// REVOKED attestor's PDA is closed and fails to load (cannot unlock). Only needed when
-    /// `task_moderation.moderator != moderation_config.moderation_authority`; the global
-    /// authority path passes with this account absent (`None`), byte-unchanged. Full-surface
-    /// only — gated so the frozen canary account list for `set_task_job_spec` is unchanged.
+    /// OPTIONAL: a registered moderation-attestor roster entry that unlocks the
+    /// publish gate when the moderation was authored by a non-global-authority
+    /// attestor. P1.2: bound by seeds to the EXPLICIT `moderator` instruction argument
+    /// (the caller chooses which attestor's verdict it consumes — §4.4), with
+    /// `attestor == moderator`, so Anchor enforces the canonical roster PDA. A forged
+    /// or mismatched entry fails account resolution; a REVOKED attestor's PDA is
+    /// closed and fails to load (fail-closed, the WP-A1 property this refactor must
+    /// not regress). Only needed when `moderator != moderation_authority`; the global
+    /// authority path passes with this absent (`None`). Full-surface only.
     #[cfg(not(feature = "mainnet-canary"))]
     #[account(
-        seeds = [b"moderation_attestor", task_moderation.moderator.as_ref()],
+        seeds = [b"moderation_attestor", moderator.as_ref()],
         bump = moderation_attestor.bump,
-        constraint = moderation_attestor.attestor == task_moderation.moderator
+        constraint = moderation_attestor.attestor == moderator
             @ CoordinationError::ModerationAttestorMismatch
     )]
     pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
+
+    /// P1.2 §5.2 — the REQUIRED BLOCK-floor slot. The handler derives
+    /// `["moderation_block", job_spec_hash]` itself and rejects a mismatched address,
+    /// so the caller can neither omit nor substitute it; a multisig-BLOCKED hash
+    /// hard-rejects regardless of which CLEAN attestor is presented.
+    ///
+    /// CHECK: validated in the handler by `require_content_not_blocked`
+    /// (handler-derived canonical PDA; system-owned/empty = pass).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub moderation_block: UncheckedAccount<'info>,
 
     #[account(
         init_if_needed,
@@ -79,6 +111,81 @@ pub struct SetTaskJobSpec<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Full-surface handler (P1.2 §4.4): takes the EXPLICIT `moderator` argument — the
+/// risk-bearing caller chooses which attestor's verdict it consumes, and the tx
+/// permanently records whose attestation was relied on.
+#[cfg(not(feature = "mainnet-canary"))]
+pub fn handler(
+    ctx: Context<SetTaskJobSpec>,
+    job_spec_hash: [u8; HASH_SIZE],
+    job_spec_uri: String,
+    moderator: Pubkey,
+) -> Result<()> {
+    validate_task_job_spec_inputs(&job_spec_hash, &job_spec_uri)?;
+    check_version_compatible(&ctx.accounts.protocol_config)?;
+
+    let clock = Clock::get()?;
+    let task_key = ctx.accounts.task.key();
+    let task = &ctx.accounts.task;
+    require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
+    validate_task_job_spec_mutable(task)?;
+
+    // §5.2 BLOCK floor first: a multisig takedown hard-rejects the hash regardless of
+    // any CLEAN attestation presented below. Handler-derived — cannot be skipped.
+    require_content_not_blocked(
+        &ctx.accounts.moderation_block.to_account_info(),
+        &job_spec_hash,
+    )?;
+
+    // Roster path: the attestor entry is Anchor-bound to ["moderation_attestor",
+    // moderator]. A revoked attestor's PDA is closed and fails to load (fail-closed,
+    // unchanged from WP-A1); an EXITING attestor no longer unlocks — the window
+    // closes at request, not finalize (§4.2).
+    let unlocking_attestor: Option<Pubkey> = ctx
+        .accounts
+        .moderation_attestor
+        .as_ref()
+        .map(|entry| entry.attestor);
+    if let Some(entry) = ctx.accounts.moderation_attestor.as_ref() {
+        require!(!entry.is_exiting(), CoordinationError::AttestorExiting);
+    }
+
+    // §4.4 v2-else-legacy record load: canonical PDA, owner, discriminator and
+    // task/creator/hash/moderator bindings all re-checked manually.
+    let record = load_task_moderation_record(
+        &ctx.accounts.task_moderation.to_account_info(),
+        &task_key,
+        &task.creator,
+        &job_spec_hash,
+        &moderator,
+    )?;
+
+    validate_task_moderation_for_job_spec(
+        &ctx.accounts.moderation_config,
+        &record,
+        task_key,
+        task,
+        &job_spec_hash,
+        clock.unix_timestamp,
+        unlocking_attestor.is_some(),
+    )?;
+
+    let task_creator = task.creator;
+    write_job_spec(
+        &mut ctx.accounts.task_job_spec,
+        ctx.bumps.task_job_spec,
+        task_key,
+        task_creator,
+        job_spec_hash,
+        job_spec_uri,
+        unlocking_attestor,
+        clock.unix_timestamp,
+    )
+}
+
+/// Canary handler: the FROZEN pre-P1.2 surface (declaratively-bound legacy record,
+/// no moderator argument, no attestor, no BLOCK floor).
+#[cfg(feature = "mainnet-canary")]
 pub fn handler(
     ctx: Context<SetTaskJobSpec>,
     job_spec_hash: [u8; HASH_SIZE],
@@ -93,19 +200,6 @@ pub fn handler(
     require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     validate_task_job_spec_mutable(task)?;
 
-    // WP-A1 roster-honored gate: the task-moderation may be authored by the global
-    // moderation authority OR any registered (non-revoked) attestor. In the canary build
-    // there is no attestor account, so `attestor_supplied` is always false and the gate
-    // collapses to the original global-authority-only check (canary surface frozen).
-    #[cfg(not(feature = "mainnet-canary"))]
-    let unlocking_attestor: Option<Pubkey> = ctx
-        .accounts
-        .moderation_attestor
-        .as_ref()
-        .map(|entry| entry.attestor);
-    #[cfg(feature = "mainnet-canary")]
-    let unlocking_attestor: Option<Pubkey> = None;
-
     validate_task_moderation_for_job_spec(
         &ctx.accounts.moderation_config,
         &ctx.accounts.task_moderation,
@@ -113,38 +207,62 @@ pub fn handler(
         task,
         &job_spec_hash,
         clock.unix_timestamp,
-        unlocking_attestor.is_some(),
+        false,
     )?;
-    let task_job_spec = &mut ctx.accounts.task_job_spec;
 
+    let task_creator = task.creator;
+    write_job_spec(
+        &mut ctx.accounts.task_job_spec,
+        ctx.bumps.task_job_spec,
+        task_key,
+        task_creator,
+        job_spec_hash,
+        job_spec_uri,
+        None,
+        clock.unix_timestamp,
+    )
+}
+
+/// Shared write tail: idempotency guards, field writes, event.
+#[allow(clippy::too_many_arguments)]
+fn write_job_spec(
+    task_job_spec: &mut TaskJobSpec,
+    bump: u8,
+    task_key: Pubkey,
+    task_creator: Pubkey,
+    job_spec_hash: [u8; HASH_SIZE],
+    job_spec_uri: String,
+    unlocking_attestor: Option<Pubkey>,
+    now: i64,
+) -> Result<()> {
     if task_job_spec.task != Pubkey::default() {
         require!(
             task_job_spec.task == task_key,
             CoordinationError::TaskJobSpecTaskMismatch
         );
         require!(
-            task_job_spec.creator == task.creator,
+            task_job_spec.creator == task_creator,
             CoordinationError::UnauthorizedTaskAction
         );
     }
 
     task_job_spec.task = task_key;
-    task_job_spec.creator = task.creator;
+    task_job_spec.creator = task_creator;
     task_job_spec.job_spec_hash = job_spec_hash;
     task_job_spec.job_spec_uri = job_spec_uri.clone();
     if task_job_spec.created_at == 0 {
-        task_job_spec.created_at = clock.unix_timestamp;
+        task_job_spec.created_at = now;
     }
-    task_job_spec.updated_at = clock.unix_timestamp;
-    task_job_spec.bump = ctx.bumps.task_job_spec;
+    task_job_spec.updated_at = now;
+    task_job_spec.bump = bump;
 
     emit!(TaskJobSpecSet {
         task: task_key,
-        creator: task.creator,
+        creator: task_creator,
         job_spec_hash,
         job_spec_uri,
         moderation_attestor: unlocking_attestor,
-        timestamp: clock.unix_timestamp,
+        timestamp: now,
     });
 
     Ok(())

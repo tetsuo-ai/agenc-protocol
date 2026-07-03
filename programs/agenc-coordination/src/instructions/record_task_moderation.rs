@@ -26,6 +26,34 @@ pub struct RecordTaskModeration<'info> {
     )]
     pub task: Account<'info, Task>,
 
+    /// The recording signer. Authorization is checked in the handler (NOT as an account
+    /// constraint here) so the registered-attestor OR global-authority branch can be
+    /// evaluated. In the canary build there is no attestor account, so the handler falls
+    /// back to the global-authority-only check — the canary surface stays frozen.
+    /// Declared BEFORE `task_moderation` in the full build so the v2 seed can reference
+    /// it (an IDL account-order change for this batch's regenerated clients).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(mut)]
+    pub moderator: Signer<'info>,
+
+    /// P1.2 §4.3 — v2 MODERATOR-KEYED record: each attestor owns an exclusive slot, so
+    /// `init_if_needed` is self-re-review only. No attestor can overwrite another's
+    /// verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted
+    /// attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are
+    /// written ONLY under v2 seeds — legacy `["task_moderation", …]` PDAs are frozen.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        init_if_needed,
+        payer = moderator,
+        space = TaskModeration::SIZE,
+        seeds = [b"task_moderation_v2", task.key().as_ref(), job_spec_hash.as_ref(), moderator.key().as_ref()],
+        bump
+    )]
+    pub task_moderation: Account<'info, TaskModeration>,
+
+    /// Canary build: the FROZEN legacy seed and account order — the restricted surface
+    /// must stay byte-identical (spec §6, review finding 8).
+    #[cfg(feature = "mainnet-canary")]
     #[account(
         init_if_needed,
         payer = moderator,
@@ -35,10 +63,8 @@ pub struct RecordTaskModeration<'info> {
     )]
     pub task_moderation: Account<'info, TaskModeration>,
 
-    /// The recording signer. Authorization is checked in the handler (NOT as an account
-    /// constraint here) so the registered-attestor OR global-authority branch can be
-    /// evaluated. In the canary build there is no attestor account, so the handler falls
-    /// back to the global-authority-only check — the canary surface stays frozen.
+    /// (See the full-build `moderator` above; the canary keeps it in its frozen slot.)
+    #[cfg(feature = "mainnet-canary")]
     #[account(mut)]
     pub moderator: Signer<'info>,
 
@@ -84,6 +110,13 @@ pub fn handler(
         ctx.accounts.moderation_config.moderation_authority,
         attestor_supplied,
     )?;
+
+    // P1.2 §4.2: an attestor in its exit window can no longer record — the window
+    // closes at request, not finalize.
+    #[cfg(not(feature = "mainnet-canary"))]
+    if let Some(entry) = ctx.accounts.moderation_attestor.as_ref() {
+        require!(!entry.is_exiting(), CoordinationError::AttestorExiting);
+    }
 
     validate_record_task_moderation_inputs(&job_spec_hash, status, risk_score, expires_at)?;
     require!(

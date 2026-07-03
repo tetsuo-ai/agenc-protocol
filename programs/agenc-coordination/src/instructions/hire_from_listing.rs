@@ -25,6 +25,9 @@ use crate::events::{ServiceListingHired, TaskCreated};
 use crate::instructions::completion_helpers::resolve_referrer_snapshot;
 use crate::instructions::constants::MIN_SKILL_PRICE;
 use crate::instructions::launch_controls::require_task_type_index_enabled;
+use crate::instructions::moderation_gate_helpers::{
+    load_listing_moderation_record, require_content_not_blocked,
+};
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
@@ -271,23 +274,36 @@ pub struct HireFromListing<'info> {
     #[account(seeds = [b"moderation_config"], bump = moderation_config.bump)]
     pub moderation_config: Box<Account<'info, ModerationConfig>>,
 
-    /// Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`;
-    /// bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed.
-    #[account(
-        seeds = [b"listing_moderation", listing.key().as_ref(), listing.spec_hash.as_ref()],
-        bump = listing_moderation.bump
-    )]
-    pub listing_moderation: Option<Box<Account<'info, ListingModeration>>>,
+    /// Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
+    /// P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the
+    /// moderator sits inside the primary record's derivation), so this arrives
+    /// unchecked and the handler re-implements every dropped constraint via
+    /// `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy),
+    /// `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings.
+    ///
+    /// CHECK: validated in the handler by `load_listing_moderation_record`.
+    pub listing_moderation: Option<UncheckedAccount<'info>>,
 
-    /// OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-    /// gate when `listing_moderation` was authored by a non-global-authority attestor.
-    /// Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the
+    /// OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire
+    /// gate when the record was authored by a non-global-authority attestor. The
     /// canonical-PDA + moderator binding is enforced in the handler via
-    /// `resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry
-    /// is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).
-    /// Only needed for the roster path; the global-authority path passes with this absent
-    /// (`None`), byte-unchanged.
+    /// `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the
+    /// risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>`
+    /// still guarantees the entry is program-owned and non-revoked (a revoked entry's
+    /// PDA is closed and fails to load — the WP-A1 fail-closed property, preserved).
+    /// Only needed for the roster path; the global-authority path passes with `None`.
     pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
+
+    /// P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`.
+    /// The handler derives `["moderation_block", listing.spec_hash]` itself and
+    /// rejects a mismatched address, so it can be neither omitted nor substituted; a
+    /// multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation
+    /// presented, and re-minting the same content under a fresh listing PDA is still
+    /// blocked (content-hash-keyed).
+    ///
+    /// CHECK: validated in the handler by `require_content_not_blocked`
+    /// (handler-derived canonical PDA; system-owned/empty = pass).
+    pub moderation_block: UncheckedAccount<'info>,
 
     /// Buyer's agent registration for identity/authorization (mirrors create_task).
     #[account(
@@ -335,6 +351,7 @@ pub fn handler(
     expected_version: u64,
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
+    moderator: Pubkey,
 ) -> Result<()> {
     let clock = Clock::get()?;
     let config = ctx.accounts.protocol_config.as_ref();
@@ -367,18 +384,27 @@ pub fn handler(
     // Capacity: reject if the listing has no free slot (max_open_jobs == 0 = unlimited).
     validate_listing_capacity(listing.open_jobs, listing.max_open_jobs)?;
 
+    // P1.2 §5.2 BLOCK floor — UNCONDITIONAL (not gated on `moderation_config.enabled`):
+    // a multisig takedown of this content hash rejects the hire outright, regardless
+    // of which CLEAN attestor is presented. Handler-derived; cannot be skipped.
+    require_content_not_blocked(
+        &ctx.accounts.moderation_block.to_account_info(),
+        &listing_spec_hash,
+    )?;
+
     // Hire-time moderation gate (§6), fail-closed: moderation_config is a required
     // account, so an unconfigured marketplace can't hire. When enabled, the hire
     // must present a publishable listing-level attestation for the pinned spec_hash.
     // When disabled, keep Model-A (the existing set_task_job_spec path gates go-live).
     //
-    // WP-A1 roster-honored gate: the listing attestation may be authored by the global
-    // moderation authority OR a registered, non-revoked ModerationAttestor. The optional
-    // attestor account is bound to the STORED `lm.moderator` in the handler (Anchor cannot
-    // seed it off an optional account) and only matters for the roster path.
+    // P1.2 §4.4: the record may be authored by the global moderation authority OR a
+    // registered, non-revoked, non-exiting ModerationAttestor. The caller names the
+    // underwriter via the EXPLICIT `moderator` argument; the optional attestor entry
+    // is bound to that argument in the handler, and the record (v2-else-legacy slot)
+    // must have been authored by it.
     let mut unlocking_attestor: Option<Pubkey> = None;
     if ctx.accounts.moderation_config.enabled {
-        let lm = ctx
+        let record_info = ctx
             .accounts
             .listing_moderation
             .as_ref()
@@ -386,11 +412,21 @@ pub fn handler(
         unlocking_attestor = resolve_listing_attestor(
             ctx.accounts.moderation_attestor.as_ref().map(|a| a.attestor),
             ctx.accounts.moderation_attestor.as_ref().map(|a| a.key()),
-            lm.moderator,
+            moderator,
+        )?;
+        // §4.2: an exiting attestor no longer unlocks — window closes at request.
+        if let Some(entry) = ctx.accounts.moderation_attestor.as_ref() {
+            require!(!entry.is_exiting(), CoordinationError::AttestorExiting);
+        }
+        let lm = load_listing_moderation_record(
+            &record_info.to_account_info(),
+            &listing_key,
+            &listing_spec_hash,
+            &moderator,
         )?;
         validate_listing_moderation_for_hire(
             ctx.accounts.moderation_config.as_ref(),
-            lm.as_ref(),
+            &lm,
             listing_key,
             &listing_spec_hash,
             clock.unix_timestamp,

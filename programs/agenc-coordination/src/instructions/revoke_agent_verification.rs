@@ -2,8 +2,9 @@
 //!
 //! Marks an existing `AgentVerification` as `revoked = true` rather than closing it, so the
 //! record stays trustlessly readable (consumers see `verified == false` via the revoked
-//! flag / expiry). Authorization mirrors `record_agent_verification` EXACTLY: the signer
-//! must be the global moderation authority OR a registered (non-revoked) `ModerationAttestor`.
+//! flag / expiry). Authorization (P1.2 §4.6, DECOUPLED — mirrors
+//! `record_agent_verification`): the signer must be the GLOBAL moderation authority only;
+//! the open roster no longer authorizes domain verification.
 //!
 //! Full-surface only (`#[cfg(not(feature = "mainnet-canary"))]`).
 
@@ -11,8 +12,7 @@ use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
 use crate::events::AgentVerificationRevoked;
-use crate::instructions::record_task_moderation::require_moderation_authorized;
-use crate::state::{AgentVerification, ModerationAttestor, ModerationConfig};
+use crate::state::{AgentVerification, ModerationConfig};
 
 #[derive(Accounts)]
 pub struct RevokeAgentVerification<'info> {
@@ -27,29 +27,19 @@ pub struct RevokeAgentVerification<'info> {
     )]
     pub agent_verification: Account<'info, AgentVerification>,
 
-    /// The recording signer. Authorization (global moderation authority OR a registered
-    /// attestor) is checked in the handler, mirroring `record_*_moderation`.
+    /// The revoking signer. P1.2 §4.6: must be the GLOBAL moderation authority
+    /// (checked in the handler; the roster no longer authorizes this).
     #[account(mut)]
     pub attestor: Signer<'info>,
-
-    /// OPTIONAL: a registered moderation-attestor roster entry (same semantics as
-    /// `record_agent_verification`). Canonical-PDA + `attestor == signer` bound; a revoked
-    /// attestor's PDA is closed and fails to load.
-    #[account(
-        seeds = [b"moderation_attestor", attestor.key().as_ref()],
-        bump = moderation_attestor.bump,
-        constraint = moderation_attestor.attestor == attestor.key()
-            @ CoordinationError::ModerationAttestorMismatch
-    )]
-    pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
 }
 
 pub fn handler(ctx: Context<RevokeAgentVerification>) -> Result<()> {
-    require_moderation_authorized(
-        ctx.accounts.attestor.key(),
-        ctx.accounts.moderation_config.moderation_authority,
-        ctx.accounts.moderation_attestor.is_some(),
-    )?;
+    // P1.2 §4.6 (decoupled): the GLOBAL moderation authority only — an open-roster
+    // key must not be able to revoke another attestor's legitimate verification.
+    require!(
+        ctx.accounts.attestor.key() == ctx.accounts.moderation_config.moderation_authority,
+        CoordinationError::UnauthorizedModerationAttestor
+    );
 
     let clock = Clock::get()?;
     let agent = ctx.accounts.agent_verification.agent;

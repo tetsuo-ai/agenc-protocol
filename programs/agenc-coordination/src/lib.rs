@@ -179,13 +179,17 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Attach or update a content-addressed off-chain job specification pointer for a task.
+    /// Attach or update a content-addressed off-chain job specification pointer for a
+    /// task. P1.2 §4.4: `moderator` names the attestor whose moderation record the
+    /// caller consumes (the record slot is v2-else-legacy; the required
+    /// `moderation_block` account is the §5.2 takedown floor).
     pub fn set_task_job_spec(
         ctx: Context<SetTaskJobSpec>,
         job_spec_hash: [u8; 32],
         job_spec_uri: String,
+        moderator: Pubkey,
     ) -> Result<()> {
-        instructions::set_task_job_spec::handler(ctx, job_spec_hash, job_spec_uri)
+        instructions::set_task_job_spec::handler(ctx, job_spec_hash, job_spec_uri, moderator)
     }
 
     /// Create a new task that depends on an existing parent task.
@@ -607,11 +611,72 @@ pub mod agenc_coordination {
         instructions::assign_moderation_attestor::handler(ctx, attestor)
     }
 
-    /// Remove a wallet from the moderation-attestor roster (authority-only, P6.8), closing
-    /// its assignment PDA. The revoked wallet can no longer record attestations.
+    /// Remove a wallet from the moderation-attestor roster (P1.2: scoped — the caller
+    /// may remove only entries it itself created, so a self-registered attestor can be
+    /// removed from chain by no one but itself), closing its assignment PDA.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn revoke_moderation_attestor(ctx: Context<RevokeModerationAttestor>) -> Result<()> {
         instructions::revoke_moderation_attestor::handler(ctx)
+    }
+
+    /// Self-register onto the open moderation-attestor roster (P1.2 §4.1,
+    /// permissionless). The signer pays rent + the hardcoded registration bond onto its
+    /// own roster PDA; `assigned_by = self` marks the entry self-registered. The bond is
+    /// an identity deposit — never confiscatable, refunded in full at exit-finalize.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn register_moderation_attestor(
+        ctx: Context<RegisterModerationAttestor>,
+    ) -> Result<()> {
+        instructions::register_moderation_attestor::handler(ctx)
+    }
+
+    /// Start the two-step attestor exit (P1.2 §4.2). Monotonic — a running exit clock
+    /// cannot be reset. From this moment the attestor is rejected at the record and
+    /// consumption gates (the window closes at REQUEST, not finalize).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn request_attestor_exit(ctx: Context<RequestAttestorExit>) -> Result<()> {
+        instructions::attestor_exit::handler_request(ctx)
+    }
+
+    /// Finalize the attestor exit after the cooldown, closing the roster PDA and
+    /// refunding bond + rent to the attestor in full (P1.2 §4.2). Requires
+    /// `exit_at != 0` — a fresh or grandfathered entry can never finalize instantly.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn finalize_attestor_exit(ctx: Context<FinalizeAttestorExit>) -> Result<()> {
+        instructions::attestor_exit::handler_finalize(ctx)
+    }
+
+    /// Set (or re-set) the multisig-governed BLOCK-only takedown floor for a content
+    /// hash (P1.2 §5.2). Requires `multisig_threshold` owner signatures in remaining
+    /// accounts and an on-chain rationale. All three consumption gates hard-reject a
+    /// blocked hash regardless of which CLEAN attestor the caller presents.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn set_moderation_block(
+        ctx: Context<SetModerationBlock>,
+        content_hash: [u8; 32],
+        rationale_hash: [u8; 32],
+        rationale_uri: String,
+    ) -> Result<()> {
+        instructions::moderation_block::handler_set(ctx, content_hash, rationale_hash, rationale_uri)
+    }
+
+    /// Clear a takedown block (P1.2 §5.2, multisig-gated). The block account stays
+    /// open as the audit trail; the hash becomes consumable again at the gates.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn clear_moderation_block(ctx: Context<ClearModerationBlock>) -> Result<()> {
+        instructions::moderation_block::handler_clear(ctx)
+    }
+
+    /// Update the on-chain default trusted-attestor list pointer (P1.2 §5.1,
+    /// multisig-gated). Advisory display-layer curation — gates nothing on-chain;
+    /// `version` is monotonic and `updated_at` is the deadman signal.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn set_default_trust_list(
+        ctx: Context<SetDefaultTrustList>,
+        list_hash: [u8; 32],
+        list_uri: String,
+    ) -> Result<()> {
+        instructions::set_default_trust_list::handler(ctx, list_hash, list_uri)
     }
 
     /// Resolve a dispute. The signer must be the protocol authority OR an assigned
@@ -1017,6 +1082,7 @@ pub mod agenc_coordination {
         expected_version: u64,
         referrer: Option<Pubkey>,
         referrer_fee_bps: u16,
+        moderator: Pubkey,
     ) -> Result<()> {
         instructions::hire_from_listing::handler(
             ctx,
@@ -1025,6 +1091,7 @@ pub mod agenc_coordination {
             expected_version,
             referrer,
             referrer_fee_bps,
+            moderator,
         )
     }
 
@@ -1042,6 +1109,7 @@ pub mod agenc_coordination {
         review_window_secs: i64,
         referrer: Option<Pubkey>,
         referrer_fee_bps: u16,
+        moderator: Pubkey,
     ) -> Result<()> {
         instructions::hire_from_listing_humanless::handler(
             ctx,
@@ -1051,6 +1119,7 @@ pub mod agenc_coordination {
             review_window_secs,
             referrer,
             referrer_fee_bps,
+            moderator,
         )
     }
 

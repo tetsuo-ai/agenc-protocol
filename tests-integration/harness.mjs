@@ -355,10 +355,32 @@ export async function freshWorld({ price = 1_000_000, maxOpenJobs = 0, capabilit
   return { svm, admin, provider, buyer, modAuth, buyerProg, providerProg, protocolPda, modCfg, providerAgent, buyerAgent, listing, listingId, price, specHash, operator, operatorFeeBps };
 }
 
+// ---------------------------------------------------------------------------
+// P1.2 open-roster helpers
+// ---------------------------------------------------------------------------
+
+/// v2 MODERATOR-KEYED task-moderation PDA (P1.2 §4.3) — post-upgrade records live here.
+export function taskModV2Pda(task, jobHash, moderator) {
+  return pda([enc("task_moderation_v2"), task.toBuffer(), Buffer.from(jobHash), moderator.toBuffer()]);
+}
+
+/// v2 MODERATOR-KEYED listing-moderation PDA (the listing mirror).
+export function listingModV2Pda(listing, specHash, moderator) {
+  return pda([enc("listing_moderation_v2"), listing.toBuffer(), Buffer.from(specHash), moderator.toBuffer()]);
+}
+
+/// Content-hash-keyed BLOCK-floor PDA (P1.2 §5.2) — required on all three gates.
+export function moderationBlockPda(contentHash) {
+  return pda([enc("moderation_block"), Buffer.from(contentHash)]);
+}
+
 /// Build (but don't send) a hire_from_listing instruction for `buyer`.
 /// P6.2: pass `referrer` (PublicKey) + `referrerFeeBps` to attach the demand-side
 /// referral leg; both default to no-leg (null / 0).
-export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null, moderationAttestor = null, referrer = null, referrerFeeBps = 0 } = {}) {
+/// P1.2: `moderator` names the attestor whose record the hire consumes (defaults to
+/// the world's global moderation authority); the required `moderationBlock` floor
+/// account is derived from the listing's pinned spec hash.
+export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProvider = false, listingModeration = null, moderationAttestor = null, referrer = null, referrerFeeBps = 0, moderator = null } = {}) {
   const signer = asProvider ? w.provider : w.buyer;
   const agent = asProvider ? w.providerAgent : w.buyerAgent;
   const prog = asProvider ? w.providerProg : w.buyerProg;
@@ -367,11 +389,12 @@ export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProv
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [authorityRateLimit] = pda([enc("authority_rate_limit"), signer.publicKey.toBuffer()]);
+  const [moderationBlock] = moderationBlockPda(w.specHash);
   const ix = await prog.methods
-    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps)
+    .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps, moderator ?? w.modAuth.publicKey)
     .accounts({
       task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
-      moderationConfig: w.modCfg, listingModeration, moderationAttestor,
+      moderationConfig: w.modCfg, listingModeration, moderationAttestor, moderationBlock,
       creatorAgent: agent, authorityRateLimit, authority: signer.publicKey,
       creator: signer.publicKey, systemProgram: SystemProgram.programId,
     })

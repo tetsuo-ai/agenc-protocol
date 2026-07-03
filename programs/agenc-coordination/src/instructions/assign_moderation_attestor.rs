@@ -61,7 +61,11 @@ pub fn handler(ctx: Context<AssignModerationAttestor>, attestor: Pubkey) -> Resu
     entry.assigned_by = ctx.accounts.authority.key();
     entry.assigned_at = clock.unix_timestamp;
     entry.bump = ctx.bumps.moderation_attestor;
-    entry._reserved = [0u8; 32];
+    // Deputized entries carry no bond and are not exiting (P1.2 bookkeeping zeroed).
+    entry.bond_lamports = 0;
+    entry.registered_at = 0;
+    entry.exit_at = 0;
+    entry._reserved = [0u8; 8];
 
     emit!(ModerationAttestorAssigned {
         attestor,
