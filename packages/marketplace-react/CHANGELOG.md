@@ -1,5 +1,21 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.3.1
+
+### Patch Changes
+
+- Activation now attaches the WP-A1 roster `moderation_attestor` account
+  automatically. `useTaskActivation` and `useHumanlessHireFlow` read the
+  recorded `TaskModeration`, and when its moderator differs from the global
+  moderation authority (i.e. a roster attestor — the default when the
+  activation backend is the public attestation service at attest.agenc.ag)
+  they attach the attestor's roster-entry PDA to `set_task_job_spec`.
+  Without this, roster-attested tasks failed activation on-chain with
+  `UNAUTHORIZED_TASK_MODERATOR` (2026-07-02 cross-node canary finding). A
+  caller-supplied `moderationAttestor` always wins; read failures degrade to
+  the previous behavior. The provider context now exposes the resolved
+  `rpcUrl` for such single-account reads.
+
 ## 0.3.0
 
 ### Minor Changes (breaking against pre-A1 programs)
