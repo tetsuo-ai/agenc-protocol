@@ -34,6 +34,7 @@ import {
   makeProgram, send, sendMany, tokenAmount, expectOk, expectFail, decode, isClosed,
   injectProtocolConfig, setProtocolPaused, injectAgentStake,
   setMultisig, injectModerationConfig, injectBidMarketplace, freshWorld, hireIx,
+  taskModV2Pda, listingModV2Pda, moderationBlockPda,
 } from "./harness.mjs";
 test("hire_from_listing: mints task + escrow + hire record, increments capacity", async () => {
   const w = await freshWorld({ price: 2_000_000 });
@@ -147,18 +148,18 @@ test("record_listing_moderation: authority records CLEAN; non-authority rejected
     rentEpoch: 0,
   });
 
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  // P1.2: v2 records are moderator-keyed — derive the PDA from the recording signer.
   const recordArgs = (prog, who) =>
     prog.methods
       .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-      .accounts({ moderationConfig: modCfg, listing: w.listing, listingModeration: listingMod, moderator: who, moderationAttestor: null, systemProgram: SystemProgram.programId })
+      .accounts({ moderationConfig: modCfg, listing: w.listing, listingModeration: listingModV2Pda(w.listing, w.specHash, who)[0], moderator: who, moderationAttestor: null, systemProgram: SystemProgram.programId })
       .instruction();
 
   // Authority records a CLEAN attestation.
   const modProg = makeProgram(modAuth);
   expectOk(send(w.svm, await recordArgs(modProg, modAuth.publicKey), [modAuth]), "record listing moderation");
 
-  const lm = decode(w.svm, "ListingModeration", listingMod);
+  const lm = decode(w.svm, "ListingModeration", listingModV2Pda(w.listing, w.specHash, modAuth.publicKey)[0]);
   assert.equal(lm.listing.toBase58(), w.listing.toBase58());
   assert.equal(lm.status, 0, "status CLEAN");
   assert.equal(
@@ -181,7 +182,7 @@ test("record_listing_moderation: authority records CLEAN; non-authority rejected
 
 test("hire moderation gate: enabled requires a publishable listing attestation", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   const record = async (status, risk, expiresAt) => {
     const modProg = makeProgram(w.modAuth);
     return send(
@@ -205,7 +206,7 @@ test("hire moderation gate: enabled requires a publishable listing attestation",
 
 test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   const modProg = makeProgram(w.modAuth);
   expectOk(
     send(
@@ -223,7 +224,7 @@ test("hire moderation gate: a BLOCKED attestation is rejected", async () => {
 
 // Record a listing-moderation attestation with explicit fields, returning the result.
 async function recordListingMod(w, { status = 0, risk = 0, expiresAt = 0 } = {}) {
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   const res = send(w.svm, await makeProgram(w.modAuth).methods
     .recordListingModeration(arr(w.specHash), status, risk, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(expiresAt))
     .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
@@ -279,7 +280,7 @@ test("moderation edges (set_task_job_spec): a non-publishable task moderation ca
   const w = await freshWorld({ moderationEnabled: true });
   const m = await setupManualTask(w, { mode: 1 }); // a plain Open task to publish against
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), m.task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(m.task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), m.task.toBuffer()]);
   // record a BLOCKED task moderation, then try to publish the job spec.
   expectOk(send(w.svm, await makeProgram(w.modAuth).methods
@@ -287,8 +288,8 @@ test("moderation edges (set_task_job_spec): a non-publishable task moderation ca
     .accounts({ moderationConfig: w.modCfg, task: m.task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "record BLOCKED task moderation");
   expectFail(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/blocked")
-    .accounts({ protocolConfig: w.protocolPda, task: m.task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/blocked", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task: m.task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "TaskModerationRejected", "publish against BLOCKED moderation");
   assert.ok(isClosed(w.svm, jobSpec), "no TaskJobSpec created when the gate fails");
 });
@@ -304,7 +305,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
   const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   const now = Number(w.svm.getClock().unixTimestamp);
@@ -326,8 +327,8 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
 
   // 3) creator publishes the job spec (moderation-gated)
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "settle:publish");
 
   // 4) worker (provider agent) claims the published task
@@ -378,7 +379,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
   // 0) record a CLEAN ListingModeration so the hire passes the moderation gate.
   // Idempotent: the listing/spec-keyed PDA is shared, so a second call in the same
   // world reuses the existing attestation rather than re-initializing it.
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   if (isClosed(w.svm, listingMod)) {
     expectOk(send(w.svm, await modProg.methods
       .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
@@ -393,7 +394,7 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
 
   // 2) task moderation -> publish job spec -> worker claims.
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
 
@@ -403,8 +404,8 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
     .instruction(), [w.modAuth]), "hire-settle:task-mod");
 
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "hire-settle:publish");
 
   expectOk(send(w.svm, await w.providerProg.methods
@@ -836,15 +837,15 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
     const { task, escrow, validation } = m;
 
     const jobHash = id32();
-    const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+    const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
     const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
     expectOk(send(w.svm, await modProg.methods
       .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
       .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.modAuth]), `${name}:task-mod`);
     expectOk(send(w.svm, await w.buyerProg.methods
-      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/noshow")
-      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/noshow", w.modAuth.publicKey)
+      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]), `${name}:publish`);
 
     const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
@@ -1111,14 +1112,14 @@ async function setupBidTask(w, { publishJobSpec = true } = {}) {
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   if (publishJobSpec) {
     const jobHash = id32();
-    const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+    const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
     expectOk(send(w.svm, await modProg.methods
       .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
       .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.modAuth]), "bid:task-mod");
     expectOk(send(w.svm, await w.buyerProg.methods
-      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid")
-      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid", w.modAuth.publicKey)
+      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]), "bid:publish");
   }
 
@@ -1203,7 +1204,7 @@ test("operator-fee protection: a hired task cannot be re-routed to manual valida
   // operator's fee, which the manual path is not yet hire-aware about).
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   expectOk(send(w.svm, await makeProgram(w.modAuth).methods
     .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
     .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
@@ -1240,15 +1241,15 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
 
   // moderate + publish a job spec (required to claim)
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
     .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "manual:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/manual")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/manual", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "manual:publish");
 
   // worker claims, then submits a result for review
@@ -1335,12 +1336,12 @@ async function setupSubmittedManual(w, opts = {}) {
   const m = await setupManualTask(w, { mode: 1, ...opts });
   const { task, escrow, validation, reward } = m;
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods.recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
     .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId }).instruction(), [w.modAuth]), "rc:mod");
-  expectOk(send(w.svm, await w.buyerProg.methods.setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/rc")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "rc:publish");
+  expectOk(send(w.svm, await w.buyerProg.methods.setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/rc", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "rc:publish");
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods.claimTaskWithJobSpec()
     .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "rc:claim");
@@ -1689,15 +1690,15 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
 
   // 4) moderate -> publish -> claim
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
     .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "token:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/token")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/token", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "token:publish");
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods

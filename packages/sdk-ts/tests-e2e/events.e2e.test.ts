@@ -110,6 +110,7 @@ describe("e2e: event codecs decode real program logs", () => {
         expectedPrice: price,
         expectedVersion: 1n,
         listingSpecHash,
+        moderator: moderator.address,
       }),
     ]);
     const [task] = await findTaskPda({ creator: buyer.address, taskId });

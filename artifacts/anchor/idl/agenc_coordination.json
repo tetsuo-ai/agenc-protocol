@@ -2269,6 +2269,88 @@
       "args": []
     },
     {
+      "name": "clear_moderation_block",
+      "docs": [
+        "Clear a takedown block (P1.2 §5.2, multisig-gated). The block account stays",
+        "open as the audit trail; the hash becomes consumable again at the gates."
+      ],
+      "discriminator": [
+        210,
+        192,
+        192,
+        105,
+        106,
+        74,
+        147,
+        252
+      ],
+      "accounts": [
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderation_block",
+          "docs": [
+            "Seeded by its own stored `content_hash` (canonical PDA). Stays open after the",
+            "clear — the on-chain audit trail of the takedown."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "moderation_block.content_hash",
+                "account": "ModerationBlock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_task",
       "docs": [
         "Reclaim a terminal task's account rent (and optional leftover job-spec",
@@ -6202,6 +6284,79 @@
       "args": []
     },
     {
+      "name": "finalize_attestor_exit",
+      "docs": [
+        "Finalize the attestor exit after the cooldown, closing the roster PDA and",
+        "refunding bond + rent to the attestor in full (P1.2 §4.2). Requires",
+        "`exit_at != 0` — a fresh or grandfathered entry can never finalize instantly."
+      ],
+      "discriminator": [
+        64,
+        78,
+        208,
+        116,
+        104,
+        235,
+        209,
+        53
+      ],
+      "accounts": [
+        {
+          "name": "moderation_attestor",
+          "docs": [
+            "Roster entry to close. `close = attestor` refunds ALL lamports on the PDA",
+            "(rent + registration bond) to the attestor — the full, non-confiscatable refund.",
+            "SELF-REGISTERED entries only (`assigned_by == attestor`): the refund is the",
+            "attestor's own bond + rent. A deputized entry's rent belongs to the authority",
+            "and is returned to it via `revoke_moderation_attestor`, not drained here."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "moderation_attestor.attestor",
+                "account": "ModerationAttestor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "attestor",
+          "docs": [
+            "Only the attestor itself may finalize; it receives the refund."
+          ],
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "hire_from_listing",
       "docs": [
         "Hire a provider from a standing service listing, minting a one-shot task",
@@ -6391,60 +6546,42 @@
         {
           "name": "listing_moderation",
           "docs": [
-            "Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`;",
-            "bound by seeds to this listing's pinned `spec_hash` so it cannot be spoofed."
+            "Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.",
+            "P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the",
+            "moderator sits inside the primary record's derivation), so this arrives",
+            "unchecked and the handler re-implements every dropped constraint via",
+            "`load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy),",
+            "`owner == crate::ID`, discriminator, and the listing/hash/moderator bindings.",
+            ""
           ],
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  108,
-                  105,
-                  115,
-                  116,
-                  105,
-                  110,
-                  103,
-                  95,
-                  109,
-                  111,
-                  100,
-                  101,
-                  114,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "listing"
-              },
-              {
-                "kind": "account",
-                "path": "listing.spec_hash",
-                "account": "ServiceListing"
-              }
-            ]
-          }
+          "optional": true
         },
         {
           "name": "moderation_attestor",
           "docs": [
-            "OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire",
-            "gate when `listing_moderation` was authored by a non-global-authority attestor.",
-            "Anchor cannot seed this off the *optional* `listing_moderation.moderator`, so the",
+            "OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire",
+            "gate when the record was authored by a non-global-authority attestor. The",
             "canonical-PDA + moderator binding is enforced in the handler via",
-            "`resolve_listing_attestor`. `Account<ModerationAttestor>` still guarantees the entry",
-            "is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load).",
-            "Only needed for the roster path; the global-authority path passes with this absent",
-            "(`None`), byte-unchanged."
+            "`resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the",
+            "risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>`",
+            "still guarantees the entry is program-owned and non-revoked (a revoked entry's",
+            "PDA is closed and fails to load — the WP-A1 fail-closed property, preserved).",
+            "Only needed for the roster path; the global-authority path passes with `None`."
           ],
           "optional": true
+        },
+        {
+          "name": "moderation_block",
+          "docs": [
+            "P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`.",
+            "The handler derives `[\"moderation_block\", listing.spec_hash]` itself and",
+            "rejects a mismatched address, so it can be neither omitted nor substituted; a",
+            "multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation",
+            "presented, and re-minting the same content under a fresh listing PDA is still",
+            "blocked (content-hash-keyed).",
+            "",
+            "(handler-derived canonical PDA; system-owned/empty = pass)."
+          ]
         },
         {
           "name": "creator_agent",
@@ -6562,6 +6699,10 @@
         {
           "name": "referrer_fee_bps",
           "type": "u16"
+        },
+        {
+          "name": "moderator",
+          "type": "pubkey"
         }
       ]
     },
@@ -6790,57 +6931,31 @@
         {
           "name": "listing_moderation",
           "docs": [
-            "Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`."
+            "Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.",
+            "P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).",
+            "",
+            "v2/legacy PDA + owner + discriminator + field bindings)."
           ],
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  108,
-                  105,
-                  115,
-                  116,
-                  105,
-                  110,
-                  103,
-                  95,
-                  109,
-                  111,
-                  100,
-                  101,
-                  114,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "listing"
-              },
-              {
-                "kind": "account",
-                "path": "listing.spec_hash",
-                "account": "ServiceListing"
-              }
-            ]
-          }
+          "optional": true
         },
         {
           "name": "moderation_attestor",
           "docs": [
-            "OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire",
-            "gate when `listing_moderation` was authored by a non-global-authority attestor. Bound",
-            "to the STORED `listing_moderation.moderator` in the handler via `resolve_listing_attestor`",
-            "(Anchor cannot seed off the optional `listing_moderation`). `Account<ModerationAttestor>`",
-            "guarantees the entry is program-owned and non-revoked. Global-authority path passes with",
-            "this absent (`None`), byte-unchanged."
+            "OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the",
+            "handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor`",
+            "(P1.2: the caller chooses the underwriter). Program-owned + non-revoked is",
+            "still guaranteed by the `Account` type (fail-closed, preserved from WP-A1)."
           ],
           "optional": true
+        },
+        {
+          "name": "moderation_block",
+          "docs": [
+            "P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`",
+            "(see `hire_from_listing`; identical semantics).",
+            "",
+            "(handler-derived canonical PDA; system-owned/empty = pass)."
+          ]
         },
         {
           "name": "authority_rate_limit",
@@ -6926,6 +7041,10 @@
         {
           "name": "referrer_fee_bps",
           "type": "u16"
+        },
+        {
+          "name": "moderator",
+          "type": "pubkey"
         }
       ]
     },
@@ -8847,56 +8966,12 @@
         {
           "name": "attestor",
           "docs": [
-            "The recording signer. Authorization (global moderation authority OR a registered",
-            "attestor) is checked in the handler, not as an account constraint here — mirroring",
-            "`record_*_moderation`."
+            "The recording signer. P1.2 §4.6: must be the GLOBAL moderation authority —",
+            "the roster no longer authorizes domain verification (decoupled from the",
+            "permissionless open roster; checked in the handler)."
           ],
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "moderation_attestor",
-          "docs": [
-            "OPTIONAL: a registered moderation-attestor roster entry. When supplied (and",
-            "`attestor == moderation_attestor.attestor`), authorizes a non-global-authority",
-            "attestor to record. Bound to `[\"moderation_attestor\", attestor]` — Anchor enforces",
-            "the canonical PDA, so a forged/mismatched entry fails account resolution, and a",
-            "REVOKED attestor's PDA is closed and fails to load (cannot attest). This instruction",
-            "is full-surface only, so this field carries no canary-surface implications."
-          ],
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  111,
-                  100,
-                  101,
-                  114,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  97,
-                  116,
-                  116,
-                  101,
-                  115,
-                  116,
-                  111,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "attestor"
-              }
-            ]
-          }
         },
         {
           "name": "system_program",
@@ -9002,7 +9077,23 @@
           }
         },
         {
+          "name": "moderator",
+          "docs": [
+            "The recording signer. Authorization (global moderation authority OR a registered",
+            "attestor) is checked in the handler, not as an account constraint here. Declared",
+            "before `listing_moderation` so the v2 seed can reference it."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
           "name": "listing_moderation",
+          "docs": [
+            "P1.2 §4.3 — v2 MODERATOR-KEYED record (the listing mirror of",
+            "`task_moderation_v2`): each attestor owns an exclusive slot; `init_if_needed`",
+            "is self-re-review only; no cross-attestor overwrites. Post-upgrade, records are",
+            "written ONLY under v2 seeds — legacy `[\"listing_moderation\", …]` PDAs are frozen."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -9026,7 +9117,10 @@
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  95,
+                  118,
+                  50
                 ]
               },
               {
@@ -9036,18 +9130,13 @@
               {
                 "kind": "arg",
                 "path": "job_spec_hash"
+              },
+              {
+                "kind": "account",
+                "path": "moderator"
               }
             ]
           }
-        },
-        {
-          "name": "moderator",
-          "docs": [
-            "The recording signer. Authorization (global moderation authority OR a registered",
-            "attestor) is checked in the handler, not as an account constraint here."
-          ],
-          "writable": true,
-          "signer": true
         },
         {
           "name": "moderation_attestor",
@@ -9216,7 +9305,27 @@
           }
         },
         {
+          "name": "moderator",
+          "docs": [
+            "The recording signer. Authorization is checked in the handler (NOT as an account",
+            "constraint here) so the registered-attestor OR global-authority branch can be",
+            "evaluated. In the canary build there is no attestor account, so the handler falls",
+            "back to the global-authority-only check — the canary surface stays frozen.",
+            "Declared BEFORE `task_moderation` in the full build so the v2 seed can reference",
+            "it (an IDL account-order change for this batch's regenerated clients)."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
           "name": "task_moderation",
+          "docs": [
+            "P1.2 §4.3 — v2 MODERATOR-KEYED record: each attestor owns an exclusive slot, so",
+            "`init_if_needed` is self-re-review only. No attestor can overwrite another's",
+            "verdict (flip a trusted BLOCKED→CLEAN or grief CLEAN→BLOCKED); a trusted",
+            "attestor's BLOCKED verdict is un-erasable evidence. Post-upgrade, records are",
+            "written ONLY under v2 seeds — legacy `[\"task_moderation\", …]` PDAs are frozen."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -9237,7 +9346,10 @@
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  95,
+                  118,
+                  50
                 ]
               },
               {
@@ -9247,20 +9359,13 @@
               {
                 "kind": "arg",
                 "path": "job_spec_hash"
+              },
+              {
+                "kind": "account",
+                "path": "moderator"
               }
             ]
           }
-        },
-        {
-          "name": "moderator",
-          "docs": [
-            "The recording signer. Authorization is checked in the handler (NOT as an account",
-            "constraint here) so the registered-attestor OR global-authority branch can be",
-            "evaluated. In the canary build there is no attestor account, so the handler falls",
-            "back to the global-authority-only check — the canary surface stays frozen."
-          ],
-          "writable": true,
-          "signer": true
         },
         {
           "name": "moderation_attestor",
@@ -9464,6 +9569,82 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "register_moderation_attestor",
+      "docs": [
+        "Self-register onto the open moderation-attestor roster (P1.2 §4.1,",
+        "permissionless). The signer pays rent + the hardcoded registration bond onto its",
+        "own roster PDA; `assigned_by = self` marks the entry self-registered. The bond is",
+        "an identity deposit — never confiscatable, refunded in full at exit-finalize."
+      ],
+      "discriminator": [
+        118,
+        194,
+        62,
+        4,
+        232,
+        60,
+        199,
+        142
+      ],
+      "accounts": [
+        {
+          "name": "moderation_attestor",
+          "docs": [
+            "Roster entry for the self-registering signer. `init` ⇒ registering an",
+            "already-rostered wallet fails (the desired \"already registered\" signal), and a",
+            "re-register after exit re-inits a fresh entry."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "attestor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "attestor",
+          "docs": [
+            "The self-registering wallet. No authority constraint — this is the",
+            "permissionless path. It pays rent AND the registration bond."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     },
     {
       "name": "register_skill",
@@ -10069,6 +10250,80 @@
           }
         }
       ]
+    },
+    {
+      "name": "request_attestor_exit",
+      "docs": [
+        "Start the two-step attestor exit (P1.2 §4.2). Monotonic — a running exit clock",
+        "cannot be reset. From this moment the attestor is rejected at the record and",
+        "consumption gates (the window closes at REQUEST, not finalize)."
+      ],
+      "discriminator": [
+        94,
+        3,
+        20,
+        231,
+        175,
+        66,
+        101,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "moderation_attestor",
+          "docs": [
+            "Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA).",
+            "The exit path is for SELF-REGISTERED entries only (`assigned_by == attestor`):",
+            "a deputized entry (`assigned_by == authority`, bond 0, rent paid by the",
+            "authority) is authority-managed and comes off the roster via",
+            "`revoke_moderation_attestor` (rent → authority), NOT here. Without this scope a",
+            "deputy could self-remove outside the authority's control and `close = attestor`",
+            "would redirect the authority-funded rent to the deputy (adversarial finding)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  97,
+                  116,
+                  116,
+                  101,
+                  115,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "moderation_attestor.attestor",
+                "account": "ModerationAttestor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "attestor",
+          "docs": [
+            "Only the attestor itself may start its exit."
+          ],
+          "signer": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "request_changes",
@@ -10966,52 +11221,11 @@
         {
           "name": "attestor",
           "docs": [
-            "The recording signer. Authorization (global moderation authority OR a registered",
-            "attestor) is checked in the handler, mirroring `record_*_moderation`."
+            "The revoking signer. P1.2 §4.6: must be the GLOBAL moderation authority",
+            "(checked in the handler; the roster no longer authorizes this)."
           ],
           "writable": true,
           "signer": true
-        },
-        {
-          "name": "moderation_attestor",
-          "docs": [
-            "OPTIONAL: a registered moderation-attestor roster entry (same semantics as",
-            "`record_agent_verification`). Canonical-PDA + `attestor == signer` bound; a revoked",
-            "attestor's PDA is closed and fails to load."
-          ],
-          "optional": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  111,
-                  100,
-                  101,
-                  114,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  97,
-                  116,
-                  116,
-                  101,
-                  115,
-                  116,
-                  111,
-                  114
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "attestor"
-              }
-            ]
-          }
         }
       ],
       "args": []
@@ -11180,8 +11394,9 @@
     {
       "name": "revoke_moderation_attestor",
       "docs": [
-        "Remove a wallet from the moderation-attestor roster (authority-only, P6.8), closing",
-        "its assignment PDA. The revoked wallet can no longer record attestations."
+        "Remove a wallet from the moderation-attestor roster (P1.2: scoped — the caller",
+        "may remove only entries it itself created, so a self-registered attestor can be",
+        "removed from chain by no one but itself), closing its assignment PDA."
       ],
       "discriminator": [
         192,
@@ -11227,7 +11442,10 @@
           "name": "moderation_attestor",
           "docs": [
             "Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA",
-            "is enforced; `close = authority` returns the rent to the moderation authority."
+            "is enforced; `close = authority` returns the rent to the moderation authority.",
+            "P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered",
+            "entry (`assigned_by == attestor`) can never be closed by the authority, so its",
+            "bond can never be confiscated through this path."
           ],
           "writable": true,
           "pda": {
@@ -11274,6 +11492,223 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_default_trust_list",
+      "docs": [
+        "Update the on-chain default trusted-attestor list pointer (P1.2 §5.1,",
+        "multisig-gated). Advisory display-layer curation — gates nothing on-chain;",
+        "`version` is monotonic and `updated_at` is the deadman signal."
+      ],
+      "discriminator": [
+        134,
+        54,
+        111,
+        97,
+        148,
+        185,
+        102,
+        131
+      ],
+      "accounts": [
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "default_trust_list",
+          "docs": [
+            "Singleton pointer PDA; `init_if_needed` so the first update creates it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  101,
+                  102,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  116,
+                  114,
+                  117,
+                  115,
+                  116,
+                  95,
+                  108,
+                  105,
+                  115,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Fee payer / tx assembler. Approval authority is the multisig threshold over",
+            "`remaining_accounts`, exactly like `update_protocol_fee`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "list_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "list_uri",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "set_moderation_block",
+      "docs": [
+        "Set (or re-set) the multisig-governed BLOCK-only takedown floor for a content",
+        "hash (P1.2 §5.2). Requires `multisig_threshold` owner signatures in remaining",
+        "accounts and an on-chain rationale. All three consumption gates hard-reject a",
+        "blocked hash regardless of which CLEAN attestor the caller presents."
+      ],
+      "discriminator": [
+        212,
+        41,
+        81,
+        152,
+        230,
+        234,
+        217,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "protocol_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderation_block",
+          "docs": [
+            "`init_if_needed`: a cleared block can be re-set (same PDA, audit trail intact)",
+            "and a live block's rationale can be updated."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "content_hash"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Fee payer / tx assembler. Approval authority is the multisig threshold over",
+            "`remaining_accounts`, exactly like `update_protocol_fee`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "content_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "rationale_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "rationale_uri",
+          "type": "string"
+        }
+      ]
     },
     {
       "name": "set_service_listing_state",
@@ -11367,7 +11802,10 @@
     {
       "name": "set_task_job_spec",
       "docs": [
-        "Attach or update a content-addressed off-chain job specification pointer for a task."
+        "Attach or update a content-addressed off-chain job specification pointer for a",
+        "task. P1.2 §4.4: `moderator` names the attestor whose moderation record the",
+        "caller consumes (the record slot is v2-else-legacy; the required",
+        "`moderation_block` account is the §5.2 takedown floor)."
       ],
       "discriminator": [
         134,
@@ -11457,51 +11895,29 @@
         },
         {
           "name": "task_moderation",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  97,
-                  115,
-                  107,
-                  95,
-                  109,
-                  111,
-                  100,
-                  101,
-                  114,
-                  97,
-                  116,
-                  105,
-                  111,
-                  110
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task"
-              },
-              {
-                "kind": "arg",
-                "path": "job_spec_hash"
-              }
-            ]
-          }
+          "docs": [
+            "P1.2 §4.4 — the v2-else-legacy moderation record slot. The v2 seed carries the",
+            "moderator INSIDE the primary record's derivation (circular for Anchor's",
+            "declarative seeds), so this arrives unchecked and the handler re-implements",
+            "every dropped constraint via `load_task_moderation_record`: canonical PDA",
+            "(v2 first, frozen-legacy fallback), `owner == crate::ID`, discriminator, and",
+            "the task/creator/hash/moderator bindings. A wrong-seed account fails CLOSED.",
+            "",
+            "v2/legacy PDA + owner + discriminator + field bindings)."
+          ]
         },
         {
           "name": "moderation_attestor",
           "docs": [
-            "OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the",
-            "publish gate when the task-moderation was authored by a non-global-authority",
-            "attestor. Bound by seeds to `task_moderation.moderator` (the STORED moderator, not",
-            "the signer/creator) with `attestor == task_moderation.moderator`, so Anchor enforces",
-            "the canonical roster PDA — a forged/mismatched entry fails account resolution, and a",
-            "REVOKED attestor's PDA is closed and fails to load (cannot unlock). Only needed when",
-            "`task_moderation.moderator != moderation_config.moderation_authority`; the global",
-            "authority path passes with this account absent (`None`), byte-unchanged. Full-surface",
-            "only — gated so the frozen canary account list for `set_task_job_spec` is unchanged."
+            "OPTIONAL: a registered moderation-attestor roster entry that unlocks the",
+            "publish gate when the moderation was authored by a non-global-authority",
+            "attestor. P1.2: bound by seeds to the EXPLICIT `moderator` instruction argument",
+            "(the caller chooses which attestor's verdict it consumes — §4.4), with",
+            "`attestor == moderator`, so Anchor enforces the canonical roster PDA. A forged",
+            "or mismatched entry fails account resolution; a REVOKED attestor's PDA is",
+            "closed and fails to load (fail-closed, the WP-A1 property this refactor must",
+            "not regress). Only needed when `moderator != moderation_authority`; the global",
+            "authority path passes with this absent (`None`). Full-surface only."
           ],
           "optional": true,
           "pda": {
@@ -11531,12 +11947,22 @@
                 ]
               },
               {
-                "kind": "account",
-                "path": "task_moderation.moderator",
-                "account": "TaskModeration"
+                "kind": "arg",
+                "path": "moderator"
               }
             ]
           }
+        },
+        {
+          "name": "moderation_block",
+          "docs": [
+            "P1.2 §5.2 — the REQUIRED BLOCK-floor slot. The handler derives",
+            "`[\"moderation_block\", job_spec_hash]` itself and rejects a mismatched address,",
+            "so the caller can neither omit nor substitute it; a multisig-BLOCKED hash",
+            "hard-rejects regardless of which CLEAN attestor is presented.",
+            "",
+            "(handler-derived canonical PDA; system-owned/empty = pass)."
+          ]
         },
         {
           "name": "task_job_spec",
@@ -11591,6 +12017,10 @@
         {
           "name": "job_spec_uri",
           "type": "string"
+        },
+        {
+          "name": "moderator",
+          "type": "pubkey"
         }
       ]
     },
@@ -14020,6 +14450,19 @@
       ]
     },
     {
+      "name": "DefaultTrustList",
+      "discriminator": [
+        142,
+        83,
+        121,
+        72,
+        66,
+        39,
+        149,
+        44
+      ]
+    },
+    {
       "name": "Dispute",
       "discriminator": [
         36,
@@ -14147,6 +14590,19 @@
         169,
         40,
         178
+      ]
+    },
+    {
+      "name": "ModerationBlock",
+      "discriminator": [
+        90,
+        220,
+        89,
+        93,
+        67,
+        217,
+        235,
+        20
       ]
     },
     {
@@ -14542,6 +14998,32 @@
       ]
     },
     {
+      "name": "AttestorExitFinalized",
+      "discriminator": [
+        22,
+        204,
+        34,
+        12,
+        13,
+        118,
+        232,
+        118
+      ]
+    },
+    {
+      "name": "AttestorExitRequested",
+      "discriminator": [
+        24,
+        232,
+        80,
+        8,
+        224,
+        107,
+        213,
+        86
+      ]
+    },
+    {
       "name": "BidAccepted",
       "discriminator": [
         19,
@@ -14721,6 +15203,19 @@
         156,
         42,
         54
+      ]
+    },
+    {
+      "name": "DefaultTrustListUpdated",
+      "discriminator": [
+        92,
+        58,
+        14,
+        174,
+        134,
+        120,
+        43,
+        80
       ]
     },
     {
@@ -14906,6 +15401,19 @@
       ]
     },
     {
+      "name": "ModerationAttestorRegistered",
+      "discriminator": [
+        1,
+        244,
+        117,
+        105,
+        40,
+        179,
+        123,
+        71
+      ]
+    },
+    {
       "name": "ModerationAttestorRevoked",
       "discriminator": [
         70,
@@ -14916,6 +15424,32 @@
         239,
         16,
         186
+      ]
+    },
+    {
+      "name": "ModerationBlockCleared",
+      "discriminator": [
+        133,
+        81,
+        67,
+        83,
+        255,
+        146,
+        227,
+        32
+      ]
+    },
+    {
+      "name": "ModerationBlockSet",
+      "discriminator": [
+        27,
+        98,
+        187,
+        114,
+        11,
+        28,
+        141,
+        209
       ]
     },
     {
@@ -17127,6 +17661,66 @@
       "code": 6308,
       "name": "TaskHasLiveCompletionBond",
       "msg": "Task has a live completion bond; reclaim it before closing the task"
+    },
+    {
+      "code": 6309,
+      "name": "AttestorBondMissing",
+      "msg": "Attestor PDA is missing the registration bond after deposit"
+    },
+    {
+      "code": 6310,
+      "name": "AttestorExitNotRequested",
+      "msg": "Attestor exit has not been requested (exit_at is zero)"
+    },
+    {
+      "code": 6311,
+      "name": "AttestorExitAlreadyRequested",
+      "msg": "Attestor exit already requested; the exit clock cannot be reset"
+    },
+    {
+      "code": 6312,
+      "name": "AttestorExitCooldownActive",
+      "msg": "Attestor exit cooldown has not elapsed"
+    },
+    {
+      "code": 6313,
+      "name": "AttestorExiting",
+      "msg": "Attestor is in its exit window and can no longer moderate or unlock gates"
+    },
+    {
+      "code": 6314,
+      "name": "UnauthorizedAttestorRevocation",
+      "msg": "Only the wallet that created a roster entry may revoke it"
+    },
+    {
+      "code": 6315,
+      "name": "AttestorNotSelfRegistered",
+      "msg": "Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke"
+    },
+    {
+      "code": 6316,
+      "name": "ContentBlocked",
+      "msg": "Content hash is blocked by the multisig takedown floor"
+    },
+    {
+      "code": 6317,
+      "name": "InvalidModerationBlockAccount",
+      "msg": "Moderation block account is not the canonical PDA for this content hash"
+    },
+    {
+      "code": 6318,
+      "name": "InvalidModerationRationale",
+      "msg": "Block rationale hash and URI are required (non-zero, non-empty, bounded)"
+    },
+    {
+      "code": 6319,
+      "name": "InvalidTrustList",
+      "msg": "Trust list hash and URI are required (non-zero, non-empty, bounded)"
+    },
+    {
+      "code": 6320,
+      "name": "InvalidModerationRecord",
+      "msg": "Moderation record account is not the canonical PDA, not program-owned, or not a moderation record"
     }
   ],
   "types": [
@@ -17813,6 +18407,55 @@
           },
           {
             "name": "expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AttestorExitFinalized",
+      "docs": [
+        "Emitted when an attestor exit finalizes and the roster PDA closes, refunding",
+        "bond + rent to the attestor in full (P1.2 — never confiscatable)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "attestor",
+            "type": "pubkey"
+          },
+          {
+            "name": "refunded_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AttestorExitRequested",
+      "docs": [
+        "Emitted when an attestor starts its two-step exit (P1.2). From this moment the",
+        "attestor is rejected at the record and consumption gates; the bond refunds at",
+        "finalize after the cooldown."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "attestor",
+            "type": "pubkey"
+          },
+          {
+            "name": "exit_at",
             "type": "i64"
           },
           {
@@ -18686,6 +19329,120 @@
               "Bump seed"
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DefaultTrustList",
+      "docs": [
+        "P1.2 §5.1 — on-chain, multisig-governed pointer to the default trusted-attestor",
+        "list. A content-addressed pointer (hash + URI), NOT the list itself: the signed,",
+        "versioned artifact ships in `@tetsuo-ai/marketplace-moderation` and is forkable by",
+        "any surface. Governance is `require_multisig_threshold` (the live 2-of-3), never an",
+        "npm publish key. `updated_at` is the deadman signal: a surface can observe staleness",
+        "and fall back to its own list.",
+        "",
+        "PDA seeds: [\"default_trust_list\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "list_hash",
+            "docs": [
+              "Content hash of the current list artifact."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "list_uri",
+            "docs": [
+              "URI of the list artifact."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "docs": [
+              "Monotonic version, bumped on every update (rollback detection)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "updated_at",
+            "docs": [
+              "Deadman timestamp: when the list was last updated."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updated_by",
+            "docs": [
+              "The fee-paying signer of the last update."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved for future trust-list metadata. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "DefaultTrustListUpdated",
+      "docs": [
+        "Emitted when the multisig updates the on-chain default trusted-attestor list",
+        "pointer (P1.2 §5.1). `version` is monotonic; `timestamp` doubles as the deadman."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "list_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "list_uri",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "u64"
+          },
+          {
+            "name": "updated_by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -20277,7 +21034,9 @@
           {
             "name": "assigned_by",
             "docs": [
-              "The protocol authority that assigned this attestor (audit trail)."
+              "The wallet that created this entry (audit trail). Authority-deputized entries",
+              "carry the moderation authority; self-registered entries (P1.2) carry the",
+              "attestor itself — `assigned_by == attestor` distinguishes the two."
             ],
             "type": "pubkey"
           },
@@ -20296,6 +21055,31 @@
             "type": "u8"
           },
           {
+            "name": "bond_lamports",
+            "docs": [
+              "Registration bond deposited on the PDA (`REGISTRATION_BOND_LAMPORTS` at",
+              "self-registration; 0 for authority-deputized/legacy entries). Refunded in full",
+              "at `finalize_attestor_exit` — never confiscatable."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "registered_at",
+            "docs": [
+              "When the attestor self-registered (0 for authority-deputized/legacy entries)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "exit_at",
+            "docs": [
+              "Exit-window start set by `request_attestor_exit` (0 = not exiting). While",
+              "non-zero the attestor is rejected at the record AND consumption gates; the",
+              "window closes at request, not finalize."
+            ],
+            "type": "i64"
+          },
+          {
             "name": "_reserved",
             "docs": [
               "Reserved for future metadata. MUST stay zeroed."
@@ -20303,7 +21087,7 @@
             "type": {
               "array": [
                 "u8",
-                32
+                8
               ]
             }
           }
@@ -20334,6 +21118,30 @@
       }
     },
     {
+      "name": "ModerationAttestorRegistered",
+      "docs": [
+        "Emitted when a wallet self-registers onto the open moderation-attestor roster",
+        "(P1.2). `bond_lamports` is the hardcoded registration bond deposited on the PDA."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "attestor",
+            "type": "pubkey"
+          },
+          {
+            "name": "bond_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "ModerationAttestorRevoked",
       "docs": [
         "Emitted when the protocol authority revokes a wallet from the moderation-attestor roster (P6.8)."
@@ -20347,6 +21155,181 @@
           },
           {
             "name": "revoked_by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ModerationBlock",
+      "docs": [
+        "P1.2 §5.2 — the BLOCK-only global takedown floor.",
+        "",
+        "Keyed by CONTENT HASH alone (not task/listing) so a takedown cannot be evaded by",
+        "re-minting the same content under a fresh task/listing PDA. REQUIRED on all three",
+        "consumption gates (`set_task_job_spec`, `hire_from_listing`,",
+        "`hire_from_listing_humanless`), which derive this address in-handler from the same",
+        "hash they are already gating — the caller cannot substitute a different account.",
+        "An absent (system-owned, empty) account means \"no block\" — the floor is a",
+        "fail-OPEN blacklist: key-death preserves publishing; nothing can be gated *in*",
+        "through it. Written only by the multisig-gated `set_moderation_block` /",
+        "`clear_moderation_block` (never the single-key moderation-authority path).",
+        "",
+        "PDA seeds: [\"moderation_block\", content_hash]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "content_hash",
+            "docs": [
+              "The blocked job-spec/listing-spec content hash (the PDA seed, stored for gPA)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "docs": [
+              "One of `moderation_block_status::*`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "rationale_hash",
+            "docs": [
+              "Hash of the written takedown rationale (REQUIRED — the `resolve_dispute`",
+              "precedent; bounds the discretionary power with an auditable record)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rationale_uri",
+            "docs": [
+              "URI of the rationale document."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "set_at",
+            "docs": [
+              "When the block was first set."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "docs": [
+              "Last set/clear transition."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updated_by",
+            "docs": [
+              "The fee-paying signer of the last transition (the multisig approval itself is",
+              "checked via `require_multisig_threshold` over remaining accounts)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_reserved",
+            "docs": [
+              "Reserved for future takedown metadata. MUST stay zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ModerationBlockCleared",
+      "docs": [
+        "Emitted when the multisig clears a takedown block (P1.2 §5.2). The account stays",
+        "open as the audit trail; the hash is consumable again at the gates."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "content_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "updated_by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ModerationBlockSet",
+      "docs": [
+        "Emitted when the multisig sets (or re-sets) the BLOCK-only takedown floor for a",
+        "content hash (P1.2 §5.2). The rationale is REQUIRED — the discretionary takedown",
+        "lever is bounded by an auditable, content-addressed record."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "content_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rationale_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "rationale_uri",
+            "type": "string"
+          },
+          {
+            "name": "updated_by",
             "type": "pubkey"
           },
           {

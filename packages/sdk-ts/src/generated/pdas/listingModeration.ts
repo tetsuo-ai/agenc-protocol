@@ -19,6 +19,7 @@ import {
 export type ListingModerationSeeds = {
   listing: Address;
   jobSpecHash: ReadonlyUint8Array;
+  moderator: Address;
 };
 
 export async function findListingModerationPda(
@@ -34,11 +35,12 @@ export async function findListingModerationPda(
       getBytesEncoder().encode(
         new Uint8Array([
           108, 105, 115, 116, 105, 110, 103, 95, 109, 111, 100, 101, 114, 97,
-          116, 105, 111, 110,
+          116, 105, 111, 110, 95, 118, 50,
         ]),
       ),
       getAddressEncoder().encode(seeds.listing),
       fixEncoderSize(getBytesEncoder(), 32).encode(seeds.jobSpecHash),
+      getAddressEncoder().encode(seeds.moderator),
     ],
   });
 }

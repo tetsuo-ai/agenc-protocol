@@ -4,12 +4,28 @@ This document records the upgrade authority of the live mainnet
 program and the precise runbook to migrate it from a single key to a **Squads
 (or equivalent) multisig**.
 
-> **Status update (2026-06-11):** the multisig migration this runbook plans has been
-> executed — the upgrade authority is now a **2-of-3 multisig** (`Hcecp…` / `BXDan…` /
-> `4QcKB…`), which was a pre-flight gate for the same-day full-surface upgrade
-> (`surface_revision = FULL`, 169 tasks migrated; see `docs/MAINNET_ROLLOUT_RUNBOOK.md`).
-> The "single key" / "[HUMAN: executes]" framing below describes the pre-migration state.
-> Re-run the `solana program show` check to confirm the live authority.
+> **✅ DONE 2026-07-03 (P0.3 executed + verified on-chain).** The program upgrade
+> authority is now a **2-of-3 Squads v4 multisig vault**:
+> `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf` (multisig account
+> `7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY`, program
+> `SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf`, members `HcecpKX…GLqh` /
+> `3HvRz5t…` / `6CpyZBm…`, autonomous). Verify: `solana program show
+> HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` → `Authority:` = the vault above,
+> **not** the old single key. The 2-of-3 was proven able to propose/vote/execute
+> (a no-op config transaction) BEFORE the transfer, so the handover is reversible.
+> Full record + tx signatures:
+> `~/agenc-mainnet-restore/mainnet/upgrade-authority-squads-members/README.md`.
+> **Residual (tracked):** all three member keys are files on one host — replace
+> one with a Ledger (Squads config tx, no re-transfer) for true distributed custody.
+>
+> **⚠️ Earlier "2026-06-11 done" note was WRONG and is struck** — it conflated the
+> `ProtocolConfig` on-chain config multisig (`Hcecp…/BXDan…/4QcKB…`, 2-of-3, which
+> governs fees / the P1.2 BLOCK floor via `require_multisig_threshold`) with the
+> BPF-loader upgrade authority this runbook migrates. Until 2026-07-03 the loader
+> authority was genuinely still the single key.
+>
+> ~~Status update (2026-06-11): … the upgrade authority is now a 2-of-3 multisig…~~
+> **(struck — see above).**
 
 > See also: `SECURITY.md` §5.3 (custody summary integrators inherit),
 > `docs/MAINNET_MAINLINE.md` (what `main` means for the live program), and
@@ -185,10 +201,10 @@ Then:
 - [x] Current single-key authority documented & verified on-chain (`HcecpKX…GLqh`).
 - [x] Risk articulated; target custody (Squads/equivalent multisig) stated here and in `SECURITY.md` §5.3.
 - [x] Runbook + safety checks written.
-- [ ] **[HUMAN]** Multisig created (M-of-N + signers chosen).
-- [ ] **[HUMAN]** Devnet rehearsal of transfer + test upgrade.
-- [ ] **[HUMAN]** Mainnet `set-upgrade-authority` executed.
-- [ ] **[HUMAN]** Post-migration verification + docs/announcement updated.
+- [x] **Multisig created** 2026-07-03 — Squads v4 2-of-3, vault `Cj9dWtov…` (members `HcecpKX…`/`3HvRz5t…`/`6CpyZBm…`).
+- [~] Devnet rehearsal — public devnet faucet was down; substituted an equivalent on **mainnet** pre-transfer proof: the 2-of-3 executed a no-op config transaction (propose→2 votes→execute), proving M-of-N signing works before the transfer.
+- [x] **Mainnet `set-upgrade-authority` executed** 2026-07-03 (destination triple-verified; no `--final`).
+- [x] **Post-migration verification** — `solana program show` reports the vault as `Authority:`. Docs updated (this file + the member-folder README). Still TODO: `SECURITY.md` §5.3 wording + swap one member to a Ledger.
 
 This is **done** only when `solana program show` reports the multisig as the
 upgrade authority on mainnet and the docs above are updated to match.

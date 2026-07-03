@@ -132,6 +132,7 @@ await buyerClient.hireFromListingHumanless({
   expectedVersion: 1n,
   reviewWindowSecs: 86_400n,
   listingSpecHash,
+  moderator: market.moderator.address, // P1.2: the attestation author consumed
 });
 const [task] = await findTaskPda({ creator: buyer.address, taskId });
 const [hireRecord] = await findHireRecordPda({ task });
@@ -145,6 +146,7 @@ await buyerClient.send([
     creator: buyer,
     jobSpecHash,
     jobSpecUri: "agenc://job-spec/sha256/demo",
+    moderator: market.moderator.address, // P1.2: the attestation author consumed
   }),
 ]);
 

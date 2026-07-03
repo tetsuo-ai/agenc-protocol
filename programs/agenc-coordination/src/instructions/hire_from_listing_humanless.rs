@@ -23,15 +23,18 @@ use crate::instructions::hire_from_listing::{
     validate_listing_capacity, validate_listing_moderation_for_hire, validate_listing_spec_hash,
 };
 use crate::instructions::launch_controls::require_task_type_index_enabled;
+use crate::instructions::moderation_gate_helpers::{
+    load_listing_moderation_record, require_content_not_blocked,
+};
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
 };
 use crate::instructions::task_validation_helpers::validate_review_window_for_mode;
 use crate::state::{
-    AuthorityRateLimit, HireRecord, ListingModeration, ModerationAttestor, ModerationConfig,
-    ProtocolConfig, ServiceListing, Task, TaskEscrow, TaskType, TaskValidationConfig,
-    ValidationMode, MANUAL_VALIDATION_SENTINEL,
+    AuthorityRateLimit, HireRecord, ModerationAttestor, ModerationConfig, ProtocolConfig,
+    ServiceListing, Task, TaskEscrow, TaskType, TaskValidationConfig, ValidationMode,
+    MANUAL_VALIDATION_SENTINEL,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -100,19 +103,24 @@ pub struct HireFromListingHumanless<'info> {
     pub moderation_config: Box<Account<'info, ModerationConfig>>,
 
     /// Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
-    #[account(
-        seeds = [b"listing_moderation", listing.key().as_ref(), listing.spec_hash.as_ref()],
-        bump = listing_moderation.bump
-    )]
-    pub listing_moderation: Option<Box<Account<'info, ListingModeration>>>,
+    /// P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).
+    ///
+    /// CHECK: validated in the handler by `load_listing_moderation_record` (canonical
+    /// v2/legacy PDA + owner + discriminator + field bindings).
+    pub listing_moderation: Option<UncheckedAccount<'info>>,
 
-    /// OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-    /// gate when `listing_moderation` was authored by a non-global-authority attestor. Bound
-    /// to the STORED `listing_moderation.moderator` in the handler via `resolve_listing_attestor`
-    /// (Anchor cannot seed off the optional `listing_moderation`). `Account<ModerationAttestor>`
-    /// guarantees the entry is program-owned and non-revoked. Global-authority path passes with
-    /// this absent (`None`), byte-unchanged.
+    /// OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the
+    /// handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor`
+    /// (P1.2: the caller chooses the underwriter). Program-owned + non-revoked is
+    /// still guaranteed by the `Account` type (fail-closed, preserved from WP-A1).
     pub moderation_attestor: Option<Box<Account<'info, ModerationAttestor>>>,
+
+    /// P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`
+    /// (see `hire_from_listing`; identical semantics).
+    ///
+    /// CHECK: validated in the handler by `require_content_not_blocked`
+    /// (handler-derived canonical PDA; system-owned/empty = pass).
+    pub moderation_block: UncheckedAccount<'info>,
 
     /// Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent).
     #[account(
@@ -146,6 +154,7 @@ pub fn handler(
     review_window_secs: i64,
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
+    moderator: Pubkey,
 ) -> Result<()> {
     let clock = Clock::get()?;
     let config = ctx.accounts.protocol_config.as_ref();
@@ -180,12 +189,18 @@ pub fn handler(
     )?;
     validate_listing_capacity(listing.open_jobs, listing.max_open_jobs)?;
 
-    // Hire-time moderation gate (§6), fail-closed. WP-A1: the listing attestation may be
-    // authored by the global moderation authority OR a registered, non-revoked
-    // ModerationAttestor (bound to the STORED `lm.moderator` via `resolve_listing_attestor`).
+    // P1.2 §5.2 BLOCK floor — UNCONDITIONAL; identical semantics to hire_from_listing.
+    require_content_not_blocked(
+        &ctx.accounts.moderation_block.to_account_info(),
+        &listing_spec_hash,
+    )?;
+
+    // Hire-time moderation gate (§6), fail-closed. P1.2 §4.4: the caller names the
+    // underwriter via the explicit `moderator` argument; the record (v2-else-legacy
+    // slot) must have been authored by it, and an exiting attestor no longer unlocks.
     let mut unlocking_attestor: Option<Pubkey> = None;
     if ctx.accounts.moderation_config.enabled {
-        let lm = ctx
+        let record_info = ctx
             .accounts
             .listing_moderation
             .as_ref()
@@ -193,11 +208,20 @@ pub fn handler(
         unlocking_attestor = resolve_listing_attestor(
             ctx.accounts.moderation_attestor.as_ref().map(|a| a.attestor),
             ctx.accounts.moderation_attestor.as_ref().map(|a| a.key()),
-            lm.moderator,
+            moderator,
+        )?;
+        if let Some(entry) = ctx.accounts.moderation_attestor.as_ref() {
+            require!(!entry.is_exiting(), CoordinationError::AttestorExiting);
+        }
+        let lm = load_listing_moderation_record(
+            &record_info.to_account_info(),
+            &listing_key,
+            &listing_spec_hash,
+            &moderator,
         )?;
         validate_listing_moderation_for_hire(
             ctx.accounts.moderation_config.as_ref(),
-            lm.as_ref(),
+            &lm,
             listing_key,
             &listing_spec_hash,
             clock.unix_timestamp,

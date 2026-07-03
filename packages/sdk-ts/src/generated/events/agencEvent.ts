@@ -39,6 +39,14 @@ import {
   type AgentVerifiedEventData,
 } from "./agentVerified";
 import {
+  getAttestorExitFinalizedEventDecoder,
+  type AttestorExitFinalizedEventData,
+} from "./attestorExitFinalized";
+import {
+  getAttestorExitRequestedEventDecoder,
+  type AttestorExitRequestedEventData,
+} from "./attestorExitRequested";
+import {
   getBidAcceptedEventDecoder,
   type BidAcceptedEventData,
 } from "./bidAccepted";
@@ -94,6 +102,10 @@ import {
   getBondSlashedEventDecoder,
   type BondSlashedEventData,
 } from "./bondSlashed";
+import {
+  getDefaultTrustListUpdatedEventDecoder,
+  type DefaultTrustListUpdatedEventData,
+} from "./defaultTrustListUpdated";
 import {
   getDependentTaskCreatedEventDecoder,
   type DependentTaskCreatedEventData,
@@ -151,9 +163,21 @@ import {
   type ModerationAttestorAssignedEventData,
 } from "./moderationAttestorAssigned";
 import {
+  getModerationAttestorRegisteredEventDecoder,
+  type ModerationAttestorRegisteredEventData,
+} from "./moderationAttestorRegistered";
+import {
   getModerationAttestorRevokedEventDecoder,
   type ModerationAttestorRevokedEventData,
 } from "./moderationAttestorRevoked";
+import {
+  getModerationBlockClearedEventDecoder,
+  type ModerationBlockClearedEventData,
+} from "./moderationBlockCleared";
+import {
+  getModerationBlockSetEventDecoder,
+  type ModerationBlockSetEventData,
+} from "./moderationBlockSet";
 import {
   getMultisigUpdatedEventDecoder,
   type MultisigUpdatedEventData,
@@ -379,6 +403,8 @@ export type AgencEvent =
   | { eventName: "AgentUpdated"; data: AgentUpdatedEventData }
   | { eventName: "AgentVerificationRevoked"; data: AgentVerificationRevokedEventData }
   | { eventName: "AgentVerified"; data: AgentVerifiedEventData }
+  | { eventName: "AttestorExitFinalized"; data: AttestorExitFinalizedEventData }
+  | { eventName: "AttestorExitRequested"; data: AttestorExitRequestedEventData }
   | { eventName: "BidAccepted"; data: BidAcceptedEventData }
   | { eventName: "BidBookInitialized"; data: BidBookInitializedEventData }
   | { eventName: "BidCancelled"; data: BidCancelledEventData }
@@ -393,6 +419,7 @@ export type AgencEvent =
   | { eventName: "BondRefunded"; data: BondRefundedEventData }
   | { eventName: "BondReleased"; data: BondReleasedEventData }
   | { eventName: "BondSlashed"; data: BondSlashedEventData }
+  | { eventName: "DefaultTrustListUpdated"; data: DefaultTrustListUpdatedEventData }
   | { eventName: "DependentTaskCreated"; data: DependentTaskCreatedEventData }
   | { eventName: "DisputeCancelled"; data: DisputeCancelledEventData }
   | { eventName: "DisputeExpired"; data: DisputeExpiredEventData }
@@ -407,7 +434,10 @@ export type AgencEvent =
   | { eventName: "ListingRated"; data: ListingRatedEventData }
   | { eventName: "MigrationCompleted"; data: MigrationCompletedEventData }
   | { eventName: "ModerationAttestorAssigned"; data: ModerationAttestorAssignedEventData }
+  | { eventName: "ModerationAttestorRegistered"; data: ModerationAttestorRegisteredEventData }
   | { eventName: "ModerationAttestorRevoked"; data: ModerationAttestorRevokedEventData }
+  | { eventName: "ModerationBlockCleared"; data: ModerationBlockClearedEventData }
+  | { eventName: "ModerationBlockSet"; data: ModerationBlockSetEventData }
   | { eventName: "MultisigUpdated"; data: MultisigUpdatedEventData }
   | { eventName: "OperatorFeePaid"; data: OperatorFeePaidEventData }
   | { eventName: "PostCreated"; data: PostCreatedEventData }
@@ -536,6 +566,20 @@ export const AGENC_EVENT_DECODERS: {
       data: getAgentVerifiedEventDecoder().decode(payload),
     }),
   },
+  "16cc220c0d76e876": {
+    eventName: "AttestorExitFinalized",
+    decode: (payload) => ({
+      eventName: "AttestorExitFinalized",
+      data: getAttestorExitFinalizedEventDecoder().decode(payload),
+    }),
+  },
+  "18e85008e06bd556": {
+    eventName: "AttestorExitRequested",
+    decode: (payload) => ({
+      eventName: "AttestorExitRequested",
+      data: getAttestorExitRequestedEventDecoder().decode(payload),
+    }),
+  },
   "138c24afc30537c1": {
     eventName: "BidAccepted",
     decode: (payload) => ({
@@ -632,6 +676,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "BondSlashed",
       data: getBondSlashedEventDecoder().decode(payload),
+    }),
+  },
+  "5c3a0eae86782b50": {
+    eventName: "DefaultTrustListUpdated",
+    decode: (payload) => ({
+      eventName: "DefaultTrustListUpdated",
+      data: getDefaultTrustListUpdatedEventDecoder().decode(payload),
     }),
   },
   "523f2e9455bf7a72": {
@@ -732,11 +783,32 @@ export const AGENC_EVENT_DECODERS: {
       data: getModerationAttestorAssignedEventDecoder().decode(payload),
     }),
   },
+  "01f4756928b37b47": {
+    eventName: "ModerationAttestorRegistered",
+    decode: (payload) => ({
+      eventName: "ModerationAttestorRegistered",
+      data: getModerationAttestorRegisteredEventDecoder().decode(payload),
+    }),
+  },
   "460895d71bef10ba": {
     eventName: "ModerationAttestorRevoked",
     decode: (payload) => ({
       eventName: "ModerationAttestorRevoked",
       data: getModerationAttestorRevokedEventDecoder().decode(payload),
+    }),
+  },
+  "85514353ff92e320": {
+    eventName: "ModerationBlockCleared",
+    decode: (payload) => ({
+      eventName: "ModerationBlockCleared",
+      data: getModerationBlockClearedEventDecoder().decode(payload),
+    }),
+  },
+  "1b62bb720b1c8dd1": {
+    eventName: "ModerationBlockSet",
+    decode: (payload) => ({
+      eventName: "ModerationBlockSet",
+      data: getModerationBlockSetEventDecoder().decode(payload),
     }),
   },
   "f2ce253b7ac5d248": {

@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import { AccountRole, address, createNoopSigner } from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  findTaskModerationPda,
+  findModerationAttestorPda,
+  findModerationBlockPda,
   getCreateTaskInstructionDataDecoder,
   getCreateTaskHumanlessInstructionDataDecoder,
   getCreateDependentTaskInstructionDataDecoder,
@@ -491,27 +494,53 @@ describe("configureTaskValidation facade instruction", () => {
 });
 
 describe("setTaskJobSpec facade instruction", () => {
-  it("targets the program, orders accounts, and round-trips data", async () => {
+  it("targets the program, orders accounts (P1.2: 9 with the BLOCK floor), and round-trips data", async () => {
     const ix = await setTaskJobSpec({
       task: A,
       creator: signerA,
       jobSpecHash: HASH32,
       jobSpecUri: "ipfs://job-spec",
+      moderator: D, // P1.2: the caller names the moderator whose record it consumes
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // P1.2 pins the gate at 9 accounts: WP-A1's 8 + the REQUIRED moderationBlock (5).
+    expect(ix.accounts.length).toBe(9);
     const names = ix.accounts.map((a) => a.address);
     // protocolConfig auto-derived (0).
     expect(names[1]).toBe(A); // task
-    // moderationConfig, taskModeration auto-derived (2..3). WP-A1 inserts the OPTIONAL
-    // moderationAttestor roster account (4); omitted here -> program-id placeholder,
-    // which shifts taskJobSpec (5), creator (6), systemProgram (7) down one slot.
-    expect(names[4]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // moderationAttestor omitted
-    expect(names[6]).toBe(signerA.address); // creator
-    expect(names[7]).toBe(SYSTEM_PROGRAM);
+    // moderationConfig auto-derived (2); taskModeration (3) is the facade-derived v2
+    // moderator-keyed record PDA ["task_moderation_v2", task, hash, moderator].
+    const [expectedModeration] = await findTaskModerationPda({
+      task: A,
+      jobSpecHash: HASH32,
+      moderator: D,
+    });
+    expect(names[3]).toBe(expectedModeration);
+    // moderationAttestor (4): global-authority path -> program-id placeholder (None).
+    expect(names[4]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // moderationBlock (5): REQUIRED BLOCK-floor PDA ["moderation_block", jobSpecHash].
+    const [expectedBlock] = await findModerationBlockPda({ contentHash: HASH32 });
+    expect(names[5]).toBe(expectedBlock);
+    expect(names[7]).toBe(signerA.address); // creator
+    expect(names[8]).toBe(SYSTEM_PROGRAM);
 
     const decoded = getSetTaskJobSpecInstructionDataDecoder().decode(ix.data);
     expect(Array.from(decoded.jobSpecHash)).toEqual(Array.from(HASH32));
     expect(decoded.jobSpecUri).toBe("ipfs://job-spec");
+    expect(decoded.moderator).toBe(D); // P1.2: new 3rd arg
+  });
+
+  it("derives the roster-entry PDA when moderatorIsAttestor is set (P1.2 roster path)", async () => {
+    const ix = await setTaskJobSpec({
+      task: A,
+      creator: signerA,
+      jobSpecHash: HASH32,
+      jobSpecUri: "ipfs://job-spec",
+      moderator: D,
+      moderatorIsAttestor: true,
+    });
+    const [expectedAttestor] = await findModerationAttestorPda({ attestor: D });
+    expect(ix.accounts[4].address).toBe(expectedAttestor);
   });
 });

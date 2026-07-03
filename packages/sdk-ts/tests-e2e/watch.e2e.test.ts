@@ -74,6 +74,7 @@ describe("e2e: watchClaimableTasks surfaces a real on-chain task via catch-up", 
         creator,
         jobSpecHash,
         jobSpecUri: "agenc://job-spec/sha256/watch-e2e",
+        moderator: market.moderator.address,
       }),
     ]);
     const [taskJobSpecPda] = await findTaskJobSpecPda({ task: taskPda });

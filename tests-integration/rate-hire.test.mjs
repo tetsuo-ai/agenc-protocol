@@ -31,6 +31,7 @@ import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld,
+  taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, SystemProgram, FailedTransactionMetadata,
 } from "./harness.mjs";
 
@@ -45,7 +46,7 @@ async function hireToCompleted(w) {
   const modProg = makeProgram(w.modAuth);
 
   // 0) CLEAN ListingModeration so the hire passes the moderation gate.
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   if (isClosed(w.svm, listingMod)) {
     expectOk(send(w.svm, await modProg.methods
       .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
@@ -60,10 +61,11 @@ async function hireToCompleted(w) {
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0)
+    .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0, w.modAuth.publicKey)
     .accounts({
       task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration: listingMod, moderationAttestor: null,
+      moderationBlock: moderationBlockPda(w.specHash)[0],
       creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey,
       creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,
     })
@@ -71,7 +73,7 @@ async function hireToCompleted(w) {
 
   // 2) task moderation -> publish job spec -> worker claims.
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
 
@@ -81,8 +83,8 @@ async function hireToCompleted(w) {
     .instruction(), [w.modAuth]), "rate-hire:task-mod");
 
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "rate-hire:publish");
 
   expectOk(send(w.svm, await w.providerProg.methods

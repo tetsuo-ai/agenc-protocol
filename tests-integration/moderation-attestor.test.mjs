@@ -42,6 +42,7 @@ import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, hireIx,
+  taskModV2Pda, listingModV2Pda,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
 
@@ -85,8 +86,9 @@ async function revoke(w, attestor, signer = w.admin) {
 }
 
 // Build a record_task_moderation ix from `recorder`, optionally passing the attestor PDA.
+// P1.2: the record PDA is the v2 moderator-keyed one, derived from the recording signer.
 async function recordTaskModeration(w, { task, recorder, jobHash, attestorEntry = null }) {
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, recorder.publicKey);
   return {
     taskMod,
     ix: await makeProgram(recorder).methods
@@ -186,7 +188,7 @@ test("record_task_moderation: a registered attestor (not the global authority) c
   expectOk(await assign(w, attestor.publicKey), "assign attestor");
 
   // Mint a task to moderate: buyer hires the listing (needs a CLEAN ListingModeration first).
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   expectOk(
     send(
       w.svm,
@@ -209,7 +211,7 @@ test("record_task_moderation: a registered attestor (not the global authority) c
   const { ix } = await recordTaskModeration(w, { task: hire.task, recorder: attestor, jobHash, attestorEntry: entry });
   expectOk(send(w.svm, ix, [attestor]), "registered attestor records task moderation");
 
-  const [taskMod] = pda([enc("task_moderation"), hire.task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(hire.task, jobHash, attestor.publicKey);
   const decoded = decode(w.svm, "TaskModeration", taskMod);
   assert.equal(decoded.moderator.toBase58(), attestor.publicKey.toBase58(), "recorded by the attestor");
 });
@@ -220,7 +222,7 @@ test("record_task_moderation: a stranger with NO roster entry cannot record", as
   w.svm.airdrop(stranger.publicKey, BigInt(10e9));
 
   // Hire to create a task (clean listing-mod first, recorded by the global authority).
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   expectOk(
     send(
       w.svm,
@@ -257,7 +259,7 @@ test("record_task_moderation: a REVOKED attestor cannot record", async () => {
   assert.ok(isClosed(w.svm, entry), "attestor entry closed after revoke");
 
   // Hire to create a task.
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   expectOk(
     send(
       w.svm,
@@ -298,7 +300,7 @@ test("record_listing_moderation: a registered attestor (not the global authority
   const [entry] = attestorPda(attestor.publicKey);
   expectOk(await assign(w, attestor.publicKey), "assign attestor");
 
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, attestor.publicKey);
   expectOk(
     send(
       w.svm,
@@ -321,7 +323,7 @@ test("record_listing_moderation: a stranger with NO roster entry cannot record",
   const w = await freshWorld({ moderationEnabled: true });
   const stranger = Keypair.generate();
   w.svm.airdrop(stranger.publicKey, BigInt(10e9));
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, stranger.publicKey);
   expectFail(
     send(
       w.svm,
@@ -341,7 +343,7 @@ test("record_listing_moderation: a stranger with NO roster entry cannot record",
 
 test("record_*_moderation: the global moderation authority still records (back-compat)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   // Global authority records with moderationAttestor=null — the unchanged path.
   expectOk(
     send(

@@ -128,6 +128,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
       expectedPrice: price,
       expectedVersion: 1n,
       listingSpecHash,
+      moderator: market.moderator.address,
     });
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
 
@@ -140,6 +141,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
         creator: buyer,
         jobSpecHash,
         jobSpecUri: "agenc://job-spec/sha256/x",
+        moderator: market.moderator.address,
       }),
     ]);
 
@@ -277,6 +279,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
         creator,
         jobSpecHash,
         jobSpecUri: "agenc://job-spec/sha256/manual",
+        moderator: market.moderator.address,
       }),
     ]);
     await workerClient.claimTaskWithJobSpec({

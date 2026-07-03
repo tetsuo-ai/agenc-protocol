@@ -135,6 +135,7 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
         expectedPrice: price,
         expectedVersion: 1n,
         listingSpecHash,
+        moderator: moderator.address,
       }),
     ]);
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
@@ -162,6 +163,7 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
         creator: buyer,
         jobSpecHash: jobHash,
         jobSpecUri: "agenc://job-spec/sha256/x",
+        moderator: moderator.address,
       }),
     ]);
 

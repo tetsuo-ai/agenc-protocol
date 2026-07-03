@@ -92,6 +92,24 @@ pub const MIN_SKILL_PRICE: u64 = 1_000;
 pub const MIN_DELEGATION_DURATION: i64 = 604_800;
 
 // ============================================================================
+// P1.2 Open-Roster Constants
+// ============================================================================
+
+/// Registration bond for permissionless attestor self-registration (0.25 SOL),
+/// deposited as excess lamports on the `["moderation_attestor", attestor]` PDA and
+/// refunded IN FULL at `finalize_attestor_exit`. HARDCODED, not a config field, so
+/// nobody can quietly reprice registration to exclude rivals — changing it is a
+/// visible multisig'd upgrade. This is an attributable-identity deposit that caps
+/// concurrent identities per unit of working capital; it is NOT a quality bond, NOT
+/// slashable, and NOT a sybil rate-limit (edge trust lists are the sybil defense).
+pub const REGISTRATION_BOND_LAMPORTS: u64 = 250_000_000;
+
+/// Cooldown between `request_attestor_exit` and `finalize_attestor_exit` (7 days).
+/// The exit window closes at REQUEST: an exiting attestor is rejected at the record
+/// and consumption gates immediately, so there is no scam-then-exit window.
+pub const ATTESTOR_EXIT_COOLDOWN: i64 = 604_800;
+
+// ============================================================================
 // Default Rate Limit Constants
 // ============================================================================
 

@@ -951,4 +951,30 @@ pub enum CoordinationError {
     ProviderAgentNotActive,
     #[msg("Task has a live completion bond; reclaim it before closing the task")]
     TaskHasLiveCompletionBond,
+
+    // === P1.2: hardened open roster (appended — never reorder/delete) ===
+    #[msg("Attestor PDA is missing the registration bond after deposit")]
+    AttestorBondMissing,
+    #[msg("Attestor exit has not been requested (exit_at is zero)")]
+    AttestorExitNotRequested,
+    #[msg("Attestor exit already requested; the exit clock cannot be reset")]
+    AttestorExitAlreadyRequested,
+    #[msg("Attestor exit cooldown has not elapsed")]
+    AttestorExitCooldownActive,
+    #[msg("Attestor is in its exit window and can no longer moderate or unlock gates")]
+    AttestorExiting,
+    #[msg("Only the wallet that created a roster entry may revoke it")]
+    UnauthorizedAttestorRevocation,
+    #[msg("Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke")]
+    AttestorNotSelfRegistered,
+    #[msg("Content hash is blocked by the multisig takedown floor")]
+    ContentBlocked,
+    #[msg("Moderation block account is not the canonical PDA for this content hash")]
+    InvalidModerationBlockAccount,
+    #[msg("Block rationale hash and URI are required (non-zero, non-empty, bounded)")]
+    InvalidModerationRationale,
+    #[msg("Trust list hash and URI are required (non-zero, non-empty, bounded)")]
+    InvalidTrustList,
+    #[msg("Moderation record account is not the canonical PDA, not program-owned, or not a moderation record")]
+    InvalidModerationRecord,
 }

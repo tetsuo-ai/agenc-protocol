@@ -113,6 +113,9 @@ export type RevokeModerationAttestorAsyncInput<
   /**
    * Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA
    * is enforced; `close = authority` returns the rent to the moderation authority.
+   * P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered
+   * entry (`assigned_by == attestor`) can never be closed by the authority, so its
+   * bond can never be confiscated through this path.
    */
   moderationAttestor: Address<TAccountModerationAttestor>;
   /** Must be the moderation authority that owns the moderation config. */
@@ -191,6 +194,9 @@ export type RevokeModerationAttestorInput<
   /**
    * Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA
    * is enforced; `close = authority` returns the rent to the moderation authority.
+   * P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered
+   * entry (`assigned_by == attestor`) can never be closed by the authority, so its
+   * bond can never be confiscated through this path.
    */
   moderationAttestor: Address<TAccountModerationAttestor>;
   /** Must be the moderation authority that owns the moderation config. */
@@ -263,6 +269,9 @@ export type ParsedRevokeModerationAttestorInstruction<
     /**
      * Roster entry to remove. Seeded by its own stored `attestor`, so the canonical PDA
      * is enforced; `close = authority` returns the rent to the moderation authority.
+     * P1.2 §4.7: `assigned_by` must be the revoking authority — a self-registered
+     * entry (`assigned_by == attestor`) can never be closed by the authority, so its
+     * bond can never be confiscated through this path.
      */
     moderationAttestor: TAccountMetas[1];
     /** Must be the moderation authority that owns the moderation config. */

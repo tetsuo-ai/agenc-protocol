@@ -41,6 +41,7 @@ import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, hireIx,
+  taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
 
@@ -78,7 +79,7 @@ function readResolver(svm, entry) {
 // (provider) opens the dispute. Returns the handles needed to resolve it.
 async function hireClaimDispute(w, { resolutionType }) {
   const modProg = makeProgram(w.modAuth);
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   if (isClosed(w.svm, listingMod)) {
     expectOk(send(w.svm, await modProg.methods
       .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
@@ -90,7 +91,7 @@ async function hireClaimDispute(w, { resolutionType }) {
   expectOk(send(w.svm, hix, [w.buyer]), "p64:hire");
 
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
@@ -98,8 +99,8 @@ async function hireClaimDispute(w, { resolutionType }) {
     .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "p64:task-mod");
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/p64")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/p64", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "p64:publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()

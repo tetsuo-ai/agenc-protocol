@@ -19,6 +19,7 @@ import {
 export type TaskModerationSeeds = {
   task: Address;
   jobSpecHash: ReadonlyUint8Array;
+  moderator: Address;
 };
 
 export async function findTaskModerationPda(
@@ -34,11 +35,12 @@ export async function findTaskModerationPda(
       getBytesEncoder().encode(
         new Uint8Array([
           116, 97, 115, 107, 95, 109, 111, 100, 101, 114, 97, 116, 105, 111,
-          110,
+          110, 95, 118, 50,
         ]),
       ),
       getAddressEncoder().encode(seeds.task),
       fixEncoderSize(getBytesEncoder(), 32).encode(seeds.jobSpecHash),
+      getAddressEncoder().encode(seeds.moderator),
     ],
   });
 }

@@ -1,5 +1,20 @@
 # Moderation neutrality — options for the attestor model (P6.8)
 
+> **SUPERSEDED 2026-07-03 → see [`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md).**
+> Two things below are now stale: (1) WP-A1 (deployed 2026-07-02) made the
+> **consumption** gates accept any registered roster attestor — the sections
+> here that say hire/`set_task_job_spec` still require
+> `moderator == moderation_authority` predate that and are false. (2) The
+> chosen direction is the **Hardened Open Roster** (permissionless
+> *registration* + surface trust lists + moderator-keyed records + a
+> multisig-governed BLOCK-only floor), which goes further than any of the three
+> options below — none proposed permissionless registration. The 2026-06-10
+> "curated roster is the launch answer" decision is **consciously reversed** by
+> the new spec (documented there as a dated decision). This file is kept for
+> history; do not build from it.
+>
+> _Original status header follows._
+>
 > Status: **DECISION PENDING — [HUMAN]**. This document presents three neutrality options
 > and a recommendation. The **registry mechanism** (the `ModerationAttestor` roster:
 > `assign_moderation_attestor` / `revoke_moderation_attestor`, and the

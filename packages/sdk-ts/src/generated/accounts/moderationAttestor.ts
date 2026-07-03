@@ -23,6 +23,8 @@ import {
   getI64Encoder,
   getStructDecoder,
   getStructEncoder,
+  getU64Decoder,
+  getU64Encoder,
   getU8Decoder,
   getU8Encoder,
   transformEncoder,
@@ -52,12 +54,30 @@ export type ModerationAttestor = {
   discriminator: ReadonlyUint8Array;
   /** The wallet authorized to record moderation attestations. */
   attestor: Address;
-  /** The protocol authority that assigned this attestor (audit trail). */
+  /**
+   * The wallet that created this entry (audit trail). Authority-deputized entries
+   * carry the moderation authority; self-registered entries (P1.2) carry the
+   * attestor itself — `assigned_by == attestor` distinguishes the two.
+   */
   assignedBy: Address;
   /** Unix timestamp the assignment was created. */
   assignedAt: bigint;
   /** PDA bump. */
   bump: number;
+  /**
+   * Registration bond deposited on the PDA (`REGISTRATION_BOND_LAMPORTS` at
+   * self-registration; 0 for authority-deputized/legacy entries). Refunded in full
+   * at `finalize_attestor_exit` — never confiscatable.
+   */
+  bondLamports: bigint;
+  /** When the attestor self-registered (0 for authority-deputized/legacy entries). */
+  registeredAt: bigint;
+  /**
+   * Exit-window start set by `request_attestor_exit` (0 = not exiting). While
+   * non-zero the attestor is rejected at the record AND consumption gates; the
+   * window closes at request, not finalize.
+   */
+  exitAt: bigint;
   /** Reserved for future metadata. MUST stay zeroed. */
   reserved: ReadonlyUint8Array;
 };
@@ -65,12 +85,30 @@ export type ModerationAttestor = {
 export type ModerationAttestorArgs = {
   /** The wallet authorized to record moderation attestations. */
   attestor: Address;
-  /** The protocol authority that assigned this attestor (audit trail). */
+  /**
+   * The wallet that created this entry (audit trail). Authority-deputized entries
+   * carry the moderation authority; self-registered entries (P1.2) carry the
+   * attestor itself — `assigned_by == attestor` distinguishes the two.
+   */
   assignedBy: Address;
   /** Unix timestamp the assignment was created. */
   assignedAt: number | bigint;
   /** PDA bump. */
   bump: number;
+  /**
+   * Registration bond deposited on the PDA (`REGISTRATION_BOND_LAMPORTS` at
+   * self-registration; 0 for authority-deputized/legacy entries). Refunded in full
+   * at `finalize_attestor_exit` — never confiscatable.
+   */
+  bondLamports: number | bigint;
+  /** When the attestor self-registered (0 for authority-deputized/legacy entries). */
+  registeredAt: number | bigint;
+  /**
+   * Exit-window start set by `request_attestor_exit` (0 = not exiting). While
+   * non-zero the attestor is rejected at the record AND consumption gates; the
+   * window closes at request, not finalize.
+   */
+  exitAt: number | bigint;
   /** Reserved for future metadata. MUST stay zeroed. */
   reserved: ReadonlyUint8Array;
 };
@@ -84,7 +122,10 @@ export function getModerationAttestorEncoder(): FixedSizeEncoder<ModerationAttes
       ["assignedBy", getAddressEncoder()],
       ["assignedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["bondLamports", getU64Encoder()],
+      ["registeredAt", getI64Encoder()],
+      ["exitAt", getI64Encoder()],
+      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
     ]),
     (value) => ({ ...value, discriminator: MODERATION_ATTESTOR_DISCRIMINATOR }),
   );
@@ -98,7 +139,10 @@ export function getModerationAttestorDecoder(): FixedSizeDecoder<ModerationAttes
     ["assignedBy", getAddressDecoder()],
     ["assignedAt", getI64Decoder()],
     ["bump", getU8Decoder()],
-    ["reserved", fixDecoderSize(getBytesDecoder(), 32)],
+    ["bondLamports", getU64Decoder()],
+    ["registeredAt", getI64Decoder()],
+    ["exitAt", getI64Decoder()],
+    ["reserved", fixDecoderSize(getBytesDecoder(), 8)],
   ]);
 }
 

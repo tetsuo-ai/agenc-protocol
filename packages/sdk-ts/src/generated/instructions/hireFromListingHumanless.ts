@@ -81,6 +81,7 @@ export type HireFromListingHumanlessInstruction<
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountListingModeration extends string | AccountMeta<string> = string,
   TAccountModerationAttestor extends string | AccountMeta<string> = string,
+  TAccountModerationBlock extends string | AccountMeta<string> = string,
   TAccountAuthorityRateLimit extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
@@ -117,6 +118,9 @@ export type HireFromListingHumanlessInstruction<
       TAccountModerationAttestor extends string
         ? ReadonlyAccount<TAccountModerationAttestor>
         : TAccountModerationAttestor,
+      TAccountModerationBlock extends string
+        ? ReadonlyAccount<TAccountModerationBlock>
+        : TAccountModerationBlock,
       TAccountAuthorityRateLimit extends string
         ? WritableAccount<TAccountAuthorityRateLimit>
         : TAccountAuthorityRateLimit,
@@ -139,6 +143,7 @@ export type HireFromListingHumanlessInstructionData = {
   reviewWindowSecs: bigint;
   referrer: Option<Address>;
   referrerFeeBps: number;
+  moderator: Address;
 };
 
 export type HireFromListingHumanlessInstructionDataArgs = {
@@ -148,6 +153,7 @@ export type HireFromListingHumanlessInstructionDataArgs = {
   reviewWindowSecs: number | bigint;
   referrer: OptionOrNullable<Address>;
   referrerFeeBps: number;
+  moderator: Address;
 };
 
 export function getHireFromListingHumanlessInstructionDataEncoder(): Encoder<HireFromListingHumanlessInstructionDataArgs> {
@@ -160,6 +166,7 @@ export function getHireFromListingHumanlessInstructionDataEncoder(): Encoder<Hir
       ["reviewWindowSecs", getI64Encoder()],
       ["referrer", getOptionEncoder(getAddressEncoder())],
       ["referrerFeeBps", getU16Encoder()],
+      ["moderator", getAddressEncoder()],
     ]),
     (value) => ({
       ...value,
@@ -177,6 +184,7 @@ export function getHireFromListingHumanlessInstructionDataDecoder(): Decoder<Hir
     ["reviewWindowSecs", getI64Decoder()],
     ["referrer", getOptionDecoder(getAddressDecoder())],
     ["referrerFeeBps", getU16Decoder()],
+    ["moderator", getAddressDecoder()],
   ]);
 }
 
@@ -200,6 +208,7 @@ export type HireFromListingHumanlessAsyncInput<
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
   TAccountModerationAttestor extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountAuthorityRateLimit extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
@@ -221,17 +230,27 @@ export type HireFromListingHumanlessAsyncInput<
   protocolConfig?: Address<TAccountProtocolConfig>;
   /** Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). */
   moderationConfig?: Address<TAccountModerationConfig>;
-  /** Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. */
+  /**
+   * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
+   * P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).
+   *
+   * v2/legacy PDA + owner + discriminator + field bindings).
+   */
   listingModeration?: Address<TAccountListingModeration>;
   /**
-   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-   * gate when `listing_moderation` was authored by a non-global-authority attestor. Bound
-   * to the STORED `listing_moderation.moderator` in the handler via `resolve_listing_attestor`
-   * (Anchor cannot seed off the optional `listing_moderation`). `Account<ModerationAttestor>`
-   * guarantees the entry is program-owned and non-revoked. Global-authority path passes with
-   * this absent (`None`), byte-unchanged.
+   * OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the
+   * handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor`
+   * (P1.2: the caller chooses the underwriter). Program-owned + non-revoked is
+   * still guaranteed by the `Account` type (fail-closed, preserved from WP-A1).
    */
   moderationAttestor?: Address<TAccountModerationAttestor>;
+  /**
+   * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`
+   * (see `hire_from_listing`; identical semantics).
+   *
+   * (handler-derived canonical PDA; system-owned/empty = pass).
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   /** Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent). */
   authorityRateLimit?: Address<TAccountAuthorityRateLimit>;
   /** The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. */
@@ -243,6 +262,7 @@ export type HireFromListingHumanlessAsyncInput<
   reviewWindowSecs: HireFromListingHumanlessInstructionDataArgs["reviewWindowSecs"];
   referrer: HireFromListingHumanlessInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingHumanlessInstructionDataArgs["referrerFeeBps"];
+  moderator: HireFromListingHumanlessInstructionDataArgs["moderator"];
 };
 
 export async function getHireFromListingHumanlessInstructionAsync<
@@ -255,6 +275,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
   TAccountModerationAttestor extends string,
+  TAccountModerationBlock extends string,
   TAccountAuthorityRateLimit extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
@@ -270,6 +291,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountAuthorityRateLimit,
     TAccountCreator,
     TAccountSystemProgram
@@ -287,6 +309,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountAuthorityRateLimit,
     TAccountCreator,
     TAccountSystemProgram
@@ -317,6 +340,10 @@ export async function getHireFromListingHumanlessInstructionAsync<
     },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
       isWritable: false,
     },
     authorityRateLimit: {
@@ -400,6 +427,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("authorityRateLimit", accounts.authorityRateLimit),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
@@ -419,6 +447,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountAuthorityRateLimit,
     TAccountCreator,
     TAccountSystemProgram
@@ -435,6 +464,7 @@ export type HireFromListingHumanlessInput<
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
   TAccountModerationAttestor extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountAuthorityRateLimit extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
@@ -456,17 +486,27 @@ export type HireFromListingHumanlessInput<
   protocolConfig: Address<TAccountProtocolConfig>;
   /** Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). */
   moderationConfig: Address<TAccountModerationConfig>;
-  /** Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. */
+  /**
+   * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
+   * P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).
+   *
+   * v2/legacy PDA + owner + discriminator + field bindings).
+   */
   listingModeration?: Address<TAccountListingModeration>;
   /**
-   * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-   * gate when `listing_moderation` was authored by a non-global-authority attestor. Bound
-   * to the STORED `listing_moderation.moderator` in the handler via `resolve_listing_attestor`
-   * (Anchor cannot seed off the optional `listing_moderation`). `Account<ModerationAttestor>`
-   * guarantees the entry is program-owned and non-revoked. Global-authority path passes with
-   * this absent (`None`), byte-unchanged.
+   * OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the
+   * handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor`
+   * (P1.2: the caller chooses the underwriter). Program-owned + non-revoked is
+   * still guaranteed by the `Account` type (fail-closed, preserved from WP-A1).
    */
   moderationAttestor?: Address<TAccountModerationAttestor>;
+  /**
+   * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`
+   * (see `hire_from_listing`; identical semantics).
+   *
+   * (handler-derived canonical PDA; system-owned/empty = pass).
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   /** Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent). */
   authorityRateLimit: Address<TAccountAuthorityRateLimit>;
   /** The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. */
@@ -478,6 +518,7 @@ export type HireFromListingHumanlessInput<
   reviewWindowSecs: HireFromListingHumanlessInstructionDataArgs["reviewWindowSecs"];
   referrer: HireFromListingHumanlessInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingHumanlessInstructionDataArgs["referrerFeeBps"];
+  moderator: HireFromListingHumanlessInstructionDataArgs["moderator"];
 };
 
 export function getHireFromListingHumanlessInstruction<
@@ -490,6 +531,7 @@ export function getHireFromListingHumanlessInstruction<
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
   TAccountModerationAttestor extends string,
+  TAccountModerationBlock extends string,
   TAccountAuthorityRateLimit extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
@@ -505,6 +547,7 @@ export function getHireFromListingHumanlessInstruction<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountAuthorityRateLimit,
     TAccountCreator,
     TAccountSystemProgram
@@ -521,6 +564,7 @@ export function getHireFromListingHumanlessInstruction<
   TAccountModerationConfig,
   TAccountListingModeration,
   TAccountModerationAttestor,
+  TAccountModerationBlock,
   TAccountAuthorityRateLimit,
   TAccountCreator,
   TAccountSystemProgram
@@ -550,6 +594,10 @@ export function getHireFromListingHumanlessInstruction<
     },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
+      isWritable: false,
+    },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
       isWritable: false,
     },
     authorityRateLimit: {
@@ -585,6 +633,7 @@ export function getHireFromListingHumanlessInstruction<
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("authorityRateLimit", accounts.authorityRateLimit),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
@@ -604,6 +653,7 @@ export function getHireFromListingHumanlessInstruction<
     TAccountModerationConfig,
     TAccountListingModeration,
     TAccountModerationAttestor,
+    TAccountModerationBlock,
     TAccountAuthorityRateLimit,
     TAccountCreator,
     TAccountSystemProgram
@@ -633,22 +683,32 @@ export type ParsedHireFromListingHumanlessInstruction<
     protocolConfig: TAccountMetas[5];
     /** Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). */
     moderationConfig: TAccountMetas[6];
-    /** Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. */
+    /**
+     * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
+     * P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).
+     *
+     * v2/legacy PDA + owner + discriminator + field bindings).
+     */
     listingModeration?: TAccountMetas[7] | undefined;
     /**
-     * OPTIONAL (WP-A1): a registered moderation-attestor roster entry that unlocks the hire
-     * gate when `listing_moderation` was authored by a non-global-authority attestor. Bound
-     * to the STORED `listing_moderation.moderator` in the handler via `resolve_listing_attestor`
-     * (Anchor cannot seed off the optional `listing_moderation`). `Account<ModerationAttestor>`
-     * guarantees the entry is program-owned and non-revoked. Global-authority path passes with
-     * this absent (`None`), byte-unchanged.
+     * OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the
+     * handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor`
+     * (P1.2: the caller chooses the underwriter). Program-owned + non-revoked is
+     * still guaranteed by the `Account` type (fail-closed, preserved from WP-A1).
      */
     moderationAttestor?: TAccountMetas[8] | undefined;
+    /**
+     * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`
+     * (see `hire_from_listing`; identical semantics).
+     *
+     * (handler-derived canonical PDA; system-owned/empty = pass).
+     */
+    moderationBlock: TAccountMetas[9];
     /** Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent). */
-    authorityRateLimit: TAccountMetas[9];
+    authorityRateLimit: TAccountMetas[10];
     /** The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. */
-    creator: TAccountMetas[10];
-    systemProgram: TAccountMetas[11];
+    creator: TAccountMetas[11];
+    systemProgram: TAccountMetas[12];
   };
   data: HireFromListingHumanlessInstructionData;
 };
@@ -661,12 +721,12 @@ export function parseHireFromListingHumanlessInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedHireFromListingHumanlessInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 12) {
+  if (instruction.accounts.length < 13) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 12,
+        expectedAccountMetas: 13,
       },
     );
   }
@@ -694,6 +754,7 @@ export function parseHireFromListingHumanlessInstruction<
       moderationConfig: getNextAccount(),
       listingModeration: getNextOptionalAccount(),
       moderationAttestor: getNextOptionalAccount(),
+      moderationBlock: getNextAccount(),
       authorityRateLimit: getNextAccount(),
       creator: getNextAccount(),
       systemProgram: getNextAccount(),

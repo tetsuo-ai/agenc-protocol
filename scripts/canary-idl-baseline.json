@@ -1,0 +1,3022 @@
+{
+  "accept_task_result": {
+    "discriminator": [
+      89,
+      230,
+      51,
+      25,
+      0,
+      219,
+      5,
+      137
+    ],
+    "accounts": [
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "claim",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                99,
+                108,
+                97,
+                105,
+                109
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            },
+            {
+              "kind": "account",
+              "path": "worker"
+            }
+          ]
+        }
+      },
+      {
+        "name": "escrow",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                101,
+                115,
+                99,
+                114,
+                111,
+                119
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_validation_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                118,
+                97,
+                108,
+                105,
+                100,
+                97,
+                116,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_submission",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                115,
+                117,
+                98,
+                109,
+                105,
+                115,
+                115,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "claim"
+            }
+          ]
+        }
+      },
+      {
+        "name": "worker",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "worker.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "treasury",
+        "writable": true,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "creator",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "worker_authority",
+        "writable": true,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "hire_record",
+        "writable": false,
+        "signer": false,
+        "optional": true
+      },
+      {
+        "name": "operator",
+        "writable": true,
+        "signer": false,
+        "optional": true
+      },
+      {
+        "name": "referrer",
+        "writable": true,
+        "signer": false,
+        "optional": true
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": []
+  },
+  "cancel_task": {
+    "discriminator": [
+      69,
+      228,
+      134,
+      187,
+      134,
+      105,
+      238,
+      48
+    ],
+    "accounts": [
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "escrow",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                101,
+                115,
+                99,
+                114,
+                111,
+                119
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": []
+  },
+  "claim_task_with_job_spec": {
+    "discriminator": [
+      230,
+      40,
+      107,
+      109,
+      208,
+      228,
+      175,
+      31
+    ],
+    "accounts": [
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_job_spec",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                106,
+                111,
+                98,
+                95,
+                115,
+                112,
+                101,
+                99
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "claim",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                99,
+                108,
+                97,
+                105,
+                109
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            },
+            {
+              "kind": "account",
+              "path": "worker"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "worker",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "worker.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": []
+  },
+  "configure_task_moderation": {
+    "discriminator": [
+      228,
+      57,
+      251,
+      233,
+      203,
+      252,
+      126,
+      31
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "moderation_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                109,
+                111,
+                100,
+                101,
+                114,
+                97,
+                116,
+                105,
+                111,
+                110,
+                95,
+                99,
+                111,
+                110,
+                102,
+                105,
+                103
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "moderation_authority",
+        "type": "pubkey"
+      },
+      {
+        "name": "enabled",
+        "type": "bool"
+      }
+    ]
+  },
+  "configure_task_validation": {
+    "discriminator": [
+      11,
+      79,
+      19,
+      188,
+      13,
+      32,
+      244,
+      90
+    ],
+    "accounts": [
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_validation_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                118,
+                97,
+                108,
+                105,
+                100,
+                97,
+                116,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_attestor_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                97,
+                116,
+                116,
+                101,
+                115,
+                116,
+                111,
+                114
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "hire_record",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                104,
+                105,
+                114,
+                101
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "creator",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "mode",
+        "type": "u8"
+      },
+      {
+        "name": "review_window_secs",
+        "type": "i64"
+      },
+      {
+        "name": "validator_quorum",
+        "type": "u8"
+      },
+      {
+        "name": "attestor",
+        "type": {
+          "option": "pubkey"
+        }
+      }
+    ]
+  },
+  "create_task": {
+    "discriminator": [
+      194,
+      80,
+      6,
+      180,
+      232,
+      127,
+      48,
+      171
+    ],
+    "accounts": [
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "creator"
+            },
+            {
+              "kind": "arg",
+              "path": "task_id"
+            }
+          ]
+        }
+      },
+      {
+        "name": "escrow",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                101,
+                115,
+                99,
+                114,
+                111,
+                119
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "creator_agent",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "creator_agent.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority_rate_limit",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                117,
+                116,
+                104,
+                111,
+                114,
+                105,
+                116,
+                121,
+                95,
+                114,
+                97,
+                116,
+                101,
+                95,
+                108,
+                105,
+                109,
+                105,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "authority"
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "creator",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "task_id",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      },
+      {
+        "name": "required_capabilities",
+        "type": "u64"
+      },
+      {
+        "name": "description",
+        "type": {
+          "array": [
+            "u8",
+            64
+          ]
+        }
+      },
+      {
+        "name": "reward_amount",
+        "type": "u64"
+      },
+      {
+        "name": "max_workers",
+        "type": "u8"
+      },
+      {
+        "name": "deadline",
+        "type": "i64"
+      },
+      {
+        "name": "task_type",
+        "type": "u8"
+      },
+      {
+        "name": "constraint_hash",
+        "type": {
+          "option": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      },
+      {
+        "name": "min_reputation",
+        "type": "u16"
+      },
+      {
+        "name": "reward_mint",
+        "type": {
+          "option": "pubkey"
+        }
+      },
+      {
+        "name": "referrer",
+        "type": {
+          "option": "pubkey"
+        }
+      },
+      {
+        "name": "referrer_fee_bps",
+        "type": "u16"
+      }
+    ]
+  },
+  "deregister_agent": {
+    "discriminator": [
+      227,
+      208,
+      166,
+      164,
+      48,
+      69,
+      111,
+      1
+    ],
+    "accounts": [
+      {
+        "name": "agent",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "agent.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "reputation_stake",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                114,
+                101,
+                112,
+                117,
+                116,
+                97,
+                116,
+                105,
+                111,
+                110,
+                95,
+                115,
+                116,
+                97,
+                107,
+                101
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "agent"
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": []
+  },
+  "expire_claim": {
+    "discriminator": [
+      176,
+      78,
+      241,
+      29,
+      159,
+      81,
+      26,
+      6
+    ],
+    "accounts": [
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "escrow",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                101,
+                115,
+                99,
+                114,
+                111,
+                119
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "claim",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                99,
+                108,
+                97,
+                105,
+                109
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            },
+            {
+              "kind": "account",
+              "path": "worker"
+            }
+          ]
+        }
+      },
+      {
+        "name": "worker",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "worker.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_validation_config",
+        "writable": false,
+        "signer": false,
+        "optional": true,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                118,
+                97,
+                108,
+                105,
+                100,
+                97,
+                116,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_submission",
+        "writable": false,
+        "signer": false,
+        "optional": true,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                115,
+                117,
+                98,
+                109,
+                105,
+                115,
+                115,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "claim"
+            }
+          ]
+        }
+      },
+      {
+        "name": "rent_recipient",
+        "writable": true,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "worker_completion_bond",
+        "writable": true,
+        "signer": false,
+        "optional": true
+      },
+      {
+        "name": "bond_creator",
+        "writable": true,
+        "signer": false,
+        "optional": true
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": []
+  },
+  "initialize_protocol": {
+    "discriminator": [
+      188,
+      233,
+      252,
+      106,
+      134,
+      146,
+      202,
+      91
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "treasury",
+        "writable": false,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "second_signer",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "dispute_threshold",
+        "type": "u8"
+      },
+      {
+        "name": "protocol_fee_bps",
+        "type": "u16"
+      },
+      {
+        "name": "min_stake",
+        "type": "u64"
+      },
+      {
+        "name": "min_stake_for_dispute",
+        "type": "u64"
+      },
+      {
+        "name": "multisig_threshold",
+        "type": "u8"
+      },
+      {
+        "name": "multisig_owners",
+        "type": {
+          "vec": "pubkey"
+        }
+      }
+    ]
+  },
+  "migrate_protocol": {
+    "discriminator": [
+      182,
+      254,
+      253,
+      220,
+      0,
+      144,
+      234,
+      250
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "payer",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "target_version",
+        "type": "u8"
+      }
+    ]
+  },
+  "migrate_task": {
+    "discriminator": [
+      114,
+      41,
+      111,
+      76,
+      14,
+      117,
+      128,
+      54
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "payer",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "dry_run",
+        "type": "bool"
+      }
+    ]
+  },
+  "record_task_moderation": {
+    "discriminator": [
+      156,
+      205,
+      56,
+      24,
+      136,
+      114,
+      93,
+      160
+    ],
+    "accounts": [
+      {
+        "name": "moderation_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                109,
+                111,
+                100,
+                101,
+                114,
+                97,
+                116,
+                105,
+                111,
+                110,
+                95,
+                99,
+                111,
+                110,
+                102,
+                105,
+                103
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "task",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_moderation",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                109,
+                111,
+                100,
+                101,
+                114,
+                97,
+                116,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            },
+            {
+              "kind": "arg",
+              "path": "job_spec_hash"
+            }
+          ]
+        }
+      },
+      {
+        "name": "moderator",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "job_spec_hash",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      },
+      {
+        "name": "status",
+        "type": "u8"
+      },
+      {
+        "name": "risk_score",
+        "type": "u8"
+      },
+      {
+        "name": "category_mask",
+        "type": "u64"
+      },
+      {
+        "name": "policy_hash",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      },
+      {
+        "name": "scanner_hash",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      },
+      {
+        "name": "expires_at",
+        "type": "i64"
+      }
+    ]
+  },
+  "register_agent": {
+    "discriminator": [
+      135,
+      157,
+      66,
+      195,
+      2,
+      113,
+      175,
+      30
+    ],
+    "accounts": [
+      {
+        "name": "agent",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "arg",
+              "path": "agent_id"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "agent_id",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      },
+      {
+        "name": "capabilities",
+        "type": "u64"
+      },
+      {
+        "name": "endpoint",
+        "type": "string"
+      },
+      {
+        "name": "metadata_uri",
+        "type": {
+          "option": "string"
+        }
+      },
+      {
+        "name": "stake_amount",
+        "type": "u64"
+      }
+    ]
+  },
+  "reject_task_result": {
+    "discriminator": [
+      144,
+      7,
+      58,
+      232,
+      157,
+      167,
+      85,
+      214
+    ],
+    "accounts": [
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "claim",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                99,
+                108,
+                97,
+                105,
+                109
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            },
+            {
+              "kind": "account",
+              "path": "claim.worker",
+              "account": "TaskClaim"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_validation_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                118,
+                97,
+                108,
+                105,
+                100,
+                97,
+                116,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_submission",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                115,
+                117,
+                98,
+                109,
+                105,
+                115,
+                115,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "claim"
+            }
+          ]
+        }
+      },
+      {
+        "name": "worker",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "worker.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "creator",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "worker_authority",
+        "writable": true,
+        "signer": false,
+        "optional": false
+      }
+    ],
+    "args": [
+      {
+        "name": "rejection_hash",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      }
+    ]
+  },
+  "set_task_job_spec": {
+    "discriminator": [
+      134,
+      102,
+      102,
+      86,
+      31,
+      164,
+      202,
+      193
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "task",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "moderation_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                109,
+                111,
+                100,
+                101,
+                114,
+                97,
+                116,
+                105,
+                111,
+                110,
+                95,
+                99,
+                111,
+                110,
+                102,
+                105,
+                103
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_moderation",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                109,
+                111,
+                100,
+                101,
+                114,
+                97,
+                116,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            },
+            {
+              "kind": "arg",
+              "path": "job_spec_hash"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_job_spec",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                106,
+                111,
+                98,
+                95,
+                115,
+                112,
+                101,
+                99
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "creator",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "job_spec_hash",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      },
+      {
+        "name": "job_spec_uri",
+        "type": "string"
+      }
+    ]
+  },
+  "submit_task_result": {
+    "discriminator": [
+      39,
+      108,
+      74,
+      4,
+      66,
+      125,
+      157,
+      7
+    ],
+    "accounts": [
+      {
+        "name": "task",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task.creator",
+              "account": "Task"
+            },
+            {
+              "kind": "account",
+              "path": "task.task_id",
+              "account": "Task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "claim",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                99,
+                108,
+                97,
+                105,
+                109
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            },
+            {
+              "kind": "account",
+              "path": "worker"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_validation_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                118,
+                97,
+                108,
+                105,
+                100,
+                97,
+                116,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "task"
+            }
+          ]
+        }
+      },
+      {
+        "name": "task_submission",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                116,
+                97,
+                115,
+                107,
+                95,
+                115,
+                117,
+                98,
+                109,
+                105,
+                115,
+                115,
+                105,
+                111,
+                110
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "claim"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "worker",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "worker.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": true,
+        "signer": true,
+        "optional": false
+      },
+      {
+        "name": "system_program",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "address": "11111111111111111111111111111111"
+      }
+    ],
+    "args": [
+      {
+        "name": "proof_hash",
+        "type": {
+          "array": [
+            "u8",
+            32
+          ]
+        }
+      },
+      {
+        "name": "result_data",
+        "type": {
+          "option": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "suspend_agent": {
+    "discriminator": [
+      242,
+      28,
+      54,
+      59,
+      247,
+      20,
+      59,
+      110
+    ],
+    "accounts": [
+      {
+        "name": "agent",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "agent.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": []
+  },
+  "unsuspend_agent": {
+    "discriminator": [
+      79,
+      75,
+      53,
+      57,
+      177,
+      142,
+      131,
+      149
+    ],
+    "accounts": [
+      {
+        "name": "agent",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "agent.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "protocol_config",
+        "writable": false,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": []
+  },
+  "update_agent": {
+    "discriminator": [
+      85,
+      2,
+      178,
+      9,
+      119,
+      139,
+      102,
+      164
+    ],
+    "accounts": [
+      {
+        "name": "agent",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                97,
+                103,
+                101,
+                110,
+                116
+              ]
+            },
+            {
+              "kind": "account",
+              "path": "agent.agent_id",
+              "account": "AgentRegistration"
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": [
+      {
+        "name": "capabilities",
+        "type": {
+          "option": "u64"
+        }
+      },
+      {
+        "name": "endpoint",
+        "type": {
+          "option": "string"
+        }
+      },
+      {
+        "name": "metadata_uri",
+        "type": {
+          "option": "string"
+        }
+      },
+      {
+        "name": "status",
+        "type": {
+          "option": "u8"
+        }
+      }
+    ]
+  },
+  "update_launch_controls": {
+    "discriminator": [
+      156,
+      19,
+      63,
+      86,
+      117,
+      245,
+      196,
+      182
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": [
+      {
+        "name": "protocol_paused",
+        "type": "bool"
+      },
+      {
+        "name": "disabled_task_type_mask",
+        "type": "u8"
+      },
+      {
+        "name": "surface_revision",
+        "type": "u16"
+      }
+    ]
+  },
+  "update_min_version": {
+    "discriminator": [
+      149,
+      215,
+      23,
+      120,
+      114,
+      69,
+      110,
+      37
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": [
+      {
+        "name": "new_min_version",
+        "type": "u8"
+      }
+    ]
+  },
+  "update_multisig": {
+    "discriminator": [
+      152,
+      192,
+      112,
+      152,
+      120,
+      184,
+      150,
+      59
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": [
+      {
+        "name": "new_threshold",
+        "type": "u8"
+      },
+      {
+        "name": "new_owners",
+        "type": {
+          "vec": "pubkey"
+        }
+      }
+    ]
+  },
+  "update_protocol_fee": {
+    "discriminator": [
+      170,
+      136,
+      6,
+      60,
+      43,
+      130,
+      81,
+      96
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": [
+      {
+        "name": "protocol_fee_bps",
+        "type": "u16"
+      }
+    ]
+  },
+  "update_rate_limits": {
+    "discriminator": [
+      247,
+      36,
+      121,
+      254,
+      22,
+      16,
+      226,
+      1
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": [
+      {
+        "name": "task_creation_cooldown",
+        "type": "i64"
+      },
+      {
+        "name": "max_tasks_per_24h",
+        "type": "u8"
+      },
+      {
+        "name": "dispute_initiation_cooldown",
+        "type": "i64"
+      },
+      {
+        "name": "max_disputes_per_24h",
+        "type": "u8"
+      },
+      {
+        "name": "min_stake_for_dispute",
+        "type": "u64"
+      }
+    ]
+  },
+  "update_treasury": {
+    "discriminator": [
+      60,
+      16,
+      243,
+      66,
+      96,
+      59,
+      254,
+      131
+    ],
+    "accounts": [
+      {
+        "name": "protocol_config",
+        "writable": true,
+        "signer": false,
+        "optional": false,
+        "pda": {
+          "seeds": [
+            {
+              "kind": "const",
+              "value": [
+                112,
+                114,
+                111,
+                116,
+                111,
+                99,
+                111,
+                108
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "new_treasury",
+        "writable": false,
+        "signer": false,
+        "optional": false
+      },
+      {
+        "name": "authority",
+        "writable": false,
+        "signer": true,
+        "optional": false
+      }
+    ],
+    "args": []
+  }
+}

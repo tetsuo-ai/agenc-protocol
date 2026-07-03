@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   enc, arr, pda, id32, makeProgram, send, expectOk, decode, isClosed,
   freshWorld, BN, Keypair, SystemProgram,
+  taskModV2Pda, listingModV2Pda, moderationBlockPda,
 } from "./harness.mjs";
 
 test("storefront: a human with NO agent hires a listing in SOL; review-accept pays worker + AgenC + operator", async () => {
@@ -28,7 +29,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
   const modProg = makeProgram(w.modAuth);
 
   // 1) moderation: record a CLEAN listing attestation for the listing's pinned spec.
-  const [listingMod] = pda([enc("listing_moderation"), w.listing.toBuffer(), Buffer.from(w.specHash)]);
+  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   expectOk(send(w.svm, await modProg.methods
     .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
     .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
@@ -43,10 +44,11 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
   const [rateLimit] = pda([enc("authority_rate_limit"), human.publicKey.toBuffer()]);
 
   expectOk(send(w.svm, await humanProg.methods
-    .hireFromListingHumanless(arr(taskId), new BN(price), new BN(1), new BN(3600), null, 0)
+    .hireFromListingHumanless(arr(taskId), new BN(price), new BN(1), new BN(3600), null, 0, w.modAuth.publicKey)
     .accounts({
       task, escrow, hireRecord, taskValidationConfig: validation, listing: w.listing,
       protocolConfig: w.protocolPda, moderationConfig: w.modCfg, listingModeration: listingMod, moderationAttestor: null,
+      moderationBlock: moderationBlockPda(w.specHash)[0],
       authorityRateLimit: rateLimit, creator: human.publicKey, systemProgram: SystemProgram.programId,
     })
     .instruction(), [human]), "store:hire-humanless");
@@ -60,7 +62,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
 
   // 3) task moderation -> publish job spec (the HUMAN creator signs) -> worker claims.
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
@@ -71,8 +73,8 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
     .instruction(), [w.modAuth]), "store:task-mod");
 
   expectOk(send(w.svm, await humanProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: human.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/x", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: human.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [human]), "store:publish (human creator, no agent)");
 
   expectOk(send(w.svm, await w.providerProg.methods

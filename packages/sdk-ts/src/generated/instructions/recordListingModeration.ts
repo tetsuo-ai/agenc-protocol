@@ -60,8 +60,8 @@ export type RecordListingModerationInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountListing extends string | AccountMeta<string> = string,
-  TAccountListingModeration extends string | AccountMeta<string> = string,
   TAccountModerator extends string | AccountMeta<string> = string,
+  TAccountListingModeration extends string | AccountMeta<string> = string,
   TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
@@ -76,13 +76,13 @@ export type RecordListingModerationInstruction<
       TAccountListing extends string
         ? ReadonlyAccount<TAccountListing>
         : TAccountListing,
-      TAccountListingModeration extends string
-        ? WritableAccount<TAccountListingModeration>
-        : TAccountListingModeration,
       TAccountModerator extends string
         ? WritableSignerAccount<TAccountModerator> &
             AccountSignerMeta<TAccountModerator>
         : TAccountModerator,
+      TAccountListingModeration extends string
+        ? WritableAccount<TAccountListingModeration>
+        : TAccountListingModeration,
       TAccountModerationAttestor extends string
         ? ReadonlyAccount<TAccountModerationAttestor>
         : TAccountModerationAttestor,
@@ -159,19 +159,26 @@ export function getRecordListingModerationInstructionDataCodec(): FixedSizeCodec
 export type RecordListingModerationAsyncInput<
   TAccountModerationConfig extends string = string,
   TAccountListing extends string = string,
-  TAccountListingModeration extends string = string,
   TAccountModerator extends string = string,
+  TAccountListingModeration extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
   listing: Address<TAccountListing>;
-  listingModeration?: Address<TAccountListingModeration>;
   /**
    * The recording signer. Authorization (global moderation authority OR a registered
-   * attestor) is checked in the handler, not as an account constraint here.
+   * attestor) is checked in the handler, not as an account constraint here. Declared
+   * before `listing_moderation` so the v2 seed can reference it.
    */
   moderator: TransactionSigner<TAccountModerator>;
+  /**
+   * P1.2 §4.3 — v2 MODERATOR-KEYED record (the listing mirror of
+   * `task_moderation_v2`): each attestor owns an exclusive slot; `init_if_needed`
+   * is self-re-review only; no cross-attestor overwrites. Post-upgrade, records are
+   * written ONLY under v2 seeds — legacy `["listing_moderation", …]` PDAs are frozen.
+   */
+  listingModeration?: Address<TAccountListingModeration>;
   /**
    * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
    * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
@@ -194,8 +201,8 @@ export type RecordListingModerationAsyncInput<
 export async function getRecordListingModerationInstructionAsync<
   TAccountModerationConfig extends string,
   TAccountListing extends string,
-  TAccountListingModeration extends string,
   TAccountModerator extends string,
+  TAccountListingModeration extends string,
   TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -203,8 +210,8 @@ export async function getRecordListingModerationInstructionAsync<
   input: RecordListingModerationAsyncInput<
     TAccountModerationConfig,
     TAccountListing,
-    TAccountListingModeration,
     TAccountModerator,
+    TAccountListingModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >,
@@ -214,8 +221,8 @@ export async function getRecordListingModerationInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountListing,
-    TAccountListingModeration,
     TAccountModerator,
+    TAccountListingModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >
@@ -231,11 +238,11 @@ export async function getRecordListingModerationInstructionAsync<
       isWritable: false,
     },
     listing: { value: input.listing ?? null, isWritable: false },
+    moderator: { value: input.moderator ?? null, isWritable: true },
     listingModeration: {
       value: input.listingModeration ?? null,
       isWritable: true,
     },
-    moderator: { value: input.moderator ?? null, isWritable: true },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
       isWritable: false,
@@ -264,6 +271,10 @@ export async function getRecordListingModerationInstructionAsync<
         "jobSpecHash",
         args.jobSpecHash,
       ),
+      moderator: getAddressFromResolvedInstructionAccount(
+        "moderator",
+        accounts.moderator.value,
+      ),
     });
   }
   if (!accounts.systemProgram.value) {
@@ -276,8 +287,8 @@ export async function getRecordListingModerationInstructionAsync<
     accounts: [
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listing", accounts.listing),
-      getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderator", accounts.moderator),
+      getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -289,8 +300,8 @@ export async function getRecordListingModerationInstructionAsync<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountListing,
-    TAccountListingModeration,
     TAccountModerator,
+    TAccountListingModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >);
@@ -299,19 +310,26 @@ export async function getRecordListingModerationInstructionAsync<
 export type RecordListingModerationInput<
   TAccountModerationConfig extends string = string,
   TAccountListing extends string = string,
-  TAccountListingModeration extends string = string,
   TAccountModerator extends string = string,
+  TAccountListingModeration extends string = string,
   TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
   listing: Address<TAccountListing>;
-  listingModeration: Address<TAccountListingModeration>;
   /**
    * The recording signer. Authorization (global moderation authority OR a registered
-   * attestor) is checked in the handler, not as an account constraint here.
+   * attestor) is checked in the handler, not as an account constraint here. Declared
+   * before `listing_moderation` so the v2 seed can reference it.
    */
   moderator: TransactionSigner<TAccountModerator>;
+  /**
+   * P1.2 §4.3 — v2 MODERATOR-KEYED record (the listing mirror of
+   * `task_moderation_v2`): each attestor owns an exclusive slot; `init_if_needed`
+   * is self-re-review only; no cross-attestor overwrites. Post-upgrade, records are
+   * written ONLY under v2 seeds — legacy `["listing_moderation", …]` PDAs are frozen.
+   */
+  listingModeration: Address<TAccountListingModeration>;
   /**
    * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
    * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
@@ -334,8 +352,8 @@ export type RecordListingModerationInput<
 export function getRecordListingModerationInstruction<
   TAccountModerationConfig extends string,
   TAccountListing extends string,
-  TAccountListingModeration extends string,
   TAccountModerator extends string,
+  TAccountListingModeration extends string,
   TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -343,8 +361,8 @@ export function getRecordListingModerationInstruction<
   input: RecordListingModerationInput<
     TAccountModerationConfig,
     TAccountListing,
-    TAccountListingModeration,
     TAccountModerator,
+    TAccountListingModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >,
@@ -353,8 +371,8 @@ export function getRecordListingModerationInstruction<
   TProgramAddress,
   TAccountModerationConfig,
   TAccountListing,
-  TAccountListingModeration,
   TAccountModerator,
+  TAccountListingModeration,
   TAccountModerationAttestor,
   TAccountSystemProgram
 > {
@@ -369,11 +387,11 @@ export function getRecordListingModerationInstruction<
       isWritable: false,
     },
     listing: { value: input.listing ?? null, isWritable: false },
+    moderator: { value: input.moderator ?? null, isWritable: true },
     listingModeration: {
       value: input.listingModeration ?? null,
       isWritable: true,
     },
-    moderator: { value: input.moderator ?? null, isWritable: true },
     moderationAttestor: {
       value: input.moderationAttestor ?? null,
       isWritable: false,
@@ -399,8 +417,8 @@ export function getRecordListingModerationInstruction<
     accounts: [
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listing", accounts.listing),
-      getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderator", accounts.moderator),
+      getAccountMeta("listingModeration", accounts.listingModeration),
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -412,8 +430,8 @@ export function getRecordListingModerationInstruction<
     TProgramAddress,
     TAccountModerationConfig,
     TAccountListing,
-    TAccountListingModeration,
     TAccountModerator,
+    TAccountListingModeration,
     TAccountModerationAttestor,
     TAccountSystemProgram
   >);
@@ -427,12 +445,19 @@ export type ParsedRecordListingModerationInstruction<
   accounts: {
     moderationConfig: TAccountMetas[0];
     listing: TAccountMetas[1];
-    listingModeration: TAccountMetas[2];
     /**
      * The recording signer. Authorization (global moderation authority OR a registered
-     * attestor) is checked in the handler, not as an account constraint here.
+     * attestor) is checked in the handler, not as an account constraint here. Declared
+     * before `listing_moderation` so the v2 seed can reference it.
      */
-    moderator: TAccountMetas[3];
+    moderator: TAccountMetas[2];
+    /**
+     * P1.2 §4.3 — v2 MODERATOR-KEYED record (the listing mirror of
+     * `task_moderation_v2`): each attestor owns an exclusive slot; `init_if_needed`
+     * is self-re-review only; no cross-attestor overwrites. Post-upgrade, records are
+     * written ONLY under v2 seeds — legacy `["listing_moderation", …]` PDAs are frozen.
+     */
+    listingModeration: TAccountMetas[3];
     /**
      * OPTIONAL (P6.8): a registered moderation-attestor roster entry. When supplied (and
      * `moderator == moderation_attestor.attestor`), authorizes a non-global-authority
@@ -481,8 +506,8 @@ export function parseRecordListingModerationInstruction<
     accounts: {
       moderationConfig: getNextAccount(),
       listing: getNextAccount(),
-      listingModeration: getNextAccount(),
       moderator: getNextAccount(),
+      listingModeration: getNextAccount(),
       moderationAttestor: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
     },

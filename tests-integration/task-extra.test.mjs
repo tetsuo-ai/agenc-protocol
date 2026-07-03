@@ -18,6 +18,7 @@ import {
   coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   injectAgentStake, freshWorld,
+  taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 
@@ -81,15 +82,15 @@ async function setupManualTask(w, { mode = 1, reviewWindow = 3600, validatorQuor
 async function publishClaimSubmit(w, { task, validation }, { workerProg = w.providerProg, workerAgent = w.providerAgent, workerKp = w.provider } = {}) {
   const modProg = makeProgram(w.modAuth);
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
     .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "publish:mod");
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/extra")
-    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/extra", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "publish:job-spec");
 
   const [claim] = pda([enc("claim"), task.toBuffer(), workerAgent.toBuffer()]);
@@ -342,15 +343,15 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
   const m = await setupManualTask(w, { mode: 1 });
   const modProg = makeProgram(w.modAuth);
   const jobHash = id32();
-  const [taskMod] = pda([enc("task_moderation"), m.task.toBuffer(), Buffer.from(jobHash)]);
+  const [taskMod] = taskModV2Pda(m.task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), m.task.toBuffer()]);
   expectOk(send(w.svm, await modProg.methods
     .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
     .accounts({ moderationConfig: w.modCfg, task: m.task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
     .instruction(), [w.modAuth]), "slash:mod");
   expectOk(send(w.svm, await w.buyerProg.methods
-    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/slash")
-    .accounts({ protocolConfig: w.protocolPda, task: m.task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/slash", w.modAuth.publicKey)
+    .accounts({ protocolConfig: w.protocolPda, task: m.task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "slash:job-spec");
   const [claim] = pda([enc("claim"), m.task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods

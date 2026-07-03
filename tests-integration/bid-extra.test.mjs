@@ -17,6 +17,7 @@ import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed,
   injectBidMarketplace, setMultisig, freshWorld,
+  taskModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
 
@@ -48,14 +49,14 @@ async function setupBidTask(w, { publishJobSpec = true, bidExpiresIn = 1800, min
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   if (publishJobSpec) {
     const jobHash = id32();
-    const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+    const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
     expectOk(send(w.svm, await modProg.methods
       .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
       .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
       .instruction(), [w.modAuth]), "bid:task-mod");
     expectOk(send(w.svm, await w.buyerProg.methods
-      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid")
-      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid", w.modAuth.publicKey)
+      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]), "bid:publish");
   }
 

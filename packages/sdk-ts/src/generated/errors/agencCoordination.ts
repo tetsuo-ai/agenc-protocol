@@ -632,6 +632,30 @@ export const AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN = 0x18a2; 
 export const AGENC_COORDINATION_ERROR__PROVIDER_AGENT_NOT_ACTIVE = 0x18a3; // 6307
 /** TaskHasLiveCompletionBond: Task has a live completion bond; reclaim it before closing the task */
 export const AGENC_COORDINATION_ERROR__TASK_HAS_LIVE_COMPLETION_BOND = 0x18a4; // 6308
+/** AttestorBondMissing: Attestor PDA is missing the registration bond after deposit */
+export const AGENC_COORDINATION_ERROR__ATTESTOR_BOND_MISSING = 0x18a5; // 6309
+/** AttestorExitNotRequested: Attestor exit has not been requested (exit_at is zero) */
+export const AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_NOT_REQUESTED = 0x18a6; // 6310
+/** AttestorExitAlreadyRequested: Attestor exit already requested; the exit clock cannot be reset */
+export const AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_ALREADY_REQUESTED = 0x18a7; // 6311
+/** AttestorExitCooldownActive: Attestor exit cooldown has not elapsed */
+export const AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_COOLDOWN_ACTIVE = 0x18a8; // 6312
+/** AttestorExiting: Attestor is in its exit window and can no longer moderate or unlock gates */
+export const AGENC_COORDINATION_ERROR__ATTESTOR_EXITING = 0x18a9; // 6313
+/** UnauthorizedAttestorRevocation: Only the wallet that created a roster entry may revoke it */
+export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_ATTESTOR_REVOCATION = 0x18aa; // 6314
+/** AttestorNotSelfRegistered: Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke */
+export const AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED = 0x18ab; // 6315
+/** ContentBlocked: Content hash is blocked by the multisig takedown floor */
+export const AGENC_COORDINATION_ERROR__CONTENT_BLOCKED = 0x18ac; // 6316
+/** InvalidModerationBlockAccount: Moderation block account is not the canonical PDA for this content hash */
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT = 0x18ad; // 6317
+/** InvalidModerationRationale: Block rationale hash and URI are required (non-zero, non-empty, bounded) */
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE = 0x18ae; // 6318
+/** InvalidTrustList: Trust list hash and URI are required (non-zero, non-empty, bounded) */
+export const AGENC_COORDINATION_ERROR__INVALID_TRUST_LIST = 0x18af; // 6319
+/** InvalidModerationRecord: Moderation record account is not the canonical PDA, not program-owned, or not a moderation record */
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD = 0x18b0; // 6320
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -649,6 +673,12 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ALREADY_VOTED
   | typeof AGENC_COORDINATION_ERROR__ARBITER_IS_DISPUTE_PARTICIPANT
   | typeof AGENC_COORDINATION_ERROR__ARITHMETIC_OVERFLOW
+  | typeof AGENC_COORDINATION_ERROR__ATTESTOR_BOND_MISSING
+  | typeof AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_ALREADY_REQUESTED
+  | typeof AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_COOLDOWN_ACTIVE
+  | typeof AGENC_COORDINATION_ERROR__ATTESTOR_EXITING
+  | typeof AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_NOT_REQUESTED
+  | typeof AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED
   | typeof AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED
   | typeof AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED
@@ -677,6 +707,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON
   | typeof AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE
   | typeof AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__CONTENT_BLOCKED
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG
@@ -743,6 +774,9 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_MIN_STAKE
   | typeof AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_ATTESTOR
+  | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT
+  | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE
+  | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD
   | typeof AGENC_COORDINATION_ERROR__INVALID_NULLIFIER
   | typeof AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__INVALID_OUTPUT_COMMITMENT
@@ -778,6 +812,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_TOKEN_ESCROW
   | typeof AGENC_COORDINATION_ERROR__INVALID_TOKEN_MINT
   | typeof AGENC_COORDINATION_ERROR__INVALID_TREASURY
+  | typeof AGENC_COORDINATION_ERROR__INVALID_TRUST_LIST
   | typeof AGENC_COORDINATION_ERROR__INVALID_VALIDATION_MODE
   | typeof AGENC_COORDINATION_ERROR__INVALID_VALIDATOR_QUORUM
   | typeof AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN
@@ -918,6 +953,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__TRUSTED_SELECTOR_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__TRUSTED_VERIFIER_PROGRAM_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_AGENT
+  | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_ATTESTOR_REVOCATION
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_CREATOR
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_ATTESTOR
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY
@@ -964,6 +1000,12 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__ALREADY_VOTED]: `Already voted on this dispute`,
     [AGENC_COORDINATION_ERROR__ARBITER_IS_DISPUTE_PARTICIPANT]: `Arbiter cannot vote on disputes they are a participant in`,
     [AGENC_COORDINATION_ERROR__ARITHMETIC_OVERFLOW]: `Arithmetic overflow`,
+    [AGENC_COORDINATION_ERROR__ATTESTOR_BOND_MISSING]: `Attestor PDA is missing the registration bond after deposit`,
+    [AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_ALREADY_REQUESTED]: `Attestor exit already requested; the exit clock cannot be reset`,
+    [AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_COOLDOWN_ACTIVE]: `Attestor exit cooldown has not elapsed`,
+    [AGENC_COORDINATION_ERROR__ATTESTOR_EXITING]: `Attestor is in its exit window and can no longer moderate or unlock gates`,
+    [AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_NOT_REQUESTED]: `Attestor exit has not been requested (exit_at is zero)`,
+    [AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED]: `Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke`,
     [AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED]: `Authority has already voted on this dispute`,
     [AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED]: `Bid has already been accepted`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED]: `Bid book has reached its active bid capacity`,
@@ -992,6 +1034,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON]: `Competitive task already completed by another worker`,
     [AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE]: `ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)`,
     [AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH]: `Proof constraint hash does not match task's stored constraint hash`,
+    [AGENC_COORDINATION_ERROR__CONTENT_BLOCKED]: `Content hash is blocked by the multisig takedown floor`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED]: `Cooldown period has not elapsed since last action`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE]: `Cooldown value exceeds maximum (24 hours)`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG]: `Cooldown value exceeds maximum allowed (1 week)`,
@@ -1058,6 +1101,9 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_MIN_STAKE]: `min_stake_for_dispute must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION]: `Minimum version cannot exceed current protocol version`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_ATTESTOR]: `Invalid moderation attestor: pubkey must be non-zero`,
+    [AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT]: `Moderation block account is not the canonical PDA for this content hash`,
+    [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE]: `Block rationale hash and URI are required (non-zero, non-empty, bounded)`,
+    [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD]: `Moderation record account is not the canonical PDA, not program-owned, or not a moderation record`,
     [AGENC_COORDINATION_ERROR__INVALID_NULLIFIER]: `Invalid nullifier: nullifier value cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_OPERATOR_ACCOUNT]: `Operator payee account does not match the hire record operator`,
     [AGENC_COORDINATION_ERROR__INVALID_OUTPUT_COMMITMENT]: `Invalid output commitment: output_commitment cannot be all zeros`,
@@ -1093,6 +1139,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_TOKEN_ESCROW]: `Token escrow ATA does not match expected derivation`,
     [AGENC_COORDINATION_ERROR__INVALID_TOKEN_MINT]: `Provided mint does not match task's reward_mint`,
     [AGENC_COORDINATION_ERROR__INVALID_TREASURY]: `Invalid treasury: treasury account cannot be default pubkey`,
+    [AGENC_COORDINATION_ERROR__INVALID_TRUST_LIST]: `Trust list hash and URI are required (non-zero, non-empty, bounded)`,
     [AGENC_COORDINATION_ERROR__INVALID_VALIDATION_MODE]: `Invalid validation mode`,
     [AGENC_COORDINATION_ERROR__INVALID_VALIDATOR_QUORUM]: `Validator quorum must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN]: `Verified domain is empty, too long, or not a valid DNS name`,
@@ -1233,6 +1280,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__TRUSTED_SELECTOR_MISMATCH]: `RISC0 seal selector does not match trusted selector`,
     [AGENC_COORDINATION_ERROR__TRUSTED_VERIFIER_PROGRAM_MISMATCH]: `RISC0 verifier program does not match trusted verifier`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_AGENT]: `Only the agent authority can perform this action`,
+    [AGENC_COORDINATION_ERROR__UNAUTHORIZED_ATTESTOR_REVOCATION]: `Only the wallet that created a roster entry may revoke it`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_CREATOR]: `Parent task does not belong to the same creator`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_ATTESTOR]: `Signer is neither the moderation authority nor a registered attestor`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY]: `Only protocol authority can perform this action`,

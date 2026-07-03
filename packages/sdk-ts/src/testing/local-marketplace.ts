@@ -75,6 +75,10 @@ export interface StartLocalMarketplaceOptions {
  * The sandbox moderation authority: records CLEAN (status 0, risk 0)
  * attestations signed by the seeded `ModerationConfig.moderationAuthority`,
  * so the fail-closed hire/claim gates pass without any external service.
+ *
+ * P1.2: the consumption gates (`hireFromListing`, `hireFromListingHumanless`,
+ * `setTaskJobSpec`) take an explicit `moderator` argument naming the
+ * attestation author — pass this moderator's {@link LocalModerator.address}.
  */
 export interface LocalModerator {
   /** The moderation-authority signer (also the fee payer of attestations). */

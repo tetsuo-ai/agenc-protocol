@@ -32,6 +32,8 @@ import {
   Keypair,
   PublicKey,
   SystemProgram,
+  taskModV2Pda,
+  moderationBlockPda,
 } from "./harness.mjs";
 
 const MODE_EXTERNAL_ATTESTATION = 3;
@@ -71,15 +73,15 @@ async function setupAttestedTask(w, { attestor, reward = 2_000_000 } = {}) {
     async claimAndSubmit() {
       expectOk(configureRes, "attested:configure");
       const jobHash = id32();
-      const [taskMod] = pda([enc("task_moderation"), task.toBuffer(), Buffer.from(jobHash)]);
+      const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
       const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
       expectOk(send(w.svm, await modProg.methods
         .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
         .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
         .instruction(), [w.modAuth]), "attested:task-mod");
       expectOk(send(w.svm, await w.buyerProg.methods
-        .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/attest")
-        .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+        .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/attest", w.modAuth.publicKey)
+        .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
         .instruction(), [w.buyer]), "attested:publish");
 
       const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);

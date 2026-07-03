@@ -48,9 +48,11 @@ import {
   facade,
   findAgentPda,
   findHireRecordPda,
+  findModerationConfigPda,
   findProtocolConfigPda,
   findTaskModerationPda,
   findTaskPda,
+  getModerationConfigDecoder,
   getProtocolConfigDecoder,
   getServiceListingDecoder,
   ListingState,
@@ -254,6 +256,23 @@ export async function runDevnetFirstHire(
   const treasury = protocolConfig.treasury;
   log(`protocol: minAgentStake ${stakeAmount} lamports, treasury ${treasury}`);
 
+  // P1.2: consumption gates (hire + set_task_job_spec) take an explicit
+  // `moderator` argument — the pubkey whose attestations this flow consumes.
+  // The sandbox auto-attestor records as the GLOBAL moderation authority, so
+  // read it once from the on-chain ModerationConfig.
+  const [moderationConfigPda] = await findModerationConfigPda();
+  const moderationConfigBytes = await fetchAccountBytes(rpc, moderationConfigPda);
+  if (moderationConfigBytes === null) {
+    throw new Error(
+      `ModerationConfig ${moderationConfigPda} not found on ${environment.cluster} ` +
+        `— the moderation gate is not configured (re-run the cluster init step)`,
+    );
+  }
+  const moderator = getModerationConfigDecoder().decode(
+    moderationConfigBytes,
+  ).moderationAuthority;
+  log(`moderation: global moderation authority ${moderator}`);
+
   // ---- 3) provider registers an agent + lists a service ----
   const providerAgentId = randomId32();
   await provider.client.registerAgent({
@@ -301,6 +320,7 @@ export async function runDevnetFirstHire(
   const [listingModeration] = await facade.findListingModerationPda({
     listing,
     jobSpecHash: listingSpecHash,
+    moderator, // P1.2: v2 records are moderator-keyed
   });
   await waitForAccount(rpc, listingModeration, "ListingModeration");
   log("attestor: listing moderation recorded CLEAN");
@@ -327,6 +347,7 @@ export async function runDevnetFirstHire(
     expectedPrice: price,
     expectedVersion: 1n,
     listingSpecHash,
+    moderator, // P1.2: the attestation author the hire gate consumes
   });
   const [task] = await findTaskPda({ creator: buyer.signer.address, taskId });
   log(`buyer: hired -> task ${task} (sig ${hireResult.signature})`);
@@ -341,7 +362,11 @@ export async function runDevnetFirstHire(
     specHash: jobSpecHash,
     endpoint: environment.attestorUrl,
   });
-  const [taskModeration] = await findTaskModerationPda({ task, jobSpecHash });
+  const [taskModeration] = await findTaskModerationPda({
+    task,
+    jobSpecHash,
+    moderator, // P1.2: v2 records are moderator-keyed
+  });
   await waitForAccount(rpc, taskModeration, "TaskModeration");
   await buyer.client.send([
     await facade.setTaskJobSpec({
@@ -349,6 +374,7 @@ export async function runDevnetFirstHire(
       creator: buyer.signer,
       jobSpecHash,
       jobSpecUri: "agenc://job-spec/sha256/devnet-first-hire",
+      moderator, // P1.2: the attestation author the publish gate consumes
     }),
   ]);
   log("buyer: task moderation + job spec pinned");

@@ -145,13 +145,15 @@ async function claimedAutoTask(salt: number): Promise<BondWorld> {
     }),
   ]);
 
-  // 4) creator pins (publishes) the job spec (moderation-gated).
+  // 4) creator pins (publishes) the job spec (moderation-gated). P1.2: the creator
+  //    names the moderator whose v2 record the gate consumes (the global authority).
   await send(svm, creator, [
     await facade.setTaskJobSpec({
       creator,
       task,
       jobSpecHash,
       jobSpecUri: "agenc://job-spec/sha256/bond-e2e",
+      moderator: moderator.address,
     }),
   ]);
 

@@ -47,11 +47,7 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import {
-  findAgentVerificationPda,
-  findModerationAttestorPda,
-  findModerationConfigPda,
-} from "../pdas";
+import { findAgentVerificationPda, findModerationConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const RECORD_AGENT_VERIFICATION_DISCRIMINATOR: ReadonlyUint8Array =
@@ -69,7 +65,6 @@ export type RecordAgentVerificationInstruction<
   TAccountAgent extends string | AccountMeta<string> = string,
   TAccountAgentVerification extends string | AccountMeta<string> = string,
   TAccountAttestor extends string | AccountMeta<string> = string,
-  TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -90,9 +85,6 @@ export type RecordAgentVerificationInstruction<
         ? WritableSignerAccount<TAccountAttestor> &
             AccountSignerMeta<TAccountAttestor>
         : TAccountAttestor,
-      TAccountModerationAttestor extends string
-        ? ReadonlyAccount<TAccountModerationAttestor>
-        : TAccountModerationAttestor,
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
@@ -155,7 +147,6 @@ export type RecordAgentVerificationAsyncInput<
   TAccountAgent extends string = string,
   TAccountAgentVerification extends string = string,
   TAccountAttestor extends string = string,
-  TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig?: Address<TAccountModerationConfig>;
@@ -167,20 +158,11 @@ export type RecordAgentVerificationAsyncInput<
    */
   agentVerification?: Address<TAccountAgentVerification>;
   /**
-   * The recording signer. Authorization (global moderation authority OR a registered
-   * attestor) is checked in the handler, not as an account constraint here — mirroring
-   * `record_*_moderation`.
+   * The recording signer. P1.2 §4.6: must be the GLOBAL moderation authority —
+   * the roster no longer authorizes domain verification (decoupled from the
+   * permissionless open roster; checked in the handler).
    */
   attestor: TransactionSigner<TAccountAttestor>;
-  /**
-   * OPTIONAL: a registered moderation-attestor roster entry. When supplied (and
-   * `attestor == moderation_attestor.attestor`), authorizes a non-global-authority
-   * attestor to record. Bound to `["moderation_attestor", attestor]` — Anchor enforces
-   * the canonical PDA, so a forged/mismatched entry fails account resolution, and a
-   * REVOKED attestor's PDA is closed and fails to load (cannot attest). This instruction
-   * is full-surface only, so this field carries no canary-surface implications.
-   */
-  moderationAttestor?: Address<TAccountModerationAttestor>;
   systemProgram?: Address<TAccountSystemProgram>;
   verifiedDomain: RecordAgentVerificationInstructionDataArgs["verifiedDomain"];
   method: RecordAgentVerificationInstructionDataArgs["method"];
@@ -192,7 +174,6 @@ export async function getRecordAgentVerificationInstructionAsync<
   TAccountAgent extends string,
   TAccountAgentVerification extends string,
   TAccountAttestor extends string,
-  TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -201,7 +182,6 @@ export async function getRecordAgentVerificationInstructionAsync<
     TAccountAgent,
     TAccountAgentVerification,
     TAccountAttestor,
-    TAccountModerationAttestor,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -212,7 +192,6 @@ export async function getRecordAgentVerificationInstructionAsync<
     TAccountAgent,
     TAccountAgentVerification,
     TAccountAttestor,
-    TAccountModerationAttestor,
     TAccountSystemProgram
   >
 > {
@@ -232,10 +211,6 @@ export async function getRecordAgentVerificationInstructionAsync<
       isWritable: true,
     },
     attestor: { value: input.attestor ?? null, isWritable: true },
-    moderationAttestor: {
-      value: input.moderationAttestor ?? null,
-      isWritable: false,
-    },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -258,14 +233,6 @@ export async function getRecordAgentVerificationInstructionAsync<
       ),
     });
   }
-  if (!accounts.moderationAttestor.value) {
-    accounts.moderationAttestor.value = await findModerationAttestorPda({
-      attestor: getAddressFromResolvedInstructionAccount(
-        "attestor",
-        accounts.attestor.value,
-      ),
-    });
-  }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
@@ -278,7 +245,6 @@ export async function getRecordAgentVerificationInstructionAsync<
       getAccountMeta("agent", accounts.agent),
       getAccountMeta("agentVerification", accounts.agentVerification),
       getAccountMeta("attestor", accounts.attestor),
-      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRecordAgentVerificationInstructionDataEncoder().encode(
@@ -291,7 +257,6 @@ export async function getRecordAgentVerificationInstructionAsync<
     TAccountAgent,
     TAccountAgentVerification,
     TAccountAttestor,
-    TAccountModerationAttestor,
     TAccountSystemProgram
   >);
 }
@@ -301,7 +266,6 @@ export type RecordAgentVerificationInput<
   TAccountAgent extends string = string,
   TAccountAgentVerification extends string = string,
   TAccountAttestor extends string = string,
-  TAccountModerationAttestor extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   moderationConfig: Address<TAccountModerationConfig>;
@@ -313,20 +277,11 @@ export type RecordAgentVerificationInput<
    */
   agentVerification: Address<TAccountAgentVerification>;
   /**
-   * The recording signer. Authorization (global moderation authority OR a registered
-   * attestor) is checked in the handler, not as an account constraint here — mirroring
-   * `record_*_moderation`.
+   * The recording signer. P1.2 §4.6: must be the GLOBAL moderation authority —
+   * the roster no longer authorizes domain verification (decoupled from the
+   * permissionless open roster; checked in the handler).
    */
   attestor: TransactionSigner<TAccountAttestor>;
-  /**
-   * OPTIONAL: a registered moderation-attestor roster entry. When supplied (and
-   * `attestor == moderation_attestor.attestor`), authorizes a non-global-authority
-   * attestor to record. Bound to `["moderation_attestor", attestor]` — Anchor enforces
-   * the canonical PDA, so a forged/mismatched entry fails account resolution, and a
-   * REVOKED attestor's PDA is closed and fails to load (cannot attest). This instruction
-   * is full-surface only, so this field carries no canary-surface implications.
-   */
-  moderationAttestor?: Address<TAccountModerationAttestor>;
   systemProgram?: Address<TAccountSystemProgram>;
   verifiedDomain: RecordAgentVerificationInstructionDataArgs["verifiedDomain"];
   method: RecordAgentVerificationInstructionDataArgs["method"];
@@ -338,7 +293,6 @@ export function getRecordAgentVerificationInstruction<
   TAccountAgent extends string,
   TAccountAgentVerification extends string,
   TAccountAttestor extends string,
-  TAccountModerationAttestor extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -347,7 +301,6 @@ export function getRecordAgentVerificationInstruction<
     TAccountAgent,
     TAccountAgentVerification,
     TAccountAttestor,
-    TAccountModerationAttestor,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -357,7 +310,6 @@ export function getRecordAgentVerificationInstruction<
   TAccountAgent,
   TAccountAgentVerification,
   TAccountAttestor,
-  TAccountModerationAttestor,
   TAccountSystemProgram
 > {
   // Program address.
@@ -376,10 +328,6 @@ export function getRecordAgentVerificationInstruction<
       isWritable: true,
     },
     attestor: { value: input.attestor ?? null, isWritable: true },
-    moderationAttestor: {
-      value: input.moderationAttestor ?? null,
-      isWritable: false,
-    },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -403,7 +351,6 @@ export function getRecordAgentVerificationInstruction<
       getAccountMeta("agent", accounts.agent),
       getAccountMeta("agentVerification", accounts.agentVerification),
       getAccountMeta("attestor", accounts.attestor),
-      getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRecordAgentVerificationInstructionDataEncoder().encode(
@@ -416,7 +363,6 @@ export function getRecordAgentVerificationInstruction<
     TAccountAgent,
     TAccountAgentVerification,
     TAccountAttestor,
-    TAccountModerationAttestor,
     TAccountSystemProgram
   >);
 }
@@ -436,21 +382,12 @@ export type ParsedRecordAgentVerificationInstruction<
      */
     agentVerification: TAccountMetas[2];
     /**
-     * The recording signer. Authorization (global moderation authority OR a registered
-     * attestor) is checked in the handler, not as an account constraint here — mirroring
-     * `record_*_moderation`.
+     * The recording signer. P1.2 §4.6: must be the GLOBAL moderation authority —
+     * the roster no longer authorizes domain verification (decoupled from the
+     * permissionless open roster; checked in the handler).
      */
     attestor: TAccountMetas[3];
-    /**
-     * OPTIONAL: a registered moderation-attestor roster entry. When supplied (and
-     * `attestor == moderation_attestor.attestor`), authorizes a non-global-authority
-     * attestor to record. Bound to `["moderation_attestor", attestor]` — Anchor enforces
-     * the canonical PDA, so a forged/mismatched entry fails account resolution, and a
-     * REVOKED attestor's PDA is closed and fails to load (cannot attest). This instruction
-     * is full-surface only, so this field carries no canary-surface implications.
-     */
-    moderationAttestor?: TAccountMetas[4] | undefined;
-    systemProgram: TAccountMetas[5];
+    systemProgram: TAccountMetas[4];
   };
   data: RecordAgentVerificationInstructionData;
 };
@@ -463,12 +400,12 @@ export function parseRecordAgentVerificationInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRecordAgentVerificationInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 6) {
+  if (instruction.accounts.length < 5) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 6,
+        expectedAccountMetas: 5,
       },
     );
   }
@@ -478,12 +415,6 @@ export function parseRecordAgentVerificationInstruction<
     accountIndex += 1;
     return accountMeta;
   };
-  const getNextOptionalAccount = () => {
-    const accountMeta = getNextAccount();
-    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
-      ? undefined
-      : accountMeta;
-  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
@@ -491,7 +422,6 @@ export function parseRecordAgentVerificationInstruction<
       agent: getNextAccount(),
       agentVerification: getNextAccount(),
       attestor: getNextAccount(),
-      moderationAttestor: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
     },
     data: getRecordAgentVerificationInstructionDataDecoder().decode(

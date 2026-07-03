@@ -427,6 +427,66 @@ pub struct ModerationAttestorRevoked {
     pub timestamp: i64,
 }
 
+/// Emitted when a wallet self-registers onto the open moderation-attestor roster
+/// (P1.2). `bond_lamports` is the hardcoded registration bond deposited on the PDA.
+#[event]
+pub struct ModerationAttestorRegistered {
+    pub attestor: Pubkey,
+    pub bond_lamports: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when an attestor starts its two-step exit (P1.2). From this moment the
+/// attestor is rejected at the record and consumption gates; the bond refunds at
+/// finalize after the cooldown.
+#[event]
+pub struct AttestorExitRequested {
+    pub attestor: Pubkey,
+    pub exit_at: i64,
+    pub timestamp: i64,
+}
+
+/// Emitted when an attestor exit finalizes and the roster PDA closes, refunding
+/// bond + rent to the attestor in full (P1.2 — never confiscatable).
+#[event]
+pub struct AttestorExitFinalized {
+    pub attestor: Pubkey,
+    pub refunded_lamports: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when the multisig sets (or re-sets) the BLOCK-only takedown floor for a
+/// content hash (P1.2 §5.2). The rationale is REQUIRED — the discretionary takedown
+/// lever is bounded by an auditable, content-addressed record.
+#[event]
+pub struct ModerationBlockSet {
+    pub content_hash: [u8; 32],
+    pub rationale_hash: [u8; 32],
+    pub rationale_uri: String,
+    pub updated_by: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when the multisig clears a takedown block (P1.2 §5.2). The account stays
+/// open as the audit trail; the hash is consumable again at the gates.
+#[event]
+pub struct ModerationBlockCleared {
+    pub content_hash: [u8; 32],
+    pub updated_by: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Emitted when the multisig updates the on-chain default trusted-attestor list
+/// pointer (P1.2 §5.1). `version` is monotonic; `timestamp` doubles as the deadman.
+#[event]
+pub struct DefaultTrustListUpdated {
+    pub list_hash: [u8; 32],
+    pub list_uri: String,
+    pub version: u64,
+    pub updated_by: Pubkey,
+    pub timestamp: i64,
+}
+
 /// Emitted when a trusted attestor records a domain-verification attestation for an
 /// agent (P7.3). `verified_by` is the recording attestor/authority.
 #[event]

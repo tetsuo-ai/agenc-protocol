@@ -8,6 +8,8 @@ import {
   getHireFromListingHumanlessInstructionDataDecoder,
   findListingPda,
   findListingModerationPda,
+  findModerationAttestorPda,
+  findModerationBlockPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../src/index.js";
 import {
@@ -162,9 +164,12 @@ describe("hireFromListing (facade)", () => {
   const creator = createNoopSigner(
     address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   );
+  // P1.2: the moderator whose listing attestation the hire consumes.
+  const moderator = address("9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA");
 
-  it("auto-derives the multi-PDA flow with correct order and round-trips its data", async () => {
+  it("auto-derives the multi-PDA flow with correct order (P1.2: 14 with the BLOCK floor) and round-trips its data", async () => {
     const taskId = new Uint8Array(32).fill(5);
+    const specHash = new Uint8Array(32).fill(9);
     const ix = await hireFromListing({
       listing,
       creatorAgent,
@@ -173,49 +178,76 @@ describe("hireFromListing (facade)", () => {
       taskId,
       expectedPrice: 1000n,
       expectedVersion: 1n,
+      listingSpecHash: specHash,
+      moderator,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // 13 accounts in declared order; only listing/creatorAgent/authority/creator
-    // are caller-supplied, the rest are derived.
-    expect(ix.accounts.length).toBe(13);
+    // P1.2 pins the gate at 14 accounts: WP-A1's 13 + the REQUIRED
+    // moderationBlock (8); only listing/creatorAgent/authority/creator (and the
+    // spec hash the moderation PDAs derive from) are caller-supplied.
+    expect(ix.accounts.length).toBe(14);
     const accts = ix.accounts.map((a) => a.address);
     expect(accts[3]).toBe(listing);
-    // WP-A1 inserts the OPTIONAL moderationAttestor roster account (7) right after
-    // listingModeration (6); omitted here -> program-id placeholder, shifting
-    // creatorAgent/authority/creator/systemProgram down one slot.
-    expect(accts[7]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // moderationAttestor omitted
-    expect(accts[8]).toBe(creatorAgent);
-    expect(accts[10]).toBe(authority.address);
-    expect(accts[11]).toBe(creator.address);
-    expect(accts[12]).toBe(SYSTEM_PROGRAM);
+    // listingModeration (6): facade-derived v2 moderator-keyed record PDA
+    // ["listing_moderation_v2", listing, specHash, moderator].
+    const [expectedModeration] = await findListingModerationPda({
+      listing,
+      jobSpecHash: specHash,
+      moderator,
+    });
+    expect(accts[6]).toBe(expectedModeration);
+    // moderationAttestor (7): global-authority path -> program-id placeholder.
+    expect(accts[7]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // moderationBlock (8): REQUIRED BLOCK-floor PDA ["moderation_block", specHash].
+    const [expectedBlock] = await findModerationBlockPda({
+      contentHash: specHash,
+    });
+    expect(accts[8]).toBe(expectedBlock);
+    expect(accts[9]).toBe(creatorAgent);
+    expect(accts[11]).toBe(authority.address);
+    expect(accts[12]).toBe(creator.address);
+    expect(accts[13]).toBe(SYSTEM_PROGRAM);
 
     const decoded = getHireFromListingInstructionDataDecoder().decode(ix.data);
     expect(decoded.expectedPrice).toBe(1000n);
     expect(decoded.expectedVersion).toBe(1n);
     expect(Array.from(decoded.taskId)).toEqual(Array.from(taskId));
+    expect(decoded.moderator).toBe(moderator); // P1.2: new arg
   });
 
-  it("derives listingModeration from listingSpecHash when given", async () => {
-    const taskId = new Uint8Array(32).fill(6);
-    const specHash = new Uint8Array(32).fill(9);
+  it("derives the roster-entry PDA when moderatorIsAttestor is set (P1.2 roster path)", async () => {
     const ix = await hireFromListing({
       listing,
       creatorAgent,
       authority,
       creator,
-      taskId,
+      taskId: new Uint8Array(32).fill(6),
       expectedPrice: 2000n,
       expectedVersion: 2n,
-      listingSpecHash: specHash,
+      listingSpecHash: new Uint8Array(32).fill(9),
+      moderator,
+      moderatorIsAttestor: true,
     });
+    const [expectedAttestor] = await findModerationAttestorPda({
+      attestor: moderator,
+    });
+    expect(ix.accounts[7].address).toBe(expectedAttestor);
+  });
 
-    const [expectedModeration] = await findListingModerationPda({
-      listing,
-      jobSpecHash: specHash,
-    });
-    // listingModeration sits at index 6 (between moderationConfig and creatorAgent).
-    expect(ix.accounts[6].address).toBe(expectedModeration);
+  it("throws when neither listingSpecHash nor moderationBlock is given (the BLOCK floor is required)", async () => {
+    await expect(
+      hireFromListing({
+        listing,
+        creatorAgent,
+        authority,
+        creator,
+        taskId: new Uint8Array(32).fill(7),
+        expectedPrice: 1000n,
+        expectedVersion: 1n,
+        moderator,
+      }),
+    ).rejects.toThrow(/listingSpecHash|moderationBlock/);
   });
 });
 
@@ -225,9 +257,12 @@ describe("hireFromListingHumanless (facade)", () => {
   const creator = createNoopSigner(
     address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   );
+  // P1.2: the moderator whose listing attestation the hire consumes.
+  const moderator = address("9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA");
 
-  it("auto-derives the multi-PDA flow with correct order and round-trips its data", async () => {
+  it("auto-derives the multi-PDA flow with correct order (P1.2: 13 with the BLOCK floor) and round-trips its data", async () => {
     const taskId = new Uint8Array(32).fill(5);
+    const specHash = new Uint8Array(32).fill(9);
     const ix = await hireFromListingHumanless({
       listing,
       creator,
@@ -235,20 +270,32 @@ describe("hireFromListingHumanless (facade)", () => {
       expectedPrice: 1000n,
       expectedVersion: 1n,
       reviewWindowSecs: 3600n,
+      listingSpecHash: specHash,
+      moderator,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // 12 accounts in declared order (no creatorAgent — the buyer is a plain
-    // wallet); only listing/creator are caller-supplied, the rest are derived.
-    expect(ix.accounts.length).toBe(12);
+    // P1.2 pins the gate at 13 accounts (no creatorAgent — the buyer is a plain
+    // wallet): WP-A1's 12 + the REQUIRED moderationBlock (9).
+    expect(ix.accounts.length).toBe(13);
     const accts = ix.accounts.map((a) => a.address);
     expect(accts[4]).toBe(listing);
-    // WP-A1 inserts the OPTIONAL moderationAttestor roster account (8) right after
-    // listingModeration (7); omitted here -> program-id placeholder, shifting
-    // creator/systemProgram down one slot.
-    expect(accts[8]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // moderationAttestor omitted
-    expect(accts[10]).toBe(creator.address);
-    expect(accts[11]).toBe(SYSTEM_PROGRAM);
+    // listingModeration (7): facade-derived v2 moderator-keyed record PDA.
+    const [expectedModeration] = await findListingModerationPda({
+      listing,
+      jobSpecHash: specHash,
+      moderator,
+    });
+    expect(accts[7]).toBe(expectedModeration);
+    // moderationAttestor (8): global-authority path -> program-id placeholder.
+    expect(accts[8]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    // moderationBlock (9): REQUIRED BLOCK-floor PDA ["moderation_block", specHash].
+    const [expectedBlock] = await findModerationBlockPda({
+      contentHash: specHash,
+    });
+    expect(accts[9]).toBe(expectedBlock);
+    expect(accts[11]).toBe(creator.address);
+    expect(accts[12]).toBe(SYSTEM_PROGRAM);
 
     const decoded =
       getHireFromListingHumanlessInstructionDataDecoder().decode(ix.data);
@@ -256,26 +303,20 @@ describe("hireFromListingHumanless (facade)", () => {
     expect(decoded.expectedVersion).toBe(1n);
     expect(decoded.reviewWindowSecs).toBe(3600n);
     expect(Array.from(decoded.taskId)).toEqual(Array.from(taskId));
+    expect(decoded.moderator).toBe(moderator); // P1.2: new arg
   });
 
-  it("derives listingModeration from listingSpecHash when given", async () => {
-    const taskId = new Uint8Array(32).fill(6);
-    const specHash = new Uint8Array(32).fill(9);
-    const ix = await hireFromListingHumanless({
-      listing,
-      creator,
-      taskId,
-      expectedPrice: 2000n,
-      expectedVersion: 2n,
-      reviewWindowSecs: 3600n,
-      listingSpecHash: specHash,
-    });
-
-    const [expectedModeration] = await findListingModerationPda({
-      listing,
-      jobSpecHash: specHash,
-    });
-    // listingModeration sits at index 7 (between moderationConfig and authorityRateLimit).
-    expect(ix.accounts[7].address).toBe(expectedModeration);
+  it("throws when neither listingSpecHash nor moderationBlock is given (the BLOCK floor is required)", async () => {
+    await expect(
+      hireFromListingHumanless({
+        listing,
+        creator,
+        taskId: new Uint8Array(32).fill(6),
+        expectedPrice: 2000n,
+        expectedVersion: 2n,
+        reviewWindowSecs: 3600n,
+        moderator,
+      }),
+    ).rejects.toThrow(/listingSpecHash|moderationBlock/);
   });
 });
