@@ -102,7 +102,15 @@ export type RequestAttestorExitInput<
   TAccountModerationAttestor extends string = string,
   TAccountAttestor extends string = string,
 > = {
-  /** Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA). */
+  /**
+   * Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA).
+   * The exit path is for SELF-REGISTERED entries only (`assigned_by == attestor`):
+   * a deputized entry (`assigned_by == authority`, bond 0, rent paid by the
+   * authority) is authority-managed and comes off the roster via
+   * `revoke_moderation_attestor` (rent → authority), NOT here. Without this scope a
+   * deputy could self-remove outside the authority's control and `close = attestor`
+   * would redirect the authority-funded rent to the deputy (adversarial finding).
+   */
   moderationAttestor: Address<TAccountModerationAttestor>;
   /** Only the attestor itself may start its exit. */
   attestor: TransactionSigner<TAccountAttestor>;
@@ -158,7 +166,15 @@ export type ParsedRequestAttestorExitInstruction<
 > = {
   programAddress: Address<TProgram>;
   accounts: {
-    /** Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA). */
+    /**
+     * Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA).
+     * The exit path is for SELF-REGISTERED entries only (`assigned_by == attestor`):
+     * a deputized entry (`assigned_by == authority`, bond 0, rent paid by the
+     * authority) is authority-managed and comes off the roster via
+     * `revoke_moderation_attestor` (rent → authority), NOT here. Without this scope a
+     * deputy could self-remove outside the authority's control and `close = attestor`
+     * would redirect the authority-funded rent to the deputy (adversarial finding).
+     */
     moderationAttestor: TAccountMetas[0];
     /** Only the attestor itself may start its exit. */
     attestor: TAccountMetas[1];

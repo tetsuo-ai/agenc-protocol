@@ -20,12 +20,20 @@ use anchor_lang::prelude::*;
 #[derive(Accounts)]
 pub struct RequestAttestorExit<'info> {
     /// Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA).
+    /// The exit path is for SELF-REGISTERED entries only (`assigned_by == attestor`):
+    /// a deputized entry (`assigned_by == authority`, bond 0, rent paid by the
+    /// authority) is authority-managed and comes off the roster via
+    /// `revoke_moderation_attestor` (rent → authority), NOT here. Without this scope a
+    /// deputy could self-remove outside the authority's control and `close = attestor`
+    /// would redirect the authority-funded rent to the deputy (adversarial finding).
     #[account(
         mut,
         seeds = [b"moderation_attestor", moderation_attestor.attestor.as_ref()],
         bump = moderation_attestor.bump,
         constraint = moderation_attestor.attestor == attestor.key()
-            @ CoordinationError::ModerationAttestorMismatch
+            @ CoordinationError::ModerationAttestorMismatch,
+        constraint = moderation_attestor.assigned_by == moderation_attestor.attestor
+            @ CoordinationError::AttestorNotSelfRegistered
     )]
     pub moderation_attestor: Box<Account<'info, ModerationAttestor>>,
 
@@ -56,13 +64,18 @@ pub fn handler_request(ctx: Context<RequestAttestorExit>) -> Result<()> {
 pub struct FinalizeAttestorExit<'info> {
     /// Roster entry to close. `close = attestor` refunds ALL lamports on the PDA
     /// (rent + registration bond) to the attestor — the full, non-confiscatable refund.
+    /// SELF-REGISTERED entries only (`assigned_by == attestor`): the refund is the
+    /// attestor's own bond + rent. A deputized entry's rent belongs to the authority
+    /// and is returned to it via `revoke_moderation_attestor`, not drained here.
     #[account(
         mut,
         close = attestor,
         seeds = [b"moderation_attestor", moderation_attestor.attestor.as_ref()],
         bump = moderation_attestor.bump,
         constraint = moderation_attestor.attestor == attestor.key()
-            @ CoordinationError::ModerationAttestorMismatch
+            @ CoordinationError::ModerationAttestorMismatch,
+        constraint = moderation_attestor.assigned_by == moderation_attestor.attestor
+            @ CoordinationError::AttestorNotSelfRegistered
     )]
     pub moderation_attestor: Box<Account<'info, ModerationAttestor>>,
 

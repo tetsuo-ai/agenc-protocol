@@ -965,6 +965,8 @@ pub enum CoordinationError {
     AttestorExiting,
     #[msg("Only the wallet that created a roster entry may revoke it")]
     UnauthorizedAttestorRevocation,
+    #[msg("Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke")]
+    AttestorNotSelfRegistered,
     #[msg("Content hash is blocked by the multisig takedown floor")]
     ContentBlocked,
     #[msg("Moderation block account is not the canonical PDA for this content hash")]

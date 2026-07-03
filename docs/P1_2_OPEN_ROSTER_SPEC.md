@@ -385,6 +385,54 @@ authority rotation, upgrades, the multisig-gated list + BLOCK floor — all P0.3
 scope). The credible-exit walkthrough passes with **zero tetsuo-ai keys**:
 register → attest own supply → hire consuming own record → settle.
 
+## 9.5 Post-implementation adversarial-review addendum (2026-07-03)
+
+A 36-agent adversarial review of the implemented diff (6 lenses → dedup → 3
+refuters per finding) confirmed no critical/high findings. What it did surface,
+stated honestly:
+
+- **Fixed in code — exit scoped to self-registered entries.** The two-step exit
+  originally gated only on `attestor == signer`, so an authority-deputized entry
+  (rent paid by the authority, bond 0) could self-exit and `close = attestor`
+  would drain the authority's rent to the deputy. Both exit instructions now
+  require `assigned_by == attestor` (`AttestorNotSelfRegistered`); deputized
+  entries come off the roster only via the authority's `revoke` (rent → authority).
+- **Fixed in tooling — the canary freeze is now shape-pinned.** `check-canary-idl`
+  compared instruction NAMES only; it now also pins every canary instruction's
+  full wire shape (discriminator, account order/flags/PDA seed literals, arg
+  names/types) against a committed baseline (`scripts/canary-idl-baseline.json`),
+  so a future cfg regression cannot ship silently.
+- **The BLOCK floor is an ENTRY gate, not a settlement freeze** (behavior as
+  specified in §5.2, kept — but say it plainly): blocking a hash stops NEW
+  publishes and hires; it does NOT stop tasks/hires already live from being
+  claimed, submitted, and settled from escrow (`accept_bid`, `claim`, settlement
+  never re-check the floor). Takedown of in-flight escrow is the dispute path's
+  job. The floor prevents *hosting new* blocked supply; it is not retroactive.
+- **`purchase_skill` is outside the moderation perimeter entirely** (pre-existing,
+  not introduced by P1.2): the skill marketplace routes real value with no
+  moderation gate, and the floor's hash domain (job-spec/listing content) cannot
+  reach skill content. A known bound on §8's takedown claim; fold into the P6.4
+  spam/moderation workstream.
+- **Exit is not a durable retraction** (reviewed and accepted as designed): an
+  attestor that exits, waits out the cooldown, finalizes, and re-registers the
+  same key posts a fresh bond and its OLD v2 records unlock gates again. The
+  exit window's promise is scoped to the window itself; durable takedown of
+  specific content is the BLOCK floor, and surface trust lists govern who is
+  trusted at all. Likewise, frozen legacy CLEAN records cannot be retracted by
+  re-recording (records are v2-only post-upgrade) — the retraction lever for a
+  legacy record is the BLOCK floor, which is auditable and multisig'd rather
+  than a silent single-key overwrite.
+- **The deploy is a coordinated flag-day cutover, not a compatible upgrade.**
+  Every changed instruction fails CLOSED for old clients (trailing `moderator`
+  arg → Borsh EOF; record-path account-order change; agent-verification account
+  removal). No funds are at risk, but publish/hire/moderation is down for any
+  client on the old wire until it ships the regenerated client. The deploy
+  Moment must sequence: program upgrade → immediately publish the regenerated
+  sdk/react/store releases → attest.agenc.ag redeploy (its writes move to v2
+  seeds; its EXISTING legacy listing records stay consumable via the grace
+  window with its roster PDA presented). Add this to the runbook checklist at
+  deploy time.
+
 ## 10. Open questions for the founder (pre-implementation)
 
 1. **Bond size** — 0.25 vs 0.5 SOL. Higher = more sybil friction but more

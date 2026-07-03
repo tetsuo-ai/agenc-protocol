@@ -109,6 +109,35 @@ the badge silently flips back to unverified:
    then re-trigger: `solana-verify remote submit-job --program-id <PID>
    --uploader <authority pubkey>`.
 
+## 2.6 P1.2 open-roster cutover — a FLAG-DAY, not a compatible upgrade (added 2026-07-03)
+
+When the P1.2 batch deploys, it is a **coordinated availability cutover**. Every
+changed instruction fails CLOSED for old-wire clients (adversarial-review
+confirmed): `set_task_job_spec` / `hire_from_listing` / `hire_from_listing_humanless`
+gained a trailing `moderator: Pubkey` arg (old txs Borsh-EOF) and a required
+`moderation_block` account; `record_task_moderation` / `record_listing_moderation`
+changed account order + moved to v2 moderator-keyed seeds; `record/revoke_agent_verification`
+dropped the optional attestor account. No funds are at risk (everything rejects),
+but marketplace publish/hire/moderation is DOWN for any client still on the old
+wire until it ships the regenerated 90-ix client. Sequence at deploy time:
+
+1. **P0.3 FIRST.** The BLOCK floor + default trust list lean on the 2-of-3
+   multisig; do the Squads custody ceremony before this deploys (do not ship the
+   hardenings against an effective 1-of-1). See `docs/UPGRADE_AUTHORITY.md`.
+2. Program upgrade (this runbook §3 + the §2.5 verified-build invariants).
+3. **Immediately** publish the already-built releases: sdk `@tetsuo-ai/marketplace-sdk`,
+   `-react`, `-tools`/`-mcp`, and the store templates (all regenerated on this
+   branch, tests green). Minimize the skew window.
+4. Redeploy **attest.agenc.ag** on the new client: its writes move to the v2
+   seeds; its EXISTING legacy listing records (e.g. attestor `13tuj…`) stay
+   consumable through the grace window when its roster PDA is presented (the SDK
+   ships `findLegacyTaskModerationPda` / `findLegacyListingModerationPda` for
+   exactly this). Confirm a live roster attestation flows end-to-end post-deploy.
+5. Announce the breaking wire change ahead of the Moment (the P4.6 deprecation
+   contract) so third-party integrators regenerate before, not after.
+
+Full rationale + the adversarial-review addendum: `docs/P1_2_OPEN_ROSTER_SPEC.md` §9.5.
+
 ## 3. Deploy choreography — ORDER IS LOAD-BEARING
 
 > The reverse order **bricks in-flight tasks**. The new binary's typed

@@ -105,6 +105,9 @@ export type FinalizeAttestorExitInput<
   /**
    * Roster entry to close. `close = attestor` refunds ALL lamports on the PDA
    * (rent + registration bond) to the attestor — the full, non-confiscatable refund.
+   * SELF-REGISTERED entries only (`assigned_by == attestor`): the refund is the
+   * attestor's own bond + rent. A deputized entry's rent belongs to the authority
+   * and is returned to it via `revoke_moderation_attestor`, not drained here.
    */
   moderationAttestor: Address<TAccountModerationAttestor>;
   /** Only the attestor itself may finalize; it receives the refund. */
@@ -167,6 +170,9 @@ export type ParsedFinalizeAttestorExitInstruction<
     /**
      * Roster entry to close. `close = attestor` refunds ALL lamports on the PDA
      * (rent + registration bond) to the attestor — the full, non-confiscatable refund.
+     * SELF-REGISTERED entries only (`assigned_by == attestor`): the refund is the
+     * attestor's own bond + rent. A deputized entry's rent belongs to the authority
+     * and is returned to it via `revoke_moderation_attestor`, not drained here.
      */
     moderationAttestor: TAccountMetas[0];
     /** Only the attestor itself may finalize; it receives the refund. */

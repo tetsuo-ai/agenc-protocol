@@ -644,16 +644,18 @@ export const AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_COOLDOWN_ACTIVE = 0x18a8; /
 export const AGENC_COORDINATION_ERROR__ATTESTOR_EXITING = 0x18a9; // 6313
 /** UnauthorizedAttestorRevocation: Only the wallet that created a roster entry may revoke it */
 export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_ATTESTOR_REVOCATION = 0x18aa; // 6314
+/** AttestorNotSelfRegistered: Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke */
+export const AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED = 0x18ab; // 6315
 /** ContentBlocked: Content hash is blocked by the multisig takedown floor */
-export const AGENC_COORDINATION_ERROR__CONTENT_BLOCKED = 0x18ab; // 6315
+export const AGENC_COORDINATION_ERROR__CONTENT_BLOCKED = 0x18ac; // 6316
 /** InvalidModerationBlockAccount: Moderation block account is not the canonical PDA for this content hash */
-export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT = 0x18ac; // 6316
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT = 0x18ad; // 6317
 /** InvalidModerationRationale: Block rationale hash and URI are required (non-zero, non-empty, bounded) */
-export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE = 0x18ad; // 6317
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE = 0x18ae; // 6318
 /** InvalidTrustList: Trust list hash and URI are required (non-zero, non-empty, bounded) */
-export const AGENC_COORDINATION_ERROR__INVALID_TRUST_LIST = 0x18ae; // 6318
+export const AGENC_COORDINATION_ERROR__INVALID_TRUST_LIST = 0x18af; // 6319
 /** InvalidModerationRecord: Moderation record account is not the canonical PDA, not program-owned, or not a moderation record */
-export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD = 0x18af; // 6319
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD = 0x18b0; // 6320
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -676,6 +678,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_COOLDOWN_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__ATTESTOR_EXITING
   | typeof AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_NOT_REQUESTED
+  | typeof AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED
   | typeof AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED
   | typeof AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED
@@ -1002,6 +1005,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_COOLDOWN_ACTIVE]: `Attestor exit cooldown has not elapsed`,
     [AGENC_COORDINATION_ERROR__ATTESTOR_EXITING]: `Attestor is in its exit window and can no longer moderate or unlock gates`,
     [AGENC_COORDINATION_ERROR__ATTESTOR_EXIT_NOT_REQUESTED]: `Attestor exit has not been requested (exit_at is zero)`,
+    [AGENC_COORDINATION_ERROR__ATTESTOR_NOT_SELF_REGISTERED]: `Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke`,
     [AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED]: `Authority has already voted on this dispute`,
     [AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED]: `Bid has already been accepted`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED]: `Bid book has reached its active bid capacity`,

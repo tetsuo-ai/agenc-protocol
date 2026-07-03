@@ -326,15 +326,27 @@ test("attestor exit: exit_at != 0 guard, monotonic request, cooldown enforced, f
   assert.equal(after, before + entryLamports - 5000n, "bond + rent refunded in full");
 });
 
-test("finalize on a grandfathered (deputized, zeroed-reserved) entry is rejected — exit_at reads 0", async () => {
+// ADVERSARIAL-REVIEW FIX (revert-sensitive): the exit path is scoped to
+// SELF-REGISTERED entries. Without the `assigned_by == attestor` constraint, a
+// deputized entry (rent paid by the authority) could request exit, wait out the
+// cooldown, and `close = attestor` would drain the AUTHORITY's rent to the deputy —
+// a lamport-flow deviation from §4.7 (deputized entries are authority-managed via
+// revoke, which returns the rent to the authority).
+test("deputized (grandfathered, authority-funded) entries cannot use the exit path at all — request AND finalize are rejected", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const deputy = Keypair.generate();
   w.svm.airdrop(deputy.publicKey, BigInt(1e9));
   expectOk(await assign(w, deputy.publicKey), "deputize (legacy-shaped entry: all bookkeeping 0)");
+
+  expectFail(
+    await requestExit(w, deputy),
+    "AttestorNotSelfRegistered",
+    "deputy cannot start an exit (authority-managed entry)",
+  );
   expectFail(
     await finalizeExit(w, deputy),
-    "AttestorExitNotRequested",
-    "grandfathered entry cannot finalize instantly",
+    "AttestorNotSelfRegistered",
+    "deputy cannot finalize either — the authority's rent is not drainable through close = attestor",
   );
 });
 

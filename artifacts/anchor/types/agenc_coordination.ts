@@ -6311,7 +6311,10 @@ export type AgencCoordination = {
           "name": "moderationAttestor",
           "docs": [
             "Roster entry to close. `close = attestor` refunds ALL lamports on the PDA",
-            "(rent + registration bond) to the attestor — the full, non-confiscatable refund."
+            "(rent + registration bond) to the attestor — the full, non-confiscatable refund.",
+            "SELF-REGISTERED entries only (`assigned_by == attestor`): the refund is the",
+            "attestor's own bond + rent. A deputized entry's rent belongs to the authority",
+            "and is returned to it via `revoke_moderation_attestor`, not drained here."
           ],
           "writable": true,
           "pda": {
@@ -10275,7 +10278,13 @@ export type AgencCoordination = {
         {
           "name": "moderationAttestor",
           "docs": [
-            "Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA)."
+            "Roster entry to exit. Seeded by its own stored `attestor` (canonical PDA).",
+            "The exit path is for SELF-REGISTERED entries only (`assigned_by == attestor`):",
+            "a deputized entry (`assigned_by == authority`, bond 0, rent paid by the",
+            "authority) is authority-managed and comes off the roster via",
+            "`revoke_moderation_attestor` (rent → authority), NOT here. Without this scope a",
+            "deputy could self-remove outside the authority's control and `close = attestor`",
+            "would redirect the authority-funded rent to the deputy (adversarial finding)."
           ],
           "writable": true,
           "pda": {
@@ -17691,26 +17700,31 @@ export type AgencCoordination = {
     },
     {
       "code": 6315,
+      "name": "attestorNotSelfRegistered",
+      "msg": "Only a self-registered (bonded) attestor may exit; deputized entries are removed via revoke"
+    },
+    {
+      "code": 6316,
       "name": "contentBlocked",
       "msg": "Content hash is blocked by the multisig takedown floor"
     },
     {
-      "code": 6316,
+      "code": 6317,
       "name": "invalidModerationBlockAccount",
       "msg": "Moderation block account is not the canonical PDA for this content hash"
     },
     {
-      "code": 6317,
+      "code": 6318,
       "name": "invalidModerationRationale",
       "msg": "Block rationale hash and URI are required (non-zero, non-empty, bounded)"
     },
     {
-      "code": 6318,
+      "code": 6319,
       "name": "invalidTrustList",
       "msg": "Trust list hash and URI are required (non-zero, non-empty, bounded)"
     },
     {
-      "code": 6319,
+      "code": 6320,
       "name": "invalidModerationRecord",
       "msg": "Moderation record account is not the canonical PDA, not program-owned, or not a moderation record"
     }
