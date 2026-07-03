@@ -99,15 +99,33 @@ the badge silently flips back to unverified:
    the hash of the dockerized build at the release commit. Keep
    `programs/agenc-coordination/Cargo.lock` committed — verification fails
    without it.
-2. **Update the PDA to the new commit right after the upgrade** (same
-   authority signature session as the deploy):
-   `solana-verify verify-from-repo --url <RPC> --program-id
-   HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
-   https://github.com/tetsuo-ai/agenc-protocol --commit-hash <deployed
-   commit> --library-name agenc_coordination --mount-path
-   programs/agenc-coordination --keypair <upgrade-authority> --skip-build -y`
-   then re-trigger: `solana-verify remote submit-job --program-id <PID>
-   --uploader <authority pubkey>`.
+2. **Update the PDA to the new commit right after the upgrade.** The
+   uploader must be the CURRENT upgrade authority — since P0.3 that is the
+   Squads vault, so the keypair-based
+   `verify-from-repo --keypair <upgrade-authority>` path no longer applies.
+   **Squads-era procedure (as executed 2026-07-03, restoring the badge after
+   the P1.2 upgrade missed this step):**
+   1. Reproduce + compare (read-only): `solana-verify verify-from-repo --url
+      <RPC> --program-id HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
+      https://github.com/tetsuo-ai/agenc-protocol --commit-hash <deployed
+      commit> --library-name agenc_coordination --mount-path
+      programs/agenc-coordination` — hashes must match before any signing.
+   2. `solana-verify export-pda-tx <repo-url> --program-id <PID> --uploader
+      <vault> --commit-hash <deployed commit> --library-name
+      agenc_coordination --mount-path programs/agenc-coordination` →
+      a base58 legacy TRANSACTION. Decode it, DROP the ComputeBudget
+      instruction (CPI-illegal inside a vault execute), and re-serialize the
+      remaining otter-verify instruction as a Squads `TransactionMessage`
+      (num_signers=1/writable, keys = [vault, otter PDA, system, program,
+      otter-verify program], u8/u16 SmallVec length prefixes).
+   3. Fund the vault with ~0.01 SOL (it pays the otter PDA rent), then
+      `squads-multisig-cli vault-transaction-create --vault-index 0
+      --transaction-message <bytes>` → `proposal-vote --action Approve` × 2
+      members → `vault-transaction-execute`. Verify the stored vault tx's
+      content (commit string + account set) BEFORE voting.
+   4. Re-trigger: `solana-verify remote submit-job --program-id <PID>
+      --uploader <vault>` and confirm `is_verified: true` at
+      verify.osec.io/status/<PID>.
 
 ## 2.6 P1.2 open-roster cutover — a FLAG-DAY, not a compatible upgrade (added 2026-07-03)
 
