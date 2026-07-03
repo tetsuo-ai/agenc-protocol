@@ -1,5 +1,17 @@
 # Moderation neutrality — options for the attestor model (P6.8)
 
+> **RESOLVED AND LIVE ON MAINNET 2026-07-03.** The Hardened Open Roster is
+> deployed (90-instruction P1.2 build, deploy slot 430491216, upgraded through
+> the 2-of-3 Squads authority): attestor registration is PERMISSIONLESS
+> (`register_moderation_attestor`, fixed refundable bond, cooldown exit),
+> records are moderator-keyed, surfaces choose whom to trust via edge trust
+> lists, and takedowns go through the multisig-governed BLOCK-only floor. The
+> full ecosystem (sdk 0.8.0, react/tools/mcp 0.4.0, store templates 0.4.0,
+> attest.agenc.ag, agenc.ag, the kit) speaks this wire. The neutrality
+> DECISION this document tracked is closed — no third party needs anyone's
+> approval to moderate their own supply. Spam/sybil defense for the open
+> world is the successor workstream (P6.4).
+>
 > **SUPERSEDED 2026-07-03 → see [`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md).**
 > Two things below are now stale: (1) WP-A1 (deployed 2026-07-02) made the
 > **consumption** gates accept any registered roster attestor — the sections
