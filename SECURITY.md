@@ -228,23 +228,25 @@ layer; **fee caps in bytecode** (combined ≤ 4000 bps, worker keeps ≥ 60%);
 
 ### 5.3 Upgrade-authority custody
 
-The program is **upgradeable** (BPFLoaderUpgradeable). As of this writing the
-mainnet upgrade authority is a **single key**:
+The program is **upgradeable** (BPFLoaderUpgradeable). As of **2026-07-03** the
+mainnet upgrade authority is a **2-of-3 Squads v4 multisig** (migrated from the
+former single key — P0.3):
 
 ```
 Program:      HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
 ProgramData:  E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw
-Authority:    HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh   (single key)
+Authority:    Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf   (Squads v4 2-of-3 vault)
+Multisig:     7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY   (program SQDS4ep65T869…)
 ```
 
 (Verify live with `solana program show HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`.)
 
-A single upgrade key over an escrow-custodying program is a single point of
-compromise. **Target custody: a Squads (or equivalent) multisig** that owns the
-upgrade authority, so no individual key can unilaterally push a malicious
-upgrade. The migration runbook is `docs/UPGRADE_AUTHORITY.md`; the actual
-authority transfer is **[HUMAN: executes]**. Until it is done, integrators
-should treat the upgrade authority as a single trusted key.
+No individual key can now unilaterally push an upgrade — the escrow-custodying
+program requires 2-of-3 signatures for any bytecode change. The migration runbook
+and full record are in `docs/UPGRADE_AUTHORITY.md`. **Residual (tracked, not yet
+done):** the three member keys are currently co-located on one operator host;
+distributing at least one onto separate hardware (a Ledger) is the remaining
+hardening — a Squads config change, no program-authority re-transfer required.
 
 > The **protocol/config authority** (which pauses via `update_launch_controls`,
 > updates fees, and manages the dispute-resolver roster) is governed by the
