@@ -12,6 +12,7 @@ import {
   withoutReferrerArgs,
   type MutationStatus,
 } from "./internal.js";
+import { resolveActivationModerationAttestor } from "./moderation-attestor.js";
 import type { HumanlessHireInput } from "./useHire.js";
 import type { TaskActivationInput } from "./useTaskActivation.js";
 
@@ -194,8 +195,19 @@ export function useHumanlessHireFlow<TJobSpec = unknown>(): UseHumanlessHireFlow
         }));
 
         setPhase("activating");
+        // WP-A1: attach the roster-attestor account when the moderation was
+        // authored by a roster attestor (e.g. the public attestation
+        // service) — without it the publish gate rejects the activation.
+        const moderationAttestor =
+          input.activation?.moderationAttestor ??
+          (await resolveActivationModerationAttestor({
+            rpcUrl: ctx.rpcUrl,
+            task: taskPda,
+            jobSpecHash,
+          }));
         const activationResult = await client.setTaskJobSpec({
           ...(input.activation ?? {}),
+          ...(moderationAttestor !== undefined ? { moderationAttestor } : {}),
           task: taskPda,
           creator,
           jobSpecHash,
