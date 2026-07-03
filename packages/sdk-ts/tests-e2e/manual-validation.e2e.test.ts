@@ -151,6 +151,7 @@ describe("e2e: CreatorReview manual validation settles on the real program", () 
         creator,
         jobSpecHash,
         jobSpecUri: "agenc://job-spec/sha256/manual",
+        moderator: modAuth.address,
       }),
     ]);
     const [jobSpec] = await findTaskJobSpecPda({ task });

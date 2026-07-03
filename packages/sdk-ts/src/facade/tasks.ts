@@ -12,6 +12,9 @@
 // Never import from generated/ internals other than its public exports.
 import { AccountRole, type Address } from "@solana/kit";
 import {
+  findModerationAttestorPda,
+  findModerationBlockPda,
+  findTaskModerationPda,
   getCreateTaskInstructionAsync,
   getCreateTaskHumanlessInstructionAsync,
   getCreateDependentTaskInstructionAsync,
@@ -321,10 +324,75 @@ export async function configureTaskValidation(
 }
 
 /**
- * Creator pins/updates a task's job-spec pointer (hash + URI). Auto-derives the
- * protocol config, moderation config, the moderation record (from `task` +
+ * Friendly input for {@link setTaskJobSpec}. Mirrors the generated async input,
+ * but the P1.2 moderation accounts become derivable:
+ *
+ * - `taskModeration` — defaults to the v2 moderator-keyed record PDA
+ *   `["task_moderation_v2", task, jobSpecHash, moderator]` (what
+ *   `recordTaskModeration` writes post-P1.2). To consume a pre-upgrade record
+ *   during the grace window, pass the legacy PDA explicitly (derivable via the
+ *   moderation facade's `findLegacyTaskModerationPda`).
+ * - `moderationBlock` — defaults to the BLOCK-floor PDA
+ *   `["moderation_block", jobSpecHash]` (required on-chain; an empty/system
+ *   account at the canonical address means "not blocked" and passes).
+ * - `moderationAttestor` — see {@link SetTaskJobSpecInput.moderatorIsAttestor}.
+ */
+export type SetTaskJobSpecInput = Omit<
+  SetTaskJobSpecAsyncInput,
+  "taskModeration" | "moderationBlock"
+> & {
+  /** Override for the moderation-record slot (e.g. a legacy grace-window PDA). */
+  taskModeration?: SetTaskJobSpecAsyncInput["taskModeration"];
+  /** Override for the BLOCK-floor PDA (rarely needed — it derives from `jobSpecHash`). */
+  moderationBlock?: SetTaskJobSpecAsyncInput["moderationBlock"];
+  /**
+   * P1.2 roster path switch. Set `true` when `moderator` is a REGISTERED
+   * moderation attestor (not the global moderation authority): the facade then
+   * derives and attaches the `["moderation_attestor", moderator]` roster entry
+   * the publish gate requires. Leave unset/false for the global-authority path —
+   * the roster account is then passed as `None` (the program-id placeholder),
+   * matching the on-chain `moderator == moderation_authority` branch. Ignored
+   * when `moderationAttestor` is passed explicitly.
+   */
+  moderatorIsAttestor?: boolean;
+};
+
+/**
+ * Creator pins/updates a task's job-spec pointer (hash + URI) and names the
+ * `moderator` whose attestation the publish gate consumes (P1.2): pass the
+ * global moderation authority's pubkey for the authority path, or a registered
+ * attestor's pubkey WITH `moderatorIsAttestor: true` for the roster path.
+ * Auto-derives the protocol config, moderation config, the v2 moderation record
+ * (from `task` + `jobSpecHash` + `moderator`), the BLOCK-floor PDA (from
  * `jobSpecHash`), and the task-job-spec PDA from `task`.
  */
-export async function setTaskJobSpec(input: SetTaskJobSpecAsyncInput) {
-  return getSetTaskJobSpecInstructionAsync(input);
+export async function setTaskJobSpec(input: SetTaskJobSpecInput) {
+  const { moderatorIsAttestor, ...rest } = input;
+  const taskModeration =
+    rest.taskModeration ??
+    (
+      await findTaskModerationPda({
+        task: rest.task,
+        jobSpecHash: rest.jobSpecHash,
+        moderator: rest.moderator,
+      })
+    )[0];
+  const moderationBlock =
+    rest.moderationBlock ??
+    (await findModerationBlockPda({ contentHash: rest.jobSpecHash }))[0];
+  // The generated async builder unconditionally resolves the OPTIONAL roster
+  // account from `moderator`, but on the global-authority path that PDA does not
+  // exist on-chain (Anchor would fail to load it). Default it to the program-id
+  // placeholder (= None) unless the caller opts into the roster path.
+  const moderationAttestor =
+    rest.moderationAttestor ??
+    (moderatorIsAttestor
+      ? (await findModerationAttestorPda({ attestor: rest.moderator }))[0]
+      : AGENC_COORDINATION_PROGRAM_ADDRESS);
+  return getSetTaskJobSpecInstructionAsync({
+    ...rest,
+    taskModeration,
+    moderationBlock,
+    moderationAttestor,
+  });
 }

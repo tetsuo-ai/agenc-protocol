@@ -193,6 +193,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedPrice: price,
       expectedVersion: 1n,
       listingSpecHash,
+      moderator: moderator.address,
     });
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
 
@@ -217,6 +218,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         creator: buyer,
         jobSpecHash,
         jobSpecUri: "agenc://job-spec/sha256/x",
+        moderator: moderator.address,
       }),
     ]);
 
@@ -354,6 +356,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: 1n,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      moderator: moderator.address,
       referrer: referrer.address,
       referrerFeeBps: 250,
     });
@@ -408,6 +411,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         expectedVersion: decodedListing.version,
         reviewWindowSecs: 3600n,
         listingSpecHash,
+        moderator: moderator.address,
       })
       .catch((error: unknown) => error);
     expect(capacityBlocked).toBeInstanceOf(AgencError);
@@ -461,6 +465,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       creator: buyer,
       jobSpecHash,
       jobSpecUri,
+      moderator: moderator.address,
     });
     const decodedJobSpec = getTaskJobSpecDecoder().decode(
       accountData(svm, taskJobSpec)!,
@@ -644,6 +649,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: decodedListing.version,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      moderator: moderator.address,
     });
     decodedListing = getServiceListingDecoder().decode(
       accountData(svm, listing)!,
@@ -728,6 +734,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: 1n,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      moderator: moderator.address,
     });
 
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
@@ -779,6 +786,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         expectedVersion: decodedListing.version,
         reviewWindowSecs: 3600n,
         listingSpecHash,
+        moderator: moderator.address,
       })
       .catch((error: unknown) => error);
     expect(stillBlocked).toBeInstanceOf(AgencError);
@@ -808,6 +816,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: decodedListing.version,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      moderator: moderator.address,
     });
     decodedListing = getServiceListingDecoder().decode(
       accountData(svm, listing)!,
@@ -909,6 +918,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         creator,
         jobSpecHash,
         jobSpecUri: "agenc://job-spec/sha256/manual",
+        moderator: modAuth.address,
       }),
     ]);
     await workerClient.claimTaskWithJobSpec({
@@ -1045,6 +1055,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       creator,
       jobSpecHash,
       jobSpecUri: "agenc://job-spec/sha256/reject",
+      moderator: modAuth.address,
     });
     await workerClient.claimTaskWithJobSpec({
       task,
@@ -1195,6 +1206,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: 1n,
       reviewWindowSecs: 10n,
       listingSpecHash,
+      moderator: moderator.address,
       referrer: referrer.address,
       referrerFeeBps: 250,
     });
@@ -1222,6 +1234,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       creator: buyer,
       jobSpecHash,
       jobSpecUri: "agenc://job-spec/sha256/auto-task",
+      moderator: moderator.address,
     });
     await providerClient.claimTaskWithJobSpec({
       task,

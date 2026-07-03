@@ -253,6 +253,7 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
         task: T3,
         jobSpecHash: t3JobHash,
         jobSpecUri: "agenc://job-spec/sha256/queries-t3",
+        moderator: moderator.address,
       }),
     ]);
     await send(svm, providerA, [
@@ -335,6 +336,7 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
         expectedPrice: PRICE,
         expectedVersion: 1n,
         listingSpecHash: l1SpecHash,
+        moderator: moderator.address,
       }),
     ]);
     [T6] = await findTaskPda({ creator: creator1.address, taskId: t6Id });

@@ -7,6 +7,7 @@
 // `hire_from_listing` is the registered-buyer path. `hire_from_listing_humanless`
 // is the human-wallet storefront checkout path used by the reference marketplace.
 // Both mint the task + escrow in one instruction.
+import type { Address } from "@solana/kit";
 import {
   getCreateServiceListingInstructionAsync,
   getUpdateServiceListingInstructionAsync,
@@ -16,6 +17,8 @@ import {
   getRateHireInstructionAsync,
   findListingPda,
   findListingModerationPda,
+  findModerationAttestorPda,
+  findModerationBlockPda,
   type CreateServiceListingAsyncInput,
   type UpdateServiceListingAsyncInput,
   type SetServiceListingStateAsyncInput,
@@ -163,90 +166,168 @@ export async function setServiceListingState(
 }
 
 /**
- * Friendly input for {@link hireFromListing}. Mirrors the generated async input,
- * but lets the caller pass `listingSpecHash` so the facade can derive the
- * listing-moderation attestation PDA (bound to the listing's pinned spec hash)
- * instead of requiring the caller to compute it.
+ * P1.2 moderation inputs shared by both hire wrappers: the facade derives the
+ * v2 listing-moderation record PDA and the REQUIRED BLOCK-floor PDA from the
+ * listing's pinned `spec_hash`, so callers pass the hash they already know
+ * instead of computing PDAs.
  */
-export type HireFromListingInput = Omit<
-  HireFromListingAsyncInput,
-  "referrer" | "referrerFeeBps"
-> & {
+type HireModerationInputs = {
   /**
-   * The listing's pinned `spec_hash` (32 bytes). When provided and
-   * `listingModeration` is not, the facade derives `listingModeration` from
-   * (listing, specHash) so the fail-closed moderation gate resolves. Omit when
-   * the moderation gate is disabled, or pass `listingModeration` explicitly.
+   * The listing's pinned `spec_hash` (32 bytes). Used to derive BOTH:
+   * `listingModeration` (the v2 record `["listing_moderation_v2", listing,
+   * specHash, moderator]` — only when `listingModeration` is not passed and the
+   * moderation gate needs it) AND the REQUIRED `moderationBlock` BLOCK-floor
+   * PDA `["moderation_block", specHash]`. Required unless `moderationBlock` is
+   * passed explicitly (the block account is mandatory on-chain even with the
+   * moderation gate disabled; an empty account at the canonical address passes).
    */
   listingSpecHash?: HireFromListingAsyncInput["taskId"];
   /**
-   * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
-   * pre-referrer behavior: the facade defaults `referrer` to `null` (the
-   * Option::None the program treats as "no referrer") and `referrerFeeBps` to
-   * `0`, which the on-chain `resolve_referrer_snapshot` maps to the no-leg/skip
-   * path — no funds are ever routed to a default/wrong address. Pass a real
-   * `referrer` with a non-zero `referrerFeeBps` to opt a demand-side embedder
-   * into the 4-way settlement split.
+   * Override for the BLOCK-floor PDA (rarely needed — it derives from
+   * `listingSpecHash`).
    */
-  referrer?: HireFromListingAsyncInput["referrer"];
-  referrerFeeBps?: HireFromListingAsyncInput["referrerFeeBps"];
+  moderationBlock?: Address;
+  /**
+   * P1.2 roster path switch. Set `true` when `moderator` is a REGISTERED
+   * moderation attestor (not the global moderation authority): the facade then
+   * derives and attaches the `["moderation_attestor", moderator]` roster entry
+   * the hire gate requires. Leave unset/false for the global-authority path —
+   * the roster account is then omitted (`None`). Ignored when
+   * `moderationAttestor` is passed explicitly.
+   */
+  moderatorIsAttestor?: boolean;
 };
+
+/** Derive the P1.2 moderation accounts both hire wrappers need. */
+async function resolveHireModerationAccounts(input: {
+  wrapper: "hireFromListing" | "hireFromListingHumanless";
+  listing: Address;
+  moderator: Address;
+  listingSpecHash?: HireFromListingAsyncInput["taskId"];
+  listingModeration?: Address;
+  moderationAttestor?: Address;
+  moderationBlock?: Address;
+  moderatorIsAttestor?: boolean;
+}): Promise<{
+  listingModeration?: Address;
+  moderationAttestor?: Address;
+  moderationBlock: Address;
+}> {
+  let moderationBlock = input.moderationBlock;
+  if (moderationBlock === undefined) {
+    if (input.listingSpecHash === undefined) {
+      throw new Error(
+        `${input.wrapper}: provide listingSpecHash (the listing's pinned spec_hash) ` +
+          "or an explicit moderationBlock — the BLOCK-floor account " +
+          '["moderation_block", spec_hash] is required on-chain (P1.2 §5.2)',
+      );
+    }
+    moderationBlock = (
+      await findModerationBlockPda({ contentHash: input.listingSpecHash })
+    )[0];
+  }
+  let listingModeration = input.listingModeration;
+  if (listingModeration === undefined && input.listingSpecHash !== undefined) {
+    listingModeration = (
+      await findListingModerationPda({
+        listing: input.listing,
+        jobSpecHash: input.listingSpecHash,
+        moderator: input.moderator,
+      })
+    )[0];
+  }
+  let moderationAttestor = input.moderationAttestor;
+  if (moderationAttestor === undefined && input.moderatorIsAttestor) {
+    moderationAttestor = (
+      await findModerationAttestorPda({ attestor: input.moderator })
+    )[0];
+  }
+  return { listingModeration, moderationAttestor, moderationBlock };
+}
+
+/**
+ * Friendly input for {@link hireFromListing}. Mirrors the generated async input,
+ * but lets the caller pass `listingSpecHash` so the facade can derive the
+ * listing-moderation attestation PDA (bound to the listing's pinned spec hash and
+ * the presented `moderator` — P1.2 v2 seeds) and the required BLOCK-floor PDA,
+ * instead of requiring the caller to compute them.
+ */
+export type HireFromListingInput = Omit<
+  HireFromListingAsyncInput,
+  "referrer" | "referrerFeeBps" | "moderationBlock"
+> &
+  HireModerationInputs & {
+    /**
+     * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
+     * pre-referrer behavior: the facade defaults `referrer` to `null` (the
+     * Option::None the program treats as "no referrer") and `referrerFeeBps` to
+     * `0`, which the on-chain `resolve_referrer_snapshot` maps to the no-leg/skip
+     * path — no funds are ever routed to a default/wrong address. Pass a real
+     * `referrer` with a non-zero `referrerFeeBps` to opt a demand-side embedder
+     * into the 4-way settlement split.
+     */
+    referrer?: HireFromListingAsyncInput["referrer"];
+    referrerFeeBps?: HireFromListingAsyncInput["referrerFeeBps"];
+  };
 
 /**
  * Build a hire_from_listing instruction — the registered-buyer entry point.
  *
  * The async builder auto-derives task, escrow, hireRecord, protocolConfig,
  * moderationConfig, authorityRateLimit, and systemProgram. The caller must
- * supply `listing` and `creatorAgent` (not derivable). `listingModeration` is
- * optional on-chain (required only when the moderation gate is enabled); if the
- * caller passes `listingSpecHash` (and not an explicit `listingModeration`),
- * the facade derives it from (listing, specHash).
+ * supply `listing` and `creatorAgent` (not derivable), plus the P1.2 `moderator`
+ * argument — the pubkey whose listing attestation the hire consumes (the global
+ * moderation authority, or a registered attestor with
+ * `moderatorIsAttestor: true`). If the caller passes `listingSpecHash`, the
+ * facade derives `listingModeration` (v2: listing + specHash + moderator) and
+ * the REQUIRED `moderationBlock` BLOCK-floor PDA from it.
  */
 export async function hireFromListing(input: HireFromListingInput) {
-  const { listingSpecHash, referrer, referrerFeeBps, ...rest } = input;
-  const withReferrer = {
+  const {
+    listingSpecHash,
+    moderatorIsAttestor,
+    referrer,
+    referrerFeeBps,
+    ...rest
+  } = input;
+  const moderation = await resolveHireModerationAccounts({
+    wrapper: "hireFromListing",
+    listing: rest.listing,
+    moderator: rest.moderator,
+    listingSpecHash,
+    listingModeration: rest.listingModeration,
+    moderationAttestor: rest.moderationAttestor,
+    moderationBlock: rest.moderationBlock,
+    moderatorIsAttestor,
+  });
+  return getHireFromListingInstructionAsync({
     ...rest,
+    ...moderation,
     referrer: referrer ?? null,
     referrerFeeBps: referrerFeeBps ?? 0,
-  };
-  if (withReferrer.listingModeration === undefined && listingSpecHash !== undefined) {
-    const [listingModeration] = await findListingModerationPda({
-      listing: withReferrer.listing,
-      jobSpecHash: listingSpecHash,
-    });
-    return getHireFromListingInstructionAsync({
-      ...withReferrer,
-      listingModeration,
-    });
-  }
-  return getHireFromListingInstructionAsync(withReferrer);
+  });
 }
 
 /**
  * Friendly input for {@link hireFromListingHumanless}. Mirrors the generated
  * async input but lets the caller pass `listingSpecHash` so the facade derives
  * the listing-moderation attestation PDA (bound to the listing's pinned spec
- * hash) instead of requiring the caller to compute it.
+ * hash and the presented `moderator` — P1.2 v2 seeds) and the required
+ * BLOCK-floor PDA, instead of requiring the caller to compute them.
  */
 export type HireFromListingHumanlessInput = Omit<
   HireFromListingHumanlessAsyncInput,
-  "referrer" | "referrerFeeBps"
-> & {
-  /**
-   * The listing's pinned `spec_hash` (32 bytes). When provided and
-   * `listingModeration` is not, the facade derives `listingModeration` from
-   * (listing, specHash) so the fail-closed moderation gate resolves. Omit when
-   * the moderation gate is disabled, or pass `listingModeration` explicitly.
-   */
-  listingSpecHash?: HireFromListingHumanlessAsyncInput["taskId"];
-  /**
-   * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
-   * pre-referrer behavior: defaults to the no-leg/skip path (`referrer: null`,
-   * `referrerFeeBps: 0`), so no funds are ever routed to a default/wrong address.
-   */
-  referrer?: HireFromListingHumanlessAsyncInput["referrer"];
-  referrerFeeBps?: HireFromListingHumanlessAsyncInput["referrerFeeBps"];
-};
+  "referrer" | "referrerFeeBps" | "moderationBlock"
+> &
+  HireModerationInputs & {
+    /**
+     * Optional P6.2 demand-side referral leg. Omit (the default) for the exact
+     * pre-referrer behavior: defaults to the no-leg/skip path (`referrer: null`,
+     * `referrerFeeBps: 0`), so no funds are ever routed to a default/wrong address.
+     */
+    referrer?: HireFromListingHumanlessAsyncInput["referrer"];
+    referrerFeeBps?: HireFromListingHumanlessAsyncInput["referrerFeeBps"];
+  };
 
 /**
  * Build a hire_from_listing_humanless instruction — the human-visitor storefront
@@ -255,29 +336,36 @@ export type HireFromListingHumanlessInput = Omit<
  * always pinned to CreatorReview so the human reviews before funds release. The
  * async builder auto-derives task, escrow, hireRecord, taskValidationConfig,
  * protocolConfig, moderationConfig, authorityRateLimit, and systemProgram; the
- * caller supplies `listing` and the `creator` wallet. `listingModeration` is
+ * caller supplies `listing`, the `creator` wallet, and the P1.2 `moderator`
+ * argument. `listingModeration` (v2) and the REQUIRED `moderationBlock` are
  * derived from `listingSpecHash` when given and not passed explicitly.
  */
 export async function hireFromListingHumanless(
   input: HireFromListingHumanlessInput,
 ) {
-  const { listingSpecHash, referrer, referrerFeeBps, ...rest } = input;
-  const withReferrer = {
+  const {
+    listingSpecHash,
+    moderatorIsAttestor,
+    referrer,
+    referrerFeeBps,
+    ...rest
+  } = input;
+  const moderation = await resolveHireModerationAccounts({
+    wrapper: "hireFromListingHumanless",
+    listing: rest.listing,
+    moderator: rest.moderator,
+    listingSpecHash,
+    listingModeration: rest.listingModeration,
+    moderationAttestor: rest.moderationAttestor,
+    moderationBlock: rest.moderationBlock,
+    moderatorIsAttestor,
+  });
+  return getHireFromListingHumanlessInstructionAsync({
     ...rest,
+    ...moderation,
     referrer: referrer ?? null,
     referrerFeeBps: referrerFeeBps ?? 0,
-  };
-  if (withReferrer.listingModeration === undefined && listingSpecHash !== undefined) {
-    const [listingModeration] = await findListingModerationPda({
-      listing: withReferrer.listing,
-      jobSpecHash: listingSpecHash,
-    });
-    return getHireFromListingHumanlessInstructionAsync({
-      ...withReferrer,
-      listingModeration,
-    });
-  }
-  return getHireFromListingHumanlessInstructionAsync(withReferrer);
+  });
 }
 
 /**

@@ -3,11 +3,14 @@
 // signatures, defaults, and (for multi-PDA flows) bundling. Never import from generated/
 // internals other than its public exports.
 //
-// P7.3 agent domain verification. A TRUSTED attestor (the global moderation authority OR a
-// registered, non-revoked ModerationAttestor — the EXACT roster that gates moderation)
-// records that operator domain D was proven to control agent A. The off-chain domain-control
-// proof (TXT record / .well-known + signed challenge) is the attestor SERVICE's job; these
-// wrappers only build the on-chain record/revoke instructions.
+// P7.3 agent domain verification. The GLOBAL moderation authority records that operator
+// domain D was proven to control agent A. (P1.2 §4.6 decoupled this from the now-OPEN
+// moderation-attestor roster: a permissionless roster would let anyone mint verified
+// badges or clobber a rival's record, so the roster account was REMOVED from these
+// instructions — global-authority only until per-attestor-keyed verification ships.)
+// The off-chain domain-control proof (TXT record / .well-known + signed challenge) is
+// the attestor SERVICE's job; these wrappers only build the on-chain record/revoke
+// instructions.
 import type { Address } from "@solana/kit";
 import {
   getRecordAgentVerificationInstructionAsync,
@@ -35,10 +38,10 @@ export type AgentVerificationMethod =
  * Build a record_agent_verification instruction (P7.3). Records that `verifiedDomain` was
  * proven to control `agent`. The moderationConfig PDA and the per-agent agentVerification
  * PDA (seeded by `agent`) are auto-derived when omitted; pass `agent`, the `attestor`
- * signer, `verifiedDomain`, `method`, and `expiresAt` (0 = no expiry). To record as a
- * registered (non-global-authority) attestor, also pass the `moderationAttestor` roster PDA
- * (derivable via the moderation facade's `findModerationAttestorPda`). Re-verification
- * overwrites the same agentVerification PDA in place.
+ * signer (P1.2 §4.6: MUST be the global moderation authority — the roster path was
+ * removed when the roster went permissionless), `verifiedDomain`, `method`, and
+ * `expiresAt` (0 = no expiry). Re-verification overwrites the same agentVerification PDA
+ * in place.
  */
 export async function recordAgentVerification(
   input: RecordAgentVerificationAsyncInput,
@@ -48,8 +51,8 @@ export async function recordAgentVerification(
 
 /**
  * Build a revoke_agent_verification instruction (P7.3). Marks an agent's verification
- * `revoked = true` (the record is kept readable, not closed). Same trusted-roster
- * authorization as `recordAgentVerification`.
+ * `revoked = true` (the record is kept readable, not closed). Same global-authority-only
+ * authorization as `recordAgentVerification` (P1.2 §4.6).
  *
  * The on-chain agentVerification PDA seed reads the account's stored `agent`, so the
  * generated builder does NOT auto-derive it; the facade derives it from the `agent` pubkey

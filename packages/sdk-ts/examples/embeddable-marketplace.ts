@@ -68,6 +68,13 @@ const buyerAuthority = createNoopSigner(
 // the worker that claims and submits the hired task.
 const providerAgent = address("4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB");
 const treasury = address("SysvarRent111111111111111111111111111111111");
+// P1.2: the moderator whose attestations the hire/publish gates consume. In a
+// live flow read `ModerationConfig.moderationAuthority` from chain (the global
+// authority path), or use a registered attestor's pubkey with
+// `moderatorIsAttestor: true`.
+const moderationAuthority = address(
+  "9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA",
+);
 
 // 32-byte ids (caller-chosen): fresh CSPRNG output via the values module.
 // ids seed PDAs, so they must never collide.
@@ -162,6 +169,10 @@ export async function main() {
     expectedVersion: 1n,
     reviewWindowSecs: 86_400n,
     listingSpecHash,
+    // P1.2: name the attestation author; the facade derives the v2
+    // listing-moderation record and the required BLOCK-floor PDA from
+    // listingSpecHash + moderator.
+    moderator: moderationAuthority,
   });
 
   // The hire mints a task whose PDA is seeded by (buyer wallet, taskId). The
@@ -175,14 +186,16 @@ export async function main() {
   });
 
   // -- 4. Buyer activates by pinning the moderated job spec ----------------
-  // The task-moderation record must already exist for (task, jobSpecHash) with
-  // the configured moderation authority. The facade derives taskJobSpec and
-  // taskModeration from task/hash.
+  // The task-moderation record must already exist for (task, jobSpecHash,
+  // moderator) — P1.2 v2 records are moderator-keyed. The facade derives
+  // taskJobSpec, the v2 taskModeration record, and the required BLOCK-floor
+  // PDA from task/hash/moderator.
   const activateIx = await facade.setTaskJobSpec({
     task,
     creator: buyerAuthority,
     jobSpecHash,
     jobSpecUri: "agenc://job-spec/sha256/example",
+    moderator: moderationAuthority,
   });
 
   // -- 5. Provider claims the activated task -------------------------------

@@ -119,8 +119,12 @@ const [listing] = await facade.findListingPda({ providerAgent, listingId });
 
 `hireFromListingHumanless` mints the task, escrow, hire-record, and CreatorReview
 validation config in one instruction. Pass `listingSpecHash` so the facade
-derives the listing moderation attestation PDA. Escrow funding alone does not
-make the task claimable; the buyer activates it in the next signed step.
+derives the listing moderation attestation PDA and the required BLOCK-floor PDA,
+and `moderator` — the pubkey whose CLEAN attestation the hire consumes
+(`moderationAuthority` here is the on-chain `ModerationConfig.moderationAuthority`,
+readable via `findModerationConfigPda` + `getModerationConfigDecoder`). Escrow
+funding alone does not make the task claimable; the buyer activates it in the
+next signed step.
 
 ```ts
 const hireIx = await facade.hireFromListingHumanless({
@@ -131,6 +135,11 @@ const hireIx = await facade.hireFromListingHumanless({
   expectedVersion: 1n,
   reviewWindowSecs: 86_400n,
   listingSpecHash: specHash,
+  // P1.2: name the moderator whose CLEAN attestation the hire gate consumes
+  // (the global moderation authority, or a registered attestor with
+  // `moderatorIsAttestor: true`). The facade also derives the required
+  // BLOCK-floor PDA from listingSpecHash.
+  moderator: moderationAuthority,
 });
 ```
 
@@ -150,8 +159,9 @@ const [creatorCompletionBond] = await findCreatorCompletionBondPda({
 ### 4. Buyer activates the task
 
 The marketplace/operator hosts the buyer's job spec, records a passing
-TaskModeration attestation for `(task, jobSpecHash)`, then the buyer signs
-`setTaskJobSpec`. Only after this step can a worker claim.
+TaskModeration attestation for `(task, jobSpecHash, moderator)` — P1.2 records
+are moderator-keyed — then the buyer signs `setTaskJobSpec`, naming that same
+`moderator`. Only after this step can a worker claim.
 
 ```ts
 const activateIx = await facade.setTaskJobSpec({
@@ -159,6 +169,7 @@ const activateIx = await facade.setTaskJobSpec({
   creator: buyerAuthority,
   jobSpecHash,
   jobSpecUri: "agenc://job-spec/sha256/example",
+  moderator: moderationAuthority, // P1.2: the attestation author consumed
 });
 ```
 
@@ -314,6 +325,7 @@ await buyerClient.hireFromListingHumanless({
   expectedVersion: 1n,
   reviewWindowSecs: 86_400n,
   listingSpecHash,
+  moderator: market.moderator.address, // P1.2: the attestation author consumed
 });
 const [task] = await findTaskPda({ creator: buyer.address, taskId });
 const [hireRecord] = await findHireRecordPda({ task });
@@ -327,6 +339,7 @@ await buyerClient.send([
     creator: buyer,
     jobSpecHash,
     jobSpecUri: "agenc://job-spec/sha256/demo",
+    moderator: market.moderator.address, // P1.2: the attestation author consumed
   }),
 ]);
 
