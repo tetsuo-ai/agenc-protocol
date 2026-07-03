@@ -164,6 +164,7 @@ export function AgencProvider(props: AgencProviderProps): ReactNode {
       read,
       client,
       rpcUrl: rpcUrl ?? null,
+      indexerBaseUrl: config.indexer?.baseUrl ?? null,
       signer: config.signer ?? null,
       referrer,
       resolveReferrerCapability: () => resolveReferrerCapabilityImpl(referrer),

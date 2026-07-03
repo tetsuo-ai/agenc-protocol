@@ -51,7 +51,9 @@ export const EN_STRINGS = {
   "referrer.notLiveReason":
     "No referrer is configured for this provider.",
   "referrer.earningsNotLiveReason":
-    "Referral settlement is live, but aggregated referrer earnings are not yet exposed by the indexer.",
+    "Referral settlement is live, but no earnings endpoint is available on this network (configure indexer.baseUrl).",
+  "referrer.earningsFetchFailed":
+    "The referrer earnings endpoint could not be read.",
 
   // Read transport.
   "transport.noReadSource":

@@ -28,7 +28,7 @@ import {
 import { QueryClient } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgencProvider,
   type AgencProviderConfig,
@@ -975,8 +975,37 @@ describe("useWalletSigner", () => {
 // ----------------------------------------------------------------------------
 // useReferrerEarnings (indexer gate)
 // ----------------------------------------------------------------------------
-describe("useReferrerEarnings (indexer gate)", () => {
-  it("returns the not-live zero state and makes no request", () => {
+describe("useReferrerEarnings (P3.8 earnings endpoint)", () => {
+  // The wire fixture mirrors the deployed endpoint's shape — ground-truthed
+  // against the cross-node canary's on-chain referrer leg (125,000 lamports).
+  const wire = {
+    live: true,
+    wallet: VALID_WALLET,
+    leg: "referrer",
+    totalLamports: "125000",
+    hires: [
+      {
+        taskPda: "CQwmEWVirRgq2hxurJgCtouQsxA5YTdHFXi2uhrDWYWJ",
+        hireRecordPda: String(PROVIDER_AGENT),
+        feeLamports: "125000",
+        signature: "",
+        settledAtUnix: 1_780_000_000,
+        feeBps: 250,
+      },
+    ],
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fetches + parses live earnings from the hosted default on mainnet", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => wire,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useReferrerEarnings(VALID_WALLET), {
       wrapper: wrapper({
         network: "mainnet",
@@ -984,21 +1013,70 @@ describe("useReferrerEarnings (indexer gate)", () => {
         referrer: { wallet: VALID_WALLET, feeBps: 250 },
       }),
     });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.live).toBe(true);
+    expect(result.current.totalLamports).toBe(125_000n);
+    expect(result.current.hires).toHaveLength(1);
+    expect(result.current.hires[0]!.feeLamports).toBe(125_000n);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://api.agenc.ag/api/explorer/referrers/${VALID_WALLET}/hires`,
+      expect.anything(),
+    );
+  });
+
+  it("prefers a configured indexer.baseUrl over the hosted default", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).includes("/api/explorer/referrers/")
+        ? { ok: true, status: 200, json: async () => wire }
+        : { ok: true, status: 200, json: async () => ({ items: [] }) },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useReferrerEarnings(VALID_WALLET), {
+      wrapper: wrapper({
+        network: "mainnet",
+        indexer: { baseUrl: "https://indexer.example" },
+        referrer: { wallet: VALID_WALLET, feeBps: 250 },
+      }),
+    });
+    await waitFor(() => expect(result.current.live).toBe(true));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://indexer.example/api/explorer/referrers/${VALID_WALLET}/hires`,
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("returns the not-live zero state with NO request when no endpoint resolves (localnet)", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useReferrerEarnings(VALID_WALLET), {
+      wrapper: wrapper({
+        network: "localnet",
+        queryTransport: mockReadTransport(),
+        referrer: { wallet: VALID_WALLET, feeBps: 250 },
+      }),
+    });
     expect(result.current.live).toBe(false);
     expect(result.current.totalLamports).toBe(0n);
     expect(result.current.hires).toEqual([]);
-    expect(result.current.isLoading).toBe(false);
     expect(result.current.reason).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("never fabricates earnings even with a configured referrer wallet", () => {
-    const { result } = renderHook(() => useReferrerEarnings(PROVIDER_AGENT), {
+  it("never fabricates on a failed fetch — zeros + surfaced error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })),
+    );
+    const { result } = renderHook(() => useReferrerEarnings(VALID_WALLET), {
       wrapper: wrapper({
         network: "mainnet",
         queryTransport: mockReadTransport(),
-        referrer: { wallet: String(PROVIDER_AGENT), feeBps: 1000 },
+        referrer: { wallet: VALID_WALLET, feeBps: 250 },
       }),
     });
+    await waitFor(() => expect(result.current.error).toBeTruthy());
     expect(result.current.totalLamports).toBe(0n);
     expect(result.current.hires).toHaveLength(0);
   });
