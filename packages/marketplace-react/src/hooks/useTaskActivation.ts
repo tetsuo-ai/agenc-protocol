@@ -7,7 +7,7 @@ import {
   requireClient,
   type MutationStatus,
 } from "./internal.js";
-import { resolveActivationModerationAttestor } from "./moderation-attestor.js";
+import { resolveActivationModerationAccounts } from "./moderation-attestor.js";
 
 export type TaskActivationInput = Omit<
   Parameters<typeof facadeNs.setTaskJobSpec>[0],
@@ -34,20 +34,26 @@ export function useTaskActivation(
   const mutation = useMutation<string, Error, TaskActivationInput>({
     mutationFn: async (input) => {
       const client = requireClient(ctx.client);
-      // WP-A1: when the task moderation was authored by a roster attestor
-      // (not the global authority), the publish gate only unlocks if the
-      // attestor's roster-entry PDA is attached. Resolve it automatically
-      // unless the caller supplied one.
-      const moderationAttestor =
-        input.moderationAttestor ??
-        (await resolveActivationModerationAttestor({
-          rpcUrl: ctx.rpcUrl,
-          task: taskPda,
-          jobSpecHash: input.jobSpecHash,
-        }));
+      // P1.2: the publish gate names an explicit `moderator` (supplied by the
+      // caller — the trust decision) and needs the roster-entry PDA when that
+      // moderator is a registered attestor, plus a record override when the
+      // attestation predates the upgrade (legacy grace window). Resolve the
+      // mechanics automatically unless the caller supplied any of them.
+      const callerResolved =
+        input.moderationAttestor !== undefined ||
+        input.moderatorIsAttestor !== undefined ||
+        input.taskModeration !== undefined;
+      const resolved = callerResolved
+        ? {}
+        : await resolveActivationModerationAccounts({
+            rpcUrl: ctx.rpcUrl,
+            task: taskPda,
+            jobSpecHash: input.jobSpecHash,
+            moderator: input.moderator,
+          });
       const { signature } = await client.setTaskJobSpec({
         ...input,
-        ...(moderationAttestor !== undefined ? { moderationAttestor } : {}),
+        ...resolved,
         task: taskPda,
         creator: input.creator ?? client.signer,
       } as Parameters<typeof facadeNs.setTaskJobSpec>[0]);

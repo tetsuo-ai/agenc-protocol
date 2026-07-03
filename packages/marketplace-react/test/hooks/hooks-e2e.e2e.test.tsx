@@ -220,6 +220,8 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
         expectedVersion: 1n,
         reviewWindowSecs: 3600n,
         listingSpecHash,
+        // P1.2: the hire gate consumes the named moderator's record.
+        moderator: market.moderator.address,
       } as never)) as never;
     });
     // No provider referrer configured in this e2e path, so no referrer injected.
@@ -252,6 +254,8 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
         creator: buyer,
         jobSpecHash: jobHash,
         jobSpecUri: "agenc://job-spec/sha256/x",
+        // P1.2: the publish gate consumes the named moderator's record.
+        moderator: market.moderator.address,
       }),
     ]);
     await providerClient.claimTaskWithJobSpec({

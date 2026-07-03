@@ -1,5 +1,39 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.8.0
+
+### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)
+
+- P1.2 open-roster client (90-instruction surface), matching the mainnet
+  program as upgraded 2026-07-03 through the 2-of-3 Squads upgrade authority.
+  Every changed instruction fails CLOSED for 0.7.x-built transactions, and
+  0.8.0-built transactions are rejected by pre-P1.2 deployments — all
+  first-party consumers move to `^0.8.0` together (runbook §2.6).
+- The three consumption gates — `set_task_job_spec`, `hire_from_listing`,
+  `hire_from_listing_humanless` — gain a REQUIRED trailing `moderator: Pubkey`
+  argument (the pubkey whose attestation the gate consumes) and a REQUIRED
+  `moderation_block` BLOCK-floor account (`["moderation_block", hash]`;
+  facade-derived from the spec/job hash). Gate account counts: 8→9 / 13→14 /
+  12→13. The facades take `moderatorIsAttestor: true` to derive+attach the
+  `["moderation_attestor", moderator]` roster entry for registered attestors,
+  and default the optional roster slot to None on the global-authority path.
+- `record_task_moderation` / `record_listing_moderation` write v2
+  moderator-keyed record seeds (`["task_moderation_v2", task, hash,
+  moderator]` + the listing mirror) so each attestor owns an exclusive record
+  slot; account order changed. Pre-upgrade records stay consumable through a
+  grace window via the new `facade.findLegacyTaskModerationPda` /
+  `facade.findLegacyListingModerationPda` and the gates' explicit record
+  overrides.
+- New open-roster surface: permissionless `registerModerationAttestor`
+  (fixed refundable bond), `requestAttestorExit`/`finalizeAttestorExit`
+  (cooldown + full refund; records rejected from the moment of the request),
+  multisig-gated `setModerationBlock`/`clearModerationBlock` (content-hash
+  takedown floor) and `setDefaultTrustList` (advisory defaults pointer).
+  `revoke_moderation_attestor` is scoped to entries the authority deputized.
+- `record_agent_verification` / `revoke_agent_verification` drop their
+  optional attestor account (global-authority-only; decoupled from the
+  moderation roster).
+
 ## 0.7.1
 
 ### Patch Changes

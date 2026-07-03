@@ -8,9 +8,12 @@ import {
 } from "../src/index.js";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  findModerationAttestorPda,
   getCreateServiceListingInstructionDataDecoder,
   getHireFromListingInstructionDataDecoder,
+  getHireFromListingHumanlessInstructionDataDecoder,
   getRegisterAgentInstructionDataDecoder,
+  getSetTaskJobSpecInstructionDataDecoder,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   A_LISTING_PDA,
@@ -18,6 +21,7 @@ import {
   A_PROVIDER,
   A_AUTHORITY,
   A_CREATOR,
+  A_MODERATOR,
 } from "./fixtures.js";
 
 // prepare-* tools build instructions purely from args; no transport needed.
@@ -111,6 +115,8 @@ describe("prepare_hire handler", () => {
         taskId: HEX32,
         expectedPrice: "50000000",
         expectedVersion: "4",
+        moderator: A_MODERATOR,
+        listingSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
@@ -128,6 +134,12 @@ describe("prepare_hire handler", () => {
     const buyerMeta = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(buyerMeta, "buyer is an account meta").toBeDefined();
     expect(buyerMeta!.role.signer).toBe(true);
+
+    // P1.2: the moderator arg is encoded into the instruction data verbatim.
+    const decoded = getHireFromListingInstructionDataDecoder().decode(
+      decodeDataBase64(ix),
+    );
+    expect(decoded.moderator).toBe(A_MODERATOR);
   });
 
   it("encodes an optional referrer leg for registered-agent hires", async () => {
@@ -139,6 +151,8 @@ describe("prepare_hire handler", () => {
         taskId: HEX32,
         expectedPrice: "50000000",
         expectedVersion: "4",
+        moderator: A_MODERATOR,
+        listingSpecHash: HEX32,
         referrer: A_CREATOR,
         referrerFeeBps: 500,
       },
@@ -164,6 +178,8 @@ describe("prepare_hire handler", () => {
           taskId: HEX32,
           expectedPrice: "1",
           expectedVersion: "1",
+          moderator: A_MODERATOR,
+          listingSpecHash: HEX32,
           referrerFeeBps: 500,
         },
         ctx,
@@ -181,6 +197,26 @@ describe("prepare_hire handler", () => {
           taskId: "deadbeef", // too short
           expectedPrice: "1",
           expectedVersion: "1",
+          moderator: A_MODERATOR,
+          listingSpecHash: HEX32,
+        },
+        ctx,
+      ),
+    ).rejects.toBeInstanceOf(MarketplaceToolError);
+  });
+
+  it("rejects a listingSpecHash that is not 64 hex chars", async () => {
+    await expect(
+      getTool("prepare_hire")!.handler(
+        {
+          listing: A_LISTING_PDA,
+          buyer: A_AUTHORITY,
+          creatorAgent: A_PROVIDER,
+          taskId: HEX32,
+          expectedPrice: "1",
+          expectedVersion: "1",
+          moderator: A_MODERATOR,
+          listingSpecHash: "deadbeef", // too short
         },
         ctx,
       ),
@@ -197,6 +233,8 @@ describe("prepare_hire_humanless handler", () => {
         taskId: HEX32,
         expectedPrice: "50000000",
         expectedVersion: "4",
+        moderator: A_MODERATOR,
+        listingSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
@@ -204,6 +242,12 @@ describe("prepare_hire_humanless handler", () => {
     expect(ix.signatures).toEqual([]);
     const buyer = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(buyer?.role.signer).toBe(true);
+
+    // P1.2: the moderator arg is encoded into the instruction data verbatim.
+    const decoded = getHireFromListingHumanlessInstructionDataDecoder().decode(
+      decodeDataBase64(ix),
+    );
+    expect(decoded.moderator).toBe(A_MODERATOR);
   });
 
   it("rejects non-zero referrerFeeBps without a referrer payee", async () => {
@@ -215,6 +259,8 @@ describe("prepare_hire_humanless handler", () => {
           taskId: HEX32,
           expectedPrice: "50000000",
           expectedVersion: "4",
+          moderator: A_MODERATOR,
+          listingSpecHash: HEX32,
           referrerFeeBps: 500,
         },
         ctx,
@@ -224,13 +270,14 @@ describe("prepare_hire_humanless handler", () => {
 });
 
 describe("prepare_set_task_job_spec handler", () => {
-  it("returns an unsigned activation instruction", async () => {
+  it("returns an unsigned activation instruction and encodes the moderator arg", async () => {
     const ix = (await getTool("prepare_set_task_job_spec")!.handler(
       {
         task: A_TASK_PDA,
         creator: A_AUTHORITY,
         jobSpecHash: HEX32,
         jobSpecUri: "agenc://job-spec/sha256/test",
+        moderator: A_MODERATOR,
       },
       ctx,
     )) as UnsignedInstructionView;
@@ -238,29 +285,84 @@ describe("prepare_set_task_job_spec handler", () => {
     expect(ix.signatures).toEqual([]);
     const creator = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(creator?.role.signer).toBe(true);
+
+    // P1.2: the moderator arg is encoded into the instruction data verbatim.
+    const decoded = getSetTaskJobSpecInstructionDataDecoder().decode(
+      decodeDataBase64(ix),
+    );
+    expect(decoded.moderator).toBe(A_MODERATOR);
+    expect(Array.from(decoded.jobSpecHash)).toEqual(Array(32).fill(7));
   });
 });
 
-describe("A1 roster-gate account shapes (sdk ^0.7.0 cutover pin)", () => {
-  // The 2026-07-02 mainnet upgrade (WP-A1) added an optional
-  // moderation_attestor account to the three moderation consumption gates.
-  // Anchor 0.32 requires optional accounts present (program-id sentinel when
-  // unset), so the deployed program rejects the old 7/12/11 shapes outright.
-  // These exact counts fail against sdk 0.6.x — they pin the cutover.
-  it("prepare_set_task_job_spec emits the 8-account post-A1 shape", async () => {
+describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => {
+  // The P1.2 "open roster" flag-day upgrade (84→90 instructions) reworked the
+  // three moderation consumption gates: a REQUIRED `moderator` instruction arg,
+  // a REQUIRED moderation_block (BLOCK-floor) account, and the optional roster
+  // moderation_attestor account. Anchor 0.32 requires optional accounts present
+  // (program-id sentinel when unset), so the deployed program rejects the old
+  // post-A1 8/13/12 shapes outright. These exact counts fail against sdk 0.7.x
+  // — they pin the cutover. Account indexes below are HARDCODED from the
+  // generated client (never computed from the builder):
+  //   set_task_job_spec  → 9  (taskModeration @3, moderationAttestor @4)
+  //   hire_from_listing  → 14 (listingModeration @6, moderationAttestor @7)
+  //   hire_..._humanless → 13 (listingModeration @7, moderationAttestor @8)
+  const NONE_PLACEHOLDER = AGENC_COORDINATION_PROGRAM_ADDRESS;
+
+  it("prepare_set_task_job_spec emits the 9-account post-P1.2 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
     const ix = (await getTool("prepare_set_task_job_spec")!.handler(
       {
         task: A_TASK_PDA,
         creator: A_AUTHORITY,
         jobSpecHash: HEX32,
         jobSpecUri: "agenc://job-spec/sha256/test",
+        moderator: A_MODERATOR,
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(8);
+    expect(ix.accounts).toHaveLength(9);
+    // Global-authority path: the optional roster slot is the program-id
+    // sentinel (= Anchor None), NOT a derived roster PDA.
+    expect(ix.accounts[4]!.address).toBe(NONE_PLACEHOLDER);
   });
 
-  it("prepare_hire emits the 13-account post-A1 shape", async () => {
+  it("prepare_set_task_job_spec with moderatorIsAttestor:true attaches the roster PDA", async () => {
+    const ix = (await getTool("prepare_set_task_job_spec")!.handler(
+      {
+        task: A_TASK_PDA,
+        creator: A_AUTHORITY,
+        jobSpecHash: HEX32,
+        jobSpecUri: "agenc://job-spec/sha256/test",
+        moderator: A_MODERATOR,
+        moderatorIsAttestor: true,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.accounts).toHaveLength(9);
+    const [rosterPda] = await findModerationAttestorPda({
+      attestor: A_MODERATOR,
+    });
+    expect(ix.accounts[4]!.address).toBe(rosterPda);
+    expect(rosterPda).not.toBe(NONE_PLACEHOLDER);
+  });
+
+  it("prepare_set_task_job_spec honors the legacy taskModeration override (grace window)", async () => {
+    const ix = (await getTool("prepare_set_task_job_spec")!.handler(
+      {
+        task: A_TASK_PDA,
+        creator: A_AUTHORITY,
+        jobSpecHash: HEX32,
+        jobSpecUri: "agenc://job-spec/sha256/test",
+        moderator: A_MODERATOR,
+        taskModeration: A_CREATOR,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.accounts).toHaveLength(9);
+    expect(ix.accounts[3]!.address).toBe(A_CREATOR);
+  });
+
+  it("prepare_hire emits the 14-account post-P1.2 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
     const ix = (await getTool("prepare_hire")!.handler(
       {
         listing: A_LISTING_PDA,
@@ -269,13 +371,41 @@ describe("A1 roster-gate account shapes (sdk ^0.7.0 cutover pin)", () => {
         taskId: HEX32,
         expectedPrice: "50000000",
         expectedVersion: "4",
+        moderator: A_MODERATOR,
+        listingSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(13);
+    expect(ix.accounts).toHaveLength(14);
+    expect(ix.accounts[7]!.address).toBe(NONE_PLACEHOLDER);
   });
 
-  it("prepare_hire_humanless emits the 12-account post-A1 shape", async () => {
+  it("prepare_hire with moderatorIsAttestor:true attaches the roster PDA; the legacy listingModeration override lands in the record slot", async () => {
+    const ix = (await getTool("prepare_hire")!.handler(
+      {
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        creatorAgent: A_PROVIDER,
+        taskId: HEX32,
+        expectedPrice: "50000000",
+        expectedVersion: "4",
+        moderator: A_MODERATOR,
+        listingSpecHash: HEX32,
+        moderatorIsAttestor: true,
+        listingModeration: A_CREATOR,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.accounts).toHaveLength(14);
+    expect(ix.accounts[6]!.address).toBe(A_CREATOR);
+    const [rosterPda] = await findModerationAttestorPda({
+      attestor: A_MODERATOR,
+    });
+    expect(ix.accounts[7]!.address).toBe(rosterPda);
+    expect(rosterPda).not.toBe(NONE_PLACEHOLDER);
+  });
+
+  it("prepare_hire_humanless emits the 13-account post-P1.2 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
     const ix = (await getTool("prepare_hire_humanless")!.handler(
       {
         listing: A_LISTING_PDA,
@@ -283,10 +413,35 @@ describe("A1 roster-gate account shapes (sdk ^0.7.0 cutover pin)", () => {
         taskId: HEX32,
         expectedPrice: "50000000",
         expectedVersion: "4",
+        moderator: A_MODERATOR,
+        listingSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(12);
+    expect(ix.accounts).toHaveLength(13);
+    expect(ix.accounts[8]!.address).toBe(NONE_PLACEHOLDER);
+  });
+
+  it("prepare_hire_humanless with moderatorIsAttestor:true attaches the roster PDA", async () => {
+    const ix = (await getTool("prepare_hire_humanless")!.handler(
+      {
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        taskId: HEX32,
+        expectedPrice: "50000000",
+        expectedVersion: "4",
+        moderator: A_MODERATOR,
+        listingSpecHash: HEX32,
+        moderatorIsAttestor: true,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+    expect(ix.accounts).toHaveLength(13);
+    const [rosterPda] = await findModerationAttestorPda({
+      attestor: A_MODERATOR,
+    });
+    expect(ix.accounts[8]!.address).toBe(rosterPda);
+    expect(rosterPda).not.toBe(NONE_PLACEHOLDER);
   });
 });
 

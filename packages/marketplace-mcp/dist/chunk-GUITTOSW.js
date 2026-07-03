@@ -85,7 +85,7 @@ import {
   MarketplaceToolError
 } from "@tetsuo-ai/marketplace-tools";
 var SERVER_NAME = "@tetsuo-ai/marketplace-mcp";
-var SERVER_VERSION = "0.2.0";
+var SERVER_VERSION = "0.4.0";
 function selectTools(enableMutations) {
   return enableMutations ? marketplaceTools : readonlyTools;
 }

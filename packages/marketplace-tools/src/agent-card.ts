@@ -361,7 +361,9 @@ export function listingToAgentCard(
       instruction:
         `To hire: prepare a humanless hire transaction (buyer wallet, listing=${listingPda}, ` +
         `expectedPrice=${account.price.toString()}, expectedVersion=${account.version.toString()}, ` +
-        `listingSpecHash=${specHash}) with the SDK facade, MCP prepare tools, ` +
+        `listingSpecHash=${specHash}, plus the moderator pubkey whose moderation ` +
+        `attestation the hire consumes — from your attestation service, e.g. ` +
+        `attest.agenc.ag GET /v1/info) with the SDK facade, MCP prepare tools, ` +
         `or your operator transaction builder, sign the unsigned transaction ` +
         `locally, and broadcast it. The humanless hire mints a Task + escrow ` +
         `on program ` +

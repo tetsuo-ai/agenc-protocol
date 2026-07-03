@@ -28,6 +28,10 @@ import {
   signerAddress,
   withoutReferrerArgs,
 } from "./internal.js";
+import {
+  resolveHireListingModerationAccounts,
+  type HireListingModerationAccounts,
+} from "./moderation-attestor.js";
 
 /**
  * Input to a standard `hire(...)` — a buyer that has a registered marketplace
@@ -132,6 +136,27 @@ export function useHire(): UseHireResult {
       const { referrerArgs, referrerInjected } = resolveReferrerArgs(ctx);
       const hireInput = withoutReferrerArgs(input);
 
+      // P1.2: the hire gate names an explicit `moderator` (the caller's trust
+      // decision) and needs the roster-entry PDA when that moderator is a
+      // registered attestor, plus a record override when the listing
+      // attestation predates the upgrade (legacy grace window). Resolve the
+      // mechanics automatically unless the caller supplied any of them.
+      const listingSpecHash = input.listingSpecHash;
+      let moderationArgs: HireListingModerationAccounts = {};
+      if (
+        input.moderationAttestor === undefined &&
+        input.moderatorIsAttestor === undefined &&
+        input.listingModeration === undefined &&
+        listingSpecHash !== undefined
+      ) {
+        moderationArgs = await resolveHireListingModerationAccounts({
+          rpcUrl: ctx.rpcUrl,
+          listing: input.listing,
+          listingSpecHash,
+          moderator: input.moderator,
+        });
+      }
+
       const creator = input.creator ?? client.signer;
       let signature: string;
 
@@ -140,6 +165,7 @@ export function useHire(): UseHireResult {
         // it settles via the buyer review path (useSubmissionReview).
         const result = await client.hireFromListingHumanless({
           ...hireInput,
+          ...moderationArgs,
           creator,
           ...referrerArgs,
         } as Parameters<typeof facadeNs.hireFromListingHumanless>[0]);
@@ -149,6 +175,7 @@ export function useHire(): UseHireResult {
         const authority = input.authority ?? client.signer;
         const result = await client.hireFromListing({
           ...hireInput,
+          ...moderationArgs,
           authority,
           creator,
           ...referrerArgs,

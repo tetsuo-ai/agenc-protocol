@@ -26,6 +26,9 @@ export const A_LISTING_PDA =
   "Stake11111111111111111111111111111111111111" as Address;
 export const A_TASK_PDA =
   "Config1111111111111111111111111111111111111" as Address;
+/** A throwaway moderator pubkey (the P1.2 moderator instruction arg). */
+export const A_MODERATOR =
+  "SysvarC1ock11111111111111111111111111111111" as Address;
 
 function zeros(n: number): Uint8Array {
   return new Uint8Array(n);

@@ -10,7 +10,7 @@ import {
   readonlyTools,
   resolveMcpConfig,
   selectTools
-} from "./chunk-OSV4TJGF.js";
+} from "./chunk-GUITTOSW.js";
 export {
   DEFAULT_RPC_URL,
   SERVER_NAME,

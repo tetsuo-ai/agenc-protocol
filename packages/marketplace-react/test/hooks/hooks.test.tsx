@@ -429,6 +429,8 @@ describe("useHumanlessHireFlow", () => {
     expectedVersion: 1n,
     reviewWindowSecs: 3600n,
     listingSpecHash: new Uint8Array(32).fill(9),
+    // P1.2: the hire gate names the moderator whose listing attestation it consumes.
+    moderator: PROVIDER_AGENT,
   };
 
   async function expectedFlowTaskPda() {
@@ -445,6 +447,7 @@ describe("useHumanlessHireFlow", () => {
       jobSpecHash: flowHash,
       jobSpecUri: "https://example.test/specs/flow.json",
       moderationAttested: true,
+      moderator: PROVIDER_AGENT,
       moderation: { verdict: "allow" },
     }));
     const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
@@ -497,6 +500,7 @@ describe("useHumanlessHireFlow", () => {
         jobSpecHash: flowHash,
         jobSpecUri: "https://example.test/specs/referrer.json",
         moderationAttested: true,
+        moderator: PROVIDER_AGENT,
       }),
     );
     const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
@@ -529,6 +533,7 @@ describe("useHumanlessHireFlow", () => {
         jobSpecHash: flowHash,
         jobSpecUri: "https://example.test/specs/no-referrer.json",
         moderationAttested: true,
+        moderator: PROVIDER_AGENT,
       }),
     );
     const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
@@ -592,6 +597,7 @@ describe("useHumanlessHireFlow", () => {
       jobSpecHash: flowHash,
       jobSpecUri: "https://example.test/specs/rejected.json",
       moderationAttested: false,
+      moderator: PROVIDER_AGENT,
     }));
     const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
       wrapper: wrapper({
@@ -622,6 +628,7 @@ describe("useHumanlessHireFlow", () => {
       jobSpecHash: new Uint8Array(31),
       jobSpecUri: "https://example.test/specs/invalid-hash.json",
       moderationAttested: true,
+      moderator: PROVIDER_AGENT,
     }));
     const invalidHash = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
       wrapper: wrapper({
@@ -645,6 +652,7 @@ describe("useHumanlessHireFlow", () => {
       jobSpecHash: flowHash,
       jobSpecUri: "   ",
       moderationAttested: true,
+      moderator: PROVIDER_AGENT,
     }));
     const emptyUri = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
       wrapper: wrapper({
@@ -675,6 +683,7 @@ describe("useHumanlessHireFlow", () => {
       jobSpecHash: flowHash,
       jobSpecUri: "https://example.test/specs/activation-fail.json",
       moderationAttested: true,
+      moderator: PROVIDER_AGENT,
     }));
     const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
       wrapper: wrapper({
@@ -708,6 +717,7 @@ describe("useHumanlessHireFlow", () => {
           jobSpecHash: Uint8Array;
           jobSpecUri: string;
           moderationAttested: true;
+          moderator: typeof PROVIDER_AGENT;
         }) => void)
       | undefined;
     const client = stubClient();
@@ -717,6 +727,7 @@ describe("useHumanlessHireFlow", () => {
           jobSpecHash: Uint8Array;
           jobSpecUri: string;
           moderationAttested: true;
+          moderator: typeof PROVIDER_AGENT;
         }>((resolve) => {
           resolveHost = resolve;
         }),
@@ -750,6 +761,7 @@ describe("useHumanlessHireFlow", () => {
       jobSpecHash: flowHash,
       jobSpecUri: "https://example.test/specs/overlap.json",
       moderationAttested: true,
+      moderator: PROVIDER_AGENT,
     });
     await expect(first).resolves.toMatchObject({
       activationSignature: "sig-activate",
@@ -777,6 +789,7 @@ describe("useHumanlessHireFlow", () => {
       jobSpecHash: flowHash,
       jobSpecUri: "https://example.test/specs/reset.json",
       moderationAttested: true,
+      moderator: PROVIDER_AGENT,
     }));
     const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
       wrapper: wrapper({

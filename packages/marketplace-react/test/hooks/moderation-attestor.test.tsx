@@ -1,17 +1,18 @@
 /**
- * WP-A1 activation wiring — the roster `moderation_attestor` account.
+ * P1.2 consumption-gate wiring — moderator, roster PDA, legacy grace window.
  *
- * Post-A1 the publish gate accepts roster-attested task moderation ONLY when
- * the attestor's roster-entry PDA is attached to `set_task_job_spec`. The
- * hooks must resolve + attach it automatically when the recorded moderation
- * was authored by a roster attestor (the default when the activation backend
- * is the public attestation service), and omit it for global-authority
- * moderation.
+ * Post-P1.2 the publish gate consumes the record of an EXPLICIT `moderator`
+ * (v2 moderator-keyed seeds). The hooks must: attach the roster-entry PDA
+ * automatically when the named moderator is a registered attestor (not the
+ * global authority); point the gate at the FROZEN legacy record when the
+ * attestation predates the upgrade and was authored by the same moderator;
+ * and pass the moderator through as the instruction arg.
  *
- * REVERT-SENSITIVE: against the pre-fix hooks (which never attached the
- * account) the "attaches" cases fail — that gap made every roster-attested
- * store activation fail on-chain with UNAUTHORIZED_TASK_MODERATOR (found by
- * the 2026-07-02 cross-node canary).
+ * REVERT-SENSITIVE: against the pre-P1.2 hooks (which derived the record
+ * from task+hash alone and never carried a moderator) the "roster" and
+ * "legacy override" cases fail — the WP-A1 ancestor of that gap made every
+ * roster-attested store activation fail on-chain with
+ * UNAUTHORIZED_TASK_MODERATOR (found by the 2026-07-02 cross-node canary).
  *
  * The SDK account fetchers are mocked at the module seam so no RPC/network is
  * involved; PDA derivation and everything else use the real SDK.
@@ -23,19 +24,31 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const chain = vi.hoisted(() => ({
-  taskModeration: null as null | { moderator: string },
+  /** On-chain moderation records by ADDRESS (v2 and legacy PDAs both land here). */
+  records: {} as Record<string, { moderator: string }>,
+  /** Existing roster entries by roster-PDA ADDRESS. */
+  attestors: {} as Record<string, true>,
   moderationConfig: null as null | { moderationAuthority: string },
 }));
 
 vi.mock("@tetsuo-ai/marketplace-sdk", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@tetsuo-ai/marketplace-sdk")>();
+  const fetchRecord = async (_rpc: unknown, addr: unknown) => {
+    const data = chain.records[addr as string];
+    return data
+      ? { exists: true, address: addr, data }
+      : { exists: false, address: addr };
+  };
   return {
     ...actual,
-    fetchMaybeTaskModeration: vi.fn(async (_rpc: unknown, addr: unknown) =>
-      chain.taskModeration
-        ? { exists: true, address: addr, data: chain.taskModeration }
-        : { exists: false, address: addr },
+    fetchMaybeTaskModeration: vi.fn(fetchRecord),
+    fetchMaybeListingModeration: vi.fn(fetchRecord),
+    fetchMaybeModerationAttestor: vi.fn(
+      async (_rpc: unknown, addr: unknown) =>
+        chain.attestors[addr as string]
+          ? { exists: true, address: addr, data: {} }
+          : { exists: false, address: addr },
     ),
     fetchMaybeModerationConfig: vi.fn(async (_rpc: unknown, addr: unknown) =>
       chain.moderationConfig
@@ -46,7 +59,9 @@ vi.mock("@tetsuo-ai/marketplace-sdk", async (importOriginal) => {
 });
 
 import {
+  facade,
   findModerationAttestorPda,
+  findTaskModerationPda,
   findTaskPda,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
@@ -112,12 +127,32 @@ async function expectedRosterPda(): Promise<string> {
   return pda;
 }
 
+/** The v2 moderator-keyed record PDA for (TASK_PDA, JOB_SPEC_HASH, moderator). */
+async function v2RecordPda(moderator: string): Promise<string> {
+  const [pda] = await findTaskModerationPda({
+    task: TASK_PDA,
+    jobSpecHash: JOB_SPEC_HASH,
+    moderator: address(moderator),
+  });
+  return pda;
+}
+
+/** The frozen pre-P1.2 record PDA for (TASK_PDA, JOB_SPEC_HASH). */
+async function legacyRecordPda(): Promise<string> {
+  const [pda] = await facade.findLegacyTaskModerationPda({
+    task: TASK_PDA,
+    jobSpecHash: JOB_SPEC_HASH,
+  });
+  return pda;
+}
+
 beforeEach(() => {
-  chain.taskModeration = null;
+  chain.records = {};
+  chain.attestors = {};
   chain.moderationConfig = null;
 });
 
-describe("useTaskActivation — WP-A1 roster attestor resolution", () => {
+describe("useTaskActivation — P1.2 moderation account resolution", () => {
   function render(client: MarketplaceClient) {
     return renderHook(() => useTaskActivation(TASK_PDA), {
       wrapper: wrapper({
@@ -128,45 +163,97 @@ describe("useTaskActivation — WP-A1 roster attestor resolution", () => {
     });
   }
 
-  it("attaches the roster moderation_attestor account when the moderation was authored by a roster attestor", async () => {
-    chain.taskModeration = { moderator: ROSTER_ATTESTOR };
+  it("attaches the roster moderation_attestor account and passes the moderator through when the moderator is a roster attestor", async () => {
     chain.moderationConfig = { moderationAuthority: GLOBAL_AUTHORITY };
+    chain.attestors[await expectedRosterPda()] = true;
+    chain.records[await v2RecordPda(ROSTER_ATTESTOR)] = {
+      moderator: ROSTER_ATTESTOR,
+    };
     const client = stubClient();
     const { result } = render(client);
 
     await result.current.activate({
       jobSpecHash: JOB_SPEC_HASH,
       jobSpecUri: "https://example.test/spec.json",
+      moderator: address(ROSTER_ATTESTOR),
+    });
+
+    const call = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0];
+    expect(call.moderator).toBe(address(ROSTER_ATTESTOR));
+    expect(call.moderationAttestor).toBe(await expectedRosterPda());
+    // v2 record exists → the facade's default derivation is correct; no override.
+    expect(call.taskModeration).toBeUndefined();
+  });
+
+  it("omits the roster account for global-authority moderation", async () => {
+    chain.moderationConfig = { moderationAuthority: GLOBAL_AUTHORITY };
+    chain.records[await v2RecordPda(GLOBAL_AUTHORITY)] = {
+      moderator: GLOBAL_AUTHORITY,
+    };
+    const client = stubClient();
+    const { result } = render(client);
+
+    await result.current.activate({
+      jobSpecHash: JOB_SPEC_HASH,
+      jobSpecUri: "https://example.test/spec.json",
+      moderator: address(GLOBAL_AUTHORITY),
+    });
+
+    const call = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0];
+    expect(call.moderator).toBe(address(GLOBAL_AUTHORITY));
+    expect(call.moderationAttestor).toBeUndefined();
+  });
+
+  it("points the gate at the FROZEN legacy record when no v2 record exists and the legacy record was authored by the same moderator (grace window)", async () => {
+    chain.moderationConfig = { moderationAuthority: GLOBAL_AUTHORITY };
+    chain.attestors[await expectedRosterPda()] = true;
+    chain.records[await legacyRecordPda()] = { moderator: ROSTER_ATTESTOR };
+    const client = stubClient();
+    const { result } = render(client);
+
+    await result.current.activate({
+      jobSpecHash: JOB_SPEC_HASH,
+      jobSpecUri: "https://example.test/spec.json",
+      moderator: address(ROSTER_ATTESTOR),
     });
 
     const call = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
     expect(call.moderationAttestor).toBe(await expectedRosterPda());
+    expect(call.taskModeration).toBe(await legacyRecordPda());
   });
 
-  it("omits the account for global-authority moderation", async () => {
-    chain.taskModeration = { moderator: GLOBAL_AUTHORITY };
+  it("does NOT point at a legacy record authored by a DIFFERENT moderator", async () => {
     chain.moderationConfig = { moderationAuthority: GLOBAL_AUTHORITY };
+    chain.records[await legacyRecordPda()] = { moderator: GLOBAL_AUTHORITY };
     const client = stubClient();
     const { result } = render(client);
 
     await result.current.activate({
       jobSpecHash: JOB_SPEC_HASH,
       jobSpecUri: "https://example.test/spec.json",
+      moderator: address(ROSTER_ATTESTOR),
     });
 
     const call = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
-    expect(call.moderationAttestor).toBeUndefined();
+    expect(call.taskModeration).toBeUndefined();
   });
 
-  it("omits the account when no TaskModeration is recorded", async () => {
+  it("does NOT attach a roster entry it cannot verify exists (stray-cluster regression)", async () => {
+    chain.moderationConfig = { moderationAuthority: GLOBAL_AUTHORITY };
+    // The moderator is not the authority, but no roster entry exists on the
+    // chain the resolver reads — attaching the derived PDA would fail the
+    // gate with AccountNotInitialized, strictly worse than attaching nothing.
     const client = stubClient();
     const { result } = render(client);
 
     await result.current.activate({
       jobSpecHash: JOB_SPEC_HASH,
       jobSpecUri: "https://example.test/spec.json",
+      moderator: address(ROSTER_ATTESTOR),
     });
 
     const call = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
@@ -175,7 +262,6 @@ describe("useTaskActivation — WP-A1 roster attestor resolution", () => {
   });
 
   it("a caller-supplied moderationAttestor wins over resolution", async () => {
-    chain.taskModeration = { moderator: ROSTER_ATTESTOR };
     chain.moderationConfig = { moderationAuthority: GLOBAL_AUTHORITY };
     const client = stubClient();
     const { result } = render(client);
@@ -184,6 +270,7 @@ describe("useTaskActivation — WP-A1 roster attestor resolution", () => {
     await result.current.activate({
       jobSpecHash: JOB_SPEC_HASH,
       jobSpecUri: "https://example.test/spec.json",
+      moderator: address(ROSTER_ATTESTOR),
       moderationAttestor: explicit,
     });
 
@@ -193,10 +280,10 @@ describe("useTaskActivation — WP-A1 roster attestor resolution", () => {
   });
 });
 
-describe("useHumanlessHireFlow — WP-A1 roster attestor resolution", () => {
-  it("attaches the roster account at the activation phase (the cross-node canary regression)", async () => {
-    chain.taskModeration = { moderator: ROSTER_ATTESTOR };
+describe("useHumanlessHireFlow — P1.2 moderation account resolution", () => {
+  it("carries the moderation result's moderator into activation and attaches the roster account (the cross-node canary regression)", async () => {
     chain.moderationConfig = { moderationAuthority: GLOBAL_AUTHORITY };
+    chain.attestors[await expectedRosterPda()] = true;
     const client = stubClient();
     const taskId = new Uint8Array(32).fill(8);
 
@@ -216,12 +303,14 @@ describe("useHumanlessHireFlow — WP-A1 roster attestor resolution", () => {
         expectedVersion: 1n,
         reviewWindowSecs: 3600n,
         listingSpecHash: new Uint8Array(32).fill(9),
+        moderator: address(ROSTER_ATTESTOR),
       },
       jobSpec: { title: "cross-node canary" },
       hostAndModerateJobSpec: vi.fn(async () => ({
         jobSpecHash: JOB_SPEC_HASH,
         jobSpecUri: "https://example.test/spec.json",
         moderationAttested: true,
+        moderator: address(ROSTER_ATTESTOR),
         moderation: { verdict: "clean" },
       })),
     });
@@ -230,9 +319,16 @@ describe("useHumanlessHireFlow — WP-A1 roster attestor resolution", () => {
       creator: address(CREATOR_WALLET),
       taskId,
     });
+    const hireCall = (
+      client.hireFromListingHumanless as ReturnType<typeof vi.fn>
+    ).mock.calls[0]![0];
+    // The hire gate names the listing moderator and gets the roster account.
+    expect(hireCall.moderator).toBe(address(ROSTER_ATTESTOR));
+    expect(hireCall.moderationAttestor).toBe(await expectedRosterPda());
     const call = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
     expect(call.task).toBe(taskPda);
+    expect(call.moderator).toBe(address(ROSTER_ATTESTOR));
     expect(call.moderationAttestor).toBe(await expectedRosterPda());
   });
 });

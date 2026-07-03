@@ -132,6 +132,8 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
       expectedPrice: price,
       expectedVersion: 1n,
       listingSpecHash,
+      // P1.2: the hire gate consumes the named moderator's record.
+      moderator: market.moderator.address,
     });
     const [task] = await findTaskPda({ creator: buyerAddress, taskId });
     expect(getTaskDecoder().decode(accountData(market, task)!).status).toBe(
@@ -147,6 +149,8 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
         creator: buyerSigner,
         jobSpecHash,
         jobSpecUri: "agenc://job-spec/sha256/x",
+        // P1.2: the publish gate consumes the named moderator's record.
+        moderator: market.moderator.address,
       }),
     ]);
 

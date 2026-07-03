@@ -1,5 +1,27 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.4.0
+
+### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)
+
+- Rebuild on `@tetsuo-ai/marketplace-sdk@^0.8.0` (peer): hire and activation
+  inputs now REQUIRE the P1.2 `moderator` — the pubkey whose attestation the
+  gate consumes, read from your attestation service (e.g. attest.agenc.ag
+  `GET /v1/info` → `moderator`). `HumanlessHireFlowModerationResult` gains a
+  required `moderator` field (the flow's activation consumes the record of
+  whoever signed the moderation), validated fail-closed like the hash/URI.
+- The hooks resolve the gate MECHANICS automatically (the trust decision
+  stays the caller's): `useHire`, `useHumanlessHireFlow`, and
+  `useTaskActivation` attach the `["moderation_attestor", moderator]` roster
+  entry when the named moderator is a registered attestor — only after
+  verifying the entry exists on-chain (attaching an uninitialized PDA fails
+  the gate harder than the authority branch) — and point the gate at the
+  FROZEN pre-P1.2 record when no v2 record exists but a legacy record by the
+  same moderator does (grace window). Caller-supplied `moderationAttestor` /
+  `moderatorIsAttestor` / record overrides win over resolution.
+- `resolveActivationModerationAttestor` (internal) is replaced by
+  `resolveActivationModerationAccounts` + `resolveHireListingModerationAccounts`.
+
 ## 0.3.2
 
 ### Patch Changes

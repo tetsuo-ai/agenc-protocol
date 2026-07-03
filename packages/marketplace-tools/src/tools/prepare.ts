@@ -228,7 +228,9 @@ interface PrepareHireArgs {
   taskId: string;
   expectedPrice: string;
   expectedVersion: string;
-  listingSpecHash?: string;
+  moderator: string;
+  listingSpecHash: string;
+  moderatorIsAttestor?: boolean;
   listingModeration?: string;
   referrer?: string;
   referrerFeeBps?: number;
@@ -253,6 +255,8 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       "taskId",
       "expectedPrice",
       "expectedVersion",
+      "moderator",
+      "listingSpecHash",
     ],
     properties: {
       listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
@@ -277,15 +281,36 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
         type: "string",
         description: "Expected listing version (decimal u64 string) — CAS guard.",
       },
+      moderator: {
+        type: "string",
+        description:
+          "Pubkey (base58) whose listing-moderation attestation this hire consumes " +
+          "(the P1.2 moderator instruction arg). Get it from your attestation " +
+          "service's signer pubkey — e.g. the `moderator` field of attest.agenc.ag " +
+          "GET /v1/info.",
+      },
       listingSpecHash: {
         type: "string",
         description:
-          "Listing's pinned spec hash as 64 hex chars. When given, the facade derives the moderation PDA.",
+          "Listing's pinned spec hash as 64 hex chars. The facade derives the " +
+          "REQUIRED moderation-block (BLOCK-floor) PDA from it, plus the v2 " +
+          "moderator-keyed moderation record PDA unless listingModeration is passed.",
+      },
+      moderatorIsAttestor: {
+        type: "boolean",
+        description:
+          "Set true when moderator is a REGISTERED roster attestor: the facade " +
+          "derives and attaches the [\"moderation_attestor\", moderator] roster PDA " +
+          "the hire gate requires. Omit/false for the global-moderation-authority " +
+          "path — the roster slot is then the None placeholder.",
       },
       listingModeration: {
         type: "string",
         description:
-          "Explicit listing-moderation attestation PDA (base58). Alternative to listingSpecHash.",
+          "Explicit listing-moderation record PDA (base58) override. Legacy " +
+          "grace-window escape hatch for pre-upgrade records at the old seeds " +
+          "(derive via facade.findLegacyListingModerationPda); defaults to the v2 " +
+          "moderator-keyed PDA derived from listingSpecHash.",
       },
       referrer: { type: "string", description: "Optional referrer wallet." },
       referrerFeeBps: {
@@ -307,13 +332,11 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       taskId: hex32(args.taskId, "taskId", "prepare_hire"),
       expectedPrice: BigInt(args.expectedPrice),
       expectedVersion: BigInt(args.expectedVersion),
+      moderator: args.moderator as Address,
+      listingSpecHash: hex32(args.listingSpecHash, "listingSpecHash", "prepare_hire"),
     };
-    if (args.listingSpecHash !== undefined) {
-      input.listingSpecHash = hex32(
-        args.listingSpecHash,
-        "listingSpecHash",
-        "prepare_hire",
-      );
+    if (args.moderatorIsAttestor !== undefined) {
+      input.moderatorIsAttestor = args.moderatorIsAttestor;
     }
     if (args.listingModeration !== undefined) {
       input.listingModeration = args.listingModeration as Address;
@@ -335,7 +358,9 @@ interface PrepareHireHumanlessArgs {
   taskId: string;
   expectedPrice: string;
   expectedVersion: string;
-  listingSpecHash?: string;
+  moderator: string;
+  listingSpecHash: string;
+  moderatorIsAttestor?: boolean;
   listingModeration?: string;
   reviewWindowSecs?: string;
   referrer?: string;
@@ -353,15 +378,48 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["listing", "buyer", "taskId", "expectedPrice", "expectedVersion"],
+    required: [
+      "listing",
+      "buyer",
+      "taskId",
+      "expectedPrice",
+      "expectedVersion",
+      "moderator",
+      "listingSpecHash",
+    ],
     properties: {
       listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
       buyer: { type: "string", description: "Plain buyer wallet that signs and funds escrow." },
       taskId: { type: "string", description: "32-byte task id as 64 hex chars." },
       expectedPrice: { type: "string", description: "Expected listing price in lamports." },
       expectedVersion: { type: "string", description: "Expected listing version." },
-      listingSpecHash: { type: "string", description: "Listing spec hash as 64 hex chars." },
-      listingModeration: { type: "string", description: "Explicit listing moderation PDA." },
+      moderator: {
+        type: "string",
+        description:
+          "Pubkey (base58) whose listing-moderation attestation this hire consumes " +
+          "(the P1.2 moderator instruction arg). Get it from your attestation " +
+          "service's signer pubkey — e.g. the `moderator` field of attest.agenc.ag " +
+          "GET /v1/info.",
+      },
+      listingSpecHash: {
+        type: "string",
+        description:
+          "Listing spec hash as 64 hex chars. Derives the REQUIRED moderation-block " +
+          "PDA plus the v2 moderation record PDA unless listingModeration is passed.",
+      },
+      moderatorIsAttestor: {
+        type: "boolean",
+        description:
+          "Set true when moderator is a REGISTERED roster attestor: the facade " +
+          "derives and attaches its [\"moderation_attestor\", moderator] roster PDA. " +
+          "Omit/false for the global-moderation-authority path (None placeholder).",
+      },
+      listingModeration: {
+        type: "string",
+        description:
+          "Explicit listing-moderation record PDA (base58) override — the legacy " +
+          "grace-window escape hatch (facade.findLegacyListingModerationPda).",
+      },
       reviewWindowSecs: { type: "string", description: "CreatorReview window in seconds." },
       referrer: { type: "string", description: "Optional referrer wallet." },
       referrerFeeBps: {
@@ -388,13 +446,15 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
       expectedPrice: BigInt(args.expectedPrice),
       expectedVersion: BigInt(args.expectedVersion),
       reviewWindowSecs: args.reviewWindowSecs ? BigInt(args.reviewWindowSecs) : 86_400n,
-    };
-    if (args.listingSpecHash !== undefined) {
-      input.listingSpecHash = hex32(
+      moderator: args.moderator as Address,
+      listingSpecHash: hex32(
         args.listingSpecHash,
         "listingSpecHash",
         "prepare_hire_humanless",
-      );
+      ),
+    };
+    if (args.moderatorIsAttestor !== undefined) {
+      input.moderatorIsAttestor = args.moderatorIsAttestor;
     }
     if (args.listingModeration !== undefined) {
       input.listingModeration = args.listingModeration as Address;
@@ -415,6 +475,9 @@ interface PrepareSetTaskJobSpecArgs {
   creator: string;
   jobSpecHash: string;
   jobSpecUri: string;
+  moderator: string;
+  moderatorIsAttestor?: boolean;
+  taskModeration?: string;
 }
 
 const prepareSetTaskJobSpec = defineTool<PrepareSetTaskJobSpecArgs, UnsignedInstructionView>({
@@ -426,21 +489,53 @@ const prepareSetTaskJobSpec = defineTool<PrepareSetTaskJobSpecArgs, UnsignedInst
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["task", "creator", "jobSpecHash", "jobSpecUri"],
+    required: ["task", "creator", "jobSpecHash", "jobSpecUri", "moderator"],
     properties: {
       task: { type: "string", description: "Task PDA to activate." },
       creator: { type: "string", description: "Task creator/buyer wallet that signs." },
       jobSpecHash: { type: "string", description: "Moderated job spec hash as 64 hex chars." },
       jobSpecUri: { type: "string", description: "Hosted job spec URI." },
+      moderator: {
+        type: "string",
+        description:
+          "Pubkey (base58) whose moderation attestation the publish gate consumes " +
+          "(the P1.2 moderator instruction arg). Get it from your attestation " +
+          "service's signer pubkey — e.g. the `moderator` field of attest.agenc.ag " +
+          "GET /v1/info.",
+      },
+      moderatorIsAttestor: {
+        type: "boolean",
+        description:
+          "Set true when moderator is a REGISTERED roster attestor: the facade " +
+          "derives and attaches its [\"moderation_attestor\", moderator] roster PDA. " +
+          "Omit/false for the global-moderation-authority path — the roster slot is " +
+          "then the None placeholder.",
+      },
+      taskModeration: {
+        type: "string",
+        description:
+          "Explicit task-moderation record PDA (base58) override. Legacy " +
+          "grace-window escape hatch for pre-upgrade records at the old seeds " +
+          "(derive via facade.findLegacyTaskModerationPda); defaults to the v2 " +
+          "moderator-keyed PDA derived from task + jobSpecHash + moderator.",
+      },
     },
   },
   async handler(args) {
-    const ix = await facade.setTaskJobSpec({
+    const input: Parameters<typeof facade.setTaskJobSpec>[0] = {
       task: args.task as Address,
       creator: createNoopSigner(args.creator as Address),
       jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_set_task_job_spec"),
       jobSpecUri: args.jobSpecUri,
-    });
+      moderator: args.moderator as Address,
+    };
+    if (args.moderatorIsAttestor !== undefined) {
+      input.moderatorIsAttestor = args.moderatorIsAttestor;
+    }
+    if (args.taskModeration !== undefined) {
+      input.taskModeration = args.taskModeration as Address;
+    }
+    const ix = await facade.setTaskJobSpec(input);
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },
 });

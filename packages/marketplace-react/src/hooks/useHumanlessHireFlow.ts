@@ -12,7 +12,11 @@ import {
   withoutReferrerArgs,
   type MutationStatus,
 } from "./internal.js";
-import { resolveActivationModerationAttestor } from "./moderation-attestor.js";
+import {
+  resolveActivationModerationAccounts,
+  resolveHireListingModerationAccounts,
+  type HireListingModerationAccounts,
+} from "./moderation-attestor.js";
 import type { HumanlessHireInput } from "./useHire.js";
 import type { TaskActivationInput } from "./useTaskActivation.js";
 
@@ -33,8 +37,15 @@ export type HumanlessHireFlowHireInput = Omit<
 
 export type HumanlessHireFlowActivationInput = Omit<
   TaskActivationInput,
-  "creator" | "jobSpecHash" | "jobSpecUri"
->;
+  "creator" | "jobSpecHash" | "jobSpecUri" | "moderator"
+> & {
+  /**
+   * Override the activation `moderator` (P1.2). Defaults to the `moderator`
+   * returned by `hostAndModerateJobSpec` — the attestation service that
+   * signed the task moderation is whose record the publish gate consumes.
+   */
+  moderator?: TaskActivationInput["moderator"];
+};
 
 export type HumanlessHireFlowCreator = HumanlessHireInput["creator"];
 
@@ -45,6 +56,12 @@ export interface HumanlessHireFlowModerationResult {
   jobSpecHash: HumanlessHireFlowJobSpecHash;
   jobSpecUri: string;
   moderationAttested: boolean;
+  /**
+   * The pubkey that signed/recorded the task attestation (P1.2) — the
+   * attestation service's signer (e.g. attest.agenc.ag `GET /v1/info` →
+   * `moderator`). Names whose record the publish gate consumes.
+   */
+  moderator: Address;
   moderation?: unknown;
 }
 
@@ -114,7 +131,11 @@ function emptyProgress(): HumanlessHireFlowProgress {
 
 function validateModerationResult(
   result: HumanlessHireFlowModerationResult,
-): { jobSpecHash: HumanlessHireFlowJobSpecHash; jobSpecUri: string } {
+): {
+  jobSpecHash: HumanlessHireFlowJobSpecHash;
+  jobSpecUri: string;
+  moderator: Address;
+} {
   if (result.moderationAttested !== true) {
     throw new Error(
       "Task moderation was not attested; activation was not signed.",
@@ -134,7 +155,16 @@ function validateModerationResult(
       "Task moderation returned an empty jobSpecUri; activation was not signed.",
     );
   }
-  return { jobSpecHash: result.jobSpecHash, jobSpecUri };
+  if (typeof result.moderator !== "string" || !result.moderator.trim()) {
+    throw new Error(
+      "Task moderation returned no moderator pubkey; activation was not signed.",
+    );
+  }
+  return {
+    jobSpecHash: result.jobSpecHash,
+    jobSpecUri,
+    moderator: result.moderator,
+  };
 }
 
 export function useHumanlessHireFlow<TJobSpec = unknown>(): UseHumanlessHireFlowResult<TJobSpec> {
@@ -159,8 +189,26 @@ export function useHumanlessHireFlow<TJobSpec = unknown>(): UseHumanlessHireFlow
       setProgress(emptyProgress());
 
       try {
+        // P1.2: resolve the hire gate's moderation mechanics (roster PDA /
+        // legacy record override) unless the caller supplied any of them.
+        const hireListingSpecHash = input.hire.listingSpecHash;
+        let hireModerationArgs: HireListingModerationAccounts = {};
+        if (
+          input.hire.moderationAttestor === undefined &&
+          input.hire.moderatorIsAttestor === undefined &&
+          input.hire.listingModeration === undefined &&
+          hireListingSpecHash !== undefined
+        ) {
+          hireModerationArgs = await resolveHireListingModerationAccounts({
+            rpcUrl: ctx.rpcUrl,
+            listing: input.hire.listing,
+            listingSpecHash: hireListingSpecHash,
+            moderator: input.hire.moderator,
+          });
+        }
         const hireResult = await client.hireFromListingHumanless({
           ...hireInput,
+          ...hireModerationArgs,
           creator,
           ...referrerArgs,
         } as Parameters<typeof facadeNs.hireFromListingHumanless>[0]);
@@ -186,7 +234,8 @@ export function useHumanlessHireFlow<TJobSpec = unknown>(): UseHumanlessHireFlow
           hireSignature: hireResult.signature,
           referrerInjected,
         });
-        const { jobSpecHash, jobSpecUri } = validateModerationResult(moderation);
+        const { jobSpecHash, jobSpecUri, moderator } =
+          validateModerationResult(moderation);
 
         setProgress((current) => ({
           ...current,
@@ -195,23 +244,31 @@ export function useHumanlessHireFlow<TJobSpec = unknown>(): UseHumanlessHireFlow
         }));
 
         setPhase("activating");
-        // WP-A1: attach the roster-attestor account when the moderation was
-        // authored by a roster attestor (e.g. the public attestation
-        // service) — without it the publish gate rejects the activation.
-        const moderationAttestor =
-          input.activation?.moderationAttestor ??
-          (await resolveActivationModerationAttestor({
-            rpcUrl: ctx.rpcUrl,
-            task: taskPda,
-            jobSpecHash,
-          }));
+        // P1.2: the publish gate consumes the record of the moderator that
+        // signed the attestation (the host callback's service by default).
+        // Resolve the gate mechanics (roster PDA / legacy record override)
+        // unless the caller supplied any of them.
+        const activationModerator = input.activation?.moderator ?? moderator;
+        const activationCallerResolved =
+          input.activation?.moderationAttestor !== undefined ||
+          input.activation?.moderatorIsAttestor !== undefined ||
+          input.activation?.taskModeration !== undefined;
+        const activationModerationArgs = activationCallerResolved
+          ? {}
+          : await resolveActivationModerationAccounts({
+              rpcUrl: ctx.rpcUrl,
+              task: taskPda,
+              jobSpecHash,
+              moderator: activationModerator,
+            });
         const activationResult = await client.setTaskJobSpec({
           ...(input.activation ?? {}),
-          ...(moderationAttestor !== undefined ? { moderationAttestor } : {}),
+          ...activationModerationArgs,
           task: taskPda,
           creator,
           jobSpecHash,
           jobSpecUri,
+          moderator: activationModerator,
         } as Parameters<typeof facadeNs.setTaskJobSpec>[0]);
 
         const result: HumanlessHireFlowResult = {

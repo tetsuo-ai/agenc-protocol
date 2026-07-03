@@ -122,7 +122,7 @@ declare function buildToolContext(config: McpServerConfig): MarketplaceToolConte
 
 /** This package's name + version, surfaced in the MCP `serverInfo`. */
 declare const SERVER_NAME = "@tetsuo-ai/marketplace-mcp";
-declare const SERVER_VERSION = "0.2.0";
+declare const SERVER_VERSION = "0.4.0";
 /** Options for {@link createMarketplaceMcpServer}. */
 interface CreateMcpServerOptions {
     /**

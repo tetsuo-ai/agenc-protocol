@@ -5,6 +5,16 @@ All notable changes to `@tetsuo-ai/marketplace-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0
+
+### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)
+
+- Rebuild on `@tetsuo-ai/marketplace-sdk@^0.8.0` +
+  `@tetsuo-ai/marketplace-tools@^0.4.0` (P1.2 90-instruction surface). The
+  exposed gate tools inherit the new required `moderator` /
+  `listingSpecHash` inputs and the optional `moderatorIsAttestor` switch —
+  see the marketplace-tools 0.4.0 notes. Tool count unchanged (19).
+
 ## 0.3.0
 
 ### Minor Changes (breaking against pre-A1 programs)

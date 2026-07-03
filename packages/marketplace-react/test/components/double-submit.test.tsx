@@ -79,6 +79,7 @@ function ConnectedHarness({ client }: { client: MarketplaceClient }): ReactNode 
           taskId: new Uint8Array(32).fill(7),
           expectedPrice: l.account.price,
           expectedVersion: 3n,
+          moderator: FIXTURE_AGENT,
         })}
       />
     </AgencProvider>

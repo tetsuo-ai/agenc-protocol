@@ -5,6 +5,29 @@ All notable changes to `@tetsuo-ai/marketplace-tools` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0
+
+### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)
+
+- Rebuild on `@tetsuo-ai/marketplace-sdk@^0.8.0` (90-instruction P1.2
+  surface). The three gate tools change contract:
+  `prepare_set_task_job_spec`, `prepare_hire`, and `prepare_hire_humanless`
+  now REQUIRE a `moderator` input (base58 — the pubkey whose moderation
+  attestation the gate consumes; get it from your attestation service, e.g.
+  attest.agenc.ag `GET /v1/info` → `moderator`) and accept an optional
+  `moderatorIsAttestor` boolean that attaches the
+  `["moderation_attestor", moderator]` roster entry for registered attestors
+  (unset = the global-authority path, roster slot passed as None).
+- `listingSpecHash` is now REQUIRED on both hire tools — it derives the
+  mandatory `moderation_block` BLOCK-floor account.
+- `prepare_set_task_job_spec` accepts an optional `taskModeration` override
+  and `prepare_hire` re-documents `listingModeration` as the legacy
+  grace-window escape hatch for pre-upgrade records
+  (`facade.findLegacyTaskModerationPda` / `findLegacyListingModerationPda`).
+- Shape pins updated: set_task_job_spec 8→9 accounts, hire_from_listing
+  13→14, hire_from_listing_humanless 12→13; new revert-sensitive pins for the
+  encoded `moderator` arg and the roster/None slot.
+
 ## 0.3.0
 
 ### Minor Changes (breaking against pre-A1 programs)
