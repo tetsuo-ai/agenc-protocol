@@ -205,6 +205,12 @@ export interface AgencContextValue {
    * activation. NOT a gPA/list-query source; the read transport owns those.
    */
   rpcUrl: string | null;
+  /**
+   * The configured hosted-indexer base URL (`config.indexer.baseUrl`), or
+   * `null` when reads run over gPA/queryTransport. Earnings hooks prefer it
+   * over the per-network hosted default.
+   */
+  indexerBaseUrl: string | null;
   /** The configured signer, or `null`. */
   signer: TransactionSigner | null;
   /** Validated referrer config, or `null` when none was supplied. */
