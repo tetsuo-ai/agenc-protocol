@@ -82,6 +82,33 @@ record that decision here before proceeding.
 
 ---
 
+## 2.5 Verified-build invariants (added 2026-07-03 — the badge is live, keep it)
+
+The program is VERIFIED on explorers: the otter-verify PDA (written by the
+upgrade authority, tx `3VeYCWspYQv4yvtHFTtxGrC23SQHbQkXKwLqtS8P9JVUc6Y2muUWNdRdnU2ovgQM6ykUVScrfHx9inVWseYpYLXf`)
+maps the live program to `github.com/tetsuo-ai/agenc-protocol` @ the deployed
+commit, `--library-name agenc_coordination --mount-path
+programs/agenc-coordination`. Every future deploy MUST keep two invariants or
+the badge silently flips back to unverified:
+
+1. **Build the deploy artifact reproducibly.** The dockerized build is the
+   canonical one (`solana-verify build --library-name agenc_coordination
+   programs/agenc-coordination`); a plain local `anchor build` reproduced the
+   same hash for the c38874c artifact, but verify BEFORE deploy:
+   `solana-verify get-executable-hash <the .so you will deploy>` must equal
+   the hash of the dockerized build at the release commit. Keep
+   `programs/agenc-coordination/Cargo.lock` committed — verification fails
+   without it.
+2. **Update the PDA to the new commit right after the upgrade** (same
+   authority signature session as the deploy):
+   `solana-verify verify-from-repo --url <RPC> --program-id
+   HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
+   https://github.com/tetsuo-ai/agenc-protocol --commit-hash <deployed
+   commit> --library-name agenc_coordination --mount-path
+   programs/agenc-coordination --keypair <upgrade-authority> --skip-build -y`
+   then re-trigger: `solana-verify remote submit-job --program-id <PID>
+   --uploader <authority pubkey>`.
+
 ## 3. Deploy choreography — ORDER IS LOAD-BEARING
 
 > The reverse order **bricks in-flight tasks**. The new binary's typed
