@@ -4,12 +4,22 @@ This document records the upgrade authority of the live mainnet
 program and the precise runbook to migrate it from a single key to a **Squads
 (or equivalent) multisig**.
 
-> **Status update (2026-06-11):** the multisig migration this runbook plans has been
-> executed — the upgrade authority is now a **2-of-3 multisig** (`Hcecp…` / `BXDan…` /
-> `4QcKB…`), which was a pre-flight gate for the same-day full-surface upgrade
-> (`surface_revision = FULL`, 169 tasks migrated; see `docs/MAINNET_ROLLOUT_RUNBOOK.md`).
-> The "single key" / "[HUMAN: executes]" framing below describes the pre-migration state.
-> Re-run the `solana program show` check to confirm the live authority.
+> **⚠️ CORRECTION (2026-07-03, verified against live mainnet):** the earlier
+> "status update" below was WRONG and has been struck. A live
+> `solana program show` shows the **program upgrade authority is STILL the single
+> key `HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh`** — it was never migrated to a
+> multisig. The `Hcecp…/BXDan…/4QcKB…` 2-of-3 that note referred to is the
+> **`ProtocolConfig` on-chain config multisig** (verified live: `owners_len=3,
+> threshold=2`, owners exactly those three) — a DIFFERENT authority that governs
+> fees / the P1.2 BLOCK floor / the default trust list via
+> `require_multisig_threshold`, NOT the BPF-loader program upgrade authority this
+> runbook migrates. So this migration (§4) is **genuinely NOT done**: one key can
+> still push arbitrary bytecode to the live escrow-custodying program (the §2
+> risk is live). P0.3 remains open.
+>
+> ~~Status update (2026-06-11): the multisig migration this runbook plans has been
+> executed — the upgrade authority is now a 2-of-3 multisig (`Hcecp…`/`BXDan…`/`4QcKB…`)…~~
+> **(struck — conflated the config multisig with the loader upgrade authority).**
 
 > See also: `SECURITY.md` §5.3 (custody summary integrators inherit),
 > `docs/MAINNET_MAINLINE.md` (what `main` means for the live program), and
