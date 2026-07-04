@@ -41,8 +41,8 @@ const ix = await facade.registerAgent({
 
 The full embeddable core flow (register → create listing → humanless hire →
 pin a moderated job spec → claim → submit → accept/close/rate) is in
-[`examples/embeddable-marketplace.ts`](./examples/embeddable-marketplace.ts), and the
-getting-started guide is in [`docs/guides/quickstart.md`](./docs/guides/quickstart.md).
+[`examples/embeddable-marketplace.ts`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/examples/embeddable-marketplace.ts), and the
+getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/docs/guides/quickstart.md).
 Advanced program primitives such as completion bonds, disputes, bids,
 governance, reputation staking, and ZK are available through the facade or
 generated client where implemented; treat them as advanced integration surfaces
@@ -228,7 +228,7 @@ ships). Moderation attestations come from a self-hosted attestor via
 shipped attestor endpoint) or — on localnet — directly from the stack's
 moderator keypair, no extra service needed. The end-to-end flow, runnable
 from a fresh clone:
-[`examples/localnet-first-hire.ts`](./examples/localnet-first-hire.ts).
+[`examples/localnet-first-hire.ts`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/examples/localnet-first-hire.ts).
 
 ## RPC strategy
 
@@ -335,5 +335,5 @@ configuration is enabled. On-chain coverage is via litesvm e2e tests.
 
 ## License
 
-MIT (see [LICENSE](./LICENSE)). The parent repository's on-chain program is GPL-3.0;
+MIT (see [LICENSE](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/LICENSE), shipped in the tarball). The parent repository's on-chain program is GPL-3.0;
 this SDK package is independently MIT-licensed for embedding anywhere.

@@ -1,5 +1,16 @@
 # @tetsuo-ai/marketplace-sdk
 
+## Unreleased
+
+### Patch Changes (docs only, no code change — WP-D5 part 2)
+
+- npm-visible docs: every relative link in the package README
+  (`examples/embeddable-marketplace.ts`, `docs/guides/quickstart.md`,
+  `examples/localnet-first-hire.ts`, `LICENSE`) is now an absolute
+  `github.com/tetsuo-ai/agenc-protocol/blob/main/...` URL, so the README
+  renders with working links on npmjs.com where `examples/` and `docs/`
+  are not shipped. No tarball contents change.
+
 ## 0.8.4
 
 ### Patch Changes (additive, no wire change — WP-H3 phase 1, Guaranteed Hire)
