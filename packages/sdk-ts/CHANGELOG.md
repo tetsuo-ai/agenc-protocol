@@ -1,5 +1,15 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.8.1
+
+### Patch Changes (additive, no wire change)
+
+- New `settlementReceiptUrl(txSignature, baseUrl?)` export: builds the
+  canonical shareable settlement-receipt URL
+  (`https://agenc.ag/receipt/<txSig>`) for accept / auto-accept / complete
+  settlements. Settle flows should surface it as the final line of the
+  settlement handoff; `baseUrl` points at another node's receipt surface.
+
 ## 0.8.0
 
 ### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)
