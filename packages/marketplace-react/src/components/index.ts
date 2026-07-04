@@ -45,6 +45,10 @@ export {
   type ModerationState,
   type VerifiedBadgeProps,
 } from "./badges.js";
+export {
+  GuaranteedBadge,
+  type GuaranteedBadgeProps,
+} from "./GuaranteedBadge.js";
 
 // Presentational formatting helpers + the component string resolver.
 export {

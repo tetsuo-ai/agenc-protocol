@@ -45,6 +45,9 @@ export const queryKeys = {
     [QUERY_KEY_ROOT, "taskStatus", taskPda] as const,
   /** One task's dispute record. */
   dispute: (taskPda: string) => [QUERY_KEY_ROOT, "dispute", taskPda] as const,
+  /** One task's completion-bond ("Guaranteed Hire") state. */
+  taskGuarantee: (taskPda: string) =>
+    [QUERY_KEY_ROOT, "taskGuarantee", taskPda] as const,
   /** One referrer wallet's earnings (indexer-gated; see useReferrerEarnings). */
   referrerEarnings: (wallet: string) =>
     [QUERY_KEY_ROOT, "referrerEarnings", wallet] as const,

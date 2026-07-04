@@ -8,11 +8,15 @@ import {
 } from "@solana/kit";
 import {
   createRpcProgramAccountsTransport,
+  fetchTaskGuarantee,
   isTaskJobSpecPinned,
   listActiveListings,
   listOpenTasks,
   listPinnedJobSpecTasks,
   listingsByProvider,
+  COMPLETION_BOND_ROLE_CREATOR,
+  COMPLETION_BOND_ROLE_WORKER,
+  COMPLETION_BOND_TASK_OFFSET,
   HIRE_RECORD_TASK_OFFSET,
   SERVICE_LISTING_AUTHORITY_OFFSET,
   SERVICE_LISTING_CATEGORY_OFFSET,
@@ -29,17 +33,20 @@ import {
 } from "../src/queries/index.js";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  COMPLETION_BOND_DISCRIMINATOR,
   DependencyType,
   ListingState,
   SERVICE_LISTING_DISCRIMINATOR,
   TaskStatus,
   TaskType,
+  getCompletionBondEncoder,
   getHireRecordEncoder,
   getServiceListingEncoder,
   getTaskBidEncoder,
   getTaskClaimEncoder,
   getTaskEncoder,
   getTaskJobSpecEncoder,
+  type CompletionBondArgs,
   type ServiceListingArgs,
   type TaskArgs,
 } from "../src/index.js";
@@ -141,6 +148,24 @@ function taskFixtureArgs(overrides: Partial<TaskArgs> = {}): TaskArgs {
 
 function encodeTask(overrides: Partial<TaskArgs> = {}): Uint8Array {
   return new Uint8Array(getTaskEncoder().encode(taskFixtureArgs(overrides)));
+}
+
+function encodeCompletionBond(
+  overrides: Partial<CompletionBondArgs> = {},
+): Uint8Array {
+  return new Uint8Array(
+    getCompletionBondEncoder().encode({
+      task: addrFromByte(0xd1),
+      party: addrFromByte(0xd2),
+      role: COMPLETION_BOND_ROLE_WORKER,
+      amount: 1_000_000n,
+      bondMint: null,
+      postedAt: 0n,
+      bump: 253,
+      reserved: new Uint8Array(16),
+      ...overrides,
+    }),
+  );
 }
 
 function encodeTaskJobSpec(
@@ -292,6 +317,95 @@ describe("queries offsets are drift-proofed against the generated encoders", () 
     expect(
       data.subarray(TASK_JOB_SPEC_HASH_OFFSET, TASK_JOB_SPEC_HASH_OFFSET + 32),
     ).toEqual(bytes32(0x93));
+  });
+
+  it("CompletionBond: task offset hits its sentinel", () => {
+    const data = encodeCompletionBond({ task: addrFromByte(0xd1) });
+    expect(decodeAddressAt(data, COMPLETION_BOND_TASK_OFFSET)).toBe(
+      addrFromByte(0xd1),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guaranteed Hire read: fetchTaskGuarantee mirrors the on-chain bond lifecycle
+// (a bond PDA is closed at settlement, so a live account == posted+unresolved)
+// and `guaranteed` keys off the WORKER bond specifically.
+// ---------------------------------------------------------------------------
+describe("fetchTaskGuarantee (WP-H3 Guaranteed Hire read)", () => {
+  const task = addrFromByte(0x81);
+  const workerWallet = addrFromByte(0x82);
+  const creatorWallet = addrFromByte(0x83);
+  const workerBondPda = addrFromByte(0x84);
+  const creatorBondPda = addrFromByte(0x85);
+
+  it("reports guaranteed:true with the decoded worker bond when a role-1 bond is live", async () => {
+    const captured: Array<readonly GpaFilter[]> = [];
+    const transport = staticTransport(
+      [
+        {
+          address: workerBondPda,
+          data: encodeCompletionBond({
+            task,
+            party: workerWallet,
+            role: COMPLETION_BOND_ROLE_WORKER,
+            amount: 1_000_000n,
+          }),
+        },
+        {
+          address: creatorBondPda,
+          data: encodeCompletionBond({
+            task,
+            party: creatorWallet,
+            role: COMPLETION_BOND_ROLE_CREATOR,
+            amount: 1_000_000n,
+          }),
+        },
+      ],
+      captured,
+    );
+    const g = await fetchTaskGuarantee(transport, task);
+    expect(g.guaranteed).toBe(true);
+    expect(g.workerBond?.address).toBe(workerBondPda);
+    expect(g.workerBond?.account.party).toBe(workerWallet);
+    expect(g.workerBond?.account.amount).toBe(1_000_000n);
+    expect(g.creatorBond?.address).toBe(creatorBondPda);
+    // The fetch is scoped server-side: discriminator + task memcmp at the
+    // drift-proofed CompletionBond.task offset.
+    expect(captured[0][0]).toEqual({
+      memcmp: {
+        offset: 0,
+        bytes: Uint8Array.from(COMPLETION_BOND_DISCRIMINATOR),
+      },
+    });
+    expect(captured[0][1]).toEqual({
+      memcmp: {
+        offset: COMPLETION_BOND_TASK_OFFSET,
+        bytes: new Uint8Array(getAddressEncoder().encode(task)),
+      },
+    });
+  });
+
+  it("a creator bond alone does NOT make the task guaranteed (worker bond keys the flag)", async () => {
+    const transport = staticTransport([
+      {
+        address: creatorBondPda,
+        data: encodeCompletionBond({
+          task,
+          party: creatorWallet,
+          role: COMPLETION_BOND_ROLE_CREATOR,
+        }),
+      },
+    ]);
+    const g = await fetchTaskGuarantee(transport, task);
+    expect(g.guaranteed).toBe(false);
+    expect(g.workerBond).toBeNull();
+    expect(g.creatorBond?.address).toBe(creatorBondPda);
+  });
+
+  it("no live bonds (never posted, or settled+closed) → guaranteed:false, both null", async () => {
+    const g = await fetchTaskGuarantee(staticTransport([]), task);
+    expect(g).toEqual({ guaranteed: false, workerBond: null, creatorBond: null });
   });
 });
 

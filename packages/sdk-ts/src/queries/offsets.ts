@@ -83,6 +83,21 @@ export const TASK_BID_TASK_OFFSET = 8;
 export const HIRE_RECORD_TASK_OFFSET = 8;
 
 // ---------------------------------------------------------------------------
+// CompletionBond (src/generated/accounts/completionBond.ts)
+//   disc(8) | task(32) | party(32) | role(1) | amount(8) | bondMint(Option) | ...
+// ---------------------------------------------------------------------------
+
+/**
+ * `CompletionBond.task` (the Task PDA the bond backs): 8.
+ *
+ * A task has AT MOST two bonds (one creator, one worker — `init` enforces one
+ * per wallet per task), so a memcmp at this offset narrows the fetch to those
+ * one or two accounts; the `role` split (0 = creator, 1 = worker) is refined
+ * client-side after decoding.
+ */
+export const COMPLETION_BOND_TASK_OFFSET = 8;
+
+// ---------------------------------------------------------------------------
 // TaskJobSpec (src/generated/accounts/taskJobSpec.ts)
 //   disc(8) | task(32) | creator(32) | jobSpecHash(32) | jobSpecUri(4+len) | ...
 // ---------------------------------------------------------------------------

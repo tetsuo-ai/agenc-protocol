@@ -276,6 +276,11 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.postCompletionBond>,
     options?: SendOptions,
   ): Promise<SendResult>;
+  /** Build (facade.reclaimCompletionBond) and send a reclaim_completion_bond transaction. */
+  reclaimCompletionBond(
+    input: FacadeInput<typeof facade.reclaimCompletionBond>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
 
   // --- dispute family (wraps every builder exported by facade/disputes.ts) ---
 
@@ -563,6 +568,7 @@ export function createMarketplaceClient(
     closeTask: viaFacade(facade.closeTask),
     rateHire: viaFacade(facade.rateHire),
     postCompletionBond: viaFacade(facade.postCompletionBond),
+    reclaimCompletionBond: viaFacade(facade.reclaimCompletionBond),
     initiateDispute: viaFacade(facade.initiateDispute),
     // P6.3: `voteDispute` removed (vote/quorum model retired).
     resolveDispute: viaFacade(facade.resolveDispute),

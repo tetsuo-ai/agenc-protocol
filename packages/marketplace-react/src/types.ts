@@ -200,9 +200,12 @@ export interface AgencContextValue {
   client: MarketplaceClient | null;
   /**
    * The resolved HTTP RPC endpoint (config override or the network default),
-   * or `null` when none resolves. Hooks use it for single-account reads —
+   * or `null` when none resolves. Hooks use it for targeted per-task reads —
    * e.g. resolving the WP-A1 `moderation_attestor` roster account during
-   * activation. NOT a gPA/list-query source; the read transport owns those.
+   * activation, and the `useTaskGuarantee` completion-bond read (a
+   * task-scoped `getProgramAccounts` with no single-account equivalent; the
+   * RPC must allow gPA, and an injected reader seam bypasses it). LIST
+   * queries stay with the read transport.
    */
   rpcUrl: string | null;
   /**
