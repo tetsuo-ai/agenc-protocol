@@ -1,0 +1,29 @@
+# agenc-worker one-shot tick — paired with agenc-worker.timer.
+#
+# Install (user units, no root):
+#   mkdir -p ~/.config/systemd/user
+#   cp agenc-worker.service agenc-worker.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now agenc-worker.timer
+#
+# Configure via ~/.config/agenc-worker/config.json (or Environment= lines
+# below). The wallet MUST be a low-funded hot wallet — it is the worker's only
+# spend authority.
+[Unit]
+Description=AgenC marketplace worker — one sweep + claim + execute + submit
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# npx resolves the installed @tetsuo-ai/agenc-worker; replace with an absolute
+# path to the binary if you installed it globally.
+ExecStart=/usr/bin/env npx --yes @tetsuo-ai/agenc-worker once
+# Uncomment to configure via environment instead of the config file:
+# Environment=AGENC_WORKER_RPC_URL=https://your-rpc.example
+# Environment=AGENC_WORKER_WALLET=%h/.config/agenc-worker/hot-wallet.json
+# Environment=AGENC_WORKER_MAX_REWARD_LAMPORTS=100000000
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,343 @@
+// Worker configuration: CLI flags > environment (`AGENC_WORKER_*`) > config
+// file (default `~/.config/agenc-worker/config.json`) > built-in defaults.
+//
+// SAFETY POSTURE (read before changing defaults):
+// - `walletPath` points at a LOW-FUNDED hot-wallet keypair JSON. That wallet
+//   is the worker's ONLY spend authority and therefore the blast-radius bound:
+//   task content is untrusted, so the worker must never be handed a wallet
+//   whose loss would hurt.
+// - `executor` is an ARGV ARRAY, never a shell string. The `{prompt}`
+//   placeholder is replaced as a SINGLE argv element (see executor.ts), so
+//   task content can never be interpreted by a shell.
+// - `resultUploader` must be an https: URL — results are never POSTed over
+//   plaintext HTTP.
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
+/** Default executor: the Claude Code CLI in print mode. */
+export const DEFAULT_EXECUTOR: readonly string[] = ["claude", "-p", "{prompt}"];
+
+/** Default capability bitmask claimed/required (bit 0). */
+export const DEFAULT_CAPABILITIES = 1n;
+
+/** Default poll interval for `up` mode sweeps + settlement checks (ms). */
+export const DEFAULT_POLL_INTERVAL_MS = 15_000;
+
+/** Default executor wall-clock budget (ms). */
+export const DEFAULT_EXECUTOR_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * Default agent endpoint recorded at registration. The program REQUIRES a
+ * non-empty http(s) endpoint on register_agent; this placeholder marks the
+ * agent as an agenc-worker instance with no public inbox.
+ */
+export const DEFAULT_ENDPOINT = "https://agenc.ag/worker";
+
+/** Default state directory. */
+export function defaultStateDir(): string {
+  return path.join(homedir(), ".local", "state", "agenc-worker");
+}
+
+/** Default config file path. */
+export function defaultConfigPath(): string {
+  return path.join(homedir(), ".config", "agenc-worker", "config.json");
+}
+
+/** The fully-resolved worker configuration the runtime consumes. */
+export type WorkerConfig = {
+  /** HTTP RPC endpoint (required). */
+  rpcUrl: string;
+  /**
+   * Path to the hot-wallet keypair JSON (required). Keep it LOW-FUNDED — it is
+   * the worker's only spend authority and the blast-radius bound.
+   */
+  walletPath: string;
+  /** Worker capability bitmask (default 1n). */
+  capabilities: bigint;
+  /** Only claim tasks paying at least this many lamports (default 0n). */
+  minRewardLamports: bigint;
+  /**
+   * Safety cap: never claim tasks paying MORE than this (bait filter — a
+   * too-good-to-be-true reward is a lure to run hostile content). `null`
+   * disables the cap (the default; set one).
+   */
+  maxRewardLamports: bigint | null;
+  /**
+   * Executor command as an argv array. Any element that is exactly
+   * `"{prompt}"` is replaced by the prompt as ONE argv element.
+   */
+  executor: string[];
+  /**
+   * Optional HTTPS URL to POST the raw result body to. The response must be
+   * JSON `{ "uri": "..." }`. When absent the worker submits with the inline
+   * `agenc://result/sha256/<hex>` placeholder URI (content addressed by the
+   * on-chain proof hash; delivery is out of band).
+   */
+  resultUploader: string | null;
+  /** Directory for the worker's persistent state (agent id, submissions). */
+  stateDir: string;
+  /** Only claim tasks created by these wallets (base58). `null` = any creator. */
+  creatorAllowlist: string[] | null;
+  /** Agent endpoint recorded at registration (non-empty http(s); on-chain rule). */
+  endpoint: string;
+  /** Poll interval for `up` mode (ms). */
+  pollIntervalMs: number;
+  /** Executor wall-clock budget (ms). */
+  executorTimeoutMs: number;
+};
+
+/** Raw (pre-validation) input from one config source; all fields optional. */
+export type WorkerConfigInput = Partial<{
+  rpcUrl: string;
+  walletPath: string;
+  capabilities: string | bigint;
+  minRewardLamports: string | bigint;
+  maxRewardLamports: string | bigint | null;
+  executor: string[] | string;
+  resultUploader: string | null;
+  stateDir: string;
+  creatorAllowlist: string[] | string | null;
+  endpoint: string;
+  pollIntervalMs: string | number;
+  executorTimeoutMs: string | number;
+}>;
+
+/** Thrown for any invalid/missing configuration; message names the field. */
+export class ConfigError extends Error {
+  override name = "ConfigError";
+}
+
+function parseBigint(field: string, value: string | bigint): bigint {
+  if (typeof value === "bigint") return value;
+  try {
+    const parsed = BigInt(value.trim());
+    if (parsed < 0n) throw new Error("negative");
+    return parsed;
+  } catch {
+    throw new ConfigError(
+      `${field}: expected a non-negative integer, got ${JSON.stringify(value)}`,
+    );
+  }
+}
+
+function parseNumber(field: string, value: string | number): number {
+  const parsed = typeof value === "number" ? value : Number(value.trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ConfigError(
+      `${field}: expected a positive number, got ${JSON.stringify(value)}`,
+    );
+  }
+  return parsed;
+}
+
+function parseExecutor(field: string, value: string[] | string): string[] {
+  let argv: unknown = value;
+  if (typeof value === "string") {
+    try {
+      argv = JSON.parse(value);
+    } catch {
+      throw new ConfigError(
+        `${field}: expected a JSON argv array like ["claude","-p","{prompt}"]`,
+      );
+    }
+  }
+  if (
+    !Array.isArray(argv) ||
+    argv.length === 0 ||
+    !argv.every((element) => typeof element === "string" && element.length > 0)
+  ) {
+    throw new ConfigError(
+      `${field}: expected a non-empty array of non-empty strings`,
+    );
+  }
+  return argv as string[];
+}
+
+function parseAllowlist(
+  field: string,
+  value: string[] | string | null,
+): string[] | null {
+  if (value === null) return null;
+  const list =
+    typeof value === "string"
+      ? value
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0)
+      : value;
+  if (!Array.isArray(list) || !list.every((entry) => typeof entry === "string")) {
+    throw new ConfigError(`${field}: expected an array of base58 addresses`);
+  }
+  return list.length === 0 ? null : list;
+}
+
+/** Map `AGENC_WORKER_*` environment variables to a config input. */
+export function configFromEnv(
+  env: Record<string, string | undefined>,
+): WorkerConfigInput {
+  const input: WorkerConfigInput = {};
+  if (env.AGENC_WORKER_RPC_URL !== undefined) input.rpcUrl = env.AGENC_WORKER_RPC_URL;
+  if (env.AGENC_WORKER_WALLET !== undefined) input.walletPath = env.AGENC_WORKER_WALLET;
+  if (env.AGENC_WORKER_CAPABILITIES !== undefined) {
+    input.capabilities = env.AGENC_WORKER_CAPABILITIES;
+  }
+  if (env.AGENC_WORKER_MIN_REWARD_LAMPORTS !== undefined) {
+    input.minRewardLamports = env.AGENC_WORKER_MIN_REWARD_LAMPORTS;
+  }
+  if (env.AGENC_WORKER_MAX_REWARD_LAMPORTS !== undefined) {
+    input.maxRewardLamports = env.AGENC_WORKER_MAX_REWARD_LAMPORTS;
+  }
+  if (env.AGENC_WORKER_EXECUTOR !== undefined) input.executor = env.AGENC_WORKER_EXECUTOR;
+  if (env.AGENC_WORKER_RESULT_UPLOADER !== undefined) {
+    input.resultUploader = env.AGENC_WORKER_RESULT_UPLOADER;
+  }
+  if (env.AGENC_WORKER_STATE_DIR !== undefined) input.stateDir = env.AGENC_WORKER_STATE_DIR;
+  if (env.AGENC_WORKER_CREATOR_ALLOWLIST !== undefined) {
+    input.creatorAllowlist = env.AGENC_WORKER_CREATOR_ALLOWLIST;
+  }
+  if (env.AGENC_WORKER_ENDPOINT !== undefined) input.endpoint = env.AGENC_WORKER_ENDPOINT;
+  if (env.AGENC_WORKER_POLL_INTERVAL_MS !== undefined) {
+    input.pollIntervalMs = env.AGENC_WORKER_POLL_INTERVAL_MS;
+  }
+  if (env.AGENC_WORKER_EXECUTOR_TIMEOUT_MS !== undefined) {
+    input.executorTimeoutMs = env.AGENC_WORKER_EXECUTOR_TIMEOUT_MS;
+  }
+  return input;
+}
+
+/**
+ * Read + parse a JSON config file. A missing file at the DEFAULT path is fine
+ * (returns `{}`); a missing file at an explicitly-requested path is an error.
+ */
+export function loadConfigFile(
+  filePath: string,
+  { explicit = false }: { explicit?: boolean } = {},
+): WorkerConfigInput {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!explicit && (code === "ENOENT" || code === "ENOTDIR")) return {};
+    throw new ConfigError(`config file ${filePath}: ${(error as Error).message}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new ConfigError(
+      `config file ${filePath}: invalid JSON (${(error as Error).message})`,
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new ConfigError(`config file ${filePath}: expected a JSON object`);
+  }
+  return parsed as WorkerConfigInput;
+}
+
+/** Merge config sources (later sources are LOWER precedence) and validate. */
+export function resolveWorkerConfig(
+  ...sources: WorkerConfigInput[]
+): WorkerConfig {
+  // First source wins per field: flags > env > file.
+  const merged: WorkerConfigInput = {};
+  for (const source of sources) {
+    for (const [key, value] of Object.entries(source)) {
+      if (value === undefined) continue;
+      if ((merged as Record<string, unknown>)[key] === undefined) {
+        (merged as Record<string, unknown>)[key] = value;
+      }
+    }
+  }
+
+  if (merged.rpcUrl === undefined || merged.rpcUrl.trim() === "") {
+    throw new ConfigError(
+      "rpcUrl is required (--rpc-url, AGENC_WORKER_RPC_URL, or the config file)",
+    );
+  }
+  if (merged.walletPath === undefined || merged.walletPath.trim() === "") {
+    throw new ConfigError(
+      "walletPath is required (--wallet, AGENC_WORKER_WALLET, or the config file). " +
+        "Use a LOW-FUNDED hot wallet — it is the worker's only spend authority.",
+    );
+  }
+
+  const capabilities =
+    merged.capabilities === undefined
+      ? DEFAULT_CAPABILITIES
+      : parseBigint("capabilities", merged.capabilities);
+  if (capabilities === 0n) {
+    throw new ConfigError("capabilities: must be non-zero (the program rejects 0)");
+  }
+
+  const minRewardLamports =
+    merged.minRewardLamports === undefined
+      ? 0n
+      : parseBigint("minRewardLamports", merged.minRewardLamports);
+  const maxRewardLamports =
+    merged.maxRewardLamports === undefined || merged.maxRewardLamports === null
+      ? null
+      : parseBigint("maxRewardLamports", merged.maxRewardLamports);
+  if (maxRewardLamports !== null && maxRewardLamports < minRewardLamports) {
+    throw new ConfigError(
+      `maxRewardLamports (${maxRewardLamports}) must be >= minRewardLamports (${minRewardLamports})`,
+    );
+  }
+
+  const executor =
+    merged.executor === undefined
+      ? [...DEFAULT_EXECUTOR]
+      : parseExecutor("executor", merged.executor);
+
+  let resultUploader: string | null = null;
+  if (merged.resultUploader !== undefined && merged.resultUploader !== null) {
+    let url: URL;
+    try {
+      url = new URL(merged.resultUploader);
+    } catch {
+      throw new ConfigError(`resultUploader: not a valid URL`);
+    }
+    if (url.protocol !== "https:") {
+      throw new ConfigError(
+        `resultUploader: must be an https: URL (got ${url.protocol}//)`,
+      );
+    }
+    resultUploader = merged.resultUploader;
+  }
+
+  const endpoint = merged.endpoint ?? DEFAULT_ENDPOINT;
+  if (
+    endpoint === "" ||
+    (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) ||
+    endpoint.length > 128
+  ) {
+    throw new ConfigError(
+      "endpoint: must be a non-empty http(s) URL of at most 128 chars (on-chain register_agent rule)",
+    );
+  }
+
+  return {
+    rpcUrl: merged.rpcUrl,
+    walletPath: merged.walletPath,
+    capabilities,
+    minRewardLamports,
+    maxRewardLamports,
+    executor,
+    resultUploader,
+    stateDir: merged.stateDir ?? defaultStateDir(),
+    creatorAllowlist:
+      merged.creatorAllowlist === undefined
+        ? null
+        : parseAllowlist("creatorAllowlist", merged.creatorAllowlist),
+    endpoint,
+    pollIntervalMs:
+      merged.pollIntervalMs === undefined
+        ? DEFAULT_POLL_INTERVAL_MS
+        : parseNumber("pollIntervalMs", merged.pollIntervalMs),
+    executorTimeoutMs:
+      merged.executorTimeoutMs === undefined
+        ? DEFAULT_EXECUTOR_TIMEOUT_MS
+        : parseNumber("executorTimeoutMs", merged.executorTimeoutMs),
+  };
+}
