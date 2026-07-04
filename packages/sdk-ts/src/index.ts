@@ -42,6 +42,11 @@ export {
   type RequestListingModerationInput,
 } from "./sandbox/moderation.js";
 
+// Every successful settlement has a shareable, independently verifiable
+// receipt page — settle flows should surface this URL as the final line of
+// the settlement handoff.
+export { settlementReceiptUrl } from "./receipt.js";
+
 // P6.5 surface-versioning contract. `getDeployedSurface` is a top-level read
 // capability (like getAgentTrackRecord) — re-export it and its types/error at the
 // package root so mainnet integrators reach it without the `facade` namespace.
