@@ -35,6 +35,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md) - **DESIGN ONLY [HUMAN: approve]** P7.2 layer 2: optional on-chain `key_commitment` at submit + `reveal_key` on accept with hash-match enforcement and deadline bounds, for trustless fair-exchange (child `SubmissionKeyEscrow` PDA, no migration)
 - [./MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md) - **DESIGN ONLY [HUMAN: approve]** P7.4: bounded (≤8) milestone schedule via child `TaskMilestone` PDAs (not a Task realloc), `submit_milestone`/`accept_milestone` releasing tranches through the existing split, creator-signed `release_partial`, listing default templates, facade `Engagement`
 - [./ENGAGEMENTS_DESIGN.md](./ENGAGEMENTS_DESIGN.md) - **DESIGN ONLY [HUMAN: approve]** P7.5 retainers: an `Engagement` PDA referencing a `ServiceListing`, one prefunded escrow for N locked-price periods, permissionless `renew_period` minting each period's Task (reusing the lifecycle), pro-rata `cancel_engagement`, one-approval kit policy model
+- [./F6_INTEROP_ASSESSMENT.md](./F6_INTEROP_ASSESSMENT.md) - **WP-F6 ecosystem interop assessment** (web-verified 2026-07-04): x402 v2 / A2A v1.0 AgentCard / ERC-8004 + Virtuals ACP / AP2-MPP-MCP adjacents — per-standard go/no-go/defer with revisit dates; pairs with [X402_FAST_PATH.md](./X402_FAST_PATH.md)
 
 ## Read By Task
 
@@ -44,6 +45,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - I need the encrypted-delivery / fair-exchange layer-2 design: [ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md)
 - I need the milestones / partial-settlement design: [MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md)
 - I need the recurring-engagement / retainer design: [ENGAGEMENTS_DESIGN.md](./ENGAGEMENTS_DESIGN.md)
+- I need the interop go/no-go (x402 / A2A / ERC-8004 / ACP): [F6_INTEROP_ASSESSMENT.md](./F6_INTEROP_ASSESSMENT.md)
 
 - I need the repo layout: [CODEBASE_MAP.md](./CODEBASE_MAP.md)
 - I need the on-chain surface: [PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md)
