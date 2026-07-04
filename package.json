@@ -11,7 +11,8 @@
     "packages/marketplace-tools",
     "packages/marketplace-mcp",
     "packages/marketplace-moderation",
-    "packages/agenc-worker"
+    "packages/agenc-worker",
+    "packages/agenc-cli"
   ],
   "scripts": {
     "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs && npm run sync:artifacts",

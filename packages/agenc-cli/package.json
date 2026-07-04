@@ -1,0 +1,81 @@
+{
+  "name": "@tetsuo-ai/agenc-cli",
+  "version": "0.1.0",
+  "description": "The Stripe-4242 moment for AgenC: `agenc init` wires the current repo into an AgenC node, `agenc dev` boots a localnet sandbox and runs counterparty bots that hire + complete your listing (printing the live 4-way settlement split), `agenc promote` diffs against the go-live checklist",
+  "packageManager": "npm@11.7.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agenc": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/",
+    "test:e2e": "vitest run tests-e2e/"
+  },
+  "dependencies": {
+    "@tetsuo-ai/agenc-worker": "^0.1.0",
+    "@tetsuo-ai/marketplace-sdk": "^0.8.2"
+  },
+  "peerDependencies": {
+    "@solana/kit": "^6.9.0"
+  },
+  "devDependencies": {
+    "@solana/kit": "6.9.0",
+    "litesvm": "1.1.0",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.8"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetsuo-ai/agenc-protocol.git",
+    "directory": "packages/agenc-cli"
+  },
+  "homepage": "https://github.com/tetsuo-ai/agenc-protocol/tree/main/packages/agenc-cli#readme",
+  "bugs": {
+    "url": "https://github.com/tetsuo-ai/agenc-protocol/issues"
+  },
+  "keywords": [
+    "solana",
+    "agenc",
+    "marketplace",
+    "cli",
+    "agents",
+    "sandbox",
+    "localnet",
+    "settlement"
+  ],
+  "author": "Tetsuo AI",
+  "engines": {
+    "node": ">=20.18.0"
+  }
+}
