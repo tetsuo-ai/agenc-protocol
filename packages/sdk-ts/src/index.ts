@@ -47,6 +47,10 @@ export {
 // the settlement handoff.
 export { settlementReceiptUrl } from "./receipt.js";
 
+// The complete buyer-side hire orchestration (hire → host/moderate job spec →
+// activate) — the open-SDK home of the flow the react hook and the kit wrap.
+export * from "./orchestration/index.js";
+
 // P6.5 surface-versioning contract. `getDeployedSurface` is a top-level read
 // capability (like getAgentTrackRecord) — re-export it and its types/error at the
 // package root so mainnet integrators reach it without the `facade` namespace.

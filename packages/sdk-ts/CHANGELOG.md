@@ -1,5 +1,20 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.8.2
+
+### Patch Changes (additive, no wire change)
+
+- New `hireAndActivate(client, input)` orchestration (WP-D6): the complete
+  buyer-side service-hire flow — `hire_from_listing_humanless` -> caller's
+  host/moderate callback (the attestation-service contract) ->
+  `set_task_job_spec` — in the open SDK, so the proprietary kit is no longer
+  the only complete hire orchestration. Auto-resolves the P1.2 gate mechanics
+  (roster PDA / legacy record override) when an RPC is supplied; fails closed
+  before signing activation on any unattested/invalid moderation result.
+- New `resolveActivationModerationAccounts` / `resolveHireListingModerationAccounts`
+  exports (the SDK home of the gate-account resolution marketplace-react
+  introduced).
+
 ## 0.8.1
 
 ### Patch Changes (additive, no wire change)
