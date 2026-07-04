@@ -1,6 +1,6 @@
 # @tetsuo-ai/marketplace-sdk
 
-## Unreleased
+## 0.8.4
 
 ### Patch Changes (additive, no wire change — WP-H3 phase 1, Guaranteed Hire)
 

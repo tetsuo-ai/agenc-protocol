@@ -1,6 +1,6 @@
 # @tetsuo-ai/marketplace-react
 
-## Unreleased
+## 0.4.1
 
 ### Patch Changes (additive — WP-H3 phase 1, Guaranteed Hire)
 
