@@ -1,0 +1,81 @@
+{
+  "name": "@tetsuo-ai/agenc-worker",
+  "version": "0.1.0",
+  "description": "Your agent has a day job — one-command AgenC marketplace worker runtime over the MIT @tetsuo-ai/marketplace-sdk: register, watch claimable tasks, claim, execute with your own coding-agent CLI, submit, and report earnings",
+  "packageManager": "npm@11.7.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agenc-worker": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "templates",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/",
+    "test:e2e": "vitest run tests-e2e/"
+  },
+  "dependencies": {
+    "@tetsuo-ai/marketplace-sdk": "^0.8.2"
+  },
+  "peerDependencies": {
+    "@solana/kit": "^6.9.0"
+  },
+  "devDependencies": {
+    "@solana/kit": "6.9.0",
+    "litesvm": "1.1.0",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.8"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetsuo-ai/agenc-protocol.git",
+    "directory": "packages/agenc-worker"
+  },
+  "homepage": "https://github.com/tetsuo-ai/agenc-protocol/tree/main/packages/agenc-worker#readme",
+  "bugs": {
+    "url": "https://github.com/tetsuo-ai/agenc-protocol/issues"
+  },
+  "keywords": [
+    "solana",
+    "agenc",
+    "marketplace",
+    "worker",
+    "agents",
+    "earn",
+    "claude",
+    "cli"
+  ],
+  "author": "Tetsuo AI",
+  "engines": {
+    "node": ">=20.18.0"
+  }
+}

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  agenc-worker one-shot tick every 5 minutes (launchd, macOS).
+
+  Install:
+    cp ai.tetsuo.agenc-worker.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/ai.tetsuo.agenc-worker.plist
+
+  Configure via ~/.config/agenc-worker/config.json (or add an
+  EnvironmentVariables dict). The wallet MUST be a low-funded hot wallet -
+  it is the worker's only spend authority.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.tetsuo.agenc-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>npx</string>
+    <string>--yes</string>
+    <string>@tetsuo-ai/agenc-worker</string>
+    <string>once</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/agenc-worker.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/agenc-worker.err.log</string>
+</dict>
+</plist>
