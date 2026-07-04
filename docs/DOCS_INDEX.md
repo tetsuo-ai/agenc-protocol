@@ -21,6 +21,12 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./VERSIONS.md](./VERSIONS.md) - P6.5 surface-versioning: program build ↔ SDK semver ↔ cluster matrix, `surface_revision` / `getDeployedSurface`, the `anchor idl init` release-runbook note, and the deprecation policy
 - [./VERSIONING.md](./VERSIONING.md) - **WP-D3 versioning & deprecation contract**: the cross-package support matrix (program surface × sdk × react × tools/mcp × store-core), the dated break-event history (2026-06-11 / 2026-07-02 / 2026-07-03), required capability detection, the announce-before-deploy rule, the flag-day lockstep policy, and the template pin check
 - [./P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md) - **P1.2 hardened open roster** (batch-2 upgrade, IMPLEMENTED in source 2026-07-03, deploy-gated): permissionless bonded attestor registration + two-step exit, v2 moderator-keyed moderation records, explicit `moderator` gate argument, the multisig BLOCK-only takedown floor, and the on-chain default trust list; supersedes MODERATION_NEUTRALITY.md
+- [./P5_2_STORE_IDENTITY_SPEC.md](./P5_2_STORE_IDENTITY_SPEC.md) - **P5.2 store/marketplace identity** (DESIGN, RATIFIED 2026-07-03): `agenc.storeManifest.v1` signed manifest first (shipped in store-core 0.5.0), then an additive on-chain `Store` PDA (address-keyed, display-only handles, mutual self-serve domain binding); pre-designs the P5.3 referrer attachment (§7.6)
+- [./P6_4_SPAM_SYBIL_DESIGN.md](./P6_4_SPAM_SYBIL_DESIGN.md) - **P6.4 spam/sybil defense** (DESIGN, RATIFIED 2026-07-03): costed threat model at live parameters (wash ratings ≈0.004 SOL, sybil attestors ≈free), provenance-weighted discovery as the primary defense, tripwire-gated program knobs (rating reward floor), never rank by attestor count or raw reputation
+- [./P5_3_REFERRAL_ATTRIBUTION_SPEC.md](./P5_3_REFERRAL_ATTRIBUTION_SPEC.md) - **P5.3 verifiable referral attribution** (WP-A6 batch-2 DESIGN): today's client-supplied referrer pubkey + strippable `?ref=` model, the costed theft/self-referral/wash economics, the buyer-priced-bps asymmetry, and the recommendation — document limits + weighting now, registered-referrer (`referrer_store` = the P5.2 Store PDA) as a tripwire-gated rider after the Store batch; referrer-signed vouchers deferred
+- [./P3_6_REFERRER_BEYOND_CREATORREVIEW.md](./P3_6_REFERRER_BEYOND_CREATORREVIEW.md) - **P3.6 referrer beyond CreatorReview** (WP-A6 batch-2 DECISION RECORD): the `configure_task_validation.rs:115-120` lockout, the full per-mode fee-leg settlement matrix, verdict — ratify CreatorReview-only as the product boundary for quorum/external/ZK, and fix the real leak (disputes + freeze-overturns pay no referrer leg) in batch 2 with P3.4
+- [./SCALE_COST_MODEL.md](./SCALE_COST_MODEL.md) - **Scale-to-millions cost model** (WP-A6): verified per-account byte/rent table, per-task lifecycle footprints (~0.020 SOL peak reviewed / ~0.010 hire), capital-at-rest curves, settlement tx account budgets vs Solana limits, the gPA→indexer thresholds (10k/100k), snapshot staleness targets, and the numeric WP-C3 target contract (T1-T8); findings: stranded `TaskAttestorConfig` rent (F1), collaborative-dispute account cliff (F2)
+- [./A6_WSH_BATCH2_ADDENDA.md](./A6_WSH_BATCH2_ADDENDA.md) - **WS-H batch-2 design stubs** (one page each, full specs later): `SpendingBudget` agent budgets (bleed-rate bound, native-vs-compose open), `award_best_bid` (revisits the Marketplace V2 auto-match Non-Goal), WP-H3 phase-2 bond-forfeit redirect (current per-path forfeit routing table + the counterparty-bounty griefing problem)
 
 ## Other Active Docs
 
@@ -46,6 +52,11 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - I need the milestones / partial-settlement design: [MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md)
 - I need the recurring-engagement / retainer design: [ENGAGEMENTS_DESIGN.md](./ENGAGEMENTS_DESIGN.md)
 - I need the interop go/no-go (x402 / A2A / ERC-8004 / ACP): [F6_INTEROP_ASSESSMENT.md](./F6_INTEROP_ASSESSMENT.md)
+- I need the store identity / manifest design: [P5_2_STORE_IDENTITY_SPEC.md](./P5_2_STORE_IDENTITY_SPEC.md)
+- I need the spam/sybil threat model + defenses: [P6_4_SPAM_SYBIL_DESIGN.md](./P6_4_SPAM_SYBIL_DESIGN.md)
+- I need the referral-attribution trust model: [P5_3_REFERRAL_ATTRIBUTION_SPEC.md](./P5_3_REFERRAL_ATTRIBUTION_SPEC.md)
+- I need which settlement paths pay the referrer leg: [P3_6_REFERRER_BEYOND_CREATORREVIEW.md](./P3_6_REFERRER_BEYOND_CREATORREVIEW.md)
+- I need rent/scale numbers or the indexer scale targets: [SCALE_COST_MODEL.md](./SCALE_COST_MODEL.md)
 
 - I need the repo layout: [CODEBASE_MAP.md](./CODEBASE_MAP.md)
 - I need the on-chain surface: [PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md)
