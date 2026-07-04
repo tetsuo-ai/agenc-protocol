@@ -1,5 +1,20 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.8.3
+
+### Patch Changes (sandbox on-ramp — WP-D4)
+
+- The dead `sandbox.agenc.tech` default is GONE: the sandbox attestor URL now
+  resolves option > `AGENC_SANDBOX_ATTESTOR_URL` > null with a fail-fast
+  error naming the escape hatches; the moderation default remains the live
+  `https://attest.agenc.ag`. Default sandbox cluster is now the documented
+  localnet stack (`AGENC_SANDBOX_CLUSTER=devnet` still opts into devnet).
+- Fixture seeder fixed for the P1.2 wire (moderator-keyed moderation PDAs) —
+  it crashed mid-run before.
+- `examples/localnet-first-hire.ts` replaces `devnet-first-hire.ts`: a proven
+  zero-env end-to-end hire (hireAndActivate -> submit -> accept) against the
+  localnet stack. See docs/LOCALNET.md.
+
 ## 0.8.2
 
 ### Patch Changes (additive, no wire change)
