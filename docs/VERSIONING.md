@@ -1,0 +1,138 @@
+# VERSIONING — cross-package support matrix & deprecation contract (WP-D3)
+
+> **STATUS: ACTIVE CONTRACT (written 2026-07-03).** This document is the
+> human-maintained source of truth for **which published package versions speak the
+> wire of the live mainnet program**, and the release contract every future breaking
+> change must follow. It complements [`VERSIONS.md`](./VERSIONS.md) (the P6.5
+> *on-chain* surface-revision mechanism — how a client detects what is deployed);
+> this file is the *off-chain* matrix — which npm versions a consumer may pin, and
+> what happens to old pins when the program changes.
+
+Program: `agenc-coordination` — `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`,
+Solana **mainnet**. Upgradeable (2-of-3 multisig upgrade authority, see
+[`UPGRADE_AUTHORITY.md`](./UPGRADE_AUTHORITY.md)); one program ID across every
+surface revision, so **the address alone never tells you the wire format** — the
+matrix below and `getDeployedSurface` do.
+
+---
+
+## 1. Support matrix
+
+### 1.1 Current compatible set (as of 2026-07-03)
+
+The live program is the **P1.2 hardened open roster** build: **90 instructions**,
+`surface_revision = FULL`, moderation-consumption gates at **9/14/13 accounts** with
+a required trailing `moderator: Pubkey` argument (deployed 2026-07-03, slot
+430491216, via the Squads 2-of-3).
+
+**This is the ONLY wire-compatible published set today:**
+
+| Package | Compatible range | Notes |
+|---|---|---|
+| `@tetsuo-ai/marketplace-sdk` | **0.8.x** (latest 0.8.1) | 0.8.0 = the P1.2 wire cutover; 0.8.1 adds `settlementReceiptUrl` (additive, no wire change) |
+| `@tetsuo-ai/marketplace-react` | **0.4.x** | |
+| `@tetsuo-ai/marketplace-tools` | **0.4.x** | |
+| `@tetsuo-ai/marketplace-mcp` | **0.4.x** | |
+| `@tetsuo-ai/marketplace-moderation` | **0.1.x** | first published alongside the roster work |
+| `@tetsuo-ai/store-core` | **0.5.x** | |
+| `create-agenc-store` | **0.5.x** | scaffolds the template pins below |
+
+Every published major/minor **below** these ranges fails **closed** against mainnet
+today (transactions reject at Borsh decode or account resolution — no funds at
+risk, but the flow is down). See §1.2 for exactly which upgrade broke which range.
+
+### 1.2 Break-event history (why this document exists)
+
+| Date | Event | Program surface | Gate shapes | What broke (fails closed since that date) | Deprecation window given |
+|---|---|---|---|---|---|
+| 2026-06-11 | **Full-surface upgrade** (Phase 9, [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md)) | 25 ix → **84 ix**, `surface_revision` stamped FULL | — | sdk **0.3.0** Borsh-broke; templates in the wild still scaffolded that pin | **ZERO** — no announcement preceded the deploy |
+| 2026-07-02 | **WP-A1 roster gates** | 84 ix (gate hardening) | **8/13/12** accounts | sdk **≤0.6.x**, react **≤0.2.x**, tools+mcp **≤0.2.0** | Same-day lockstep republish (sdk 0.7.0, react/tools/mcp 0.3.0, store 0.3.0); no advance notice |
+| 2026-07-03 | **P1.2 hardened open roster** ([`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md)) | 84 ix → **90 ix** | **9/14/13** accounts + required trailing `moderator` arg | sdk **0.7.x**, react/tools/mcp **0.3.x**, store-core **≤0.4.x** | Same-day lockstep republish (§2.6 runbook pattern): sdk 0.8.0, react/tools/mcp 0.4.0, store-core/create 0.4.0 |
+
+The 2026-06-11 row is the motivating failure: a flag-day wire change shipped with
+no deprecation window while the old sdk pin was still being scaffolded by public
+templates. The contract in §2 exists so that never happens again.
+
+---
+
+## 2. The contract going forward
+
+### 2.1 Capability detection is REQUIRED in first-party consumers
+
+Every first-party consumer (react/tools/mcp packages, store-core, the store
+templates, agenc.ag, the marketplace kit) MUST gate surface-dependent flows on the
+SDK's capability API instead of assuming a deploy state:
+
+- `getDeployedSurface(rpc)` — reads the live `ProtocolConfig.surface_revision`
+  size-tolerantly and returns a `CapabilitySet` (never throws on old layouts).
+- `capabilitiesForRevision(revision)` — pure mapping, for tests/offline use.
+- `assertCapability(surface, capability)` — throws a typed
+  `SurfaceNotDeployedError` **before** a transaction that the cluster would reject.
+
+All three are exported from the `@tetsuo-ai/marketplace-sdk` root (implementation:
+[`packages/sdk-ts/src/facade/surface.ts`](../packages/sdk-ts/src/facade/surface.ts),
+re-exported in [`packages/sdk-ts/src/index.ts`](../packages/sdk-ts/src/index.ts)).
+Mechanism details and the revision table: [`VERSIONS.md`](./VERSIONS.md).
+
+### 2.2 Breaking wire changes are announced BEFORE the program deploys
+
+A breaking wire change (instruction args, account order/count, seeds, layout) MUST,
+**before** the on-chain deploy:
+
+1. update the §1 support matrix in this file (new row in §1.2, new ranges in §1.1);
+2. carry an explicit breaking-change announcement **in the release notes of the npm
+   versions** that implement the new wire, **and in the marketplace binary release
+   notes** (`tetsuo-ai/agenc-marketplace-releases`).
+
+The model is the P1.2 cutover choreography —
+[`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) **§2.6**: packages
+regenerated and tested on-branch first, program upgrade, then immediate lockstep
+publish to minimize the skew window, then dependent services (attest.agenc.ag)
+redeployed on the new client.
+
+### 2.3 Deprecation-window policy
+
+- **Additive changes** (new instruction, appended account field behind a migration,
+  new SDK export — e.g. sdk 0.8.1's `settlementReceiptUrl`): **no window needed**.
+  Publish as a minor/patch; old clients keep working.
+- **Flag-day wire changes** (old clients fail closed, as in all three §1.2 events):
+  - ALL first-party packages are republished **the same day** (lockstep), per §2.6
+    of the runbook;
+  - the old majors/minors are documented as **fail-closed immediately** in §1.2 —
+    no grace period is promised for the old wire, because the program cannot serve
+    both shapes;
+  - the quickstart and the store templates/`create-agenc-store` pins are bumped
+    **the same day**, so nothing public scaffolds a dead pin (the 2026-06-11
+    failure mode).
+- **On-chain account layouts** remain append-only with migrations — that policy
+  lives in [`VERSIONS.md`](./VERSIONS.md) ("Deprecation policy") and is unchanged.
+
+### 2.4 Template/starter pins must sit inside the matrix (enforced)
+
+The `agenc-store-templates` repo (source of the three store templates and the
+`create-agenc-store` scaffolder) enforces this mechanically: `npm run check:pins`
+(`scripts/check-pins.mjs`) asserts every `@tetsuo-ai/marketplace-*` and
+`@tetsuo-ai/store-core` pin's minimum resolvable version falls inside the §1.1
+ranges, and fails with instructions to update its `SUPPORT_MATRIX` constant
+alongside any lockstep republish.
+
+CI is deliberately disabled in these repos (cost), so this check runs as part of
+the **pre-release gate** (the local check-script pass before any publish/deploy),
+not GitHub Actions. A lockstep republish (§2.3) MUST include: bump template pins →
+update the script's `SUPPORT_MATRIX` → `npm run check:pins` green → publish.
+
+---
+
+## 3. Maintenance
+
+Update this file **in the same release window** as any of:
+
+- a program deploy that changes the wire (add a §1.2 row, rewrite §1.1);
+- a lockstep npm republish (rewrite §1.1 ranges);
+- a change to the capability-detection exports (§2.1 links).
+
+Related: [`VERSIONS.md`](./VERSIONS.md) (on-chain surface detection),
+[`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md) (live deployment record),
+[`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) (deploy choreography,
+§2.6 flag-day pattern), [`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md)
+(the current wire's spec).
