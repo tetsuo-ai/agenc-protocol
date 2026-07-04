@@ -1,5 +1,6 @@
-// createSandboxClient: one call from nothing to a funded, devnet-wired
-// MarketplaceClient. Browser-safe (kit RPC + WebCrypto keygen only).
+// createSandboxClient: one call from nothing to a funded, sandbox-wired
+// (localnet by default, devnet via the seam) MarketplaceClient. Browser-safe
+// (kit RPC + WebCrypto keygen only).
 import {
   createSolanaRpc,
   createSolanaRpcSubscriptions,
@@ -64,11 +65,12 @@ export interface CreateSandboxClientOptions {
   /**
    * HTTP RPC endpoint. Defaults through the environment seam
    * (`resolveSandboxEnvironment`): `AGENC_SANDBOX_RPC_URL` /
-   * `AGENC_SANDBOX_CLUSTER` when set, otherwise
-   * {@link SANDBOX_DEVNET_RPC_URL}. Must look devnet/local — hostname
-   * containing `"devnet"`, or localhost/127.0.0.1/::1 — unless
-   * `allowCustomRpc` is set; anything else is refused with
-   * {@link SandboxClusterError} before any key generation or airdrop.
+   * `AGENC_SANDBOX_CLUSTER` when set, otherwise the localnet default
+   * ({@link SANDBOX_LOCALNET_RPC_URL} — the `scripts/localnet-up.mjs`
+   * stack). Must look devnet/local — hostname containing `"devnet"`, or
+   * localhost/127.0.0.1/::1 — unless `allowCustomRpc` is set; anything else
+   * is refused with {@link SandboxClusterError} before any key generation or
+   * airdrop.
    */
   rpcUrl?: string;
   /**
@@ -76,7 +78,8 @@ export interface CreateSandboxClientOptions {
    * is overridden (option or env var), derived from it (`http` → `ws`,
    * `https` → `wss`, same host/port/path) so confirmations come from the
    * same cluster the sends go to; otherwise the resolved cluster default
-   * ({@link SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL} for devnet).
+   * ({@link SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL} for localnet,
+   * {@link SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL} for devnet).
    */
   rpcSubscriptionsUrl?: string;
   /**
@@ -234,18 +237,19 @@ async function fundViaAirdrop(
 }
 
 /**
- * Create a funded, devnet-wired {@link MarketplaceClient} in one call:
- * connect to devnet RPC, generate a throwaway `KeyPairSigner`, request a
- * faucet airdrop (default 2 SOL), wait until it lands, and return
- * `{ client, signer, rpc }`.
+ * Create a funded, sandbox-wired {@link MarketplaceClient} in one call:
+ * connect to the resolved sandbox RPC (the localnet stack by default),
+ * generate a throwaway `KeyPairSigner`, request a faucet airdrop (default
+ * 2 SOL), wait until it lands, and return `{ client, signer, rpc }`.
  *
  * Endpoint defaults flow through the environment seam
- * (`resolveSandboxEnvironment`): with `AGENC_SANDBOX_CLUSTER=localnet` (or
- * `AGENC_SANDBOX_RPC_URL` pointing at a local validator) the same call
- * targets a localnet stack instead of public devnet — localhost URLs pass
- * the cluster guard via the localhost allowlist.
+ * (`resolveSandboxEnvironment`): the shipped default is the documented
+ * localnet stack (`scripts/localnet-up.mjs` at the repo root, RPC
+ * 127.0.0.1:8899); with `AGENC_SANDBOX_CLUSTER=devnet` (or
+ * `AGENC_SANDBOX_RPC_URL`) the same call targets public devnet instead —
+ * localhost URLs pass the cluster guard via the localhost allowlist.
  *
- * ## DEVNET ONLY — throwaway keys, never real funds
+ * ## LOCALNET/DEVNET ONLY — throwaway keys, never real funds
  *
  * This is the test-mode entry point (PLAN.md P2.4). The generated key lives
  * only in this process and is NOT persisted anywhere: treat it as disposable,
@@ -291,11 +295,12 @@ export async function createSandboxClient(
     rpcSubscriptionsUrl: options.rpcSubscriptionsUrl,
     fixtures: SANDBOX_FIXTURES,
   });
-  // Cluster guard FIRST: refuse a non-devnet-looking rpcUrl before any key
+  // Cluster guard FIRST: refuse a non-devnet/non-local rpcUrl before any key
   // generation, airdrop, or send. The airdrop failure must never be the only
   // thing standing between a throwaway key and a real cluster. The shipped
-  // devnet default needs no check; localnet URLs pass via the localhost
-  // allowlist (one source of truth: SANDBOX_LOCAL_HOSTNAMES below).
+  // devnet URL needs no check; the localnet default and other local URLs
+  // pass via the localhost allowlist (one source of truth:
+  // SANDBOX_LOCAL_HOSTNAMES above).
   if (
     environment.rpcUrl !== SANDBOX_DEVNET_RPC_URL &&
     options.allowCustomRpc !== true

@@ -70,7 +70,12 @@ SDK-side resolution order (browser-safe; `process` is only touched behind a
 2. environment variables `AGENC_SANDBOX_CLUSTER` / `AGENC_SANDBOX_RPC_URL` /
    `AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL` / `AGENC_SANDBOX_ATTESTOR_URL` /
    `AGENC_SANDBOX_FIXTURES`
-3. shipped defaults (public devnet + `DEFAULT_SANDBOX_ATTESTOR_URL` + shipped fixtures)
+3. shipped defaults: **this localnet stack** (cluster `localnet`, RPC
+   `127.0.0.1:8899/8900`) + shipped fixtures. There is NO shipped attestor
+   endpoint (WP-D4 removed the dead `sandbox.agenc.tech` default — the
+   attestor resolves to `null` unless configured; the moderator keypair is
+   the localnet no-attestor path). `AGENC_SANDBOX_CLUSTER=devnet` selects the
+   public devnet endpoints.
 
 Node scripts/services additionally accept `--env-file <path>` (defaulting to
 `.localnet/env.json` when it exists) and export the `AGENC_SANDBOX_*` variables for
@@ -115,7 +120,7 @@ its step 4 initializers ↔ our step 5; its seeding hook ↔ the same seeder scr
 - **Seeding stake.** This localnet's `ProtocolConfig.min_agent_stake` is 0.001 SOL (the
   program-enforced floor in `initialize_protocol`). `register_agent` requires
   `stake_amount >= min_agent_stake` — a `stakeAmount: 0` registration fails with
-  `InsufficientStake` (6136). The seeder script and `examples/devnet-first-hire.ts`
+  `InsufficientStake` (6136). The seeder script and `examples/localnet-first-hire.ts`
   read `min_agent_stake` from the on-chain ProtocolConfig and stake exactly that,
   so they work unmodified on any properly initialized cluster.
 - **One stack per machine by default.** `--port` moves the RPC/WS ports, but

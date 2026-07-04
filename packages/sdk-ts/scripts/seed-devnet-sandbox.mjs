@@ -626,6 +626,35 @@ async function main() {
   const stakeAmount = protocolConfig.data.minAgentStake;
   console.log(`provider stake: ${stakeAmount} lamports (ProtocolConfig.min_agent_stake)`);
 
+  // P1.2: moderation records are moderator-keyed. Both attestation paths
+  // (HTTP attestor / direct moderator keypair) record as the GLOBAL
+  // moderation authority, so read it once from the on-chain ModerationConfig
+  // and derive the record PDAs with it.
+  const [moderationConfigPda] = await sdk.findModerationConfigPda();
+  const moderationConfig = await sdk.fetchMaybeModerationConfig(
+    rpc,
+    moderationConfigPda,
+    { commitment: "confirmed" },
+  );
+  if (!moderationConfig.exists) {
+    throw new Error(
+      `ModerationConfig ${moderationConfigPda} not found via ${config.rpc} — ` +
+        `the moderation gate is not configured on this cluster (localnet: ` +
+        `re-run \`node scripts/localnet-up.mjs\`; devnet: follow ` +
+        `scripts/devnet-deploy.md).`,
+    );
+  }
+  const moderationAuthority = moderationConfig.data.moderationAuthority;
+  if (moderator && moderator.address !== moderationAuthority) {
+    throw new Error(
+      `moderator keypair ${moderator.address} is not the on-chain global ` +
+        `moderation authority (${moderationAuthority}) — its attestations ` +
+        `would not pass the fail-closed hire gate. Use the right key ` +
+        `(localnet: .localnet/keys/moderator.json).`,
+    );
+  }
+  console.log(`moderation authority: ${moderationAuthority}`);
+
   const entries = [];
   for (const blueprint of SANDBOX_PROVIDER_BLUEPRINTS) {
     const agentId = deriveId32(`agenc-sandbox-provider:${blueprint.name}`);
@@ -653,7 +682,9 @@ async function main() {
         authority,
         agentId,
         capabilities: 1n,
-        endpoint: "https://sandbox.agenc.tech/providers",
+        // RFC 2606 placeholder: sandbox providers are operator-driven and
+        // have no live callback endpoint (never a dead real-looking host).
+        endpoint: "https://example.invalid/sandbox/providers",
         metadataUri: null,
         stakeAmount,
       });
@@ -723,10 +754,13 @@ async function main() {
       console.log(`created listing: ${blueprint.name} (${listing})`);
     }
 
-    // CLEAN moderation so the fail-closed hire gate passes.
+    // CLEAN moderation so the fail-closed hire gate passes. P1.2: the v2
+    // record PDA is moderator-keyed — derive it with the global moderation
+    // authority both attestation paths record as.
     const [listingModeration] = await sdk.facade.findListingModerationPda({
       listing,
       jobSpecHash: specHash,
+      moderator: moderationAuthority,
     });
     const moderationAccount = await sdk.fetchMaybeListingModeration(
       rpc,

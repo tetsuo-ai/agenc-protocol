@@ -214,14 +214,21 @@ setups. The repo also has deeper lifecycle coverage in
 `tests-e2e/client.e2e.test.ts` and `tests-e2e/testing.e2e.test.ts` (repo-only:
 `tests-e2e/` and `docs/` are not shipped in the npm tarball).
 
-## Devnet sandbox — `@tetsuo-ai/marketplace-sdk/sandbox`
+## Sandbox — `@tetsuo-ai/marketplace-sdk/sandbox`
 
-`createSandboxClient()` wires the client to devnet with a throwaway airdropped
-signer; `SANDBOX_FIXTURES` exposes the seeded provider/listing addresses (currently
-unseeded — populated after the Phase-2 devnet redeploy);
-`requestSandboxAttestation(...)` asks the hosted sandbox attestor to record the
-CLEAN moderation your hire needs. See
-[`examples/devnet-first-hire.ts`](./examples/devnet-first-hire.ts).
+`createSandboxClient()` wires the client to a sandbox cluster with a throwaway
+airdropped signer. The shipped default is the **documented localnet stack**
+(`node scripts/localnet-up.mjs` at the repo root, RPC `127.0.0.1:8899`) —
+never a dead hosted endpoint; `AGENC_SANDBOX_CLUSTER=devnet` retargets the
+same code at public devnet. Fixtures come from the localnet seeder
+(`scripts/seed-devnet-sandbox.mjs` writes `.localnet/fixtures.json`; the
+SHIPPED `SANDBOX_FIXTURES` stay unseeded until a public devnet seeding run
+ships). Moderation attestations come from a self-hosted attestor via
+`requestSandboxAttestation(...)` (`AGENC_SANDBOX_ATTESTOR_URL`; there is no
+shipped attestor endpoint) or — on localnet — directly from the stack's
+moderator keypair, no extra service needed. The end-to-end flow, runnable
+from a fresh clone:
+[`examples/localnet-first-hire.ts`](./examples/localnet-first-hire.ts).
 
 ## RPC strategy
 
@@ -280,12 +287,15 @@ your own RPC. The indexer client also includes webhook helpers
 iterating — the `agenc-protocol` repo ships a one-command local stack
 (`node scripts/localnet-up.mjs`, see `docs/LOCALNET.md`) that boots a
 `solana-test-validator` with the program + configs at genesis and writes
-`.localnet/env.json`. Export the `AGENC_SANDBOX_*` variables it derives
-(cluster/RPC/WS/attestor/moderation/fixtures) and every sandbox helper —
-`resolveSandboxEnvironment`, `createSandboxClient`,
-`requestSandboxAttestation`, `requestListingModeration` — retargets to
-localhost with **zero code changes**. The same seam later retargets to devnet
-(unset everything) or a hosted surface (point the variables at it).
+`.localnet/env.json`. The sandbox helpers — `resolveSandboxEnvironment`,
+`createSandboxClient`, `requestSandboxAttestation`,
+`requestListingModeration` — already default to this stack (localhost
+RPC/WS); export `AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json` (plus
+`AGENC_SANDBOX_ATTESTOR_URL` if you run a local attestor) to route the
+seeded state in, or run `examples/localnet-first-hire.ts`, which reads
+`.localnet/env.json` itself. The same seam retargets to devnet
+(`AGENC_SANDBOX_CLUSTER=devnet`) or a hosted surface (point the variables at
+it) with **zero code changes**.
 
 ## Layout
 

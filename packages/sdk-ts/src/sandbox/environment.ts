@@ -18,18 +18,16 @@ export const SANDBOX_LOCALNET_RPC_URL = "http://127.0.0.1:8899";
  */
 export const SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL = "ws://127.0.0.1:8900";
 
-/**
- * Default endpoint of the hosted devnet sandbox moderation auto-attestor.
- *
- * The service itself ships in Phase 2.3 (PLAN.md P2.3 — a devnet-only service
- * holding the devnet moderation authority key, rate-limited per IP). This
- * constant is updated when the human operator deploys it; until then, calls
- * against the default endpoint fail at the network layer, and you can point
- * `requestSandboxAttestation` at a self-hosted instance via `input.endpoint`
- * or the `AGENC_SANDBOX_ATTESTOR_URL` environment variable.
- */
-export const DEFAULT_SANDBOX_ATTESTOR_URL =
-  "https://sandbox.agenc.tech/api/sandbox/attest";
+// There is deliberately NO shipped default for the sandbox moderation
+// auto-attestor endpoint. The previously shipped default
+// (`sandbox.agenc.tech`) was never deployed and failed DNS — a dead host as
+// a default turns every fresh-clone run into a network error (WP-D4). The
+// attestor endpoint now resolves to `null` unless the `attestorUrl` option
+// or `AGENC_SANDBOX_ATTESTOR_URL` names a live instance (e.g. a self-hosted
+// storefront `sandboxAttestor`). On the localnet stack no attestor is needed
+// at all: the moderator keypair (`.localnet/keys/moderator.json`) records
+// moderation directly, as `scripts/seed-devnet-sandbox.mjs` and
+// `examples/localnet-first-hire.ts` do.
 
 /**
  * Shipped default for the hosted marketplace moderation API — the open,
@@ -65,13 +63,18 @@ export type SandboxCluster = (typeof SANDBOX_CLUSTERS)[number];
  * beats the shipped default.
  */
 export interface ResolveSandboxEnvironmentOptions {
-  /** Target cluster (beats `AGENC_SANDBOX_CLUSTER`; default `"devnet"`). */
+  /** Target cluster (beats `AGENC_SANDBOX_CLUSTER`; default `"localnet"`). */
   cluster?: SandboxCluster;
   /** HTTP RPC endpoint (beats `AGENC_SANDBOX_RPC_URL`). */
   rpcUrl?: string;
   /** WebSocket endpoint (beats `AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL`). */
   rpcSubscriptionsUrl?: string;
-  /** Moderation auto-attestor endpoint (beats `AGENC_SANDBOX_ATTESTOR_URL`). */
+  /**
+   * Moderation auto-attestor endpoint (beats `AGENC_SANDBOX_ATTESTOR_URL`).
+   * There is NO shipped default: when neither this option nor the env var is
+   * set, the resolved value is `null` (on localnet, record moderation
+   * directly with the moderator keypair instead).
+   */
   attestorUrl?: string;
   /**
    * Moderation-scan endpoint — the Phase-3 storefront
@@ -92,14 +95,19 @@ export interface ResolveSandboxEnvironmentOptions {
 
 /** The fully resolved sandbox environment. See {@link resolveSandboxEnvironment}. */
 export interface SandboxEnvironment {
-  /** Resolved cluster (`"devnet"` unless overridden). */
+  /** Resolved cluster (`"localnet"` unless overridden). */
   cluster: SandboxCluster;
   /** Resolved HTTP RPC endpoint. */
   rpcUrl: string;
   /** Resolved WebSocket endpoint. */
   rpcSubscriptionsUrl: string;
-  /** Resolved moderation auto-attestor endpoint. */
-  attestorUrl: string;
+  /**
+   * Resolved moderation auto-attestor endpoint (`attestorUrl` option /
+   * `AGENC_SANDBOX_ATTESTOR_URL`), or `null` when no attestor is configured —
+   * there is no shipped default (the localnet stack's moderator keypair is
+   * the no-attestor path).
+   */
+  attestorUrl: string | null;
   /**
    * Resolved moderation-scan endpoint (`AGENC_SANDBOX_MODERATION_URL` /
    * env-file `moderationUrl`), or `null` when no endpoint is configured —
@@ -250,7 +258,7 @@ async function readSandboxFixturesFile(
  * Resolve the sandbox environment — THE switchover point between localnet,
  * devnet, and a future hosted surface. Every sandbox helper
  * (`createSandboxClient`, `requestSandboxAttestation`, the
- * `examples/devnet-first-hire.ts` flow) routes its defaults through this
+ * `examples/localnet-first-hire.ts` flow) routes its defaults through this
  * function, so retargeting a whole workflow is a matter of exporting
  * variables (or editing the one `.localnet/env.json` file a Node runner
  * derives them from) — never a refactor.
@@ -265,13 +273,15 @@ async function readSandboxFixturesFile(
  *    `AGENC_SANDBOX_RPC_SUBSCRIPTIONS_URL`, `AGENC_SANDBOX_ATTESTOR_URL`,
  *    `AGENC_SANDBOX_MODERATION_URL`,
  *    `AGENC_SANDBOX_FIXTURES` (a JSON file path — Node only).
- * 3. **Shipped defaults**: public devnet RPC endpoints,
- *    {@link DEFAULT_SANDBOX_ATTESTOR_URL}, and the shipped
- *    {@link SANDBOX_FIXTURES} (for cluster `"localnet"` the RPC defaults are
- *    the `solana-test-validator` ports instead — see
- *    {@link SANDBOX_LOCALNET_RPC_URL}). The moderation-scan endpoint
- *    (`moderationUrl`) has NO shipped default and resolves to `null` when
- *    nothing sets it.
+ * 3. **Shipped defaults**: cluster `"localnet"` on the
+ *    `solana-test-validator` ports ({@link SANDBOX_LOCALNET_RPC_URL} /
+ *    {@link SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL} — the documented
+ *    one-command stack, `scripts/localnet-up.mjs` at the repo root) and the
+ *    shipped {@link SANDBOX_FIXTURES}. Cluster `"devnet"` gets the public
+ *    devnet RPC endpoints instead. The attestor endpoint (`attestorUrl`) and
+ *    the moderation-scan endpoint (`moderationUrl`) have NO shipped default
+ *    and resolve to `null` when nothing sets them — a default must never be
+ *    a dead host (WP-D4: the old `sandbox.agenc.tech` default failed DNS).
  *
  * When `rpcUrl` is overridden but `rpcSubscriptionsUrl` is not, the WebSocket
  * endpoint is derived from it (`http` → `ws`, `https` → `wss`, same
@@ -281,8 +291,8 @@ async function readSandboxFixturesFile(
  *
  * | Stage             | How to point the SDK at it                                                                                                              |
  * | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
- * | **localnet (now)** | Run the one-command localnet stack (`scripts/localnet-up.mjs`, repo root); it writes `.localnet/env.json` and Node runners export the `AGENC_SANDBOX_*` variables from it (`CLUSTER=localnet`, localhost RPC, local attestor or `null`, `AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json`). |
- * | **devnet (later)** | Unset every `AGENC_SANDBOX_*` variable — the shipped defaults (public devnet + {@link DEFAULT_SANDBOX_ATTESTOR_URL} + shipped fixtures) take over. No code change. |
+ * | **localnet (the shipped default)** | Run the one-command localnet stack (`scripts/localnet-up.mjs`, repo root) + the seeder; consume `.localnet/env.json` — export the `AGENC_SANDBOX_*` variables from it (localhost RPC, local attestor or `null`, `AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json`), or run `examples/localnet-first-hire.ts`, which reads the file itself. |
+ * | **devnet (when seeded)** | Export `AGENC_SANDBOX_CLUSTER=devnet` (public devnet RPC + the shipped fixtures take over) and point `AGENC_SANDBOX_ATTESTOR_URL` at a live attestor. No code change. |
  * | **hosted (later)** | Export `AGENC_SANDBOX_RPC_URL` / `AGENC_SANDBOX_ATTESTOR_URL` (or pass options) pointing at the hosted endpoints — a one-file env change, never a refactor. |
  *
  * Mainnet note: `"mainnet"` is representable (the env-file convention covers
@@ -302,8 +312,8 @@ async function readSandboxFixturesFile(
  *
  * @example
  * ```ts
- * // Local stack running? `AGENC_SANDBOX_CLUSTER=localnet` (plus the other
- * // exports from .localnet/env.json) retargets this without code changes:
+ * // Local stack running (scripts/localnet-up.mjs)? The shipped defaults
+ * // already point here — no exports needed:
  * const env = await resolveSandboxEnvironment();
  * const sandbox = await createSandboxClient({ rpcUrl: env.rpcUrl });
  * ```
@@ -325,7 +335,7 @@ export async function resolveSandboxEnvironment(
     options.cluster ??
     (envCluster !== undefined
       ? parseSandboxCluster(envCluster, "AGENC_SANDBOX_CLUSTER")
-      : "devnet");
+      : "localnet");
 
   const explicitRpcUrl = options.rpcUrl ?? envRpcUrl;
   let rpcUrl: string;
@@ -352,8 +362,11 @@ export async function resolveSandboxEnvironment(
         ? SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL
         : SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL);
 
-  const attestorUrl =
-    options.attestorUrl ?? envAttestorUrl ?? DEFAULT_SANDBOX_ATTESTOR_URL;
+  // Attestor endpoint resolution: explicit option > env var > null. No
+  // shipped default — the old sandbox.agenc.tech default was a dead host
+  // (WP-D4). On the localnet stack, moderation is recorded directly with the
+  // moderator keypair instead of through an attestor.
+  const attestorUrl = options.attestorUrl ?? envAttestorUrl ?? null;
 
   // Moderation endpoint resolution: explicit option > env var > shipped hosted
   // default (mainnet only) > null. The hosted default is the live, open

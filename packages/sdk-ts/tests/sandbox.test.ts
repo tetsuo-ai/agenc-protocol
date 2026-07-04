@@ -35,7 +35,6 @@ import {
   assertSandboxSeeded,
   createSandboxClient,
   DEFAULT_SANDBOX_AIRDROP_LAMPORTS,
-  DEFAULT_SANDBOX_ATTESTOR_URL,
   DEFAULT_HOSTED_MODERATION_LISTINGS_URL,
   requestSandboxAttestation,
   resolveSandboxEnvironment,
@@ -173,7 +172,30 @@ const SPEC_HASH_BYTES = new Uint8Array(32).fill(0xab);
 const SPEC_HASH_HEX = "ab".repeat(32);
 
 describe("requestSandboxAttestation", () => {
-  it("POSTs {kind, address, specHash-hex} to the default endpoint and returns the signature", async () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("fails fast (before any fetch) when no attestor endpoint is configured — no shipped default (WP-D4)", async () => {
+    const { fetch, calls } = fakeFetch();
+    const failure = await requestSandboxAttestation({
+      kind: "listing",
+      address: LISTING_PDA,
+      specHash: SPEC_HASH_BYTES,
+      fetch,
+    }).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(
+      "no sandbox attestor endpoint is configured",
+    );
+    expect((failure as Error).message).toContain("AGENC_SANDBOX_ATTESTOR_URL");
+    expect((failure as Error).message).toContain("moderator keypair");
+    // Fail-closed BEFORE the network: the old dead default would have dialed.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POSTs {kind, address, specHash-hex} to the seam-resolved endpoint and returns the signature", async () => {
+    vi.stubEnv("AGENC_SANDBOX_ATTESTOR_URL", "http://127.0.0.1:4174/attest");
     const { fetch, calls } = fakeFetch({
       body: JSON.stringify({ signature: "devnet-sig" }),
     });
@@ -185,7 +207,7 @@ describe("requestSandboxAttestation", () => {
     });
     expect(result).toEqual({ signature: "devnet-sig" });
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe(DEFAULT_SANDBOX_ATTESTOR_URL);
+    expect(calls[0]!.url).toBe("http://127.0.0.1:4174/attest");
     expect(calls[0]!.init.method).toBe("POST");
     expect(calls[0]!.init.headers["content-type"]).toBe("application/json");
     expect(JSON.parse(calls[0]!.init.body)).toEqual({
@@ -236,6 +258,7 @@ describe("requestSandboxAttestation", () => {
       kind: "listing",
       address: LISTING_PDA,
       specHash: SPEC_HASH_BYTES,
+      endpoint: "https://attestor.example/attest",
       fetch,
     }).catch((e: unknown) => e);
     expect(failure).toBeInstanceOf(SandboxAttestationError);
@@ -257,6 +280,7 @@ describe("requestSandboxAttestation", () => {
       kind: "listing",
       address: LISTING_PDA,
       specHash: SPEC_HASH_BYTES,
+      endpoint: "https://attestor.example/attest",
       fetch,
     }).catch((e: unknown) => e)) as SandboxAttestationError;
     expect(failure).toBeInstanceOf(SandboxAttestationError);
@@ -275,15 +299,15 @@ describe("requestSandboxAttestation", () => {
       kind: "task",
       address: LISTING_PDA,
       specHash: SPEC_HASH_BYTES,
+      endpoint: "https://attestor.example/attest",
       fetch,
     }).catch((e: unknown) => e)) as SandboxAttestationError;
     expect(failure.retryAfterSeconds).toBe(7);
   });
 
   it("wraps a network-layer fetch rejection in SandboxAttestationError (status 0)", async () => {
-    // The exact failure every default-endpoint caller hits while the hosted
-    // P2.3 attestor is not deployed: fetch rejects (NXDOMAIN/refused) before
-    // any HTTP response exists.
+    // The failure a caller hits when the configured attestor is down: fetch
+    // rejects (NXDOMAIN/refused) before any HTTP response exists.
     const networkFailure = new TypeError("fetch failed");
     const rejectingFetch: SandboxFetchLike = async () => {
       throw networkFailure;
@@ -292,6 +316,7 @@ describe("requestSandboxAttestation", () => {
       kind: "listing",
       address: LISTING_PDA,
       specHash: SPEC_HASH_BYTES,
+      endpoint: "https://attestor.example/attest",
       fetch: rejectingFetch,
     }).catch((e: unknown) => e);
     expect(failure).toBeInstanceOf(SandboxAttestationError);
@@ -300,11 +325,10 @@ describe("requestSandboxAttestation", () => {
     expect(error.retryAfterSeconds).toBeNull();
     expect(error.body).toBeNull();
     expect(error.cause).toBe(networkFailure);
-    // The message must name the endpoint and point at the not-yet-deployed
-    // caveat + the `endpoint` override.
-    expect(error.message).toContain(DEFAULT_SANDBOX_ATTESTOR_URL);
-    expect(error.message).toContain("may not be deployed yet");
-    expect(error.message).toContain("endpoint");
+    // The message must name the endpoint and point at the override paths.
+    expect(error.message).toContain("https://attestor.example/attest");
+    expect(error.message).toContain("could not be reached");
+    expect(error.message).toContain("AGENC_SANDBOX_ATTESTOR_URL");
   });
 
   it("names a custom endpoint in the network-rejection error", async () => {
@@ -329,6 +353,7 @@ describe("requestSandboxAttestation", () => {
       kind: "listing",
       address: LISTING_PDA,
       specHash: SPEC_HASH_BYTES,
+      endpoint: "https://attestor.example/attest",
       fetch,
     }).catch((e: unknown) => e)) as SandboxAttestationError;
     expect(failure).toBeInstanceOf(SandboxAttestationError);
@@ -515,11 +540,11 @@ describe("createSandboxClient subscriptions URL", () => {
     expect(subscriptionsSpy).toHaveBeenCalledWith("ws://127.0.0.1:9001");
   });
 
-  it("uses the public devnet WebSocket only when rpcUrl is also defaulted", async () => {
+  it("uses the localnet WebSocket default (8900) only when rpcUrl is also defaulted", async () => {
     subscriptionsSpy.mockClear();
     await createSandboxClient({ skipAirdrop: true });
     expect(subscriptionsSpy).toHaveBeenCalledWith(
-      SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL,
+      SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL,
     );
   });
 
@@ -747,17 +772,26 @@ describe("resolveSandboxEnvironment", () => {
     vi.unstubAllEnvs();
   });
 
-  it("ships the public-devnet defaults when nothing overrides", async () => {
+  it("ships the LOCALNET defaults when nothing overrides (WP-D4)", async () => {
     const env = await resolveSandboxEnvironment();
     expect(env).toEqual({
-      cluster: "devnet",
-      rpcUrl: SANDBOX_DEVNET_RPC_URL,
-      rpcSubscriptionsUrl: SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL,
-      attestorUrl: DEFAULT_SANDBOX_ATTESTOR_URL,
+      cluster: "localnet",
+      rpcUrl: SANDBOX_LOCALNET_RPC_URL,
+      rpcSubscriptionsUrl: SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL,
+      // No shipped default attestor endpoint — null, never a dead host.
+      attestorUrl: null,
       // No shipped default for the P3.4 moderation endpoint — null, not a URL.
       moderationUrl: null,
       fixtures: SANDBOX_FIXTURES,
     });
+  });
+
+  it("cluster devnet still resolves the public devnet endpoints", async () => {
+    const env = await resolveSandboxEnvironment({ cluster: "devnet" });
+    expect(env.cluster).toBe("devnet");
+    expect(env.rpcUrl).toBe(SANDBOX_DEVNET_RPC_URL);
+    expect(env.rpcSubscriptionsUrl).toBe(SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL);
+    expect(env.attestorUrl).toBeNull();
   });
 
   it("AGENC_SANDBOX_* env vars beat the shipped defaults", async () => {
@@ -819,10 +853,10 @@ describe("resolveSandboxEnvironment", () => {
       // Every env var (including the unreadable fixtures path) is invisible:
       // shipped defaults all the way down, and no node:fs access happened.
       expect(env).toEqual({
-        cluster: "devnet",
-        rpcUrl: SANDBOX_DEVNET_RPC_URL,
-        rpcSubscriptionsUrl: SANDBOX_DEVNET_RPC_SUBSCRIPTIONS_URL,
-        attestorUrl: DEFAULT_SANDBOX_ATTESTOR_URL,
+        cluster: "localnet",
+        rpcUrl: SANDBOX_LOCALNET_RPC_URL,
+        rpcSubscriptionsUrl: SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL,
+        attestorUrl: null,
         moderationUrl: null,
         fixtures: SANDBOX_FIXTURES,
       });
@@ -866,9 +900,9 @@ describe("resolveSandboxEnvironment", () => {
     vi.stubEnv("AGENC_SANDBOX_ATTESTOR_URL", "");
     vi.stubEnv("AGENC_SANDBOX_MODERATION_URL", "  ");
     const env = await resolveSandboxEnvironment();
-    expect(env.cluster).toBe("devnet");
-    expect(env.rpcUrl).toBe(SANDBOX_DEVNET_RPC_URL);
-    expect(env.attestorUrl).toBe(DEFAULT_SANDBOX_ATTESTOR_URL);
+    expect(env.cluster).toBe("localnet");
+    expect(env.rpcUrl).toBe(SANDBOX_LOCALNET_RPC_URL);
+    expect(env.attestorUrl).toBeNull();
     expect(env.moderationUrl).toBeNull();
   });
 
