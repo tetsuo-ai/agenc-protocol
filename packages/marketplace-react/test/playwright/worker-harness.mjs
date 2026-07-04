@@ -125,13 +125,15 @@ export async function completeWorkerSide(params) {
     }),
   ]);
 
-  // 2) buyer (creator) publishes the job spec.
+  // 2) buyer (creator) publishes the job spec, consuming the moderator's
+  //    attestation (P1.2: the publish gate takes an explicit moderator).
   await buyerClient.send([
     await facade.setTaskJobSpec({
       task: kit.address(String(taskPda)),
       creator: buyer,
       jobSpecHash,
       jobSpecUri,
+      moderator: moderator.address,
     }),
   ]);
 

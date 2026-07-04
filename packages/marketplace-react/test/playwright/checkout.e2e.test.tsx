@@ -144,6 +144,17 @@ beforeAll(async () => {
       // The seeder is the provider authority -> the worker authority paid on accept.
       workerAuthority: "", // filled after the worker side resolves it
       treasury: String(pc.data.treasury),
+      // P1.2: the hire gate consumes the sandbox moderation authority's
+      // listing attestation — derive its pubkey from the moderator keypair.
+      moderator: String(
+        (
+          await kit.createKeyPairSignerFromBytes(
+            Uint8Array.from(
+              JSON.parse(await readFile(keypairs.moderator, "utf8")),
+            ),
+          )
+        ).address,
+      ),
     };
 
     ready = {
@@ -214,6 +225,7 @@ function CheckoutFlow({
       expectedVersion: BigInt(config.expectedVersion),
       reviewWindowSecs: BigInt(config.reviewWindowSecs),
       listingSpecHash: hexToBytes(config.listingSpecHashHex),
+      moderator: config.moderator as Address,
     } as Parameters<typeof hire.hire>[0]);
     setTaskPda(String(result.taskPda));
     setPhase("worker");
