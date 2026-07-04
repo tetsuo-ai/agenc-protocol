@@ -89,12 +89,16 @@ export const SANDBOX_FIXTURES: SandboxFixtures =
 export class SandboxNotSeededError extends Error {
   constructor(what: string) {
     super(
-      `The devnet sandbox is not seeded yet, so there are no ${what} fixtures to use. ` +
-        `SANDBOX_FIXTURES.seeded is false in this build of @tetsuo-ai/marketplace-sdk: ` +
-        `the devnet full-surface redeploy (PLAN.md P2.2) and the seeding run ` +
-        `(scripts/seed-devnet-sandbox.mjs) have not happened yet, or you are on a ` +
-        `pre-seeding release. Check SANDBOX_FIXTURES.seeded before using fixtures, ` +
-        `and upgrade the SDK once a seeded release ships.`,
+      `The resolved sandbox is not seeded, so there are no ${what} fixtures to use ` +
+        `(SANDBOX_FIXTURES.seeded is false). Seed a sandbox and route its fixtures ` +
+        `in through the environment seam: on the localnet stack, run ` +
+        `\`node scripts/localnet-up.mjs\` (repo root) then the seeder ` +
+        `(scripts/seed-devnet-sandbox.mjs — it picks up .localnet/env.json ` +
+        `automatically and writes .localnet/fixtures.json), and consume it via ` +
+        `AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json or ` +
+        `resolveSandboxEnvironment({ fixtures }). The SHIPPED fixtures stay ` +
+        `unseeded until a public devnet seeding run ships in a release. Check ` +
+        `SANDBOX_FIXTURES.seeded before using fixtures.`,
     );
     this.name = "SandboxNotSeededError";
   }

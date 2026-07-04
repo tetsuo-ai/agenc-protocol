@@ -2,7 +2,8 @@
 #
 # Purpose: the hosted devnet sandbox (seeded fixtures + auto-attestor + RPC)
 # is only trustworthy if something exercises it continuously. This workflow
-# runs examples/devnet-first-hire.ts nightly against REAL devnet — faucet
+# runs examples/localnet-first-hire.ts (cluster-pinned to devnet) nightly
+# against REAL devnet — faucet
 # airdrop -> register -> list -> attest -> hire -> claim -> settle — so any
 # silent rot (devnet redeploy wiping fixtures, attestor outage, program/SDK
 # drift, faucet policy changes) turns into a red run instead of a broken
@@ -15,12 +16,12 @@
 #        b. the seeding run (scripts/seed-devnet-sandbox.mjs), with the seeded
 #           fixtures.json shipped in the checkout under test;
 #        c. the P2.3 sandbox auto-attestor deploy (agenc-services-storefront,
-#           SANDBOX_ATTESTOR_ENABLED=true) AND working DNS for the SDK's
-#           DEFAULT_SANDBOX_ATTESTOR_URL host — or, if the attestor lives at
-#           a different host, the repository variable SANDBOX_ATTESTOR_URL
-#           set to its full attest endpoint (e.g.
-#           https://marketplace.agenc.tech/api/sandbox/attest). The variable
-#           is forwarded to the test below and passed through to
+#           SANDBOX_ATTESTOR_ENABLED=true) AND the repository variable
+#           SANDBOX_ATTESTOR_URL set to its full attest endpoint (e.g.
+#           https://marketplace.agenc.tech/api/sandbox/attest). The SDK
+#           ships NO default attestor endpoint (WP-D4 removed the dead
+#           sandbox.agenc.tech default), so this variable is REQUIRED. It is
+#           forwarded to the test below and passed through to
 #           requestSandboxAttestation as the attestation endpoint, so no SDK
 #           release is needed to repoint the nightly.
 #      Until then the workflow is inert. (GitHub Actions is currently disabled
@@ -40,7 +41,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  devnet-first-hire:
+  devnet-first-hire-canary:
     if: ${{ vars.SANDBOX_NIGHTLY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     defaults:
@@ -70,7 +71,7 @@ jobs:
         run: npx vitest run tests-e2e/devnet-nightly.test.ts
         env:
           SANDBOX_NIGHTLY: "1"
-          # Optional attestor-endpoint override (repository variable). Empty
-          # when unset — the test then falls back to the SDK's
-          # DEFAULT_SANDBOX_ATTESTOR_URL.
+          # Attestor endpoint (repository variable). REQUIRED for a green
+          # run: the SDK ships no default attestor endpoint (WP-D4), so an
+          # empty value fails fast with a descriptive error.
           SANDBOX_ATTESTOR_URL: ${{ vars.SANDBOX_ATTESTOR_URL }}

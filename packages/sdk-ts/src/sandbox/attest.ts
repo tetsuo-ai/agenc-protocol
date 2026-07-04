@@ -1,12 +1,9 @@
 // SDK half of the P2.3 sandbox moderation auto-attestor: a fetch-based,
-// browser-safe client for the hosted devnet-only service that records CLEAN
+// browser-safe client for a self-hosted attestor service that records CLEAN
 // ListingModeration / TaskModeration attestations so the fail-closed
 // moderation gate passes without a human moderator.
 import type { Address } from "@solana/kit";
-import {
-  DEFAULT_SANDBOX_ATTESTOR_URL,
-  resolveSandboxEnvironment,
-} from "./environment.js";
+import { resolveSandboxEnvironment } from "./environment.js";
 import { SANDBOX_FIXTURES } from "./fixtures.js";
 
 /** What the attestor is asked to moderate: a service listing or a task. */
@@ -45,9 +42,10 @@ export interface RequestSandboxAttestationInput {
    */
   specHash: Uint8Array | string;
   /**
-   * Override the attestor endpoint. Default: the environment seam's resolved
-   * attestor (`AGENC_SANDBOX_ATTESTOR_URL` when set, otherwise
-   * {@link DEFAULT_SANDBOX_ATTESTOR_URL}).
+   * The attestor endpoint. Default: the environment seam's resolved attestor
+   * (`AGENC_SANDBOX_ATTESTOR_URL`). There is NO shipped fallback endpoint —
+   * when neither this option nor the env var names an attestor, the call
+   * throws before any network access.
    */
   endpoint?: string;
   /** Override the fetch implementation (tests / custom transports). */
@@ -145,32 +143,38 @@ function parseRetryAfterSeconds(
 }
 
 /**
- * Ask the devnet sandbox auto-attestor (P2.3) to record a CLEAN moderation
- * attestation for a listing or task, so the program's fail-closed moderation
- * gate passes without a human moderator.
+ * Ask a sandbox moderation auto-attestor (P2.3 — e.g. the storefront's
+ * self-hostable `sandboxAttestor`) to record a CLEAN moderation attestation
+ * for a listing or task, so the program's fail-closed moderation gate passes
+ * without a human moderator.
  *
  * POSTs `{ kind, address, specHash }` (spec hash as lowercase hex) to the
- * attestor and resolves with the devnet transaction signature it landed. The
+ * attestor and resolves with the transaction signature it landed. The
  * on-chain `ListingModeration` / `TaskModeration` account appears within
  * seconds of a 2xx response — poll the PDA before depending on it.
  *
  * The default endpoint flows through the environment seam
  * (`resolveSandboxEnvironment`): set `AGENC_SANDBOX_ATTESTOR_URL` to point a
- * whole workflow (e.g. a localnet stack's self-hosted attestor) somewhere
- * else without touching call sites.
+ * whole workflow at a self-hosted attestor without touching call sites.
+ * There is **no shipped default endpoint** — when nothing names an attestor,
+ * this throws before any network access. On the localnet stack you usually
+ * need no attestor at all: record moderation directly with the moderator
+ * keypair (`facade.recordListingModeration` / `facade.recordTaskModeration`),
+ * as `scripts/seed-devnet-sandbox.mjs` and `examples/localnet-first-hire.ts`
+ * do.
  *
- * **Devnet-only.** The attestor holds the devnet moderation authority key and
- * exists so third parties can exercise the flagship hire flow; there is no
- * mainnet equivalent.
+ * **Localnet/devnet-only.** An attestor holds a sandbox moderation authority
+ * key and exists so third parties can exercise the flagship hire flow; there
+ * is no mainnet equivalent.
  *
  * @param input - Kind, address, spec hash, and optional endpoint/fetch overrides.
  * @returns The attestor's `{ signature }` response.
+ * @throws Error when no attestor endpoint is configured at all (no
+ *   `endpoint` option and no `AGENC_SANDBOX_ATTESTOR_URL`).
  * @throws {@link SandboxAttestationError} when the endpoint cannot be reached
- *   at all (`status` 0 — DNS/refused/no network; the hosted attestor ships in
- *   P2.3 and may not be deployed yet, see
- *   {@link DEFAULT_SANDBOX_ATTESTOR_URL} — point `input.endpoint` at a
- *   self-hosted instance), on any non-2xx response (with `retryAfterSeconds`
- *   populated when rate-limited), or on a malformed 2xx body.
+ *   at all (`status` 0 — DNS/refused/no network), on any non-2xx response
+ *   (with `retryAfterSeconds` populated when rate-limited), or on a
+ *   malformed 2xx body.
  * @throws TypeError when `specHash` is not 32 bytes / 64 hex chars.
  *
  * @example
@@ -185,19 +189,33 @@ function parseRetryAfterSeconds(
 export async function requestSandboxAttestation(
   input: RequestSandboxAttestationInput,
 ): Promise<SandboxAttestationResponse> {
+  // Validate the input hash first (TypeError before any config/network work).
+  const specHash = specHashToHex(input.specHash);
   // Default endpoint comes from the environment seam: an explicit
-  // `input.endpoint` beats AGENC_SANDBOX_ATTESTOR_URL, which beats
-  // DEFAULT_SANDBOX_ATTESTOR_URL. The shipped fixtures are passed through so
+  // `input.endpoint` beats AGENC_SANDBOX_ATTESTOR_URL. There is no shipped
+  // fallback — fail fast (before any fetch) with the escape hatches when
+  // nothing names an attestor. The shipped fixtures are passed through so
   // attestation never depends on an AGENC_SANDBOX_FIXTURES file it does not
   // use.
   const endpoint =
     input.endpoint ??
     (await resolveSandboxEnvironment({ fixtures: SANDBOX_FIXTURES }))
       .attestorUrl;
+  if (endpoint === null) {
+    throw new Error(
+      `requestSandboxAttestation: no sandbox attestor endpoint is ` +
+        `configured. There is no shipped default endpoint (the old hosted ` +
+        `default was never deployed). Pass the \`endpoint\` option or set ` +
+        `AGENC_SANDBOX_ATTESTOR_URL to a live attestor — or, on the ` +
+        `localnet stack, skip the attestor entirely and record moderation ` +
+        `directly with the moderator keypair ` +
+        `(.localnet/keys/moderator.json), as scripts/seed-devnet-sandbox.mjs ` +
+        `and examples/localnet-first-hire.ts do.`,
+    );
+  }
   // Wrapped so the global fetch keeps its expected receiver in browsers.
   const fetchImpl: SandboxFetchLike =
     input.fetch ?? ((url, init) => globalThis.fetch(url, init));
-  const specHash = specHashToHex(input.specHash);
 
   let response: Awaited<ReturnType<SandboxFetchLike>>;
   try {
@@ -211,10 +229,9 @@ export async function requestSandboxAttestation(
     // there is no HTTP status, so report 0 and keep the raw error as `cause`.
     throw new SandboxAttestationError(
       `sandbox attestor at ${endpoint} could not be reached (the fetch ` +
-        `itself failed before any HTTP response). The hosted attestor ships ` +
-        `in P2.3 and may not be deployed yet — point the \`endpoint\` ` +
-        `option at a self-hosted attestor, or retry once the hosted ` +
-        `endpoint is live.`,
+        `itself failed before any HTTP response). Check that the attestor ` +
+        `service is actually running at that URL, or point the \`endpoint\` ` +
+        `option / AGENC_SANDBOX_ATTESTOR_URL at a live self-hosted attestor.`,
       { status: 0, cause },
     );
   }

@@ -398,9 +398,10 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 - **Steps:** seed devnet with ~10 provider agents + Active listings at known addresses;
   publish them as `@tetsuo-ai/marketplace-sdk/sandbox` constants. Add
   `createSandboxClient()` wiring devnet RPC + airdrop + a funded throwaway signer.
-- **Done when:** `examples/devnet-first-hire.ts` broadcasts real devnet transactions
-  from faucet to accepted result, and runs nightly in CI (cron workflow) so the sandbox
-  cannot silently rot.
+- **Done when:** `examples/localnet-first-hire.ts` (renamed from
+  `devnet-first-hire.ts` in WP-D4 — localnet is the shipped sandbox default now)
+  broadcasts real devnet transactions from faucet to accepted result, and runs
+  nightly in CI (cron workflow) so the sandbox cannot silently rot.
 
 ---
 

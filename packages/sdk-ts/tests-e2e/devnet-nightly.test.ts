@@ -1,5 +1,5 @@
 // Nightly devnet sandbox canary (PLAN.md P2.4 done-when): runs the REAL
-// examples/devnet-first-hire.ts flow against public devnet so the hosted
+// examples/localnet-first-hire.ts flow against public devnet so a hosted
 // sandbox cannot silently rot. Gated on SANDBOX_NIGHTLY=1 because it needs
 // network + faucet airdrops — in normal `npm test` runs it reports skipped.
 //
@@ -7,20 +7,21 @@
 //
 // Driven by .github/workflows/sandbox-nightly.yml (cron 03:17 UTC).
 import { describe, it } from "vitest";
-import { runDevnetFirstHire } from "../examples/devnet-first-hire.js";
+import { runFirstHire } from "../examples/localnet-first-hire.js";
 
 const enabled = process.env.SANDBOX_NIGHTLY === "1";
 
-// Optional attestor-endpoint override: the workflow forwards the repository
-// variable SANDBOX_ATTESTOR_URL (empty when unset) so the nightly can point
-// at the real P2.3 attestor deployment without an SDK release — the SDK's
-// DEFAULT_SANDBOX_ATTESTOR_URL DNS may lag the deploy.
+// Attestor-endpoint override: the workflow forwards the repository variable
+// SANDBOX_ATTESTOR_URL (empty when unset) so the nightly can point at the
+// real P2.3 attestor deployment without an SDK release. The SDK ships NO
+// default attestor endpoint (WP-D4 removed the dead sandbox.agenc.tech
+// default), so on devnet this variable — or AGENC_SANDBOX_ATTESTOR_URL — is
+// REQUIRED for the flow to attest; without it the example fails fast with a
+// descriptive error instead of dialing a dead host.
 //
-// Cluster/RPC/fixtures selection is handled INSIDE the example by the
-// environment seam (resolveSandboxEnvironment): with no AGENC_SANDBOX_*
-// variables exported this runs against public devnet with the shipped
-// fixtures; exporting the localnet variables (from .localnet/env.json via
-// scripts/localnet-up.mjs) points the very same flow at a local validator.
+// The cluster is pinned to devnet here: the example otherwise defaults to
+// the localnet stack (and auto-discovers .localnet/env.json), which is not
+// what a devnet canary should ever inherit.
 const attestorUrlEnv = process.env.SANDBOX_ATTESTOR_URL?.trim();
 const attestorUrl =
   attestorUrlEnv !== undefined && attestorUrlEnv !== ""
@@ -34,7 +35,7 @@ describe.runIf(enabled)("devnet nightly: sandbox first hire", () => {
     async () => {
       // requireSeeded: when the nightly is enabled, unseeded fixtures are a
       // failure (the gate variable should only be flipped post-seeding).
-      await runDevnetFirstHire({ requireSeeded: true, attestorUrl });
+      await runFirstHire({ requireSeeded: true, cluster: "devnet", attestorUrl });
     },
   );
 });
