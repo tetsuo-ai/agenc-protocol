@@ -485,6 +485,13 @@ P6.4 must not repeat it for a spam problem that the indexer solves.
 
 ## 5. Open questions for the founder
 
+> **RATIFIED 2026-07-03 (founder): ALL recommendations adopted as written.**
+> For conditional recommendations the applicable branch applies (store spec
+> Q5: the P1.2 deploy has already shipped, so the Store PDA rides a
+> standalone additive batch — never retrofitted onto a flag-day). This
+> section is the decision record; the build work below each recommendation
+> is unblocked.
+
 1. **Ship P6.4 as pure indexer work first?** Recommend **yes** — §4.1 closes the
    practical exposure with zero deploy risk on a money program, and everything in
    §4.2 is a small rider on batch 2 that we can add *after* watching real spam

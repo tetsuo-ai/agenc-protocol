@@ -373,6 +373,13 @@ in this spec depends on that future; nothing in it blocks it.
 
 ## 8. Open questions for the founder
 
+> **RATIFIED 2026-07-03 (founder): ALL recommendations adopted as written.**
+> For conditional recommendations the applicable branch applies (store spec
+> Q5: the P1.2 deploy has already shipped, so the Store PDA rides a
+> standalone additive batch — never retrofitted onto a flag-day). This
+> section is the decision record; the build work below each recommendation
+> is unblocked.
+
 1. **Bond size** — recommend a hardcoded `STORE_REGISTRATION_BOND_LAMPORTS` of
    **0.05 SOL** (smaller than the roster's 0.25: a Store gates no consumption
    path, so the bond only prices gPA-namespace spam), refundable in full at
