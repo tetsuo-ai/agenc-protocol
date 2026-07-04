@@ -37,6 +37,12 @@ export interface CheckoutConfig {
   workerAuthority: string;
   /** The protocol treasury (from ProtocolConfig.treasury) — accept needs it. */
   treasury: string;
+  /**
+   * P1.2: the moderator whose LISTING attestation the hire gate consumes —
+   * on the sandbox this is the moderation authority; in production it comes
+   * from the attestation service response (or its `GET /v1/info`).
+   */
+  moderator: string;
 }
 
 /** Hex string -> Uint8Array. */
@@ -86,6 +92,7 @@ export function CheckoutFlow({ config, onHired }: CheckoutFlowProps) {
       expectedVersion: BigInt(config.expectedVersion),
       reviewWindowSecs: BigInt(config.reviewWindowSecs),
       listingSpecHash: hexToBytes(config.listingSpecHashHex),
+      moderator: config.moderator as Address,
     } as Parameters<typeof hire.hire>[0]);
     setTaskPda(String(result.taskPda));
     setPhase("worker");
