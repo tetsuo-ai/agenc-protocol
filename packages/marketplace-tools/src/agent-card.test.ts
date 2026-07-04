@@ -17,6 +17,8 @@ import {
   buildAgentCardManifest,
   AGENT_CARD_SCHEMA_VERSION,
   A2A_SCHEMA_VERSION,
+  A2A_AGENC_PROTOCOL_BINDING,
+  A2A_AGENC_EXTENSION_URI,
 } from "./agent-card.js";
 
 // A deterministic on-chain-shaped fixture. We round-trip it through the SDK's
@@ -117,18 +119,68 @@ describe("listingToAgentCard", () => {
     expect(card.hire.instruction).toContain("MCP prepare tools");
     expect(card.hire.instruction).toContain(LISTING_PDA);
 
-    // a2a projection
+    // a2a projection — A2A v1.0 shape
+    // Revert-sensitive version pin: the projection targets A2A v1.0 (spec
+    // v1.0.x, a2aproject/A2A), not the retired a2a/v0.2 shape.
     expect(card.a2a.schemaVersion).toBe(A2A_SCHEMA_VERSION);
+    expect(A2A_SCHEMA_VERSION).toBe("a2a/v1.0");
     expect(card.a2a.name).toBe("Translation Pro");
-    expect(card.a2a.provider.organization).toBe(PROVIDER_AGENT);
+    // v1.0 REQUIRED: supportedInterfaces — the marketplace listing page under
+    // the honest custom binding, never a fabricated JSON-RPC endpoint.
+    expect(card.a2a.supportedInterfaces).toHaveLength(1);
+    expect(card.a2a.supportedInterfaces[0]!.url).toBe(
+      `https://agenc.ag/listings/${LISTING_PDA}`,
+    );
+    expect(card.a2a.supportedInterfaces[0]!.protocolBinding).toBe(
+      A2A_AGENC_PROTOCOL_BINDING,
+    );
+    expect(card.a2a.supportedInterfaces[0]!.protocolVersion).toBe("1.0");
+    // v1.0: provider requires url when present — omitted without providerUrl.
+    expect(card.a2a.provider).toBeUndefined();
+    // v1.0 REQUIRED: version — the listing's on-chain CAS version counter.
+    expect(card.a2a.version).toBe("3");
+    // v1.0 REQUIRED: media modes.
+    expect(card.a2a.defaultInputModes).toEqual(["application/json"]);
+    expect(card.a2a.defaultOutputModes).toEqual(["application/json"]);
+    // v1.0 REQUIRED: skills — x-a2a mapping pins category ≈ skills[].id.
     expect(card.a2a.skills).toHaveLength(1);
-    expect(card.a2a.skills[0]!.id).toBe(LISTING_PDA);
+    expect(card.a2a.skills[0]!.id).toBe("translation");
     expect(card.a2a.skills[0]!.tags).toEqual([
       "translation",
       "english-to-french",
       "docs",
     ]);
     expect(card.a2a.capabilities.streaming).toBe(false);
+    expect(card.a2a.capabilities.pushNotifications).toBe(false);
+    // Spec-native extension linking the unified AgenC card contract.
+    expect(card.a2a.capabilities.extensions).toHaveLength(1);
+    expect(card.a2a.capabilities.extensions[0]!.uri).toBe(
+      A2A_AGENC_EXTENSION_URI,
+    );
+    expect(card.a2a.capabilities.extensions[0]!.required).toBe(false);
+    expect(card.a2a.capabilities.extensions[0]!.params.listing).toBe(
+      LISTING_PDA,
+    );
+    expect(card.a2a.capabilities.extensions[0]!.params.program).toBe(
+      String(AGENC_COORDINATION_PROGRAM_ADDRESS),
+    );
+  });
+
+  it("falls back to the listing PDA for skills[].id when category is unset", () => {
+    // Unset on-chain category = all-NUL [u8;32] (decodes to "").
+    const card = listingToAgentCard(
+      decodedFrom(makeFixture({ category: new Uint8Array(32) })),
+    );
+    expect(card.a2a.skills[0]!.id).toBe(LISTING_PDA);
+  });
+
+  it("honors a caller-supplied listingUrl for supportedInterfaces[0].url", () => {
+    const card = listingToAgentCard(decodedFrom(makeFixture()), {
+      listingUrl: "https://store.example.com/listings/abc",
+    });
+    expect(card.a2a.supportedInterfaces[0]!.url).toBe(
+      "https://store.example.com/listings/abc",
+    );
   });
 
   it("serializes to JSON with no bigint / non-serializable leaks", () => {
@@ -178,7 +230,10 @@ describe("listingToAgentCard", () => {
     });
     expect(card.trust.metadataValid).toBe(false);
     expect(card.trust.metadataIssues).toEqual(["category not canonical"]);
-    expect(card.a2a.provider.url).toBe("https://example.com/provider");
+    expect(card.a2a.provider).toEqual({
+      organization: PROVIDER_AGENT,
+      url: "https://example.com/provider",
+    });
   });
 
   it("emits a 0-bitmask card with no required bits", () => {

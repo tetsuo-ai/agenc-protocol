@@ -5,6 +5,35 @@ All notable changes to `@tetsuo-ai/marketplace-tools` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Minor Changes (breaking for consumers of the `a2a` projection shape)
+
+- Re-pin the AgentCard `a2a` projection from the retired `a2a/v0.2` shape to
+  **A2A v1.0** (`A2A_SCHEMA_VERSION = "a2a/v1.0"`; verified against
+  `a2aproject/A2A specification/a2a.proto` at tag v1.0.1, 2026-07-04 — the
+  WP-F6 GO on schema alignment). The projection now carries every field the
+  v1.0 `AgentCard` message marks REQUIRED: `name`, `description`,
+  `supportedInterfaces`, `version` (the listing's on-chain CAS version
+  counter), `capabilities`, `defaultInputModes`/`defaultOutputModes`
+  (`application/json`), and `skills`.
+- Semantics stay honest — an AgenC card describes a hireable marketplace
+  listing, not a live A2A endpoint: `supportedInterfaces[0]` points at the
+  listing's public marketplace page (new `listingUrl` option, default
+  `https://agenc.ag/listings/<pda>`) under the custom open-form
+  `protocolBinding` `AGENC-MARKETPLACE` (`A2A_AGENC_PROTOCOL_BINDING`)
+  instead of fabricating a JSON-RPC endpoint, and
+  `capabilities.extensions[]` declares the spec-native `AgentExtension`
+  `https://agenc.ag/schemas/agenc.agentCard.v1.json`
+  (`A2A_AGENC_EXTENSION_URI`) linking the unified AgenC card contract.
+- Per the `agenc.agentCard.v1` `x-a2a` mapping: `skills[0].id` is now the
+  listing's `category` token (PDA fallback when unset) instead of the PDA,
+  and `provider` is emitted only when `providerUrl` is supplied (v1.0
+  requires `provider.url` when the block is present).
+- New exports: `A2A_AGENC_PROTOCOL_BINDING`, `A2A_AGENC_EXTENSION_URI`, and
+  the `AgentCardA2AInterface` / `AgentCardA2ASkill` /
+  `AgentCardA2AExtension` / `AgentCardA2ACapabilities` types.
+
 ## 0.4.0
 
 ### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)

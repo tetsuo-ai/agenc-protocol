@@ -398,11 +398,35 @@ declare function toCrewAITools(tools: ReadonlyArray<MarketplaceTool>, ctx: Marke
 declare const AGENT_CARD_SCHEMA_VERSION: "agenc.agent-card/v1";
 /**
  * The canonical A2A AgentCard schema version this module's `a2a` projection
- * targets. The A2A AgentCard is an evolving public spec; the field set below is
- * the stable core (name, description, provider, url, skills, capabilities) that
- * a generic A2A crawler reads.
+ * targets: **A2A v1.0** (Agent2Agent, Linux Foundation — spec v1.0.0 released
+ * 2026-03-12, patch v1.0.1 2026-05-28; verified against
+ * `a2aproject/A2A specification/a2a.proto` at tag v1.0.1 on 2026-07-04). Per
+ * the spec's Major.Minor protocol versioning, patch releases are excluded
+ * from the pin. The projection carries every field the v1.0 `AgentCard`
+ * message marks REQUIRED: `name`, `description`, `supportedInterfaces`,
+ * `version`, `capabilities`, `defaultInputModes`, `defaultOutputModes`,
+ * `skills`.
  */
-declare const A2A_SCHEMA_VERSION: "a2a/v0.2";
+declare const A2A_SCHEMA_VERSION: "a2a/v1.0";
+/**
+ * The `protocolBinding` this projection declares on its single
+ * {@link AgentCardA2AInterface}. A2A v1.0 defines `protocolBinding` as an
+ * open-form string (the officially supported core bindings are `JSONRPC`,
+ * `GRPC`, `HTTP+JSON`); this custom binding states honestly that the interface
+ * URL is a hireable **marketplace listing page** — a web surface where the
+ * engagement is a Solana escrow transaction — NOT an A2A task-lifecycle
+ * endpoint. A2A clients that do not understand this binding skip the
+ * interface instead of attempting JSON-RPC against it.
+ */
+declare const A2A_AGENC_PROTOCOL_BINDING: "AGENC-MARKETPLACE";
+/**
+ * The extension URI declared in the projection's
+ * `capabilities.extensions[]` (the spec-native `AgentExtension` mechanism):
+ * the canonical unified AgenC card schema. Crawlers that resolve it get the
+ * full `agenc.agentCard.v1` contract — price terms, CAS guards, trust
+ * badges, and the hire instruction — that has no A2A equivalent.
+ */
+declare const A2A_AGENC_EXTENSION_URI: "https://agenc.ag/schemas/agenc.agentCard.v1.json";
 /** Price terms an agent needs to decide whether (and how) to engage. */
 interface AgentCardPrice {
     /** Price as a decimal string (u64-safe — never a JS number). */
@@ -505,38 +529,120 @@ interface AgentCardHire {
     instruction: string;
 }
 /**
- * A minimal A2A-AgentCard-shaped projection a generic Agent2Agent crawler reads
- * without knowing anything AgenC-specific. The AgenC-native detail
+ * One A2A v1.0 `AgentInterface`. All three fields are REQUIRED by the spec.
+ * This projection emits exactly one interface: the listing's public
+ * marketplace page under the {@link A2A_AGENC_PROTOCOL_BINDING} custom
+ * binding — a truthful declaration, not a fake JSON-RPC endpoint.
+ */
+interface AgentCardA2AInterface {
+    /** Absolute HTTPS URL of the listing's marketplace page (the hire surface). */
+    url: string;
+    /** The open-form protocol binding served at {@link url}. */
+    protocolBinding: typeof A2A_AGENC_PROTOCOL_BINDING;
+    /**
+     * The A2A protocol version whose AgentCard data model this projection
+     * speaks (`"1.0"`). The binding above is not an A2A transport; this states
+     * the card-schema generation, per the spec's Major.Minor versioning.
+     */
+    protocolVersion: "1.0";
+}
+/** One A2A v1.0 `AgentSkill` (id/name/description/tags are REQUIRED). */
+interface AgentCardA2ASkill {
+    /**
+     * Skill id: the listing's LISTING_METADATA v1 `category` token when set
+     * (the `agenc.agentCard.v1` `x-a2a` mapping: `category` ≈ `skills[].id`),
+     * falling back to the listing PDA when the category is unset.
+     */
+    id: string;
+    /** Human-readable skill name. */
+    name: string;
+    /** Detailed skill description. */
+    description: string;
+    /** Keywords: the listing's category + discovery tags. */
+    tags: string[];
+}
+/**
+ * One A2A v1.0 `AgentExtension` declared in `capabilities.extensions[]` —
+ * the spec-native escape hatch this projection uses to link the AgenC-native
+ * contract (price/trust/hire) that has no A2A field.
+ */
+interface AgentCardA2AExtension {
+    /** The unique URI identifying the extension ({@link A2A_AGENC_EXTENSION_URI}). */
+    uri: string;
+    /** How this card uses the extension. */
+    description: string;
+    /** `false`: A2A clients may ignore the extension and still read the card. */
+    required: false;
+    /** Extension params: where the AgenC-native detail lives. */
+    params: {
+        /** The ServiceListing PDA this card describes. */
+        listing: string;
+        /** The on-chain program the engagement settles on. */
+        program: string;
+    };
+}
+/** A2A v1.0 `AgentCapabilities` for an AgenC listing. */
+interface AgentCardA2ACapabilities {
+    /** AgenC listings are non-streaming, single-shot escrowed hires. */
+    streaming: false;
+    pushNotifications: false;
+    /** Declared extensions (the `x-agenc` unified-card link). */
+    extensions: AgentCardA2AExtension[];
+}
+/**
+ * An A2A **v1.0** AgentCard-shaped projection a generic Agent2Agent crawler
+ * reads without knowing anything AgenC-specific. The AgenC-native detail
  * (price/trust/hire) lives in the top-level {@link AgentCard}; this nested
  * object is the cross-ecosystem lingua franca.
+ *
+ * Semantics stay honest: an AgenC card describes a hireable marketplace
+ * LISTING settled on Solana, not a live A2A protocol endpoint. Where v1.0
+ * demands endpoint facts we don't have, the projection declares truthful
+ * values — `supportedInterfaces` points at the listing's marketplace page
+ * under the custom {@link A2A_AGENC_PROTOCOL_BINDING} binding, and the
+ * unified-card extension in `capabilities.extensions[]` links the full
+ * AgenC contract — rather than fabricating a JSON-RPC endpoint.
  */
 interface AgentCardA2A {
-    /** A2A schema marker. */
+    /** AgenC-added schema marker pinning the targeted A2A spec generation. */
     schemaVersion: typeof A2A_SCHEMA_VERSION;
-    /** Listing display name. */
+    /** Listing display name (v1.0 REQUIRED). */
     name: string;
-    /** Listing description (category + tags, human-readable). */
+    /** Listing description (category + tags, human-readable; v1.0 REQUIRED). */
     description: string;
-    /** The provider identity (AgentRegistration PDA). */
-    provider: {
+    /**
+     * Ordered supported interfaces (v1.0 REQUIRED; first entry preferred).
+     * Exactly one: the listing's marketplace page.
+     */
+    supportedInterfaces: AgentCardA2AInterface[];
+    /**
+     * The provider identity (v1.0 optional; when present, `organization` and
+     * `url` are both REQUIRED — so this is emitted only when a provider URL is
+     * known). `organization` is the provider's AgentRegistration PDA.
+     */
+    provider?: {
         organization: string;
-        url?: string;
+        url: string;
     };
     /**
-     * A2A `skills`: one skill per listing, tagged with the listing's category +
-     * tags so a skill-matching crawler can route work to it.
+     * The version of the agent (v1.0 REQUIRED): the listing's on-chain
+     * `version` counter (the same value hires echo as `expectedVersion`), as a
+     * decimal string.
      */
-    skills: Array<{
-        id: string;
-        name: string;
-        description: string;
-        tags: string[];
-    }>;
-    /** A2A capability flags. AgenC listings are non-streaming, single-shot hires. */
-    capabilities: {
-        streaming: false;
-        pushNotifications: false;
-    };
+    version: string;
+    /** A2A capability flags + declared extensions (v1.0 REQUIRED). */
+    capabilities: AgentCardA2ACapabilities;
+    /**
+     * Interaction media types (v1.0 REQUIRED). AgenC engagements exchange
+     * JSON job specs / buyer inputs and JSON-described artifacts.
+     */
+    defaultInputModes: string[];
+    defaultOutputModes: string[];
+    /**
+     * A2A `skills` (v1.0 REQUIRED): one skill per listing, tagged with the
+     * listing's category + tags so a skill-matching crawler can route work.
+     */
+    skills: AgentCardA2ASkill[];
 }
 /**
  * The AgenC AgentCard: the machine-readable card an agent crawler consumes to
@@ -583,8 +689,17 @@ interface ListingToAgentCardOptions {
     /**
      * Provider-facing URL the crawler can open (e.g. the storefront listing page
      * or the provider's site). Surfaced in the A2A projection's `provider.url`.
+     * A2A v1.0 requires `url` when `provider` is present, so the projection
+     * omits `provider` entirely when this is not supplied.
      */
     providerUrl?: string;
+    /**
+     * The listing's public marketplace page — the A2A projection's
+     * `supportedInterfaces[0].url` (an absolute HTTPS URL). Defaults to the
+     * canonical agenc.ag listing page, `https://agenc.ag/listings/<pda>`.
+     * Storefronts should pass their own listing URL.
+     */
+    listingUrl?: string;
     /**
      * Metadata-conformance signals, when the caller has them (the hosted indexer
      * supplies these). Omit when emitting from a raw decoded account.
@@ -689,4 +804,4 @@ interface BuildAgentCardManifestOptions {
  */
 declare function buildAgentCardManifest(listings: ReadonlyArray<DecodedProgramAccount<ServiceListing>>, options?: BuildAgentCardManifestOptions): AgentCardManifest;
 
-export { A2A_SCHEMA_VERSION, AGENT_CARD_SCHEMA_VERSION, type AgentCard, type AgentCardA2A, type AgentCardCapabilities, type AgentCardHire, type AgentCardManifest, type AgentCardPrice, type AgentCardTrust, type BuildAgentCardManifestOptions, type BuiltInstructionLike, type CrewAIToolDescriptor, type JsonSchema, type JsonSchemaProperty, type KitRpcLike, type LangChainToolDescriptor, type ListingToAgentCardOptions, type ListingView, type MarketplaceTool, type MarketplaceToolContext, MarketplaceToolError, type MarketplaceToolRegistry, type OpenAITool, type TaskView, type UnsignedInstructionView, buildAgentCardManifest, createToolRegistry, getTool, indexerListingToAgentCard, listingToAgentCard, marketplaceToolRegistry, marketplaceTools, prepareTools, projectInstruction, projectListing, projectTask, readonlyTools, toCrewAITools, toHex, toLangChainTools, toOpenAITools };
+export { A2A_AGENC_EXTENSION_URI, A2A_AGENC_PROTOCOL_BINDING, A2A_SCHEMA_VERSION, AGENT_CARD_SCHEMA_VERSION, type AgentCard, type AgentCardA2A, type AgentCardA2ACapabilities, type AgentCardA2AExtension, type AgentCardA2AInterface, type AgentCardA2ASkill, type AgentCardCapabilities, type AgentCardHire, type AgentCardManifest, type AgentCardPrice, type AgentCardTrust, type BuildAgentCardManifestOptions, type BuiltInstructionLike, type CrewAIToolDescriptor, type JsonSchema, type JsonSchemaProperty, type KitRpcLike, type LangChainToolDescriptor, type ListingToAgentCardOptions, type ListingView, type MarketplaceTool, type MarketplaceToolContext, MarketplaceToolError, type MarketplaceToolRegistry, type OpenAITool, type TaskView, type UnsignedInstructionView, buildAgentCardManifest, createToolRegistry, getTool, indexerListingToAgentCard, listingToAgentCard, marketplaceToolRegistry, marketplaceTools, prepareTools, projectInstruction, projectListing, projectTask, readonlyTools, toCrewAITools, toHex, toLangChainTools, toOpenAITools };

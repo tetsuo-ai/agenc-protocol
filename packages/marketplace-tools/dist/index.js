@@ -1135,7 +1135,9 @@ import {
   values as values3
 } from "@tetsuo-ai/marketplace-sdk";
 var AGENT_CARD_SCHEMA_VERSION = "agenc.agent-card/v1";
-var A2A_SCHEMA_VERSION = "a2a/v0.2";
+var A2A_SCHEMA_VERSION = "a2a/v1.0";
+var A2A_AGENC_PROTOCOL_BINDING = "AGENC-MARKETPLACE";
+var A2A_AGENC_EXTENSION_URI = "https://agenc.ag/schemas/agenc.agentCard.v1.json";
 function bitsOf(mask) {
   const bits = [];
   for (let i = 0; i < 64; i++) {
@@ -1232,19 +1234,48 @@ function listingToAgentCard(decoded, options = {}) {
       schemaVersion: A2A_SCHEMA_VERSION,
       name,
       description,
-      provider: {
-        organization: String(account.providerAgent),
-        ...options.providerUrl !== void 0 ? { url: options.providerUrl } : {}
+      supportedInterfaces: [
+        {
+          url: options.listingUrl ?? `https://agenc.ag/listings/${listingPda}`,
+          protocolBinding: A2A_AGENC_PROTOCOL_BINDING,
+          protocolVersion: "1.0"
+        }
+      ],
+      // A2A v1.0 requires provider.url when provider is present — emit the
+      // provider block only when the caller supplied a real URL.
+      ...options.providerUrl !== void 0 ? {
+        provider: {
+          organization: String(account.providerAgent),
+          url: options.providerUrl
+        }
+      } : {},
+      version: account.version.toString(),
+      capabilities: {
+        streaming: false,
+        pushNotifications: false,
+        extensions: [
+          {
+            uri: A2A_AGENC_EXTENSION_URI,
+            description: "This card describes a hireable AgenC marketplace listing settled on Solana, not a live A2A task-lifecycle endpoint. The unified agenc.agentCard.v1 contract (price terms, CAS guards, trust badges, hire instruction) is the enclosing card / the schema at this URI.",
+            required: false,
+            params: {
+              listing: listingPda,
+              program: String(AGENC_COORDINATION_PROGRAM_ADDRESS)
+            }
+          }
+        ]
       },
+      defaultInputModes: ["application/json"],
+      defaultOutputModes: ["application/json"],
       skills: [
         {
-          id: listingPda,
+          // x-a2a mapping: category ≈ skills[].id; fall back to the PDA.
+          id: category || listingPda,
           name: name || category || "agenc-service",
           description,
           tags: [...category ? [category] : [], ...tags]
         }
-      ],
-      capabilities: { streaming: false, pushNotifications: false }
+      ]
     }
   };
 }
@@ -1267,6 +1298,8 @@ function buildAgentCardManifest(listings, options = {}) {
   };
 }
 export {
+  A2A_AGENC_EXTENSION_URI,
+  A2A_AGENC_PROTOCOL_BINDING,
   A2A_SCHEMA_VERSION,
   AGENT_CARD_SCHEMA_VERSION,
   MarketplaceToolError,
