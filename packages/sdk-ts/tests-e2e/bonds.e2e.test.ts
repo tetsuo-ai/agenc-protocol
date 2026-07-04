@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   facade,
+  fetchTaskGuarantee,
   findCompletionBondPda,
   getCompletionBondDecoder,
   getTaskDecoder,
   TaskStatus,
 } from "../src/index.js";
+import { GpaSimulator } from "./gpa-sim.js";
 import type { Address, KeyPairSigner } from "@solana/kit";
 import { LiteSVM } from "litesvm";
 import {
@@ -406,5 +408,55 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
     expect(accountData(w.svm, workerBond)).toBeNull();
     const workerDelta = bal(w.svm, w.worker.address) - workerBefore;
     expect(workerDelta).toBeGreaterThan(bondLamports - 50_000n);
+  });
+
+  it("fetchTaskGuarantee (WP-H3): guaranteed:true while the worker bond is live, resolved after settlement", async () => {
+    // The Guaranteed Hire read helper against REAL on-chain state: post the
+    // worker bond -> the task reads as guaranteed (decoded 25% amount + party),
+    // settle via complete_task -> the bond PDA is closed and the same read
+    // reports the guarantee resolved (guaranteed:false, no live bonds).
+    const w = await claimedAutoTask(50);
+    const gpa = new GpaSimulator(w.svm);
+    const [workerBond] = await findCompletionBondPda({
+      task: w.task,
+      party: w.worker.address,
+    });
+    gpa.register(w.task, workerBond);
+
+    // Before any bond: not guaranteed.
+    const before = await fetchTaskGuarantee(gpa, w.task);
+    expect(before.guaranteed).toBe(false);
+    expect(before.workerBond).toBeNull();
+
+    // Worker posts the role-1 bond -> guaranteed, with the on-chain 25% stake.
+    await send(w.svm, w.worker, [
+      await facade.postCompletionBond({ authority: w.worker, task: w.task, role: 1 }),
+    ]);
+    const live = await fetchTaskGuarantee(gpa, w.task);
+    expect(live.guaranteed).toBe(true);
+    expect(live.workerBond?.address).toBe(workerBond);
+    expect(live.workerBond?.account.amount).toBe(BOND);
+    expect(live.workerBond?.account.party).toBe(w.worker.address);
+    expect(live.creatorBond).toBeNull();
+
+    // Settlement (complete_task force-settles the bond) resolves the guarantee.
+    await send(w.svm, w.worker, [
+      await facade.completeTask({
+        authority: w.worker,
+        task: w.task,
+        creator: w.creator.address,
+        worker: w.workerAgent,
+        treasury: w.admin.address,
+        proofHash: new Uint8Array(32).fill(11),
+        resultData: null,
+      }),
+    ]);
+    expect(getTaskDecoder().decode(accountData(w.svm, w.task)!).status).toBe(
+      TaskStatus.Completed,
+    );
+    const settled = await fetchTaskGuarantee(gpa, w.task);
+    expect(settled.guaranteed).toBe(false);
+    expect(settled.workerBond).toBeNull();
+    expect(settled.creatorBond).toBeNull();
   });
 });

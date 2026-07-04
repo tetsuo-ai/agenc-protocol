@@ -1,5 +1,22 @@
 # @tetsuo-ai/marketplace-sdk
 
+## Unreleased
+
+### Patch Changes (additive, no wire change — WP-H3 phase 1, Guaranteed Hire)
+
+- New `fetchTaskGuarantee(source, task)` query helper (+ `TaskGuarantee` type,
+  `COMPLETION_BOND_TASK_OFFSET`, `COMPLETION_BOND_ROLE_CREATOR/WORKER`): one
+  gPA read of a task's live completion bonds, split by role, with a plain
+  `guaranteed: boolean` that is true iff the WORKER bond is posted and
+  unresolved (bond PDAs are closed at settlement, so live == unresolved).
+  Works over any `ProgramAccountsTransport` (RPC gPA today, indexer later).
+- `client.reclaimCompletionBond(...)` named client method — parity with
+  `postCompletionBond` for the recovery crank of the bond lifecycle.
+- Facade/query doc comments now carry the Guaranteed Hire pitch AND the
+  phase-1 honest boundary: a forfeited bond pays the protocol treasury, not
+  the harmed party (phase 2 program work redirects it); UIs must not claim
+  the buyer receives the bond.
+
 ## 0.8.3
 
 ### Patch Changes (sandbox on-ramp — WP-D4)

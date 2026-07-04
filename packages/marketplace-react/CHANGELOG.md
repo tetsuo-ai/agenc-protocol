@@ -1,5 +1,27 @@
 # @tetsuo-ai/marketplace-react
 
+## Unreleased
+
+### Patch Changes (additive — WP-H3 phase 1, Guaranteed Hire)
+
+- New `useTaskGuarantee(taskPda)` read hook: a task's completion-bond state
+  (`guarantee` + a plain `guaranteed` flag — true iff the worker's 25% bond is
+  posted and unresolved). Reads through an injected `guaranteeReader` seam, or
+  defaults to the provider's resolved `rpcUrl` via the SDK
+  `fetchTaskGuarantee` (a task-scoped `getProgramAccounts`; the RPC must allow
+  gPA).
+- New `useCompletionBond(taskPda)` mutation hook: `post(...)` /
+  `reclaim(...)` over the client's named bond methods, with the post
+  `authority` defaulted to the client signer, the reclaim `party` defaulted to
+  the signer's address, and the task's guarantee cache invalidated on success.
+- New `<GuaranteedBadge task={...} />` component: renders NOTHING unless the
+  task is guaranteed; when it is, a small success-tone badge ("Guaranteed —
+  worker has 25% at stake") with the full detail sentence on title/aria. The
+  copy is deliberately phase-1-honest: the buyer is refunded and the worker
+  FORFEITS the bond — it does not claim the buyer receives the bond (a
+  forfeited bond pays the protocol treasury until the phase-2 program work
+  redirects it to the harmed party).
+
 ## 0.4.0
 
 ### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)

@@ -13,6 +13,7 @@
 // client-side.
 import { getAddressEncoder, type Address } from "@solana/kit";
 import {
+  COMPLETION_BOND_DISCRIMINATOR,
   HIRE_RECORD_DISCRIMINATOR,
   SERVICE_LISTING_DISCRIMINATOR,
   TASK_BID_DISCRIMINATOR,
@@ -21,12 +22,14 @@ import {
   TASK_JOB_SPEC_DISCRIMINATOR,
   ListingState,
   TaskStatus,
+  getCompletionBondDecoder,
   getHireRecordDecoder,
   getServiceListingDecoder,
   getTaskBidDecoder,
   getTaskClaimDecoder,
   getTaskDecoder,
   getTaskJobSpecDecoder,
+  type CompletionBond,
   type HireRecord,
   type ServiceListing,
   type Task,
@@ -34,6 +37,7 @@ import {
   type TaskClaim,
 } from "../generated/index.js";
 import {
+  COMPLETION_BOND_TASK_OFFSET,
   HIRE_RECORD_TASK_OFFSET,
   SERVICE_LISTING_CATEGORY_OFFSET,
   SERVICE_LISTING_PROVIDER_AGENT_OFFSET,
@@ -446,6 +450,85 @@ export async function bidsByTask(
     ],
     (d) => decoder.decode(d),
   );
+}
+
+/** `CompletionBond.role` byte for the creator-posted bond. */
+export const COMPLETION_BOND_ROLE_CREATOR = 0;
+/** `CompletionBond.role` byte for the worker-posted bond. */
+export const COMPLETION_BOND_ROLE_WORKER = 1;
+
+/**
+ * A task's completion-bond ("Guaranteed Hire") state — see
+ * {@link fetchTaskGuarantee}.
+ */
+export type TaskGuarantee = {
+  /**
+   * `true` iff the WORKER bond is live (posted and not yet settled): the
+   * worker has 25% of the reward at stake behind their result.
+   */
+  guaranteed: boolean;
+  /** The live worker bond (role 1), or `null` when none is posted/unsettled. */
+  workerBond: DecodedProgramAccount<CompletionBond> | null;
+  /** The live creator bond (role 0), or `null` when none is posted/unsettled. */
+  creatorBond: DecodedProgramAccount<CompletionBond> | null;
+};
+
+/**
+ * Fetch a task's completion-bond state — the read side of **Guaranteed Hire**:
+ * a worker who posts a completion bond stakes 25% of the reward on passing
+ * review, and forfeits it if the result is rejected or they lose a dispute.
+ *
+ * One gPA round trip: server-side memcmp on `CompletionBond.task` narrows to
+ * the task's (at most two) bonds, split client-side by `role`. A bond PDA is
+ * refunded-or-forfeited AND CLOSED by every settlement exit (accept /
+ * complete / cancel / dispute / reject-frozen / reclaim), so a bond account
+ * existing on-chain means exactly "posted and unresolved" — `guaranteed` is
+ * `true` iff the worker bond is live.
+ *
+ * HONEST BOUNDARY (do not overclaim in UI copy): in the live phase-1 program a
+ * FORFEITED bond pays the protocol **treasury**, not the harmed party. The
+ * buyer's protection today is the escrow refund on a failed review PLUS the
+ * worker's 25% skin in the game — the buyer does not receive the bond itself.
+ * Phase 2 (batch-2 program work) redirects forfeiture to the harmed party.
+ *
+ * @param source - A kit `Rpc<GetProgramAccountsApi>` or a
+ * {@link ProgramAccountsTransport} (e.g. the Phase-3 hosted indexer client).
+ * @param task - The Task PDA to inspect.
+ * @returns The {@link TaskGuarantee}: live worker/creator bonds + `guaranteed`.
+ *
+ * @example
+ * ```ts
+ * const { guaranteed, workerBond } = await fetchTaskGuarantee(rpc, taskPda);
+ * if (guaranteed) console.log(`worker staked ${workerBond!.account.amount}`);
+ * ```
+ */
+export async function fetchTaskGuarantee(
+  source: ProgramAccountsSource,
+  task: Address,
+): Promise<TaskGuarantee> {
+  const decoder = getCompletionBondDecoder();
+  const bonds = await fetchDecoded(
+    source,
+    [
+      discriminatorFilter(COMPLETION_BOND_DISCRIMINATOR),
+      {
+        memcmp: {
+          offset: COMPLETION_BOND_TASK_OFFSET,
+          bytes: addressBytes(task),
+        },
+      },
+    ],
+    (d) => decoder.decode(d),
+  );
+  const workerBond =
+    bonds.find(
+      ({ account }) => account.role === COMPLETION_BOND_ROLE_WORKER,
+    ) ?? null;
+  const creatorBond =
+    bonds.find(
+      ({ account }) => account.role === COMPLETION_BOND_ROLE_CREATOR,
+    ) ?? null;
+  return { guaranteed: workerBond !== null, workerBond, creatorBond };
 }
 
 /**

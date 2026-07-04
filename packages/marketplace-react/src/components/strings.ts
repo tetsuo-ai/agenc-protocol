@@ -120,6 +120,14 @@ export const EN_COMPONENT_STRINGS = {
   "components.provider.claimedDomainLabel":
     "Claimed domain {domain} (not verified on-chain)",
 
+  // GuaranteedBadge (WP-H3 Guaranteed Hire). The detail copy is deliberately
+  // phase-1-honest: the buyer is refunded (escrow) and the worker FORFEITS the
+  // bond — it does NOT say the buyer receives the bond, because a forfeited
+  // bond pays the protocol treasury until phase 2 redirects it.
+  "components.guarantee.badge": "Guaranteed — worker has 25% at stake",
+  "components.guarantee.detail":
+    "Worker has 25% at stake — if the result fails review you're refunded and the worker forfeits the bond.",
+
   // PoweredByAgenC.
   "components.poweredBy.label": "Powered by AgenC",
   "components.poweredBy.trustLink": "Learn how this works",

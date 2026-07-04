@@ -36,6 +36,7 @@ export {
 } from "./transport.js";
 export {
   ANCHOR_DISCRIMINATOR_SIZE,
+  COMPLETION_BOND_TASK_OFFSET,
   HIRE_RECORD_TASK_OFFSET,
   SERVICE_LISTING_AUTHORITY_OFFSET,
   SERVICE_LISTING_CATEGORY_OFFSET,
@@ -49,7 +50,10 @@ export {
   TASK_STATUS_OFFSET,
 } from "./offsets.js";
 export {
+  COMPLETION_BOND_ROLE_CREATOR,
+  COMPLETION_BOND_ROLE_WORKER,
   bidsByTask,
+  fetchTaskGuarantee,
   isTaskJobSpecPinned,
   listActiveListings,
   listClaimsForWorker,
@@ -60,4 +64,5 @@ export {
   type DecodedProgramAccount,
   type ListActiveListingsOptions,
   type ListOpenTasksOptions,
+  type TaskGuarantee,
 } from "./helpers.js";

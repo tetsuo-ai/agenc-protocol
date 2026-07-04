@@ -768,6 +768,10 @@ describe("MarketplaceClient first-party lifecycle surface", () => {
       "cancelTask",
       "closeTask",
       "rateHire",
+      // WP-H3 Guaranteed Hire: both halves of the completion-bond lifecycle
+      // are first-class named methods (post AND the reclaim recovery crank).
+      "postCompletionBond",
+      "reclaimCompletionBond",
     ] as const) {
       expect(typeof client[name]).toBe("function");
     }

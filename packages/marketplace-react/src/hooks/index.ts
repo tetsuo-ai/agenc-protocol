@@ -42,6 +42,12 @@ export {
   type UseTaskStatusOptions,
   type UseTaskStatusResult,
 } from "./useTaskStatus.js";
+export {
+  useTaskGuarantee,
+  type TaskGuaranteeReader,
+  type UseTaskGuaranteeOptions,
+  type UseTaskGuaranteeResult,
+} from "./useTaskGuarantee.js";
 
 // Writes
 export {
@@ -113,6 +119,13 @@ export {
   type UseDisputeOptions,
   type UseDisputeResult,
 } from "./useDispute.js";
+export {
+  useCompletionBond,
+  type CompletionBondStatus,
+  type PostCompletionBondInput,
+  type ReclaimCompletionBondInput,
+  type UseCompletionBondResult,
+} from "./useCompletionBond.js";
 
 // Wallet bridge
 export {
