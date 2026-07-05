@@ -65,6 +65,7 @@ import {
   getServiceListingCodec,
   getSkillRatingCodec,
   getSkillRegistrationCodec,
+  getStoreCodec,
   getTaskAttestorConfigCodec,
   getTaskBidBookCodec,
   getTaskBidCodec,
@@ -139,6 +140,8 @@ import {
   type SkillRatingArgs,
   type SkillRegistration,
   type SkillRegistrationArgs,
+  type Store,
+  type StoreArgs,
   type Task,
   type TaskArgs,
   type TaskAttestorConfig,
@@ -179,6 +182,7 @@ import {
   getClaimTaskInstructionAsync,
   getClaimTaskWithJobSpecInstructionAsync,
   getClearModerationBlockInstructionAsync,
+  getCloseStoreInstructionAsync,
   getCloseTaskInstructionAsync,
   getCompleteTaskInstructionAsync,
   getCompleteTaskPrivateInstructionAsync,
@@ -208,6 +212,7 @@ import {
   getInitiateDisputeInstructionAsync,
   getMigrateProtocolInstruction,
   getMigrateTaskInstruction,
+  getModerationHeartbeatInstructionAsync,
   getPostCompletionBondInstructionAsync,
   getPostToFeedInstructionAsync,
   getPurchaseSkillInstructionAsync,
@@ -220,6 +225,7 @@ import {
   getRegisterAgentInstructionAsync,
   getRegisterModerationAttestorInstructionAsync,
   getRegisterSkillInstructionAsync,
+  getRegisterStoreInstructionAsync,
   getRejectAndFreezeInstructionAsync,
   getRejectTaskResultInstructionAsync,
   getRequestAttestorExitInstruction,
@@ -249,6 +255,7 @@ import {
   getUpdateServiceListingInstructionAsync,
   getUpdateSkillInstructionAsync,
   getUpdateStateInstructionAsync,
+  getUpdateStoreInstructionAsync,
   getUpdateTreasuryInstructionAsync,
   getUpdateZkImageIdInstructionAsync,
   getUpvotePostInstructionAsync,
@@ -269,6 +276,7 @@ import {
   parseClaimTaskInstruction,
   parseClaimTaskWithJobSpecInstruction,
   parseClearModerationBlockInstruction,
+  parseCloseStoreInstruction,
   parseCloseTaskInstruction,
   parseCompleteTaskInstruction,
   parseCompleteTaskPrivateInstruction,
@@ -298,6 +306,7 @@ import {
   parseInitiateDisputeInstruction,
   parseMigrateProtocolInstruction,
   parseMigrateTaskInstruction,
+  parseModerationHeartbeatInstruction,
   parsePostCompletionBondInstruction,
   parsePostToFeedInstruction,
   parsePurchaseSkillInstruction,
@@ -310,6 +319,7 @@ import {
   parseRegisterAgentInstruction,
   parseRegisterModerationAttestorInstruction,
   parseRegisterSkillInstruction,
+  parseRegisterStoreInstruction,
   parseRejectAndFreezeInstruction,
   parseRejectTaskResultInstruction,
   parseRequestAttestorExitInstruction,
@@ -339,6 +349,7 @@ import {
   parseUpdateServiceListingInstruction,
   parseUpdateSkillInstruction,
   parseUpdateStateInstruction,
+  parseUpdateStoreInstruction,
   parseUpdateTreasuryInstruction,
   parseUpdateZkImageIdInstruction,
   parseUpvotePostInstruction,
@@ -359,6 +370,7 @@ import {
   type ClaimTaskAsyncInput,
   type ClaimTaskWithJobSpecAsyncInput,
   type ClearModerationBlockAsyncInput,
+  type CloseStoreAsyncInput,
   type CloseTaskAsyncInput,
   type CompleteTaskAsyncInput,
   type CompleteTaskPrivateAsyncInput,
@@ -388,6 +400,7 @@ import {
   type InitiateDisputeAsyncInput,
   type MigrateProtocolInput,
   type MigrateTaskInput,
+  type ModerationHeartbeatAsyncInput,
   type ParsedAcceptBidInstruction,
   type ParsedAcceptTaskResultInstruction,
   type ParsedApplyDisputeSlashInstruction,
@@ -402,6 +415,7 @@ import {
   type ParsedClaimTaskInstruction,
   type ParsedClaimTaskWithJobSpecInstruction,
   type ParsedClearModerationBlockInstruction,
+  type ParsedCloseStoreInstruction,
   type ParsedCloseTaskInstruction,
   type ParsedCompleteTaskInstruction,
   type ParsedCompleteTaskPrivateInstruction,
@@ -431,6 +445,7 @@ import {
   type ParsedInitiateDisputeInstruction,
   type ParsedMigrateProtocolInstruction,
   type ParsedMigrateTaskInstruction,
+  type ParsedModerationHeartbeatInstruction,
   type ParsedPostCompletionBondInstruction,
   type ParsedPostToFeedInstruction,
   type ParsedPurchaseSkillInstruction,
@@ -443,6 +458,7 @@ import {
   type ParsedRegisterAgentInstruction,
   type ParsedRegisterModerationAttestorInstruction,
   type ParsedRegisterSkillInstruction,
+  type ParsedRegisterStoreInstruction,
   type ParsedRejectAndFreezeInstruction,
   type ParsedRejectTaskResultInstruction,
   type ParsedRequestAttestorExitInstruction,
@@ -472,6 +488,7 @@ import {
   type ParsedUpdateServiceListingInstruction,
   type ParsedUpdateSkillInstruction,
   type ParsedUpdateStateInstruction,
+  type ParsedUpdateStoreInstruction,
   type ParsedUpdateTreasuryInstruction,
   type ParsedUpdateZkImageIdInstruction,
   type ParsedUpvotePostInstruction,
@@ -490,6 +507,7 @@ import {
   type RegisterAgentAsyncInput,
   type RegisterModerationAttestorAsyncInput,
   type RegisterSkillAsyncInput,
+  type RegisterStoreAsyncInput,
   type RejectAndFreezeAsyncInput,
   type RejectTaskResultAsyncInput,
   type RequestAttestorExitInput,
@@ -519,6 +537,7 @@ import {
   type UpdateServiceListingAsyncInput,
   type UpdateSkillAsyncInput,
   type UpdateStateAsyncInput,
+  type UpdateStoreAsyncInput,
   type UpdateTreasuryAsyncInput,
   type UpdateZkImageIdAsyncInput,
   type UpvotePostAsyncInput,
@@ -566,6 +585,7 @@ import {
   findReputationStakePda,
   findSkillPda,
   findStatePda,
+  findStorePda,
   findTaskAttestorConfigPda,
   findTaskJobSpecPda,
   findTaskModerationPda,
@@ -614,6 +634,7 @@ export enum AgencCoordinationAccount {
   ServiceListing,
   SkillRating,
   SkillRegistration,
+  Store,
   Task,
   TaskAttestorConfig,
   TaskBid,
@@ -977,6 +998,17 @@ export function identifyAgencCoordinationAccount(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([130, 48, 247, 244, 182, 191, 30, 26]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.Store;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([79, 34, 229, 55, 88, 90, 55, 84]),
       ),
       0,
@@ -1126,6 +1158,7 @@ export enum AgencCoordinationInstruction {
   ClaimTask,
   ClaimTaskWithJobSpec,
   ClearModerationBlock,
+  CloseStore,
   CloseTask,
   CompleteTask,
   CompleteTaskPrivate,
@@ -1155,6 +1188,7 @@ export enum AgencCoordinationInstruction {
   InitiateDispute,
   MigrateProtocol,
   MigrateTask,
+  ModerationHeartbeat,
   PostCompletionBond,
   PostToFeed,
   PurchaseSkill,
@@ -1167,6 +1201,7 @@ export enum AgencCoordinationInstruction {
   RegisterAgent,
   RegisterModerationAttestor,
   RegisterSkill,
+  RegisterStore,
   RejectAndFreeze,
   RejectTaskResult,
   RequestAttestorExit,
@@ -1196,6 +1231,7 @@ export enum AgencCoordinationInstruction {
   UpdateServiceListing,
   UpdateSkill,
   UpdateState,
+  UpdateStore,
   UpdateTreasury,
   UpdateZkImageId,
   UpvotePost,
@@ -1361,6 +1397,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.ClearModerationBlock;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([87, 18, 213, 192, 63, 136, 65, 205]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.CloseStore;
   }
   if (
     containsBytes(
@@ -1685,6 +1732,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([215, 182, 250, 219, 71, 134, 198, 0]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.ModerationHeartbeat;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([119, 207, 253, 151, 32, 175, 35, 66]),
       ),
       0,
@@ -1812,6 +1870,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.RegisterSkill;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([63, 55, 152, 6, 167, 127, 89, 129]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.RegisterStore;
   }
   if (
     containsBytes(
@@ -2136,6 +2205,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([169, 49, 137, 251, 233, 234, 172, 103]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.UpdateStore;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([60, 16, 243, 66, 96, 59, 254, 131]),
       ),
       0,
@@ -2250,6 +2330,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.ClearModerationBlock;
     } & ParsedClearModerationBlockInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.CloseStore;
+    } & ParsedCloseStoreInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.CloseTask;
     } & ParsedCloseTaskInstruction<TProgram>)
   | ({
@@ -2337,6 +2420,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.MigrateTask;
     } & ParsedMigrateTaskInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.ModerationHeartbeat;
+    } & ParsedModerationHeartbeatInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.PostCompletionBond;
     } & ParsedPostCompletionBondInstruction<TProgram>)
   | ({
@@ -2372,6 +2458,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.RegisterSkill;
     } & ParsedRegisterSkillInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.RegisterStore;
+    } & ParsedRegisterStoreInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.RejectAndFreeze;
     } & ParsedRejectAndFreezeInstruction<TProgram>)
@@ -2459,6 +2548,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.UpdateState;
     } & ParsedUpdateStateInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.UpdateStore;
+    } & ParsedUpdateStoreInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.UpdateTreasury;
     } & ParsedUpdateTreasuryInstruction<TProgram>)
@@ -2579,6 +2671,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ClearModerationBlock,
         ...parseClearModerationBlockInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.CloseStore: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.CloseStore,
+        ...parseCloseStoreInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.CloseTask: {
@@ -2784,6 +2883,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseMigrateTaskInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.ModerationHeartbeat: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.ModerationHeartbeat,
+        ...parseModerationHeartbeatInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.PostCompletionBond: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2867,6 +2973,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.RegisterSkill,
         ...parseRegisterSkillInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.RegisterStore: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.RegisterStore,
+        ...parseRegisterStoreInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.RejectAndFreeze: {
@@ -3073,6 +3186,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseUpdateStateInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.UpdateStore: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.UpdateStore,
+        ...parseUpdateStoreInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.UpdateTreasury: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3195,6 +3315,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<SkillRatingArgs, SkillRating>;
   skillRegistration: ReturnType<typeof getSkillRegistrationCodec> &
     SelfFetchFunctions<SkillRegistrationArgs, SkillRegistration>;
+  store: ReturnType<typeof getStoreCodec> &
+    SelfFetchFunctions<StoreArgs, Store>;
   task: ReturnType<typeof getTaskCodec> & SelfFetchFunctions<TaskArgs, Task>;
   taskAttestorConfig: ReturnType<typeof getTaskAttestorConfigCodec> &
     SelfFetchFunctions<TaskAttestorConfigArgs, TaskAttestorConfig>;
@@ -3276,6 +3398,10 @@ export type AgencCoordinationPluginInstructions = {
   clearModerationBlock: (
     input: ClearModerationBlockAsyncInput,
   ) => ReturnType<typeof getClearModerationBlockInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  closeStore: (
+    input: CloseStoreAsyncInput,
+  ) => ReturnType<typeof getCloseStoreInstructionAsync> &
     SelfPlanAndSendFunctions;
   closeTask: (
     input: CloseTaskAsyncInput,
@@ -3392,6 +3518,10 @@ export type AgencCoordinationPluginInstructions = {
   migrateTask: (
     input: MakeOptional<MigrateTaskInput, "payer">,
   ) => ReturnType<typeof getMigrateTaskInstruction> & SelfPlanAndSendFunctions;
+  moderationHeartbeat: (
+    input: ModerationHeartbeatAsyncInput,
+  ) => ReturnType<typeof getModerationHeartbeatInstructionAsync> &
+    SelfPlanAndSendFunctions;
   postCompletionBond: (
     input: PostCompletionBondAsyncInput,
   ) => ReturnType<typeof getPostCompletionBondInstructionAsync> &
@@ -3439,6 +3569,10 @@ export type AgencCoordinationPluginInstructions = {
   registerSkill: (
     input: RegisterSkillAsyncInput,
   ) => ReturnType<typeof getRegisterSkillInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  registerStore: (
+    input: RegisterStoreAsyncInput,
+  ) => ReturnType<typeof getRegisterStoreInstructionAsync> &
     SelfPlanAndSendFunctions;
   rejectAndFreeze: (
     input: RejectAndFreezeAsyncInput,
@@ -3555,6 +3689,10 @@ export type AgencCoordinationPluginInstructions = {
     input: UpdateStateAsyncInput,
   ) => ReturnType<typeof getUpdateStateInstructionAsync> &
     SelfPlanAndSendFunctions;
+  updateStore: (
+    input: UpdateStoreAsyncInput,
+  ) => ReturnType<typeof getUpdateStoreInstructionAsync> &
+    SelfPlanAndSendFunctions;
   updateTreasury: (
     input: UpdateTreasuryAsyncInput,
   ) => ReturnType<typeof getUpdateTreasuryInstructionAsync> &
@@ -3598,6 +3736,7 @@ export type AgencCoordinationPluginPdas = {
   moderationConfig: typeof findModerationConfigPda;
   moderationAttestor: typeof findModerationAttestorPda;
   agentStats: typeof findAgentStatsPda;
+  store: typeof findStorePda;
   hireRecord: typeof findHireRecordPda;
   completeTaskWorkerCompletionBond: typeof findCompleteTaskWorkerCompletionBondPda;
   zkConfig: typeof findZkConfigPda;
@@ -3747,6 +3886,7 @@ export function agencCoordinationProgram() {
             client,
             getSkillRegistrationCodec(),
           ),
+          store: addSelfFetchFunctions(client, getStoreCodec()),
           task: addSelfFetchFunctions(client, getTaskCodec()),
           taskAttestorConfig: addSelfFetchFunctions(
             client,
@@ -3845,6 +3985,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getClearModerationBlockInstructionAsync(input),
+            ),
+          closeStore: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getCloseStoreInstructionAsync(input),
             ),
           closeTask: (input) =>
             addSelfPlanAndSendFunctions(
@@ -3997,6 +4142,11 @@ export function agencCoordinationProgram() {
                 payer: input.payer ?? client.payer,
               }),
             ),
+          moderationHeartbeat: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getModerationHeartbeatInstructionAsync(input),
+            ),
           postCompletionBond: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4056,6 +4206,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getRegisterSkillInstructionAsync(input),
+            ),
+          registerStore: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getRegisterStoreInstructionAsync(input),
             ),
           rejectAndFreeze: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4202,6 +4357,11 @@ export function agencCoordinationProgram() {
               client,
               getUpdateStateInstructionAsync(input),
             ),
+          updateStore: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getUpdateStoreInstructionAsync(input),
+            ),
           updateTreasury: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4250,6 +4410,7 @@ export function agencCoordinationProgram() {
           moderationConfig: findModerationConfigPda,
           moderationAttestor: findModerationAttestorPda,
           agentStats: findAgentStatsPda,
+          store: findStorePda,
           hireRecord: findHireRecordPda,
           completeTaskWorkerCompletionBond:
             findCompleteTaskWorkerCompletionBondPda,

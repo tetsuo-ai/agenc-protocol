@@ -179,6 +179,10 @@ import {
   type ModerationBlockSetEventData,
 } from "./moderationBlockSet";
 import {
+  getModerationHeartbeatRecordedEventDecoder,
+  type ModerationHeartbeatRecordedEventData,
+} from "./moderationHeartbeatRecorded";
+import {
   getMultisigUpdatedEventDecoder,
   type MultisigUpdatedEventData,
 } from "./multisigUpdated";
@@ -306,6 +310,18 @@ import {
   getStateUpdatedEventDecoder,
   type StateUpdatedEventData,
 } from "./stateUpdated";
+import {
+  getStoreClosedEventDecoder,
+  type StoreClosedEventData,
+} from "./storeClosed";
+import {
+  getStoreRegisteredEventDecoder,
+  type StoreRegisteredEventData,
+} from "./storeRegistered";
+import {
+  getStoreUpdatedEventDecoder,
+  type StoreUpdatedEventData,
+} from "./storeUpdated";
 import {
   getTaskCancelledEventDecoder,
   type TaskCancelledEventData,
@@ -438,6 +454,7 @@ export type AgencEvent =
   | { eventName: "ModerationAttestorRevoked"; data: ModerationAttestorRevokedEventData }
   | { eventName: "ModerationBlockCleared"; data: ModerationBlockClearedEventData }
   | { eventName: "ModerationBlockSet"; data: ModerationBlockSetEventData }
+  | { eventName: "ModerationHeartbeatRecorded"; data: ModerationHeartbeatRecordedEventData }
   | { eventName: "MultisigUpdated"; data: MultisigUpdatedEventData }
   | { eventName: "OperatorFeePaid"; data: OperatorFeePaidEventData }
   | { eventName: "PostCreated"; data: PostCreatedEventData }
@@ -470,6 +487,9 @@ export type AgencEvent =
   | { eventName: "SkillUpdated"; data: SkillUpdatedEventData }
   | { eventName: "SpeculativeCommitmentCreated"; data: SpeculativeCommitmentCreatedEventData }
   | { eventName: "StateUpdated"; data: StateUpdatedEventData }
+  | { eventName: "StoreClosed"; data: StoreClosedEventData }
+  | { eventName: "StoreRegistered"; data: StoreRegisteredEventData }
+  | { eventName: "StoreUpdated"; data: StoreUpdatedEventData }
   | { eventName: "TaskCancelled"; data: TaskCancelledEventData }
   | { eventName: "TaskChangesRequested"; data: TaskChangesRequestedEventData }
   | { eventName: "TaskClaimed"; data: TaskClaimedEventData }
@@ -811,6 +831,13 @@ export const AGENC_EVENT_DECODERS: {
       data: getModerationBlockSetEventDecoder().decode(payload),
     }),
   },
+  "19ffdc72b7eae3cc": {
+    eventName: "ModerationHeartbeatRecorded",
+    decode: (payload) => ({
+      eventName: "ModerationHeartbeatRecorded",
+      data: getModerationHeartbeatRecordedEventDecoder().decode(payload),
+    }),
+  },
   "f2ce253b7ac5d248": {
     eventName: "MultisigUpdated",
     decode: (payload) => ({
@@ -1033,6 +1060,27 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "StateUpdated",
       data: getStateUpdatedEventDecoder().decode(payload),
+    }),
+  },
+  "b8916b629900d6d3": {
+    eventName: "StoreClosed",
+    decode: (payload) => ({
+      eventName: "StoreClosed",
+      data: getStoreClosedEventDecoder().decode(payload),
+    }),
+  },
+  "0815ea8d93e31091": {
+    eventName: "StoreRegistered",
+    decode: (payload) => ({
+      eventName: "StoreRegistered",
+      data: getStoreRegisteredEventDecoder().decode(payload),
+    }),
+  },
+  "da078e38393fb9d3": {
+    eventName: "StoreUpdated",
+    decode: (payload) => ({
+      eventName: "StoreUpdated",
+      data: getStoreUpdatedEventDecoder().decode(payload),
     }),
   },
   "9e65dcbb108d8d40": {

@@ -60,11 +60,21 @@ export type ModerationConfig = {
   enabled: boolean;
   /** Creation timestamp. */
   createdAt: bigint;
-  /** Last update timestamp. */
+  /**
+   * Last update timestamp. ALSO the P1.3 liveness heartbeat: bumped by
+   * `configure_task_moderation` and `moderation_heartbeat`; when it goes stale
+   * past the liveness window the consumption gates relax to moderation-optional
+   * (`docs/MODERATION_LIVENESS.md`).
+   */
   updatedAt: bigint;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future moderation policy flags. */
+  /**
+   * Reserved bytes. `[0..4]` carry the P1.3 liveness window (LE `u32` seconds,
+   * 0 = default 90 days) via the accessors below — the value-only,
+   * size-identical reserved-carve precedent (ModerationAttestor P1.2). `[4..6]`
+   * MUST stay zeroed.
+   */
   reserved: ReadonlyUint8Array;
 };
 
@@ -77,11 +87,21 @@ export type ModerationConfigArgs = {
   enabled: boolean;
   /** Creation timestamp. */
   createdAt: number | bigint;
-  /** Last update timestamp. */
+  /**
+   * Last update timestamp. ALSO the P1.3 liveness heartbeat: bumped by
+   * `configure_task_moderation` and `moderation_heartbeat`; when it goes stale
+   * past the liveness window the consumption gates relax to moderation-optional
+   * (`docs/MODERATION_LIVENESS.md`).
+   */
   updatedAt: number | bigint;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future moderation policy flags. */
+  /**
+   * Reserved bytes. `[0..4]` carry the P1.3 liveness window (LE `u32` seconds,
+   * 0 = default 90 days) via the accessors below — the value-only,
+   * size-identical reserved-carve precedent (ModerationAttestor P1.2). `[4..6]`
+   * MUST stay zeroed.
+   */
   reserved: ReadonlyUint8Array;
 };
 

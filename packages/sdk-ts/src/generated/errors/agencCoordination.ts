@@ -656,6 +656,22 @@ export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE = 0x18ae; //
 export const AGENC_COORDINATION_ERROR__INVALID_TRUST_LIST = 0x18af; // 6319
 /** InvalidModerationRecord: Moderation record account is not the canonical PDA, not program-owned, or not a moderation record */
 export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD = 0x18b0; // 6320
+/** InvalidStoreHandle: Store handle must be 3-20 chars of lowercase [a-z0-9-], starting alphanumeric, zero-padded */
+export const AGENC_COORDINATION_ERROR__INVALID_STORE_HANDLE = 0x18b1; // 6321
+/** InvalidStoreMetadataUri: Store metadata URI exceeds the maximum length */
+export const AGENC_COORDINATION_ERROR__INVALID_STORE_METADATA_URI = 0x18b2; // 6322
+/** InvalidStoreDomain: Store domain is not a valid DNS name */
+export const AGENC_COORDINATION_ERROR__INVALID_STORE_DOMAIN = 0x18b3; // 6323
+/** InvalidStoreOperatorTerms: Store operator fee requires a non-default operator payee (and vice versa) */
+export const AGENC_COORDINATION_ERROR__INVALID_STORE_OPERATOR_TERMS = 0x18b4; // 6324
+/** StoreBondMissing: Store PDA is missing the registration bond after deposit */
+export const AGENC_COORDINATION_ERROR__STORE_BOND_MISSING = 0x18b5; // 6325
+/** UnauthorizedModerationHeartbeat: Only the moderation config authority or the moderation authority may heartbeat */
+export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_HEARTBEAT = 0x18b6; // 6326
+/** InvalidModerationLivenessWindow: Moderation liveness window is outside the allowed [1 day, 400 day] range */
+export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW = 0x18b7; // 6327
+/** InvalidStoreManifest: Store manifest hash and URI must be pinned together (both set or both empty) */
+export const AGENC_COORDINATION_ERROR__INVALID_STORE_MANIFEST = 0x18b8; // 6328
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -775,6 +791,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_ATTESTOR
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT
+  | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE
   | typeof AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD
   | typeof AGENC_COORDINATION_ERROR__INVALID_NULLIFIER
@@ -800,6 +817,11 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATE_KEY
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION
+  | typeof AGENC_COORDINATION_ERROR__INVALID_STORE_DOMAIN
+  | typeof AGENC_COORDINATION_ERROR__INVALID_STORE_HANDLE
+  | typeof AGENC_COORDINATION_ERROR__INVALID_STORE_MANIFEST
+  | typeof AGENC_COORDINATION_ERROR__INVALID_STORE_METADATA_URI
+  | typeof AGENC_COORDINATION_ERROR__INVALID_STORE_OPERATOR_TERMS
   | typeof AGENC_COORDINATION_ERROR__INVALID_SURFACE_REVISION
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_ID
   | typeof AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH
@@ -910,6 +932,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS
   | typeof AGENC_COORDINATION_ERROR__STATE_NOT_FOUND
   | typeof AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION
+  | typeof AGENC_COORDINATION_ERROR__STORE_BOND_MISSING
   | typeof AGENC_COORDINATION_ERROR__STRING_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_PENDING
   | typeof AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_RESOLVED
@@ -956,6 +979,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_ATTESTOR_REVOCATION
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_CREATOR
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_ATTESTOR
+  | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_HEARTBEAT
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER
   | typeof AGENC_COORDINATION_ERROR__UNAUTHORIZED_REVIEW_DECISION
@@ -1102,6 +1126,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_MIN_VERSION]: `Minimum version cannot exceed current protocol version`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_ATTESTOR]: `Invalid moderation attestor: pubkey must be non-zero`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_BLOCK_ACCOUNT]: `Moderation block account is not the canonical PDA for this content hash`,
+    [AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW]: `Moderation liveness window is outside the allowed [1 day, 400 day] range`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RATIONALE]: `Block rationale hash and URI are required (non-zero, non-empty, bounded)`,
     [AGENC_COORDINATION_ERROR__INVALID_MODERATION_RECORD]: `Moderation record account is not the canonical PDA, not program-owned, or not a moderation record`,
     [AGENC_COORDINATION_ERROR__INVALID_NULLIFIER]: `Invalid nullifier: nullifier value cannot be all zeros`,
@@ -1127,6 +1152,11 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_STATE_KEY]: `Invalid state key: state_key cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE]: `Invalid state value: state_value cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION]: `Invalid task status transition`,
+    [AGENC_COORDINATION_ERROR__INVALID_STORE_DOMAIN]: `Store domain is not a valid DNS name`,
+    [AGENC_COORDINATION_ERROR__INVALID_STORE_HANDLE]: `Store handle must be 3-20 chars of lowercase [a-z0-9-], starting alphanumeric, zero-padded`,
+    [AGENC_COORDINATION_ERROR__INVALID_STORE_MANIFEST]: `Store manifest hash and URI must be pinned together (both set or both empty)`,
+    [AGENC_COORDINATION_ERROR__INVALID_STORE_METADATA_URI]: `Store metadata URI exceeds the maximum length`,
+    [AGENC_COORDINATION_ERROR__INVALID_STORE_OPERATOR_TERMS]: `Store operator fee requires a non-default operator payee (and vice versa)`,
     [AGENC_COORDINATION_ERROR__INVALID_SURFACE_REVISION]: `Surface revision value is not a recognized surface`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_ID]: `Invalid task ID: cannot be zero`,
     [AGENC_COORDINATION_ERROR__INVALID_TASK_JOB_SPEC_HASH]: `Invalid task job specification hash`,
@@ -1237,6 +1267,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS]: `State key already exists`,
     [AGENC_COORDINATION_ERROR__STATE_NOT_FOUND]: `State not found`,
     [AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION]: `State ownership violation: only the creator agent can update this state`,
+    [AGENC_COORDINATION_ERROR__STORE_BOND_MISSING]: `Store PDA is missing the registration bond after deposit`,
     [AGENC_COORDINATION_ERROR__STRING_TOO_LONG]: `String too long`,
     [AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_PENDING]: `Task submission already pending review`,
     [AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_RESOLVED]: `Task submission has already been resolved`,
@@ -1283,6 +1314,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_ATTESTOR_REVOCATION]: `Only the wallet that created a roster entry may revoke it`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_CREATOR]: `Parent task does not belong to the same creator`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_ATTESTOR]: `Signer is neither the moderation authority nor a registered attestor`,
+    [AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_HEARTBEAT]: `Only the moderation config authority or the moderation authority may heartbeat`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY]: `Only protocol authority can perform this action`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER]: `Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_REVIEW_DECISION]: `Caller is not authorized to make this review decision`,

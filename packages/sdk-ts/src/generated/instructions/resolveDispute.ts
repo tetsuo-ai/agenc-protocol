@@ -77,6 +77,7 @@ export type ResolveDisputeInstruction<
   TAccountWorkerWallet extends string | AccountMeta<string> = string,
   TAccountHireRecord extends string | AccountMeta<string> = string,
   TAccountDisputeOperator extends string | AccountMeta<string> = string,
+  TAccountDisputeReferrer extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
   TAccountTokenEscrowAta extends string | AccountMeta<string> = string,
@@ -134,6 +135,9 @@ export type ResolveDisputeInstruction<
       TAccountDisputeOperator extends string
         ? WritableAccount<TAccountDisputeOperator>
         : TAccountDisputeOperator,
+      TAccountDisputeReferrer extends string
+        ? WritableAccount<TAccountDisputeReferrer>
+        : TAccountDisputeReferrer,
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
@@ -226,6 +230,7 @@ export type ResolveDisputeAsyncInput<
   TAccountWorkerWallet extends string = string,
   TAccountHireRecord extends string = string,
   TAccountDisputeOperator extends string = string,
+  TAccountDisputeReferrer extends string = string,
   TAccountSystemProgram extends string = string,
   TAccountTokenEscrowAta extends string = string,
   TAccountCreatorTokenAccount extends string = string,
@@ -287,8 +292,16 @@ export type ResolveDisputeAsyncInput<
    * record is deserialized + validated there.
    */
   hireRecord?: Address<TAccountHireRecord>;
-  /** a live hire carries a non-zero operator fee. Receives the operator leg (SOL). */
+  /**
+   * HireRecord fallback); required only when those terms carry a non-zero operator fee.
+   * Receives the operator leg (SOL).
+   */
   disputeOperator?: Address<TAccountDisputeOperator>;
+  /**
+   * dispute exits honor the snapshotted referrer leg); required only when those terms
+   * carry a non-zero referrer fee. Receives the referrer leg (SOL).
+   */
+  disputeReferrer?: Address<TAccountDisputeReferrer>;
   systemProgram?: Address<TAccountSystemProgram>;
   /** Token escrow ATA holding reward tokens (optional) */
   tokenEscrowAta?: Address<TAccountTokenEscrowAta>;
@@ -325,6 +338,7 @@ export async function getResolveDisputeInstructionAsync<
   TAccountWorkerWallet extends string,
   TAccountHireRecord extends string,
   TAccountDisputeOperator extends string,
+  TAccountDisputeReferrer extends string,
   TAccountSystemProgram extends string,
   TAccountTokenEscrowAta extends string,
   TAccountCreatorTokenAccount extends string,
@@ -351,6 +365,7 @@ export async function getResolveDisputeInstructionAsync<
     TAccountWorkerWallet,
     TAccountHireRecord,
     TAccountDisputeOperator,
+    TAccountDisputeReferrer,
     TAccountSystemProgram,
     TAccountTokenEscrowAta,
     TAccountCreatorTokenAccount,
@@ -379,6 +394,7 @@ export async function getResolveDisputeInstructionAsync<
     TAccountWorkerWallet,
     TAccountHireRecord,
     TAccountDisputeOperator,
+    TAccountDisputeReferrer,
     TAccountSystemProgram,
     TAccountTokenEscrowAta,
     TAccountCreatorTokenAccount,
@@ -413,6 +429,7 @@ export async function getResolveDisputeInstructionAsync<
     workerWallet: { value: input.workerWallet ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     disputeOperator: { value: input.disputeOperator ?? null, isWritable: true },
+    disputeReferrer: { value: input.disputeReferrer ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
     tokenEscrowAta: { value: input.tokenEscrowAta ?? null, isWritable: true },
     creatorTokenAccount: {
@@ -492,6 +509,7 @@ export async function getResolveDisputeInstructionAsync<
       getAccountMeta("workerWallet", accounts.workerWallet),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("disputeOperator", accounts.disputeOperator),
+      getAccountMeta("disputeReferrer", accounts.disputeReferrer),
       getAccountMeta("systemProgram", accounts.systemProgram),
       getAccountMeta("tokenEscrowAta", accounts.tokenEscrowAta),
       getAccountMeta("creatorTokenAccount", accounts.creatorTokenAccount),
@@ -522,6 +540,7 @@ export async function getResolveDisputeInstructionAsync<
     TAccountWorkerWallet,
     TAccountHireRecord,
     TAccountDisputeOperator,
+    TAccountDisputeReferrer,
     TAccountSystemProgram,
     TAccountTokenEscrowAta,
     TAccountCreatorTokenAccount,
@@ -549,6 +568,7 @@ export type ResolveDisputeInput<
   TAccountWorkerWallet extends string = string,
   TAccountHireRecord extends string = string,
   TAccountDisputeOperator extends string = string,
+  TAccountDisputeReferrer extends string = string,
   TAccountSystemProgram extends string = string,
   TAccountTokenEscrowAta extends string = string,
   TAccountCreatorTokenAccount extends string = string,
@@ -610,8 +630,16 @@ export type ResolveDisputeInput<
    * record is deserialized + validated there.
    */
   hireRecord: Address<TAccountHireRecord>;
-  /** a live hire carries a non-zero operator fee. Receives the operator leg (SOL). */
+  /**
+   * HireRecord fallback); required only when those terms carry a non-zero operator fee.
+   * Receives the operator leg (SOL).
+   */
   disputeOperator?: Address<TAccountDisputeOperator>;
+  /**
+   * dispute exits honor the snapshotted referrer leg); required only when those terms
+   * carry a non-zero referrer fee. Receives the referrer leg (SOL).
+   */
+  disputeReferrer?: Address<TAccountDisputeReferrer>;
   systemProgram?: Address<TAccountSystemProgram>;
   /** Token escrow ATA holding reward tokens (optional) */
   tokenEscrowAta?: Address<TAccountTokenEscrowAta>;
@@ -648,6 +676,7 @@ export function getResolveDisputeInstruction<
   TAccountWorkerWallet extends string,
   TAccountHireRecord extends string,
   TAccountDisputeOperator extends string,
+  TAccountDisputeReferrer extends string,
   TAccountSystemProgram extends string,
   TAccountTokenEscrowAta extends string,
   TAccountCreatorTokenAccount extends string,
@@ -674,6 +703,7 @@ export function getResolveDisputeInstruction<
     TAccountWorkerWallet,
     TAccountHireRecord,
     TAccountDisputeOperator,
+    TAccountDisputeReferrer,
     TAccountSystemProgram,
     TAccountTokenEscrowAta,
     TAccountCreatorTokenAccount,
@@ -701,6 +731,7 @@ export function getResolveDisputeInstruction<
   TAccountWorkerWallet,
   TAccountHireRecord,
   TAccountDisputeOperator,
+  TAccountDisputeReferrer,
   TAccountSystemProgram,
   TAccountTokenEscrowAta,
   TAccountCreatorTokenAccount,
@@ -734,6 +765,7 @@ export function getResolveDisputeInstruction<
     workerWallet: { value: input.workerWallet ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: false },
     disputeOperator: { value: input.disputeOperator ?? null, isWritable: true },
+    disputeReferrer: { value: input.disputeReferrer ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
     tokenEscrowAta: { value: input.tokenEscrowAta ?? null, isWritable: true },
     creatorTokenAccount: {
@@ -794,6 +826,7 @@ export function getResolveDisputeInstruction<
       getAccountMeta("workerWallet", accounts.workerWallet),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("disputeOperator", accounts.disputeOperator),
+      getAccountMeta("disputeReferrer", accounts.disputeReferrer),
       getAccountMeta("systemProgram", accounts.systemProgram),
       getAccountMeta("tokenEscrowAta", accounts.tokenEscrowAta),
       getAccountMeta("creatorTokenAccount", accounts.creatorTokenAccount),
@@ -824,6 +857,7 @@ export function getResolveDisputeInstruction<
     TAccountWorkerWallet,
     TAccountHireRecord,
     TAccountDisputeOperator,
+    TAccountDisputeReferrer,
     TAccountSystemProgram,
     TAccountTokenEscrowAta,
     TAccountCreatorTokenAccount,
@@ -893,25 +927,33 @@ export type ParsedResolveDisputeInstruction<
      * record is deserialized + validated there.
      */
     hireRecord: TAccountMetas[11];
-    /** a live hire carries a non-zero operator fee. Receives the operator leg (SOL). */
+    /**
+     * HireRecord fallback); required only when those terms carry a non-zero operator fee.
+     * Receives the operator leg (SOL).
+     */
     disputeOperator?: TAccountMetas[12] | undefined;
-    systemProgram: TAccountMetas[13];
+    /**
+     * dispute exits honor the snapshotted referrer leg); required only when those terms
+     * carry a non-zero referrer fee. Receives the referrer leg (SOL).
+     */
+    disputeReferrer?: TAccountMetas[13] | undefined;
+    systemProgram: TAccountMetas[14];
     /** Token escrow ATA holding reward tokens (optional) */
-    tokenEscrowAta?: TAccountMetas[14] | undefined;
+    tokenEscrowAta?: TAccountMetas[15] | undefined;
     /** Creator's token account for refund (optional) */
-    creatorTokenAccount?: TAccountMetas[15] | undefined;
+    creatorTokenAccount?: TAccountMetas[16] | undefined;
     /** Worker's token account for payment (optional) */
-    workerTokenAccountAta?: TAccountMetas[16] | undefined;
+    workerTokenAccountAta?: TAccountMetas[17] | undefined;
     /** Treasury's token account for protocol fees (optional) */
-    treasuryTokenAccount?: TAccountMetas[17] | undefined;
+    treasuryTokenAccount?: TAccountMetas[18] | undefined;
     /** SPL token mint (optional, must match task.reward_mint) */
-    rewardMint?: TAccountMetas[18] | undefined;
+    rewardMint?: TAccountMetas[19] | undefined;
     /** SPL Token program (optional, required for token tasks) */
-    tokenProgram?: TAccountMetas[19] | undefined;
+    tokenProgram?: TAccountMetas[20] | undefined;
     /** forfeited to the treasury. Fully validated by settle_completion_bond. */
-    creatorCompletionBond: TAccountMetas[20];
-    workerCompletionBond: TAccountMetas[21];
-    bondTreasury: TAccountMetas[22];
+    creatorCompletionBond: TAccountMetas[21];
+    workerCompletionBond: TAccountMetas[22];
+    bondTreasury: TAccountMetas[23];
   };
   data: ResolveDisputeInstructionData;
 };
@@ -924,12 +966,12 @@ export function parseResolveDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedResolveDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 23) {
+  if (instruction.accounts.length < 24) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 23,
+        expectedAccountMetas: 24,
       },
     );
   }
@@ -961,6 +1003,7 @@ export function parseResolveDisputeInstruction<
       workerWallet: getNextOptionalAccount(),
       hireRecord: getNextAccount(),
       disputeOperator: getNextOptionalAccount(),
+      disputeReferrer: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
       tokenEscrowAta: getNextOptionalAccount(),
       creatorTokenAccount: getNextOptionalAccount(),

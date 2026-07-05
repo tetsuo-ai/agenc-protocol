@@ -37,6 +37,7 @@ export * from "./reputationStake";
 export * from "./serviceListing";
 export * from "./skillRating";
 export * from "./skillRegistration";
+export * from "./store";
 export * from "./task";
 export * from "./taskAttestorConfig";
 export * from "./taskBid";
