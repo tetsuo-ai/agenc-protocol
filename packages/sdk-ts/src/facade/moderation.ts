@@ -24,6 +24,7 @@ import {
   getSetModerationBlockInstructionAsync,
   getClearModerationBlockInstructionAsync,
   getSetDefaultTrustListInstructionAsync,
+  getModerationHeartbeatInstructionAsync,
   findModerationConfigPda,
   findTaskModerationPda,
   findListingModerationPda,
@@ -42,6 +43,7 @@ import {
   type SetModerationBlockAsyncInput,
   type ClearModerationBlockAsyncInput,
   type SetDefaultTrustListAsyncInput,
+  type ModerationHeartbeatAsyncInput,
 } from "../generated/index.js";
 
 export {
@@ -313,4 +315,20 @@ export async function clearModerationBlock(
  */
 export async function setDefaultTrustList(input: SetDefaultTrustListAsyncInput) {
   return getSetDefaultTrustListInstructionAsync(input);
+}
+
+/**
+ * Build a moderation_heartbeat instruction (batch-2 A2, P1.3 moderation
+ * liveness). The config authority or the moderation authority bumps the
+ * deadman timestamp on `ModerationConfig` (PDA auto-derived); the config
+ * authority may also retune the liveness window via `newWindowSecs`
+ * (floored at 1 day on-chain — pass `none()` to leave it unchanged).
+ *
+ * Silence past the window relaxes the moderation ALLOW gates to
+ * moderation-optional (docs/MODERATION_LIVENESS.md), so a censoring-by-
+ * abandonment authority cannot freeze the marketplace; the multisig BLOCK
+ * floor never relaxes.
+ */
+export async function moderationHeartbeat(input: ModerationHeartbeatAsyncInput) {
+  return getModerationHeartbeatInstructionAsync(input);
 }
