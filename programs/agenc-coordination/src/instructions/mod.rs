@@ -83,6 +83,8 @@ pub mod create_task_humanless;
 pub mod delegate_reputation;
 pub mod deregister_agent;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod distribute_ghost_share;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod execute_proposal;
 pub mod expire_claim;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -117,6 +119,7 @@ pub mod rate_hire;
 pub mod rate_skill;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod reclaim_completion_bond;
+pub mod reclaim_terminal_claim;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod record_agent_verification;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -248,6 +251,9 @@ pub use delegate_reputation::*;
 pub use deregister_agent::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use distribute_ghost_share::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use execute_proposal::*;
 #[allow(ambiguous_glob_reexports)]
 pub use expire_claim::*;
@@ -294,6 +300,7 @@ pub use rate_hire::*;
 pub use rate_skill::*;
 #[cfg(not(feature = "mainnet-canary"))]
 pub use reclaim_completion_bond::*;
+pub use reclaim_terminal_claim::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use record_agent_verification::*;

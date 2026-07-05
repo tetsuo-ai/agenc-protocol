@@ -151,6 +151,25 @@ pub const STORE_REGISTRATION_BOND_LAMPORTS: u64 = 50_000_000;
 /// Maximum deadline relative to current time (1 year in seconds)
 pub const MAX_DEADLINE_SECONDS: i64 = 31_536_000;
 
+/// Batch 3 WS-CONTEST: the creator's post-deadline selection window (48h). A
+/// schema-1 `Competitive` task's `ghost_at = deadline + SELECTION_WINDOW_SECS`;
+/// before it only the creator may settle (accept/reject), at/after it the
+/// permissionless `distribute_ghost_share` crank takes over — an airtight
+/// temporal partition, so the judge and the crank can never interleave.
+pub const SELECTION_WINDOW_SECS: i64 = 172_800;
+
+/// Batch 3 WS-CONTEST fix round: refundable anti-slop contest entry deposit
+/// (0.01 SOL), carried as SURPLUS LAMPORTS on the contest claim PDA (no
+/// `TaskClaim` layout change). Charged only when claiming a contest-CONFIGURED
+/// task (schema-1 Competitive + CreatorReview). Refunded in full on every exit
+/// where the worker SUBMITTED (accept / reject / ghost-split close the claim
+/// with ALL its lamports to the worker — losers lose nothing). FORFEITED to the
+/// protocol treasury (never the creator) on no-show exits: `expire_claim` with a
+/// provably-absent submission PDA, and `reclaim_terminal_claim`. Rationale:
+/// claim rent alone was a free slot-squat DoS (fully refundable even to
+/// no-shows); the deposit prices squatting while keeping honest entry net-free.
+pub const CONTEST_ENTRY_DEPOSIT_LAMPORTS: u64 = 10_000_000;
+
 /// Default cooldown between task creations in seconds
 pub const DEFAULT_TASK_CREATION_COOLDOWN: i64 = 60;
 

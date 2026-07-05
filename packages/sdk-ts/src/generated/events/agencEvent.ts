@@ -103,6 +103,10 @@ import {
   type BondSlashedEventData,
 } from "./bondSlashed";
 import {
+  getContestDepositForfeitedEventDecoder,
+  type ContestDepositForfeitedEventData,
+} from "./contestDepositForfeited";
+import {
   getDefaultTrustListUpdatedEventDecoder,
   type DefaultTrustListUpdatedEventData,
 } from "./defaultTrustListUpdated";
@@ -134,6 +138,10 @@ import {
   getDisputeResolverRevokedEventDecoder,
   type DisputeResolverRevokedEventData,
 } from "./disputeResolverRevoked";
+import {
+  getGhostShareDistributedEventDecoder,
+  type GhostShareDistributedEventData,
+} from "./ghostShareDistributed";
 import {
   getGovernanceInitializedEventDecoder,
   type GovernanceInitializedEventData,
@@ -387,6 +395,10 @@ import {
   type TaskValidationConfiguredEventData,
 } from "./taskValidationConfigured";
 import {
+  getTerminalClaimReclaimedEventDecoder,
+  type TerminalClaimReclaimedEventData,
+} from "./terminalClaimReclaimed";
+import {
   getTreasuryUpdatedEventDecoder,
   type TreasuryUpdatedEventData,
 } from "./treasuryUpdated";
@@ -435,6 +447,7 @@ export type AgencEvent =
   | { eventName: "BondRefunded"; data: BondRefundedEventData }
   | { eventName: "BondReleased"; data: BondReleasedEventData }
   | { eventName: "BondSlashed"; data: BondSlashedEventData }
+  | { eventName: "ContestDepositForfeited"; data: ContestDepositForfeitedEventData }
   | { eventName: "DefaultTrustListUpdated"; data: DefaultTrustListUpdatedEventData }
   | { eventName: "DependentTaskCreated"; data: DependentTaskCreatedEventData }
   | { eventName: "DisputeCancelled"; data: DisputeCancelledEventData }
@@ -443,6 +456,7 @@ export type AgencEvent =
   | { eventName: "DisputeResolved"; data: DisputeResolvedEventData }
   | { eventName: "DisputeResolverAssigned"; data: DisputeResolverAssignedEventData }
   | { eventName: "DisputeResolverRevoked"; data: DisputeResolverRevokedEventData }
+  | { eventName: "GhostShareDistributed"; data: GhostShareDistributedEventData }
   | { eventName: "GovernanceInitialized"; data: GovernanceInitializedEventData }
   | { eventName: "GovernanceVoteCast"; data: GovernanceVoteCastEventData }
   | { eventName: "LaunchControlsUpdated"; data: LaunchControlsUpdatedEventData }
@@ -506,6 +520,7 @@ export type AgencEvent =
   | { eventName: "TaskResultSubmitted"; data: TaskResultSubmittedEventData }
   | { eventName: "TaskResultValidationRecorded"; data: TaskResultValidationRecordedEventData }
   | { eventName: "TaskValidationConfigured"; data: TaskValidationConfiguredEventData }
+  | { eventName: "TerminalClaimReclaimed"; data: TerminalClaimReclaimedEventData }
   | { eventName: "TreasuryUpdated"; data: TreasuryUpdatedEventData }
   | { eventName: "ZkConfigInitialized"; data: ZkConfigInitializedEventData }
   | { eventName: "ZkImageIdUpdated"; data: ZkImageIdUpdatedEventData };
@@ -698,6 +713,13 @@ export const AGENC_EVENT_DECODERS: {
       data: getBondSlashedEventDecoder().decode(payload),
     }),
   },
+  "1edf1a42ff5c64e9": {
+    eventName: "ContestDepositForfeited",
+    decode: (payload) => ({
+      eventName: "ContestDepositForfeited",
+      data: getContestDepositForfeitedEventDecoder().decode(payload),
+    }),
+  },
   "5c3a0eae86782b50": {
     eventName: "DefaultTrustListUpdated",
     decode: (payload) => ({
@@ -752,6 +774,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "DisputeResolverRevoked",
       data: getDisputeResolverRevokedEventDecoder().decode(payload),
+    }),
+  },
+  "c48f8a1aa81d6f62": {
+    eventName: "GhostShareDistributed",
+    decode: (payload) => ({
+      eventName: "GhostShareDistributed",
+      data: getGhostShareDistributedEventDecoder().decode(payload),
     }),
   },
   "29bb671a2a2c1e0f": {
@@ -1193,6 +1222,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "TaskValidationConfigured",
       data: getTaskValidationConfiguredEventDecoder().decode(payload),
+    }),
+  },
+  "d39aafe63ead6c33": {
+    eventName: "TerminalClaimReclaimed",
+    decode: (payload) => ({
+      eventName: "TerminalClaimReclaimed",
+      data: getTerminalClaimReclaimedEventDecoder().decode(payload),
     }),
   },
   "50ef36a82b265591": {

@@ -16,7 +16,8 @@ use crate::instructions::completion_helpers::{
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
-    is_manual_validation_task, sync_task_validation_status,
+    is_manual_validation_task, note_submission_left_review, sync_task_validation_status,
+    validate_contest_accept_window,
 };
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
@@ -199,6 +200,12 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         ctx.accounts.task_submission.status == SubmissionStatus::Submitted,
         CoordinationError::SubmissionNotPending
     );
+    // Batch 3 WS-CONTEST temporal partition (spec §3): a contest winner may be
+    // accepted only strictly BEFORE `ghost_at` (afterwards the permissionless
+    // ghost-split crank owns settlement), and only once every other live
+    // submission has been rejected (losers' claim + submission rent must flow
+    // back to them before the task can go terminal). No-op for non-contests.
+    validate_contest_accept_window(&ctx.accounts.task, clock.unix_timestamp)?;
 
     validate_task_dependency(
         ctx.accounts.task.as_ref(),
@@ -206,6 +213,7 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         ctx.program_id,
     )?;
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
+    note_submission_left_review(&mut ctx.accounts.task)?;
 
     #[cfg(not(feature = "mainnet-canary"))]
     let bid_completion_meta = load_bid_task_completion_meta(
@@ -424,6 +432,13 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
 
     ctx.accounts
         .claim
+        .close(ctx.accounts.worker_authority.to_account_info())?;
+
+    // Batch 3 WS-CONTEST §1 (submission-rent return, ALL task types): the worker
+    // funded the TaskSubmission PDA — close it back to them at settle instead of
+    // leaving its rent for the close_task sweep.
+    ctx.accounts
+        .task_submission
         .close(ctx.accounts.worker_authority.to_account_info())?;
 
     // Batch 3 §8: an accepted result means nobody lost — refund BOTH bonds. Required +

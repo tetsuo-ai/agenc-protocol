@@ -1261,6 +1261,29 @@ pub mod agenc_coordination {
         instructions::reject_frozen_exits::expire_handler(ctx)
     }
 
+    /// Permissionless contest ghost-split crank (Batch 3 WS-CONTEST §3): from
+    /// `ghost_at = deadline + SELECTION_WINDOW_SECS`, pay one live (Submitted)
+    /// contest submission its equal slice of the remaining escrow pool — same fee
+    /// legs as settlement — and close its submission + claim to the worker. The
+    /// final slice sweeps the pool, completes the task, and closes the escrow.
+    /// Exit path — settles even while paused (money never locks).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn distribute_ghost_share(ctx: Context<DistributeGhostShare>) -> Result<()> {
+        instructions::distribute_ghost_share::handler(ctx)
+    }
+
+    /// Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim
+    /// stranded on an already-terminal (Completed/Cancelled) task (fix round):
+    /// claim rent to the worker, contest entry-deposit surplus forfeited to the
+    /// treasury, slot counters freed (un-bricks close_task + the worker's
+    /// active_tasks budget). Requires unfakeable proof there is no live
+    /// submission (the derived submission PDA must be empty). Exit path —
+    /// settles even while paused (money never locks).
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn reclaim_terminal_claim(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
+        instructions::reclaim_terminal_claim::handler(ctx)
+    }
+
     /// Rate a skill (1-5, reputation-weighted).
     /// One rating per agent per skill, enforced by PDA uniqueness.
     #[cfg(not(feature = "mainnet-canary"))]

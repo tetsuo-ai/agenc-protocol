@@ -12,7 +12,7 @@ use crate::instructions::completion_helpers::{
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, is_manual_validation_task,
-    release_claim_slot, sync_task_validation_status,
+    note_submission_left_review, release_claim_slot, sync_task_validation_status,
 };
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
@@ -308,6 +308,7 @@ pub fn handler<'info>(
             ctx.program_id,
         )?;
         decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
+        note_submission_left_review(&mut ctx.accounts.task)?;
 
         let bid_completion_meta = load_bid_task_completion_meta(
             ctx.accounts.task.as_ref(),
@@ -457,10 +458,19 @@ pub fn handler<'info>(
         ctx.accounts
             .claim
             .close(ctx.accounts.worker_authority.to_account_info())?;
+        // Batch 3 WS-CONTEST §1 (submission-rent return): the worker funded the
+        // accepted TaskSubmission PDA — close it back to them at settle. The
+        // REJECT branch below intentionally keeps the submission alive: quorum
+        // resubmission rounds key TaskValidationVote replay protection on
+        // `submission_count`, which a close-and-reinit would reset.
+        ctx.accounts
+            .task_submission
+            .close(ctx.accounts.worker_authority.to_account_info())?;
         return Ok(());
     }
 
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
+    note_submission_left_review(&mut ctx.accounts.task)?;
 
     let claim_key = ctx.accounts.claim.key();
     let worker_key = ctx.accounts.claim.worker;

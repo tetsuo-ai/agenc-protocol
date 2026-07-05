@@ -70,12 +70,13 @@ pub(crate) fn classify_config_migration(len: usize) -> Result<ConfigMigrationAct
 }
 
 /// Validate an operator-supplied `surface_revision`: only `0` (unstamped),
-/// `SURFACE_REVISION_FULL`, or `SURFACE_REVISION_BATCH2` are accepted. Pure,
-/// unit-testable.
+/// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`, or
+/// `SURFACE_REVISION_BATCH3` are accepted. Pure, unit-testable.
 pub(crate) fn is_valid_surface_revision(surface_revision: u16) -> bool {
     surface_revision == 0
         || surface_revision == ProtocolConfig::SURFACE_REVISION_FULL
         || surface_revision == ProtocolConfig::SURFACE_REVISION_BATCH2
+        || surface_revision == ProtocolConfig::SURFACE_REVISION_BATCH3
 }
 
 /// Migrate protocol configuration: realloc to the P6.5 surface-versioning layout
@@ -658,10 +659,20 @@ mod tests {
     }
 
     #[test]
+    fn test_surface_revision_batch3_is_valid() {
+        // Batch-3 (WS-CONTEST surface): the stamp path must accept it or the operator
+        // could never advertise the deployed contest surface.
+        assert!(is_valid_surface_revision(
+            ProtocolConfig::SURFACE_REVISION_BATCH3
+        ));
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH3, 3);
+    }
+
+    #[test]
     fn test_surface_revision_unknown_rejected() {
         // Unknown revisions are rejected so an operator cannot stamp a surface the SDK
-        // does not understand. (2 = SURFACE_REVISION_BATCH2 became valid in batch-2.)
-        for bad in [3u16, 7, u16::MAX] {
+        // does not understand. (3 = SURFACE_REVISION_BATCH3 became valid in batch-3.)
+        for bad in [4u16, 7, u16::MAX] {
             assert!(
                 !is_valid_surface_revision(bad),
                 "revision {bad} must be rejected"

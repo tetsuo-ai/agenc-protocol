@@ -83,8 +83,11 @@ pub(crate) fn validate_store_args(
 /// no integrity pin. Both contradict the `Store` struct's "all-zero/empty = no
 /// manifest pinned" semantics, so reject them at register/update.
 pub(crate) fn validate_store_manifest(metadata_hash: &[u8; 32], metadata_uri: &str) -> Result<()> {
+    // Parity check: hash-set XOR uri-empty must never disagree — i.e. hash set
+    // iff uri present. (Written as `!=` for clippy::nonminimal_bool; identical to
+    // the original `(hash set) == !(uri empty)`.)
     require!(
-        (*metadata_hash != [0u8; 32]) == !metadata_uri.is_empty(),
+        (*metadata_hash != [0u8; 32]) != metadata_uri.is_empty(),
         CoordinationError::InvalidStoreManifest
     );
     Ok(())

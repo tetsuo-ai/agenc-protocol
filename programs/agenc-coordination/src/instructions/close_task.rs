@@ -26,8 +26,8 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskClosed;
 use crate::state::{
-    HireRecord, ServiceListing, Task, TaskAttestorConfig, TaskEscrow, TaskJobSpec, TaskModeration,
-    TaskStatus, TaskSubmission, TaskValidationConfig,
+    AgentRegistration, HireRecord, ProtocolConfig, ServiceListing, Task, TaskAttestorConfig,
+    TaskEscrow, TaskJobSpec, TaskModeration, TaskStatus, TaskSubmission, TaskValidationConfig,
 };
 use anchor_lang::prelude::*;
 
@@ -136,6 +136,17 @@ pub struct CloseTask<'info> {
     /// Task creator; receives the reclaimed rent. Mutable to credit lamports.
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    /// Protocol config (fix round, FIX 5) — supplies the canonical treasury
+    /// pubkey for the deregistered-worker straggler path below. Optional so
+    /// existing close paths (no stragglers, or stragglers with live agents)
+    /// keep working without it; REQUIRED (fail-closed) whenever a straggler
+    /// submission's worker agent is provably closed.
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Option<Box<Account<'info, ProtocolConfig>>>,
 }
 
 /// A program-owned, non-tombstoned account at the bond PDA means a completion bond is
@@ -245,51 +256,109 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     }
 
     // Reclaim rent from any auxiliary child PDAs (task_moderation / task_validation /
-    // task_submission) passed via remaining_accounts. Each is bound to THIS task by
-    // its stored `task` field, so a caller cannot close an unrelated account; the
-    // task is already terminal, so these records are no longer needed.
-    for child in ctx.remaining_accounts.iter() {
-        close_task_child(child, &task_key, &authority_info)?;
+    // task_submission / task_attestor) passed via remaining_accounts. Each is bound to
+    // THIS task by its stored `task` field, so a caller cannot close an unrelated
+    // account; the task is already terminal, so these records are no longer needed.
+    //
+    // Batch 3 WS-CONTEST §1 (submission-rent return): a straggler `TaskSubmission`
+    // was funded by its WORKER, so its rent goes back to the submission's stored
+    // worker — the caller must follow each TaskSubmission child with that worker's
+    // `AgentRegistration` (resolves agent PDA -> authority wallet) and the writable
+    // authority wallet itself, both validated against stored pubkeys. FAIL-CLOSED:
+    // if the matching accounts are not supplied the instruction errors — the
+    // creator is NEVER paid a worker's submission rent (kills the rent-farming
+    // sink where junk tasks harvested ~0.00286 SOL from every submitter).
+    let mut idx = 0;
+    while idx < ctx.remaining_accounts.len() {
+        let child = &ctx.remaining_accounts[idx];
+        idx = idx
+            .checked_add(1)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        match classify_task_child(child, &task_key)? {
+            TaskChild::CreatorFunded => close_child_to(child, &authority_info)?,
+            TaskChild::WorkerSubmission { worker_agent } => {
+                let agent_info = ctx
+                    .remaining_accounts
+                    .get(idx)
+                    .ok_or(CoordinationError::SubmissionRentAccountsRequired)?;
+                let worker_wallet_info = ctx
+                    .remaining_accounts
+                    .get(
+                        idx.checked_add(1)
+                            .ok_or(CoordinationError::ArithmeticOverflow)?,
+                    )
+                    .ok_or(CoordinationError::SubmissionRentAccountsRequired)?;
+                idx = idx
+                    .checked_add(2)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?;
+                close_submission_child_to_worker(
+                    child,
+                    &worker_agent,
+                    agent_info,
+                    worker_wallet_info,
+                    ctx.accounts
+                        .protocol_config
+                        .as_ref()
+                        .map(|config| config.treasury),
+                )?;
+            }
+        }
     }
 
     Ok(())
 }
 
-/// Drain rent from a terminal task's auxiliary child PDA to the creator and
-/// tombstone it. Only program-owned accounts recognized as one of this task's
-/// child records (`TaskModeration` / `TaskValidationConfig` / `TaskSubmission`
-/// / `TaskAttestorConfig`) AND whose stored `task` equals `task_key` are touched; anything else is
-/// rejected so a caller cannot close an unrelated or another task's account.
-fn close_task_child<'info>(
-    child: &AccountInfo<'info>,
-    task_key: &Pubkey,
-    authority_info: &AccountInfo<'info>,
-) -> Result<()> {
+/// A recognized auxiliary child of a terminal task, classified by who funded it —
+/// which decides who gets its rent back.
+enum TaskChild {
+    /// Creator-funded records (`TaskModeration` / `TaskValidationConfig` /
+    /// `TaskAttestorConfig`): rent returns to the creator, as before.
+    CreatorFunded,
+    /// A worker-funded `TaskSubmission` straggler: rent returns to the submission's
+    /// stored worker (Batch 3 WS-CONTEST §1). Carries the stored worker AGENT PDA
+    /// the payee accounts must be validated against.
+    WorkerSubmission { worker_agent: Pubkey },
+}
+
+/// Identify a child by trying each known type's discriminator, validate it is bound
+/// to THIS task, and classify its rent destination. An unrecognized program-owned
+/// account (or another task's record) is rejected so a caller cannot close an
+/// unrelated account.
+fn classify_task_child(child: &AccountInfo, task_key: &Pubkey) -> Result<TaskChild> {
     require!(
         child.owner == &crate::ID,
         CoordinationError::InvalidAccountOwner
     );
-    // Identify the child by trying each known type's discriminator and read the
-    // task it is bound to. An unrecognized program-owned account is rejected.
-    let bound_task = {
-        let data = child.try_borrow_data()?;
-        if let Ok(m) = TaskModeration::try_deserialize(&mut &data[..]) {
-            m.task
-        } else if let Ok(v) = TaskValidationConfig::try_deserialize(&mut &data[..]) {
-            v.task
-        } else if let Ok(s) = TaskSubmission::try_deserialize(&mut &data[..]) {
-            s.task
-        } else if let Ok(a) = TaskAttestorConfig::try_deserialize(&mut &data[..]) {
-            a.task
-        } else {
-            return err!(CoordinationError::InvalidInput);
-        }
+    let data = child.try_borrow_data()?;
+    let (bound_task, child_kind) = if let Ok(m) = TaskModeration::try_deserialize(&mut &data[..]) {
+        (m.task, TaskChild::CreatorFunded)
+    } else if let Ok(v) = TaskValidationConfig::try_deserialize(&mut &data[..]) {
+        (v.task, TaskChild::CreatorFunded)
+    } else if let Ok(s) = TaskSubmission::try_deserialize(&mut &data[..]) {
+        (
+            s.task,
+            TaskChild::WorkerSubmission {
+                worker_agent: s.worker,
+            },
+        )
+    } else if let Ok(a) = TaskAttestorConfig::try_deserialize(&mut &data[..]) {
+        (a.task, TaskChild::CreatorFunded)
+    } else {
+        return err!(CoordinationError::InvalidInput);
     };
     require!(bound_task == *task_key, CoordinationError::InvalidInput);
+    Ok(child_kind)
+}
 
+/// Drain a child's rent to `recipient` and tombstone the account (mirrors the
+/// cancel_task claim-close pattern; the 0-lamport account is GC'd at end of tx).
+fn close_child_to<'info>(
+    child: &AccountInfo<'info>,
+    recipient: &AccountInfo<'info>,
+) -> Result<()> {
     let lamports = child.lamports();
     **child.try_borrow_mut_lamports()? = 0;
-    **authority_info.try_borrow_mut_lamports()? = authority_info
+    **recipient.try_borrow_mut_lamports()? = recipient
         .lamports()
         .checked_add(lamports)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -297,6 +366,53 @@ fn close_task_child<'info>(
     data.fill(0);
     data[..8].copy_from_slice(&[255u8; 8]);
     Ok(())
+}
+
+/// Close a straggler `TaskSubmission` to its worker. Every payee is validated
+/// against program-owned stored pubkeys (spec invariant 2 — no cranker-supplied
+/// account trust): the supplied agent account must BE the submission's stored
+/// worker agent, and the writable wallet must BE that agent's stored authority.
+///
+/// FIX 5 (deregistered-agent orphan): the worker's `AgentRegistration` may have
+/// been legitimately closed (`deregister_agent` is allowed once
+/// `active_tasks == 0`, while a Rejected quorum-straggler submission survives).
+/// The stored agent ADDRESS is still unfakeable, so when the account at that
+/// exact address is provably closed (system-owned, zero data) the worker wallet
+/// is unrecoverable on-chain — route the rent to the protocol TREASURY
+/// (validated against `protocol_config`; NEVER the creator) instead of
+/// fail-closing `close_task` permanently.
+fn close_submission_child_to_worker<'info>(
+    child: &AccountInfo<'info>,
+    stored_worker_agent: &Pubkey,
+    agent_info: &AccountInfo<'info>,
+    worker_wallet_info: &AccountInfo<'info>,
+    treasury: Option<Pubkey>,
+) -> Result<()> {
+    require!(
+        agent_info.key() == *stored_worker_agent,
+        CoordinationError::SubmissionRentAccountsRequired
+    );
+    let expected_payee = if agent_info.owner == &crate::ID {
+        let data = agent_info.try_borrow_data()?;
+        AgentRegistration::try_deserialize(&mut &data[..])
+            .map_err(|_| error!(CoordinationError::SubmissionRentAccountsRequired))?
+            .authority
+    } else if agent_info.owner == &anchor_lang::system_program::ID && agent_info.data_is_empty() {
+        // Provably-closed agent at the stored address: the only safe payee is
+        // the protocol treasury (fail-closed if protocol_config was omitted).
+        treasury.ok_or(CoordinationError::SubmissionRentAccountsRequired)?
+    } else {
+        return err!(CoordinationError::SubmissionRentAccountsRequired);
+    };
+    require!(
+        worker_wallet_info.key() == expected_payee,
+        CoordinationError::SubmissionRentAccountsRequired
+    );
+    require!(
+        worker_wallet_info.is_writable,
+        CoordinationError::SubmissionRentAccountsRequired
+    );
+    close_child_to(child, worker_wallet_info)
 }
 
 #[cfg(test)]

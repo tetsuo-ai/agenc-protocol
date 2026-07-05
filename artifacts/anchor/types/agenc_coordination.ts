@@ -2655,6 +2655,34 @@ export type AgencCoordination = {
           ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "protocolConfig",
+          "docs": [
+            "Protocol config (fix round, FIX 5) — supplies the canonical treasury",
+            "pubkey for the deregistered-worker straggler path below. Optional so",
+            "existing close paths (no stragglers, or stragglers with live agents)",
+            "keep working without it; REQUIRED (fail-closed) whenever a straggler",
+            "submission's worker agent is provably closed."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -5319,6 +5347,261 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "distributeGhostShare",
+      "docs": [
+        "Permissionless contest ghost-split crank (Batch 3 WS-CONTEST §3): from",
+        "`ghost_at = deadline + SELECTION_WINDOW_SECS`, pay one live (Submitted)",
+        "contest submission its equal slice of the remaining escrow pool — same fee",
+        "legs as settlement — and close its submission + claim to the worker. The",
+        "final slice sweeps the pool, completes the task, and closes the escrow.",
+        "Exit path — settles even while paused (money never locks)."
+      ],
+      "discriminator": [
+        238,
+        29,
+        21,
+        234,
+        93,
+        251,
+        101,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "validated against task.creator. Never receives pool funds."
+          ],
+          "writable": true
+        },
+        {
+          "name": "workerAuthority",
+          "docs": [
+            "against worker.authority (stored pubkey — spec invariant 2)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "operator",
+          "docs": [
+            "only when the task carries a non-zero operator fee. (A contest can never be",
+            "a hire — configure_task_validation rejects live-HireRecord tasks — so the",
+            "terms come from the Task alone; no HireRecord fallback.)"
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "referrer",
+          "docs": [
+            "split). Required only when the task carries a non-zero referrer fee."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "cranker",
+          "docs": [
+            "Permissionless cranker; pays only the transaction fee."
+          ],
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "executeProposal",
       "docs": [
         "Execute an approved governance proposal after voting period ends.",
@@ -5796,6 +6079,17 @@ export type AgencCoordination = {
         },
         {
           "name": "taskSubmission",
+          "docs": [
+            "The derived `[\"task_submission\", claim]` PDA. The address is seeds-pinned",
+            "(unfakeable), so what lives AT it is honest evidence: a live program-owned",
+            "`TaskSubmission` is deserialized and inspected; a system-owned, zero-data",
+            "account at this address PROVES no submission exists for this claim (the",
+            "PDA was either never initialized — a no-show — or already closed by a",
+            "settlement path that also closed the claim). This is what lets a no-show",
+            "claim be expired during `PendingValidation` (another entrant's submission",
+            "moved the task there) without reopening the caller-omission attack: the",
+            "caller must still PASS the account, and cannot fake its contents."
+          ],
           "optional": true,
           "pda": {
             "seeds": [
@@ -5878,6 +6172,19 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Receives the FORFEITED contest entry-deposit surplus on a no-show expiry",
+            "(never the creator). Required whenever the expiring claim carries a",
+            "contest deposit; enforced in the handler (non-skippable). Full-surface",
+            "only — canary builds are contest-incapable (see",
+            "`validate_task_supports_validation_mode`), so the frozen canary account",
+            "list for `expire_claim` is unchanged."
+          ],
+          "writable": true,
+          "optional": true
         },
         {
           "name": "systemProgram",
@@ -8981,6 +9288,188 @@ export type AgencCoordination = {
           "type": "u8"
         }
       ]
+    },
+    {
+      "name": "reclaimTerminalClaim",
+      "docs": [
+        "Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim",
+        "stranded on an already-terminal (Completed/Cancelled) task (fix round):",
+        "claim rent to the worker, contest entry-deposit surplus forfeited to the",
+        "treasury, slot counters freed (un-bricks close_task + the worker's",
+        "active_tasks budget). Requires unfakeable proof there is no live",
+        "submission (the derived submission PDA must be empty). Exit path —",
+        "settles even while paused (money never locks)."
+      ],
+      "discriminator": [
+        224,
+        135,
+        44,
+        9,
+        88,
+        5,
+        32,
+        20
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Permissionless caller; pays only the transaction fee."
+          ],
+          "signer": true
+        },
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "docs": [
+            "The derived `[\"task_submission\", claim]` PDA — the unfakeable liveness",
+            "probe. It must be system-owned with zero data (no submission was ever",
+            "made for this claim, or it was already closed together with the claim by",
+            "a settlement path — in which case THIS claim would not exist). A live",
+            "program-owned submission here means the claim is still settleable by the",
+            "normal paths and must not be short-circuited."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Receives the forfeited contest entry-deposit surplus (never the creator);",
+            "0 lamports for non-contest claims."
+          ],
+          "writable": true
+        },
+        {
+          "name": "rentRecipient",
+          "docs": [
+            "worker authority (stored pubkey; no caller-supplied-account trust)."
+          ],
+          "writable": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "recordAgentVerification",
@@ -15552,6 +16041,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "contestDepositForfeited",
+      "discriminator": [
+        30,
+        223,
+        26,
+        66,
+        255,
+        92,
+        100,
+        233
+      ]
+    },
+    {
       "name": "defaultTrustListUpdated",
       "discriminator": [
         92,
@@ -15653,6 +16155,19 @@ export type AgencCoordination = {
         222,
         1,
         100
+      ]
+    },
+    {
+      "name": "ghostShareDistributed",
+      "discriminator": [
+        196,
+        143,
+        138,
+        26,
+        168,
+        29,
+        111,
+        98
       ]
     },
     {
@@ -16472,6 +16987,19 @@ export type AgencCoordination = {
         123,
         232,
         163
+      ]
+    },
+    {
+      "name": "terminalClaimReclaimed",
+      "discriminator": [
+        211,
+        154,
+        175,
+        230,
+        62,
+        173,
+        108,
+        51
       ]
     },
     {
@@ -18159,6 +18687,66 @@ export type AgencCoordination = {
       "code": 6328,
       "name": "invalidStoreManifest",
       "msg": "Store manifest hash and URI must be pinned together (both set or both empty)"
+    },
+    {
+      "code": 6329,
+      "name": "contestSolRewardOnly",
+      "msg": "Contest (schema-1 Competitive) tasks must use SOL rewards"
+    },
+    {
+      "code": 6330,
+      "name": "contestSelectionWindowElapsed",
+      "msg": "Selection window has closed; the contest settles via distribute_ghost_share"
+    },
+    {
+      "code": 6331,
+      "name": "contestAcceptRequiresSoleLiveSubmission",
+      "msg": "Reject every other live submission before accepting a contest winner"
+    },
+    {
+      "code": 6332,
+      "name": "contestAutoAcceptDisabled",
+      "msg": "Auto-accept is disabled for contest tasks; accept before ghost_at or crank distribute_ghost_share after"
+    },
+    {
+      "code": 6333,
+      "name": "contestGhostWindowNotReached",
+      "msg": "Ghost-split is not open yet; the creator's selection window is still active"
+    },
+    {
+      "code": 6334,
+      "name": "contestGhostShareUnavailable",
+      "msg": "distribute_ghost_share requires a schema-1 Competitive task pending validation"
+    },
+    {
+      "code": 6335,
+      "name": "contestHasLiveSubmissions",
+      "msg": "Contest tasks cannot be cancelled while live submissions exist"
+    },
+    {
+      "code": 6336,
+      "name": "contestFlowUnsupported",
+      "msg": "Dispute/freeze/revision flows are disabled for contest tasks"
+    },
+    {
+      "code": 6337,
+      "name": "submissionRentAccountsRequired",
+      "msg": "Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator)"
+    },
+    {
+      "code": 6338,
+      "name": "contestForfeitTreasuryRequired",
+      "msg": "Contest no-show forfeit requires the protocol treasury account"
+    },
+    {
+      "code": 6339,
+      "name": "claimReclaimRequiresTerminalTask",
+      "msg": "reclaim_terminal_claim requires a terminal (Completed/Cancelled) task"
+    },
+    {
+      "code": 6340,
+      "name": "claimReclaimRequiresNoSubmission",
+      "msg": "reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)"
     }
   ],
   "types": [
@@ -18706,16 +19294,20 @@ export type AgencCoordination = {
       "docs": [
         "On-chain domain-verification attestation for an agent (P7.3).",
         "",
-        "A trusted attestor (the global moderation authority OR a registered, non-revoked",
-        "`ModerationAttestor`) records that operator domain `D` was proven to control agent",
-        "`A`. The off-chain proof (a DNS `TXT` record or `.well-known` file containing the",
-        "agent PDA + a signed challenge) is the attestor SERVICE's job; on-chain this account",
-        "only records the trusted attestor's verdict so `verified` + domain is trustlessly",
-        "readable. Re-verification overwrites the same PDA (`init_if_needed`); a revocation",
-        "marks `revoked = true`.",
+        "The GLOBAL moderation authority (`ModerationConfig.moderation_authority`) records",
+        "that operator domain `D` was proven to control agent `A`. The off-chain proof (a DNS",
+        "`TXT` record or `.well-known` file containing the agent PDA + a signed challenge) is",
+        "the attestor SERVICE's job; on-chain this account only records the authority's",
+        "verdict so `verified` + domain is trustlessly readable. Re-verification overwrites",
+        "the same PDA (`init_if_needed`); a revocation marks `revoked = true`.",
         "",
-        "Authorization mirrors `record_*_moderation` EXACTLY (same trusted roster), so domain",
-        "verifications come from the same set of attestors that gate moderation.",
+        "Authorization (P1.2 §4.6, DECOUPLED from the roster): `record_agent_verification` /",
+        "`revoke_agent_verification` accept ONLY the global moderation authority — NOT",
+        "`ModerationAttestor` roster entries. With permissionless roster registration",
+        "(`register_moderation_attestor`), a bonded self-registered key could otherwise mint",
+        "domain badges for domains it does not control and clobber the single per-agent",
+        "`[\"agent_verification\", agent]` slot. Domain verification is a different trust",
+        "question from content moderation and does not ride the open roster in v1.",
         "",
         "PDA seeds: [\"agent_verification\", agent]"
       ],
@@ -19698,6 +20290,46 @@ export type AgencCoordination = {
                 16
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "contestDepositForfeited",
+      "docs": [
+        "Emitted when a contest entry deposit is FORFEITED to the protocol treasury on",
+        "a no-show exit (`expire_claim` with a provably-absent submission PDA, or",
+        "`reclaim_terminal_claim`). Workers who submitted are always refunded in full",
+        "(their claim closes with all lamports — deposit included — to them)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "docs": [
+              "The no-show worker's `AgentRegistration` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Lamports forfeited to the treasury (the surplus above the claim's rent)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -20694,6 +21326,50 @@ export type AgencCoordination = {
                 4
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ghostShareDistributed",
+      "docs": [
+        "Emitted by each `distribute_ghost_share` crank: an unjudged contest",
+        "(schema-1 Competitive) submission was paid its equal slice of the remaining",
+        "escrow worker pool after the selection window elapsed (`ghost_at`). The paid",
+        "submission + claim are closed to the worker in the same instruction, so a",
+        "submission can be ghost-paid at most once."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "docs": [
+              "The contest task being ghost-split."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "docs": [
+              "The paid submitter's `AgentRegistration` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "lamports",
+            "docs": [
+              "Lamports paid to the worker for this slice (net of the fee legs)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "remaining",
+            "docs": [
+              "Live submissions REMAINING after this slice (0 = the contest is fully",
+              "distributed and the task is Completed)."
+            ],
+            "type": "u8"
           }
         ]
       }
@@ -24791,7 +25467,16 @@ export type AgencCoordination = {
             "name": "reserved",
             "docs": [
               "Reserved padding so future field adds become value-only migrates rather",
-              "than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields)."
+              "than another realloc-all sweep.",
+              "",
+              "Batch 3 (WS-CONTEST) carves the first two bytes in place — a value-only",
+              "migrate, NO size change, NO realloc (live pre-batch-3 accounts read back as",
+              "zeros == schema 0 / no live submissions, which is exactly their meaning):",
+              "* `_reserved[0]` = `task_schema` (0 = pre-batch-3, 1 = contest-aware;",
+              "see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).",
+              "* `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with",
+              "status `Submitted`; maintained ONLY for schema-1 tasks).",
+              "Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields)."
             ],
             "type": {
               "array": [
@@ -26445,6 +27130,55 @@ export type AgencCoordination = {
                 5
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "terminalClaimReclaimed",
+      "docs": [
+        "Emitted by `reclaim_terminal_claim`: a claimed-but-never-submitted (no-show)",
+        "claim on an already-terminal (Completed/Cancelled) task was reclaimed —",
+        "claim rent back to the worker, any contest entry-deposit surplus forfeited",
+        "to the protocol treasury, and the task/worker slot counters freed (which",
+        "un-bricks `close_task` and the worker's `active_tasks` budget)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "docs": [
+              "The no-show worker's `AgentRegistration` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "workerRefund",
+            "docs": [
+              "Lamports returned to the worker authority (the claim's rent-exempt minimum)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "forfeited",
+            "docs": [
+              "Lamports forfeited to the protocol treasury (the contest entry-deposit",
+              "surplus above rent; 0 for non-contest claims)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }

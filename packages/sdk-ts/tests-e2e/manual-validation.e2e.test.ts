@@ -219,11 +219,9 @@ describe("e2e: CreatorReview manual validation settles on the real program", () 
     const taskAfter = getTaskDecoder().decode(accountData(svm, task)!);
     expect(taskAfter.status).toBe(TaskStatus.Completed);
 
-    // 2) The submission is Accepted.
-    const submissionAfter = getTaskSubmissionDecoder().decode(
-      accountData(svm, submission)!,
-    );
-    expect(submissionAfter.status).toBe(SubmissionStatus.Accepted);
+    // 2) The accepted submission is CLOSED to the worker at settle (Batch 3
+    //    WS-CONTEST §1 — submission rent returns to the worker who funded it).
+    expect(accountData(svm, submission)).toBeNull();
 
     // 3) The worker was paid (balance strictly increased; worker did not sign accept).
     const workerBalAfter = svm.getBalance(worker.address);

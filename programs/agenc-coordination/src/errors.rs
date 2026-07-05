@@ -996,4 +996,31 @@ pub enum CoordinationError {
     InvalidModerationLivenessWindow,
     #[msg("Store manifest hash and URI must be pinned together (both set or both empty)")]
     InvalidStoreManifest,
+
+    // === Batch 3 WS-CONTEST (appended — never reorder/delete): contest tasks +
+    //     submission-rent return (docs/design/batch-3-contest-tasks.md) ===
+    #[msg("Contest (schema-1 Competitive) tasks must use SOL rewards")]
+    ContestSolRewardOnly,
+    #[msg("Selection window has closed; the contest settles via distribute_ghost_share")]
+    ContestSelectionWindowElapsed,
+    #[msg("Reject every other live submission before accepting a contest winner")]
+    ContestAcceptRequiresSoleLiveSubmission,
+    #[msg("Auto-accept is disabled for contest tasks; accept before ghost_at or crank distribute_ghost_share after")]
+    ContestAutoAcceptDisabled,
+    #[msg("Ghost-split is not open yet; the creator's selection window is still active")]
+    ContestGhostWindowNotReached,
+    #[msg("distribute_ghost_share requires a schema-1 Competitive task pending validation")]
+    ContestGhostShareUnavailable,
+    #[msg("Contest tasks cannot be cancelled while live submissions exist")]
+    ContestHasLiveSubmissions,
+    #[msg("Dispute/freeze/revision flows are disabled for contest tasks")]
+    ContestFlowUnsupported,
+    #[msg("Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator)")]
+    SubmissionRentAccountsRequired,
+    #[msg("Contest no-show forfeit requires the protocol treasury account")]
+    ContestForfeitTreasuryRequired,
+    #[msg("reclaim_terminal_claim requires a terminal (Completed/Cancelled) task")]
+    ClaimReclaimRequiresTerminalTask,
+    #[msg("reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)")]
+    ClaimReclaimRequiresNoSubmission,
 }

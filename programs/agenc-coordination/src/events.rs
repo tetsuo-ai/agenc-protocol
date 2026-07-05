@@ -1166,3 +1166,59 @@ pub struct ModerationHeartbeatRecorded {
     pub window_secs: u32,
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Batch 3 events (WS-CONTEST — docs/design/batch-3-contest-tasks.md)
+// ============================================================================
+
+/// Emitted by each `distribute_ghost_share` crank: an unjudged contest
+/// (schema-1 Competitive) submission was paid its equal slice of the remaining
+/// escrow worker pool after the selection window elapsed (`ghost_at`). The paid
+/// submission + claim are closed to the worker in the same instruction, so a
+/// submission can be ghost-paid at most once.
+#[event]
+pub struct GhostShareDistributed {
+    /// The contest task being ghost-split.
+    pub task: Pubkey,
+    /// The paid submitter's `AgentRegistration` PDA.
+    pub worker_agent: Pubkey,
+    /// Lamports paid to the worker for this slice (net of the fee legs).
+    pub lamports: u64,
+    /// Live submissions REMAINING after this slice (0 = the contest is fully
+    /// distributed and the task is Completed).
+    pub remaining: u8,
+}
+
+/// Emitted by `reclaim_terminal_claim`: a claimed-but-never-submitted (no-show)
+/// claim on an already-terminal (Completed/Cancelled) task was reclaimed —
+/// claim rent back to the worker, any contest entry-deposit surplus forfeited
+/// to the protocol treasury, and the task/worker slot counters freed (which
+/// un-bricks `close_task` and the worker's `active_tasks` budget).
+#[event]
+pub struct TerminalClaimReclaimed {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    /// The no-show worker's `AgentRegistration` PDA.
+    pub worker_agent: Pubkey,
+    /// Lamports returned to the worker authority (the claim's rent-exempt minimum).
+    pub worker_refund: u64,
+    /// Lamports forfeited to the protocol treasury (the contest entry-deposit
+    /// surplus above rent; 0 for non-contest claims).
+    pub forfeited: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a contest entry deposit is FORFEITED to the protocol treasury on
+/// a no-show exit (`expire_claim` with a provably-absent submission PDA, or
+/// `reclaim_terminal_claim`). Workers who submitted are always refunded in full
+/// (their claim closes with all lamports — deposit included — to them).
+#[event]
+pub struct ContestDepositForfeited {
+    pub task: Pubkey,
+    pub claim: Pubkey,
+    /// The no-show worker's `AgentRegistration` PDA.
+    pub worker_agent: Pubkey,
+    /// Lamports forfeited to the treasury (the surplus above the claim's rent).
+    pub amount: u64,
+    pub timestamp: i64,
+}

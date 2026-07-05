@@ -196,6 +196,7 @@ import {
   getCreateTaskInstructionAsync,
   getDelegateReputationInstructionAsync,
   getDeregisterAgentInstructionAsync,
+  getDistributeGhostShareInstructionAsync,
   getExecuteProposalInstructionAsync,
   getExpireBidInstructionAsync,
   getExpireClaimInstructionAsync,
@@ -219,6 +220,7 @@ import {
   getRateHireInstructionAsync,
   getRateSkillInstructionAsync,
   getReclaimCompletionBondInstructionAsync,
+  getReclaimTerminalClaimInstructionAsync,
   getRecordAgentVerificationInstructionAsync,
   getRecordListingModerationInstructionAsync,
   getRecordTaskModerationInstructionAsync,
@@ -290,6 +292,7 @@ import {
   parseCreateTaskInstruction,
   parseDelegateReputationInstruction,
   parseDeregisterAgentInstruction,
+  parseDistributeGhostShareInstruction,
   parseExecuteProposalInstruction,
   parseExpireBidInstruction,
   parseExpireClaimInstruction,
@@ -313,6 +316,7 @@ import {
   parseRateHireInstruction,
   parseRateSkillInstruction,
   parseReclaimCompletionBondInstruction,
+  parseReclaimTerminalClaimInstruction,
   parseRecordAgentVerificationInstruction,
   parseRecordListingModerationInstruction,
   parseRecordTaskModerationInstruction,
@@ -384,6 +388,7 @@ import {
   type CreateTaskHumanlessAsyncInput,
   type DelegateReputationAsyncInput,
   type DeregisterAgentAsyncInput,
+  type DistributeGhostShareAsyncInput,
   type ExecuteProposalAsyncInput,
   type ExpireBidAsyncInput,
   type ExpireClaimAsyncInput,
@@ -429,6 +434,7 @@ import {
   type ParsedCreateTaskInstruction,
   type ParsedDelegateReputationInstruction,
   type ParsedDeregisterAgentInstruction,
+  type ParsedDistributeGhostShareInstruction,
   type ParsedExecuteProposalInstruction,
   type ParsedExpireBidInstruction,
   type ParsedExpireClaimInstruction,
@@ -452,6 +458,7 @@ import {
   type ParsedRateHireInstruction,
   type ParsedRateSkillInstruction,
   type ParsedReclaimCompletionBondInstruction,
+  type ParsedReclaimTerminalClaimInstruction,
   type ParsedRecordAgentVerificationInstruction,
   type ParsedRecordListingModerationInstruction,
   type ParsedRecordTaskModerationInstruction,
@@ -501,6 +508,7 @@ import {
   type RateHireAsyncInput,
   type RateSkillAsyncInput,
   type ReclaimCompletionBondAsyncInput,
+  type ReclaimTerminalClaimAsyncInput,
   type RecordAgentVerificationAsyncInput,
   type RecordListingModerationAsyncInput,
   type RecordTaskModerationAsyncInput,
@@ -1172,6 +1180,7 @@ export enum AgencCoordinationInstruction {
   CreateTaskHumanless,
   DelegateReputation,
   DeregisterAgent,
+  DistributeGhostShare,
   ExecuteProposal,
   ExpireBid,
   ExpireClaim,
@@ -1195,6 +1204,7 @@ export enum AgencCoordinationInstruction {
   RateHire,
   RateSkill,
   ReclaimCompletionBond,
+  ReclaimTerminalClaim,
   RecordAgentVerification,
   RecordListingModeration,
   RecordTaskModeration,
@@ -1556,6 +1566,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([238, 29, 21, 234, 93, 251, 101, 47]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.DistributeGhostShare;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([186, 60, 116, 133, 108, 128, 111, 28]),
       ),
       0,
@@ -1804,6 +1825,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.ReclaimCompletionBond;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([224, 135, 44, 9, 88, 5, 32, 20]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.ReclaimTerminalClaim;
   }
   if (
     containsBytes(
@@ -2372,6 +2404,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.DeregisterAgent;
     } & ParsedDeregisterAgentInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.DistributeGhostShare;
+    } & ParsedDistributeGhostShareInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.ExecuteProposal;
     } & ParsedExecuteProposalInstruction<TProgram>)
   | ({
@@ -2440,6 +2475,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.ReclaimCompletionBond;
     } & ParsedReclaimCompletionBondInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.ReclaimTerminalClaim;
+    } & ParsedReclaimTerminalClaimInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.RecordAgentVerification;
     } & ParsedRecordAgentVerificationInstruction<TProgram>)
@@ -2771,6 +2809,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseDeregisterAgentInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.DistributeGhostShare: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.DistributeGhostShare,
+        ...parseDistributeGhostShareInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.ExecuteProposal: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2930,6 +2975,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ReclaimCompletionBond,
         ...parseReclaimCompletionBondInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.ReclaimTerminalClaim: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.ReclaimTerminalClaim,
+        ...parseReclaimTerminalClaimInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.RecordAgentVerification: {
@@ -3455,6 +3507,10 @@ export type AgencCoordinationPluginInstructions = {
     input: DeregisterAgentAsyncInput,
   ) => ReturnType<typeof getDeregisterAgentInstructionAsync> &
     SelfPlanAndSendFunctions;
+  distributeGhostShare: (
+    input: DistributeGhostShareAsyncInput,
+  ) => ReturnType<typeof getDistributeGhostShareInstructionAsync> &
+    SelfPlanAndSendFunctions;
   executeProposal: (
     input: ExecuteProposalAsyncInput,
   ) => ReturnType<typeof getExecuteProposalInstructionAsync> &
@@ -3545,6 +3601,10 @@ export type AgencCoordinationPluginInstructions = {
   reclaimCompletionBond: (
     input: ReclaimCompletionBondAsyncInput,
   ) => ReturnType<typeof getReclaimCompletionBondInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  reclaimTerminalClaim: (
+    input: ReclaimTerminalClaimAsyncInput,
+  ) => ReturnType<typeof getReclaimTerminalClaimInstructionAsync> &
     SelfPlanAndSendFunctions;
   recordAgentVerification: (
     input: RecordAgentVerificationAsyncInput,
@@ -4056,6 +4116,11 @@ export function agencCoordinationProgram() {
               client,
               getDeregisterAgentInstructionAsync(input),
             ),
+          distributeGhostShare: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getDistributeGhostShareInstructionAsync(input),
+            ),
           executeProposal: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4176,6 +4241,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getReclaimCompletionBondInstructionAsync(input),
+            ),
+          reclaimTerminalClaim: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getReclaimTerminalClaimInstructionAsync(input),
             ),
           recordAgentVerification: (input) =>
             addSelfPlanAndSendFunctions(

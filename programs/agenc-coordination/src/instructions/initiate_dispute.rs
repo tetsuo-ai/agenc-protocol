@@ -3,6 +3,7 @@
 use crate::errors::CoordinationError;
 use crate::events::DisputeInitiated;
 use crate::instructions::launch_controls::require_task_type_enabled;
+use crate::instructions::task_validation_helpers::is_contest_configured_task;
 use crate::state::{
     AgentRegistration, AgentStatus, AuthorityRateLimit, Dispute, DisputeStatus, ProtocolConfig,
     ResolutionType, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
@@ -130,6 +131,19 @@ pub fn handler<'info>(
         .as_ref()
         .map(|(_, status)| is_disputable_submission_status(*status))
         .unwrap_or(false);
+
+    // Batch 3 WS-CONTEST: contests carry NO dispute apparatus (founder ruling —
+    // losers lose nothing; the winner is protected by the ghost-split guarantee).
+    // A Disputed transition would also freeze accept AND the ghost crank for every
+    // entrant, breaking the spec's "no re-entry via Disputed" partition invariant.
+    // FIX ROUND: gate on contest-CONFIGURED (schema-1 Competitive AND manual
+    // CreatorReview), not the type-wide predicate — an AUTO-validation Competitive
+    // task never enters the contest lifecycle (no ghost-split replaces its
+    // recourse), so it keeps dispute access exactly as before batch 3.
+    require!(
+        !is_contest_configured_task(task),
+        CoordinationError::ContestFlowUnsupported
+    );
 
     // Verify task is in a disputable state
     validate_disputable_task_state(task.status, submission_is_disputable)?;

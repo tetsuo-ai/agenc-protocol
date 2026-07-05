@@ -192,6 +192,20 @@ pub fn init_task_fields(
     task.operator_fee_bps = 0;
     task.referrer = Pubkey::default();
     task.referrer_fee_bps = 0;
+    // Batch 3 WS-CONTEST: every task created from this build onward is
+    // contest-aware (spec §2). Live pre-batch-3 accounts read schema 0 from their
+    // zeroed reserved bytes and keep today's exact semantics.
+    task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+    task.set_live_submissions(0);
+
+    // Contest rails (schema-1 Competitive): the ghost-split crank pays lamport fee
+    // legs and needs a real `ghost_at` anchor, so contests are SOL-denominated and
+    // deadline-bearing at creation — an SPL contest could otherwise reach a
+    // `ghost_at` state it cannot exit (spec §3).
+    if task.task_type == TaskType::Competitive {
+        require!(reward_mint.is_none(), CoordinationError::ContestSolRewardOnly);
+        require!(deadline > 0, CoordinationError::InvalidDeadline);
+    }
 
     Ok(())
 }
@@ -212,6 +226,59 @@ pub fn increment_total_tasks(protocol_config: &mut ProtocolConfig) -> Result<()>
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod contest_init_tests {
+    use super::*;
+
+    fn init(task_type: u8, deadline: i64, reward_mint: Option<Pubkey>) -> Result<Task> {
+        let mut task = Task::default();
+        init_task_fields(
+            &mut task,
+            [1u8; 32],
+            Pubkey::new_unique(),
+            1,
+            [2u8; 64],
+            None,
+            1_000_000,
+            3,
+            task_type,
+            deadline,
+            Pubkey::new_unique(),
+            255,
+            100,
+            1_700_000_000,
+            0,
+            reward_mint,
+        )?;
+        Ok(task)
+    }
+
+    // Revert-sensitive: dropping the schema stamp in init_task_fields turns this red.
+    #[test]
+    fn new_tasks_are_stamped_contest_aware() {
+        let task = init(0, 1_700_003_600, None).unwrap();
+        assert_eq!(task.task_schema(), Task::TASK_SCHEMA_CONTEST_AWARE);
+        assert_eq!(task.live_submissions(), 0);
+    }
+
+    #[test]
+    fn competitive_creation_requires_sol_reward() {
+        // Spec §3: contests are SOL-only — an SPL contest must never be able to
+        // reach a ghost_at state it cannot exit.
+        let err = init(2, 1_700_003_600, Some(Pubkey::new_unique())).err().unwrap();
+        assert_eq!(err, CoordinationError::ContestSolRewardOnly.into());
+        // SPL rewards stay fine for non-contest types.
+        assert!(init(0, 1_700_003_600, Some(Pubkey::new_unique())).is_ok());
+    }
+
+    #[test]
+    fn competitive_creation_requires_deadline() {
+        let err = init(2, 0, None).err().unwrap();
+        assert_eq!(err, CoordinationError::InvalidDeadline.into());
+        assert!(init(2, 1_700_003_600, None).is_ok());
+    }
 }
 
 #[cfg(test)]

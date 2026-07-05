@@ -37,7 +37,12 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findEscrowPda, findHireRecordPda, findTaskJobSpecPda } from "../pdas";
+import {
+  findEscrowPda,
+  findHireRecordPda,
+  findProtocolConfigPda,
+  findTaskJobSpecPda,
+} from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const CLOSE_TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
@@ -58,6 +63,7 @@ export type CloseTaskInstruction<
   TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
+  TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -88,6 +94,9 @@ export type CloseTaskInstruction<
         ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
+      TAccountProtocolConfig extends string
+        ? ReadonlyAccount<TAccountProtocolConfig>
+        : TAccountProtocolConfig,
       ...TRemainingAccounts,
     ]
   >;
@@ -128,6 +137,7 @@ export type CloseTaskAsyncInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountAuthority extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   task: Address<TAccountTask>;
   /**
@@ -176,6 +186,14 @@ export type CloseTaskAsyncInput<
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Protocol config (fix round, FIX 5) — supplies the canonical treasury
+   * pubkey for the deregistered-worker straggler path below. Optional so
+   * existing close paths (no stragglers, or stragglers with live agents)
+   * keep working without it; REQUIRED (fail-closed) whenever a straggler
+   * submission's worker agent is provably closed.
+   */
+  protocolConfig?: Address<TAccountProtocolConfig>;
 };
 
 export async function getCloseTaskInstructionAsync<
@@ -187,6 +205,7 @@ export async function getCloseTaskInstructionAsync<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountAuthority extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CloseTaskAsyncInput<
@@ -197,7 +216,8 @@ export async function getCloseTaskInstructionAsync<
     TAccountListing,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -210,7 +230,8 @@ export async function getCloseTaskInstructionAsync<
     TAccountListing,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >
 > {
   // Program address.
@@ -233,6 +254,7 @@ export async function getCloseTaskInstructionAsync<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -264,6 +286,9 @@ export async function getCloseTaskInstructionAsync<
       ),
     });
   }
+  if (!accounts.protocolConfig.value) {
+    accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -276,6 +301,7 @@ export async function getCloseTaskInstructionAsync<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getCloseTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -288,7 +314,8 @@ export async function getCloseTaskInstructionAsync<
     TAccountListing,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >);
 }
 
@@ -301,6 +328,7 @@ export type CloseTaskInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountAuthority extends string = string,
+  TAccountProtocolConfig extends string = string,
 > = {
   task: Address<TAccountTask>;
   /**
@@ -349,6 +377,14 @@ export type CloseTaskInput<
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * Protocol config (fix round, FIX 5) — supplies the canonical treasury
+   * pubkey for the deregistered-worker straggler path below. Optional so
+   * existing close paths (no stragglers, or stragglers with live agents)
+   * keep working without it; REQUIRED (fail-closed) whenever a straggler
+   * submission's worker agent is provably closed.
+   */
+  protocolConfig?: Address<TAccountProtocolConfig>;
 };
 
 export function getCloseTaskInstruction<
@@ -360,6 +396,7 @@ export function getCloseTaskInstruction<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountAuthority extends string,
+  TAccountProtocolConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CloseTaskInput<
@@ -370,7 +407,8 @@ export function getCloseTaskInstruction<
     TAccountListing,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): CloseTaskInstruction<
@@ -382,7 +420,8 @@ export function getCloseTaskInstruction<
   TAccountListing,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
-  TAccountAuthority
+  TAccountAuthority,
+  TAccountProtocolConfig
 > {
   // Program address.
   const programAddress =
@@ -404,6 +443,7 @@ export function getCloseTaskInstruction<
       isWritable: true,
     },
     authority: { value: input.authority ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -421,6 +461,7 @@ export function getCloseTaskInstruction<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("authority", accounts.authority),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
     ],
     data: getCloseTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -433,7 +474,8 @@ export function getCloseTaskInstruction<
     TAccountListing,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountAuthority
+    TAccountAuthority,
+    TAccountProtocolConfig
   >);
 }
 
@@ -490,6 +532,14 @@ export type ParsedCloseTaskInstruction<
     workerCompletionBond?: TAccountMetas[6] | undefined;
     /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
     authority: TAccountMetas[7];
+    /**
+     * Protocol config (fix round, FIX 5) — supplies the canonical treasury
+     * pubkey for the deregistered-worker straggler path below. Optional so
+     * existing close paths (no stragglers, or stragglers with live agents)
+     * keep working without it; REQUIRED (fail-closed) whenever a straggler
+     * submission's worker agent is provably closed.
+     */
+    protocolConfig?: TAccountMetas[8] | undefined;
   };
   data: CloseTaskInstructionData;
 };
@@ -502,12 +552,12 @@ export function parseCloseTaskInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCloseTaskInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 8) {
+  if (instruction.accounts.length < 9) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 8,
+        expectedAccountMetas: 9,
       },
     );
   }
@@ -534,6 +584,7 @@ export function parseCloseTaskInstruction<
       creatorCompletionBond: getNextAccount(),
       workerCompletionBond: getNextOptionalAccount(),
       authority: getNextAccount(),
+      protocolConfig: getNextOptionalAccount(),
     },
     data: getCloseTaskInstructionDataDecoder().decode(instruction.data),
   };

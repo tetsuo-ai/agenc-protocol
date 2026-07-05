@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**94 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**96 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -39,6 +39,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`create_task_humanless`](#create_task_humanless)
 - [`delegate_reputation`](#delegate_reputation)
 - [`deregister_agent`](#deregister_agent)
+- [`distribute_ghost_share`](#distribute_ghost_share)
 - [`execute_proposal`](#execute_proposal)
 - [`expire_bid`](#expire_bid)
 - [`expire_claim`](#expire_claim)
@@ -62,6 +63,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`rate_hire`](#rate_hire)
 - [`rate_skill`](#rate_skill)
 - [`reclaim_completion_bond`](#reclaim_completion_bond)
+- [`reclaim_terminal_claim`](#reclaim_terminal_claim)
 - [`record_agent_verification`](#record_agent_verification)
 - [`record_listing_moderation`](#record_listing_moderation)
 - [`record_task_moderation`](#record_task_moderation)
@@ -446,7 +448,7 @@ _None._
 Reclaim a terminal task's account rent (and optional leftover job-spec
 pointer). Allowed only when the task is Completed or Cancelled.
 
-### Accounts (8)
+### Accounts (9)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -458,6 +460,7 @@ pointer). Allowed only when the task is Completed or Cancelled.
 | 6 | `creator_completion_bond` |  |  |  | PDA ["completion_bond", account:task, account:task.creator (Task)] | Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task REFUSES to close the Task while this is a live program-owned bond, so the Task PDA (which reclaim_completion_bond needs) can never be destroyed out from under an unsettled creator bond. The party is the creator, so this PDA is canonically derivable here. For an already-settled / un-bonded task it is an empty system PDA. |
 | 7 | `worker_completion_bond` | yes |  | yes |  | Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot canonically pin this (the worker authority is not recorded on the Task after the claim closes), so it is checked only when supplied: if a live program-owned bond is passed, close is REFUSED. The hard guarantee for the worker bond comes from the Completed settlement paths (accept/auto_accept/complete), which are now required + pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond (now also valid on Cancelled) is the worker's permissionless recovery on the cancel path. CHECK: liveness checked in the handler when present. |
 | 8 | `authority` | yes | yes |  |  | Task creator; receives the reclaimed rent. Mutable to credit lamports. |
+| 9 | `protocol_config` |  |  | yes | PDA ["protocol"] | Protocol config (fix round, FIX 5) — supplies the canonical treasury pubkey for the deregistered-worker straggler path below. Optional so existing close paths (no stragglers, or stragglers with live agents) keep working without it; REQUIRED (fail-closed) whenever a straggler submission's worker agent is provably closed. |
 
 ### Args (0)
 
@@ -848,6 +851,38 @@ Agent must have no active tasks.
 
 _None._
 
+## distribute_ghost_share
+
+Permissionless contest ghost-split crank (Batch 3 WS-CONTEST §3): from
+`ghost_at = deadline + SELECTION_WINDOW_SECS`, pay one live (Submitted)
+contest submission its equal slice of the remaining escrow pool — same fee
+legs as settlement — and close its submission + claim to the worker. The
+final slice sweeps the pool, completes the task, and closes the escrow.
+Exit path — settles even while paused (money never locks).
+
+### Accounts (14)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 2 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
+| 3 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
+| 4 | `task_validation_config` | yes |  |  | PDA ["task_validation", account:task] |  |
+| 5 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] |  |
+| 6 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
+| 7 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
+| 8 | `treasury` | yes |  |  |  |  |
+| 9 | `creator` | yes |  |  |  | validated against task.creator. Never receives pool funds. |
+| 10 | `worker_authority` | yes |  |  |  | against worker.authority (stored pubkey — spec invariant 2). |
+| 11 | `operator` | yes |  | yes |  | only when the task carries a non-zero operator fee. (A contest can never be a hire — configure_task_validation rejects live-HireRecord tasks — so the terms come from the Task alone; no HireRecord fallback.) |
+| 12 | `referrer` | yes |  | yes |  | split). Required only when the task carries a non-zero referrer fee. |
+| 13 | `cranker` |  | yes |  |  | Permissionless cranker; pays only the transaction fee. |
+| 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+
+### Args (0)
+
+_None._
+
 ## execute_proposal
 
 Execute an approved governance proposal after voting period ends.
@@ -895,7 +930,7 @@ _None._
 Expire a stale claim to free up task slot.
 Can only be called after claim.expires_at has passed.
 
-### Accounts (13)
+### Accounts (14)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -906,12 +941,13 @@ Can only be called after claim.expires_at has passed.
 | 5 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
 | 6 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 7 | `task_validation_config` |  |  | yes | PDA ["task_validation", account:task] |  |
-| 8 | `task_submission` |  |  | yes | PDA ["task_submission", account:claim] |  |
+| 8 | `task_submission` |  |  | yes | PDA ["task_submission", account:claim] | The derived `["task_submission", claim]` PDA. The address is seeds-pinned (unfakeable), so what lives AT it is honest evidence: a live program-owned `TaskSubmission` is deserialized and inspected; a system-owned, zero-data account at this address PROVES no submission exists for this claim (the PDA was either never initialized — a no-show — or already closed by a settlement path that also closed the claim). This is what lets a no-show claim be expired during `PendingValidation` (another entrant's submission moved the task there) without reopening the caller-omission attack: the caller must still PASS the account, and cannot fake its contents. |
 | 9 | `rent_recipient` | yes |  |  |  |  |
 | 10 | `worker_completion_bond` | yes |  | yes |  | (InProgress expiry) its principal is forfeited to the creator. Fully validated in the handler by settle_completion_bond (owner, PDA, task, role, party). |
 | 11 | `bond_creator` | yes |  | yes |  |  |
 | 12 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:worker] | OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, a no-show expiry bumps `claims_expired`. Created lazily on first write, bound to `["agent_stats", worker]`. Full-surface only — gated so the frozen canary account list for `expire_claim` is unchanged. Paid by the (permissionless) caller. |
-| 13 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 13 | `treasury` | yes |  | yes |  | Receives the FORFEITED contest entry-deposit surplus on a no-show expiry (never the creator). Required whenever the expiring claim carries a contest deposit; enforced in the handler (non-skippable). Full-surface only — canary builds are contest-incapable (see `validate_task_supports_validation_mode`), so the frozen canary account list for `expire_claim` is unchanged. |
+| 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (0)
 
@@ -1434,6 +1470,33 @@ the optional bond account (audit fix). `role`: 0 = creator, 1 = worker.
 | # | Arg | Type |
 |---|---|---|
 | 1 | `role` | `u8` |
+
+## reclaim_terminal_claim
+
+Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim
+stranded on an already-terminal (Completed/Cancelled) task (fix round):
+claim rent to the worker, contest entry-deposit surplus forfeited to the
+treasury, slot counters freed (un-bricks close_task + the worker's
+active_tasks budget). Requires unfakeable proof there is no live
+submission (the derived submission PDA must be empty). Exit path —
+settles even while paused (money never locks).
+
+### Accounts (8)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `authority` |  | yes |  |  | Permissionless caller; pays only the transaction fee. |
+| 2 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 3 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
+| 4 | `task_submission` |  |  |  | PDA ["task_submission", account:claim] | The derived `["task_submission", claim]` PDA — the unfakeable liveness probe. It must be system-owned with zero data (no submission was ever made for this claim, or it was already closed together with the claim by a settlement path — in which case THIS claim would not exist). A live program-owned submission here means the claim is still settleable by the normal paths and must not be short-circuited. |
+| 5 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
+| 6 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 7 | `treasury` | yes |  |  |  | Receives the forfeited contest entry-deposit surplus (never the creator); 0 lamports for non-contest claims. |
+| 8 | `rent_recipient` | yes |  |  |  | worker authority (stored pubkey; no caller-supplied-account trust). |
+
+### Args (0)
+
+_None._
 
 ## record_agent_verification
 

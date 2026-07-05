@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**329 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**341 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -340,3 +340,15 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6326 | 0x18b6 | `UnauthorizedModerationHeartbeat` | Only the moderation config authority or the moderation authority may heartbeat |
 | 6327 | 0x18b7 | `InvalidModerationLivenessWindow` | Moderation liveness window is outside the allowed [1 day, 400 day] range |
 | 6328 | 0x18b8 | `InvalidStoreManifest` | Store manifest hash and URI must be pinned together (both set or both empty) |
+| 6329 | 0x18b9 | `ContestSolRewardOnly` | Contest (schema-1 Competitive) tasks must use SOL rewards |
+| 6330 | 0x18ba | `ContestSelectionWindowElapsed` | Selection window has closed; the contest settles via distribute_ghost_share |
+| 6331 | 0x18bb | `ContestAcceptRequiresSoleLiveSubmission` | Reject every other live submission before accepting a contest winner |
+| 6332 | 0x18bc | `ContestAutoAcceptDisabled` | Auto-accept is disabled for contest tasks; accept before ghost_at or crank distribute_ghost_share after |
+| 6333 | 0x18bd | `ContestGhostWindowNotReached` | Ghost-split is not open yet; the creator's selection window is still active |
+| 6334 | 0x18be | `ContestGhostShareUnavailable` | distribute_ghost_share requires a schema-1 Competitive task pending validation |
+| 6335 | 0x18bf | `ContestHasLiveSubmissions` | Contest tasks cannot be cancelled while live submissions exist |
+| 6336 | 0x18c0 | `ContestFlowUnsupported` | Dispute/freeze/revision flows are disabled for contest tasks |
+| 6337 | 0x18c1 | `SubmissionRentAccountsRequired` | Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator) |
+| 6338 | 0x18c2 | `ContestForfeitTreasuryRequired` | Contest no-show forfeit requires the protocol treasury account |
+| 6339 | 0x18c3 | `ClaimReclaimRequiresTerminalTask` | reclaim_terminal_claim requires a terminal (Completed/Cancelled) task |
+| 6340 | 0x18c4 | `ClaimReclaimRequiresNoSubmission` | reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim) |
