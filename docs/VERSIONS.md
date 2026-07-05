@@ -24,7 +24,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 | `0` | Unstamped / conservative (canary, or a config not yet stamped) | every capability `false` (`listings:false`, …) |
 | `1` (`SURFACE_REVISION_FULL`) | The full 84-instruction surface is live | every capability `true` |
 | `2` (`SURFACE_REVISION_BATCH2`) | Batch-2 surface: 94 ix — store identity, moderation liveness deadman, dispute/freeze-exit referrer legs, `rate_hire` rollup | every capability `true` (monotonic ≥ FULL) |
-| `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest surface: 95 ix — submission-rent return on every settle path, `task_schema`/`live_submissions` carve-out, contests (`distribute_ghost_share`, auto-accept disable, cancel guard) | every capability `true` (monotonic ≥ FULL) |
+| `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest surface: 96 ix — submission-rent return on every settle path, `task_schema`/`live_submissions` carve-out, contests (`distribute_ghost_share`, auto-accept disable, cancel guard, refundable entry deposit, `reclaim_terminal_claim`) | every capability `true` (monotonic ≥ FULL) |
 
 `getDeployedSurface` **tolerates the pre-migration on-chain layout**: before the
 2026-06-11 migration the live mainnet `ProtocolConfig` was the OLD 349-byte layout with

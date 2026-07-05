@@ -33,6 +33,7 @@ import {
   getConfigureTaskValidationInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  findProtocolConfigPda,
   findTaskPda,
   findEscrowPda,
   findClaimPda,
@@ -264,6 +265,7 @@ export async function closeTask(input: CloseTaskInput) {
       : optionalAddress(input.taskJobSpec);
   const hireRecord =
     input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
+  const [protocolConfig] = await findProtocolConfigPda();
 
   return {
     programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -297,6 +299,11 @@ export async function closeTask(input: CloseTaskInput) {
         role: AccountRole.WRITABLE_SIGNER,
         signer: input.authority,
       },
+      // Fix round (FIX 5): optional protocol_config, always supplied by the
+      // facade (const-seed PDA). It validates the treasury payee when a
+      // straggler submission's worker agent has been deregistered; harmless
+      // (readonly) otherwise.
+      { address: protocolConfig, role: AccountRole.READONLY },
     ],
     data: getCloseTaskInstructionDataEncoder().encode({}),
   };

@@ -95,6 +95,14 @@ undercount would drain escrow with submitters unpaid).
   uniform; otherwise gate schema-1 Competitive creation to SOL rewards with an explicit
   error and document the limitation. Never leave an SPL contest able to reach a `ghost_at`
   state it cannot exit.
+- **Gate scope (fix round):** the validation mode is unknown at creation, so the
+  creation-time gates (SOL-only rewards + deadline required) are TYPE-WIDE — they apply to
+  every schema-1 `Competitive` task, including ones that later stay Auto-validation. The
+  LIFECYCLE gates that remove recourse (`initiate_dispute` / `request_changes` blocks) are
+  narrower: they key on contest-CONFIGURED tasks (`is_contest_task && is_manual_validation_task`,
+  the same conjunction the claim/accept/ghost paths use), so an Auto-validation
+  schema-1 Competitive task — which never enters the contest lifecycle — keeps its
+  pre-batch-3 dispute recourse.
 
 ### 4. Cancel guard
 
@@ -102,6 +110,46 @@ For schema-1 Competitive: `cancel_task` additionally requires `live_submissions 
 (Existing guards already block cancel in `PendingValidation`; this closes any
 InProgress-with-live-submission gap and makes "received work is never refunded" a program
 invariant, not a status accident.)
+
+### 5. Contest entry deposit (fix round — the anti-slop deposit, concretely)
+
+The original framing ("the deposit = the refundable claim rent") was wrong: claim rent is
+refundable EVEN TO NO-SHOWS, so slot-squatting a contest (claim all `max_workers` slots,
+never submit) was economically FREE — a cheap DoS that also stranded the creator's prize
+behind `expire_claim` cranking. The implemented design:
+
+- `CONTEST_ENTRY_DEPOSIT_LAMPORTS = 10_000_000` (0.01 SOL), carried as **surplus lamports
+  on the claim PDA** — no `TaskClaim` layout change, no new account.
+- Charged in `claim_task` ONLY for contest-configured tasks (schema-1 `Competitive` +
+  CreatorReview). All other task types and schema-0 tasks are unchanged.
+- **Refund rule: anyone who SUBMITS is made whole.** Every submitted exit closes the claim
+  with ALL its lamports (rent + deposit) to the worker — accept, reject (losers lose
+  nothing), and the ghost-split. Net-free competition is preserved.
+- **Forfeit rule: no-shows lose the deposit.** On the no-show exits — `expire_claim` with a
+  provably-absent submission PDA (both the InProgress arm and the PendingValidation arm)
+  and `reclaim_terminal_claim` — the claim's rent-exempt minimum returns to the worker and
+  the surplus above it is forfeited to the protocol **treasury** (validated against
+  `protocol_config`; NEVER the creator, who could otherwise farm forfeits with junk
+  contests). The forfeit is non-skippable (absence proof + treasury account required).
+- The existing 1000-lamport `expire_claim` cleanup reward is unrelated (it comes from the
+  escrow) and is kept.
+
+### 6. Terminal no-show reclaim (fix round)
+
+`reclaim_terminal_claim` (full module only): permissionlessly reclaim a
+claimed-but-never-submitted claim on an already-terminal (Completed/Cancelled) task.
+Requires the derived `["task_submission", claim]` PDA to be system-owned + zero-data (the
+unfakeable no-submission proof); closes the claim (rent → worker, deposit surplus →
+treasury), decrements `task.current_workers` and the worker's `active_tasks`. This is what
+un-bricks `close_task` after a contest settles with a no-show entrant still holding a slot.
+No escrow account (closed by then), no cleanup reward.
+
+### 7. Reject window (fix round — symmetric temporal partition)
+
+`reject_task_result` on a contest requires `now < ghost_at`, exactly like accept. Without
+it a creator could front-run the ghost cranks after `ghost_at`, reject every entry, drive
+the task to Open, cancel, and claw back the prize. From `ghost_at` onward the crank owns
+every live submission.
 
 ## Invariants (adversarial review checklist)
 

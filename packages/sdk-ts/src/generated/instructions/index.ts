@@ -58,6 +58,7 @@ export * from "./purchaseSkill";
 export * from "./rateHire";
 export * from "./rateSkill";
 export * from "./reclaimCompletionBond";
+export * from "./reclaimTerminalClaim";
 export * from "./recordAgentVerification";
 export * from "./recordListingModeration";
 export * from "./recordTaskModeration";

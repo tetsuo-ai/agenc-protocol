@@ -1017,4 +1017,10 @@ pub enum CoordinationError {
     ContestFlowUnsupported,
     #[msg("Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator)")]
     SubmissionRentAccountsRequired,
+    #[msg("Contest no-show forfeit requires the protocol treasury account")]
+    ContestForfeitTreasuryRequired,
+    #[msg("reclaim_terminal_claim requires a terminal (Completed/Cancelled) task")]
+    ClaimReclaimRequiresTerminalTask,
+    #[msg("reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)")]
+    ClaimReclaimRequiresNoSubmission,
 }

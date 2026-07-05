@@ -141,8 +141,10 @@ describe("generated event discriminator table", () => {
     // +DefaultTrustListUpdated [P1.2 hardened open roster]) -> 98
     // (+StoreRegistered, +StoreUpdated, +StoreClosed [batch-2 store identity],
     // +ModerationHeartbeatRecorded [batch-2 A2 moderation liveness]) -> 99
-    // (+GhostShareDistributed [batch-3 WS-CONTEST ghost-split]).
-    expect(idl.events.length).toBe(99);
+    // (+GhostShareDistributed [batch-3 WS-CONTEST ghost-split]) -> 99
+    // (+TerminalClaimReclaimed, +ContestDepositForfeited [batch-3 adversarial
+    // fix round: reclaim_terminal_claim + contest entry-deposit forfeits]).
+    expect(idl.events.length).toBe(101);
     expect(Object.keys(AGENC_EVENT_DECODERS).length).toBe(idl.events.length);
     for (const event of idl.events) {
       const entry = AGENC_EVENT_DECODERS[hex(event.discriminator)];

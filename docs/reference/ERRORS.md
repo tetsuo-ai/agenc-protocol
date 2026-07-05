@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**338 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**341 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -349,3 +349,6 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6335 | 0x18bf | `ContestHasLiveSubmissions` | Contest tasks cannot be cancelled while live submissions exist |
 | 6336 | 0x18c0 | `ContestFlowUnsupported` | Dispute/freeze/revision flows are disabled for contest tasks |
 | 6337 | 0x18c1 | `SubmissionRentAccountsRequired` | Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator) |
+| 6338 | 0x18c2 | `ContestForfeitTreasuryRequired` | Contest no-show forfeit requires the protocol treasury account |
+| 6339 | 0x18c3 | `ClaimReclaimRequiresTerminalTask` | reclaim_terminal_claim requires a terminal (Completed/Cancelled) task |
+| 6340 | 0x18c4 | `ClaimReclaimRequiresNoSubmission` | reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim) |

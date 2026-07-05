@@ -11,8 +11,7 @@ use crate::errors::CoordinationError;
 use crate::events::TaskChangesRequested;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
-    is_manual_validation_task,
-    note_submission_left_review,
+    is_contest_configured_task, is_manual_validation_task, note_submission_left_review,
 };
 use crate::state::{
     ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
@@ -99,8 +98,13 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     // `ghost_at` outward indefinitely and defeating the ghost-split guarantee, and
     // they stomp the shared task status while other entries are pending. Contest
     // entries settle only via reject / accept / distribute_ghost_share.
+    // FIX ROUND: gate on contest-CONFIGURED (schema-1 Competitive AND manual
+    // CreatorReview) — an auto-mode Competitive task never enters the contest
+    // lifecycle and keeps its pre-batch-3 flows. (request_changes additionally
+    // requires CreatorReview mode below, so for THIS instruction the predicates
+    // coincide; the narrow one is used for consistency with initiate_dispute.)
     require!(
-        !ctx.accounts.task.is_contest_task(),
+        !is_contest_configured_task(&ctx.accounts.task),
         CoordinationError::ContestFlowUnsupported
     );
     require!(

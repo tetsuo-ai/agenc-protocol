@@ -26,8 +26,8 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskClosed;
 use crate::state::{
-    AgentRegistration, HireRecord, ServiceListing, Task, TaskAttestorConfig, TaskEscrow,
-    TaskJobSpec, TaskModeration, TaskStatus, TaskSubmission, TaskValidationConfig,
+    AgentRegistration, HireRecord, ProtocolConfig, ServiceListing, Task, TaskAttestorConfig,
+    TaskEscrow, TaskJobSpec, TaskModeration, TaskStatus, TaskSubmission, TaskValidationConfig,
 };
 use anchor_lang::prelude::*;
 
@@ -136,6 +136,17 @@ pub struct CloseTask<'info> {
     /// Task creator; receives the reclaimed rent. Mutable to credit lamports.
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    /// Protocol config (fix round, FIX 5) — supplies the canonical treasury
+    /// pubkey for the deregistered-worker straggler path below. Optional so
+    /// existing close paths (no stragglers, or stragglers with live agents)
+    /// keep working without it; REQUIRED (fail-closed) whenever a straggler
+    /// submission's worker agent is provably closed.
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Option<Box<Account<'info, ProtocolConfig>>>,
 }
 
 /// A program-owned, non-tombstoned account at the bond PDA means a completion bond is
@@ -285,6 +296,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
                     &worker_agent,
                     agent_info,
                     worker_wallet_info,
+                    ctx.accounts
+                        .protocol_config
+                        .as_ref()
+                        .map(|config| config.treasury),
                 )?;
             }
         }
@@ -357,28 +372,40 @@ fn close_child_to<'info>(
 /// against program-owned stored pubkeys (spec invariant 2 — no cranker-supplied
 /// account trust): the supplied agent account must BE the submission's stored
 /// worker agent, and the writable wallet must BE that agent's stored authority.
+///
+/// FIX 5 (deregistered-agent orphan): the worker's `AgentRegistration` may have
+/// been legitimately closed (`deregister_agent` is allowed once
+/// `active_tasks == 0`, while a Rejected quorum-straggler submission survives).
+/// The stored agent ADDRESS is still unfakeable, so when the account at that
+/// exact address is provably closed (system-owned, zero data) the worker wallet
+/// is unrecoverable on-chain — route the rent to the protocol TREASURY
+/// (validated against `protocol_config`; NEVER the creator) instead of
+/// fail-closing `close_task` permanently.
 fn close_submission_child_to_worker<'info>(
     child: &AccountInfo<'info>,
     stored_worker_agent: &Pubkey,
     agent_info: &AccountInfo<'info>,
     worker_wallet_info: &AccountInfo<'info>,
+    treasury: Option<Pubkey>,
 ) -> Result<()> {
     require!(
         agent_info.key() == *stored_worker_agent,
         CoordinationError::SubmissionRentAccountsRequired
     );
-    require!(
-        agent_info.owner == &crate::ID,
-        CoordinationError::SubmissionRentAccountsRequired
-    );
-    let authority = {
+    let expected_payee = if agent_info.owner == &crate::ID {
         let data = agent_info.try_borrow_data()?;
         AgentRegistration::try_deserialize(&mut &data[..])
             .map_err(|_| error!(CoordinationError::SubmissionRentAccountsRequired))?
             .authority
+    } else if agent_info.owner == &anchor_lang::system_program::ID && agent_info.data_is_empty() {
+        // Provably-closed agent at the stored address: the only safe payee is
+        // the protocol treasury (fail-closed if protocol_config was omitted).
+        treasury.ok_or(CoordinationError::SubmissionRentAccountsRequired)?
+    } else {
+        return err!(CoordinationError::SubmissionRentAccountsRequired);
     };
     require!(
-        worker_wallet_info.key() == authority,
+        worker_wallet_info.key() == expected_payee,
         CoordinationError::SubmissionRentAccountsRequired
     );
     require!(

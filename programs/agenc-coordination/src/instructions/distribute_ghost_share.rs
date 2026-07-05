@@ -360,14 +360,21 @@ pub fn handler(ctx: Context<DistributeGhostShare>) -> Result<()> {
             .ok_or(CoordinationError::ArithmeticOverflow)?;
     }
 
-    emit!(TaskCompleted {
-        task_id: ctx.accounts.task.task_id,
-        worker: ctx.accounts.worker.key(),
-        proof_hash: ctx.accounts.claim.proof_hash,
-        result_data: ctx.accounts.claim.result_data,
-        reward_paid: worker_reward,
-        timestamp: clock.unix_timestamp,
-    });
+    // Event hygiene (fix round): TaskCompleted fires ONLY on the final slice —
+    // the task actually completes there. Per-slice consumers key on the
+    // GhostShareDistributed event below (its `remaining == 0` is the terminal
+    // marker); a ghost-split is N RewardDistributed + N treasury legs but ONE
+    // TaskCompleted for the task.
+    if is_final_slice {
+        emit!(TaskCompleted {
+            task_id: ctx.accounts.task.task_id,
+            worker: ctx.accounts.worker.key(),
+            proof_hash: ctx.accounts.claim.proof_hash,
+            result_data: ctx.accounts.claim.result_data,
+            reward_paid: worker_reward,
+            timestamp: clock.unix_timestamp,
+        });
+    }
     emit!(RewardDistributed {
         task_id: ctx.accounts.task.task_id,
         recipient: ctx.accounts.worker.key(),

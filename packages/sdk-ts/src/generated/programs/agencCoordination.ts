@@ -220,6 +220,7 @@ import {
   getRateHireInstructionAsync,
   getRateSkillInstructionAsync,
   getReclaimCompletionBondInstructionAsync,
+  getReclaimTerminalClaimInstructionAsync,
   getRecordAgentVerificationInstructionAsync,
   getRecordListingModerationInstructionAsync,
   getRecordTaskModerationInstructionAsync,
@@ -315,6 +316,7 @@ import {
   parseRateHireInstruction,
   parseRateSkillInstruction,
   parseReclaimCompletionBondInstruction,
+  parseReclaimTerminalClaimInstruction,
   parseRecordAgentVerificationInstruction,
   parseRecordListingModerationInstruction,
   parseRecordTaskModerationInstruction,
@@ -456,6 +458,7 @@ import {
   type ParsedRateHireInstruction,
   type ParsedRateSkillInstruction,
   type ParsedReclaimCompletionBondInstruction,
+  type ParsedReclaimTerminalClaimInstruction,
   type ParsedRecordAgentVerificationInstruction,
   type ParsedRecordListingModerationInstruction,
   type ParsedRecordTaskModerationInstruction,
@@ -505,6 +508,7 @@ import {
   type RateHireAsyncInput,
   type RateSkillAsyncInput,
   type ReclaimCompletionBondAsyncInput,
+  type ReclaimTerminalClaimAsyncInput,
   type RecordAgentVerificationAsyncInput,
   type RecordListingModerationAsyncInput,
   type RecordTaskModerationAsyncInput,
@@ -1200,6 +1204,7 @@ export enum AgencCoordinationInstruction {
   RateHire,
   RateSkill,
   ReclaimCompletionBond,
+  ReclaimTerminalClaim,
   RecordAgentVerification,
   RecordListingModeration,
   RecordTaskModeration,
@@ -1820,6 +1825,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.ReclaimCompletionBond;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([224, 135, 44, 9, 88, 5, 32, 20]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.ReclaimTerminalClaim;
   }
   if (
     containsBytes(
@@ -2460,6 +2476,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.ReclaimCompletionBond;
     } & ParsedReclaimCompletionBondInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.ReclaimTerminalClaim;
+    } & ParsedReclaimTerminalClaimInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.RecordAgentVerification;
     } & ParsedRecordAgentVerificationInstruction<TProgram>)
   | ({
@@ -2956,6 +2975,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ReclaimCompletionBond,
         ...parseReclaimCompletionBondInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.ReclaimTerminalClaim: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.ReclaimTerminalClaim,
+        ...parseReclaimTerminalClaimInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.RecordAgentVerification: {
@@ -3575,6 +3601,10 @@ export type AgencCoordinationPluginInstructions = {
   reclaimCompletionBond: (
     input: ReclaimCompletionBondAsyncInput,
   ) => ReturnType<typeof getReclaimCompletionBondInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  reclaimTerminalClaim: (
+    input: ReclaimTerminalClaimAsyncInput,
+  ) => ReturnType<typeof getReclaimTerminalClaimInstructionAsync> &
     SelfPlanAndSendFunctions;
   recordAgentVerification: (
     input: RecordAgentVerificationAsyncInput,
@@ -4211,6 +4241,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getReclaimCompletionBondInstructionAsync(input),
+            ),
+          reclaimTerminalClaim: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getReclaimTerminalClaimInstructionAsync(input),
             ),
           recordAgentVerification: (input) =>
             addSelfPlanAndSendFunctions(

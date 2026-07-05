@@ -93,12 +93,25 @@ pub fn validate_attestor(mode: ValidationMode, attestor: Option<Pubkey>) -> Resu
 }
 
 pub fn validate_task_supports_validation_mode(task: &Task, mode: ValidationMode) -> Result<()> {
-    // Batch 3 WS-CONTEST: schema-1 Competitive tasks ARE contests — the creator
-    // reviews entries via CreatorReview (accept/reject before `ghost_at`, the
+    // Batch 3 WS-CONTEST: schema-1 Competitive tasks + CreatorReview ARE contests —
+    // the creator reviews entries (accept/reject before `ghost_at`, the
     // permissionless ghost-split after). Only CreatorReview is a contest judging
     // mode; quorum/attestation stay unsupported. Schema-0 Competitive tasks keep
     // today's exact behavior (rejected for every manual mode).
+    //
+    // FIX ROUND (canary latent lock): the mainnet-canary build compiles the contest
+    // ENTRY rails but `distribute_ghost_share` is full-module-only — a canary-built
+    // deployment could otherwise mint a contest that becomes unexitable after
+    // `ghost_at`. Gate the CreatorReview-for-Competitive allowance OFF under the
+    // canary feature so canary builds are contest-INCAPABLE by construction
+    // (Competitive rejects every manual mode, exactly the pre-batch-3 behavior).
     if task.task_type == TaskType::Competitive {
+        #[cfg(feature = "mainnet-canary")]
+        {
+            let _ = mode;
+            return err!(CoordinationError::ValidationModeUnsupportedTaskType);
+        }
+        #[cfg(not(feature = "mainnet-canary"))]
         require!(
             task.task_schema() >= Task::TASK_SCHEMA_CONTEST_AWARE
                 && mode == ValidationMode::CreatorReview,
@@ -231,6 +244,19 @@ pub fn note_submission_left_review(task: &mut Task) -> Result<()> {
     Ok(())
 }
 
+/// A contest-CONFIGURED task: schema-1 `Competitive` AND actually configured for
+/// manual (CreatorReview — the only mode `validate_task_supports_validation_mode`
+/// permits for Competitive) validation. This is the conjunction that decides
+/// whether a task actually ENTERS the contest lifecycle (PendingValidation →
+/// accept/reject/ghost-split). An AUTO-validation schema-1 Competitive task never
+/// does — it keeps the pre-batch-3 flows (including dispute recourse), so gates
+/// that REMOVE recourse must use this predicate, not the broader
+/// [`Task::is_contest_task`] (which is correct for creation-time gates where the
+/// validation mode is not yet known).
+pub fn is_contest_configured_task(task: &Task) -> bool {
+    task.is_contest_task() && is_manual_validation_task(task)
+}
+
 /// The contest ghost boundary: `ghost_at = deadline + SELECTION_WINDOW_SECS`.
 /// Only meaningful for contest tasks; creation enforces `deadline > 0` for them,
 /// and a zero deadline here fails closed rather than yielding a bogus boundary.
@@ -259,6 +285,23 @@ pub fn validate_contest_accept_window(task: &Task, now: i64) -> Result<()> {
     require!(
         task.live_submissions() == 1,
         CoordinationError::ContestAcceptRequiresSoleLiveSubmission
+    );
+    Ok(())
+}
+
+/// Temporal-partition guard for the creator-side contest REJECT (fix round —
+/// symmetric with the accept window): permitted strictly BEFORE `ghost_at`.
+/// Without it a creator could front-run the ghost cranks after `ghost_at`,
+/// reject every entry (driving the task to Open), cancel, and claw back the
+/// prize — hollowing out the ghost-split guarantee. From `ghost_at` onward the
+/// crank owns every live submission. Pure + revert-sensitive.
+pub fn validate_contest_reject_window(task: &Task, now: i64) -> Result<()> {
+    if !task.is_contest_task() {
+        return Ok(());
+    }
+    require!(
+        now < contest_ghost_at(task)?,
+        CoordinationError::ContestSelectionWindowElapsed
     );
     Ok(())
 }
@@ -513,10 +556,64 @@ mod tests {
         assert!(validate_contest_accept_window(&exclusive, i64::MAX).is_ok());
     }
 
+    // Revert-sensitive (FIX 2): removing the `now < ghost_at` require in
+    // validate_contest_reject_window turns this red — a creator could front-run
+    // the ghost cranks, reject-all, and claw back the prize.
+    #[test]
+    fn test_contest_reject_window_forbids_reject_at_or_after_ghost_at() {
+        let task = contest_task(1_000, 2);
+        let ghost_at = 1_000 + SELECTION_WINDOW_SECS;
+        assert!(validate_contest_reject_window(&task, ghost_at - 1).is_ok());
+        let at = validate_contest_reject_window(&task, ghost_at).unwrap_err();
+        assert_eq!(at, CoordinationError::ContestSelectionWindowElapsed.into());
+        assert!(validate_contest_reject_window(&task, ghost_at + 1).is_err());
+    }
+
+    #[test]
+    fn test_contest_reject_window_is_noop_for_non_contests() {
+        let legacy = Task {
+            task_type: TaskType::Competitive,
+            deadline: 1_000,
+            ..Task::default()
+        };
+        assert!(validate_contest_reject_window(&legacy, i64::MAX).is_ok());
+    }
+
+    // FIX 3: the recourse-removing gates key on contest-CONFIGURED (schema-1
+    // Competitive AND manual validation), not on the type-wide predicate — an
+    // auto-mode Competitive task never enters the contest lifecycle and must keep
+    // its dispute recourse.
+    #[test]
+    fn test_is_contest_configured_requires_manual_validation() {
+        let mut auto_competitive = contest_task(1_000, 0);
+        // Default constraint_hash is zeroed — an auto-validation task.
+        assert!(auto_competitive.is_contest_task());
+        assert!(!is_contest_configured_task(&auto_competitive));
+
+        auto_competitive.constraint_hash = MANUAL_VALIDATION_SENTINEL;
+        assert!(is_contest_configured_task(&auto_competitive));
+
+        let mut manual_exclusive = Task {
+            constraint_hash: MANUAL_VALIDATION_SENTINEL,
+            deadline: 1_000,
+            ..Task::default()
+        };
+        manual_exclusive.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+        assert!(!is_contest_configured_task(&manual_exclusive));
+    }
+
     #[test]
     fn test_competitive_manual_validation_mode_support() {
-        // Schema-1 Competitive: CreatorReview allowed, quorum/attestation rejected.
+        // Schema-1 Competitive: CreatorReview allowed (full module), quorum/attestation rejected.
         let contest = contest_task(1_000, 0);
+        // FIX 7 (canary latent lock): under the mainnet-canary feature the
+        // CreatorReview-for-Competitive allowance is OFF — the canary build is
+        // contest-incapable by construction (distribute_ghost_share is
+        // full-module-only, so a canary contest could never exit after ghost_at).
+        #[cfg(feature = "mainnet-canary")]
+        assert!(validate_task_supports_validation_mode(&contest, ValidationMode::CreatorReview)
+            .is_err());
+        #[cfg(not(feature = "mainnet-canary"))]
         assert!(
             validate_task_supports_validation_mode(&contest, ValidationMode::CreatorReview).is_ok()
         );

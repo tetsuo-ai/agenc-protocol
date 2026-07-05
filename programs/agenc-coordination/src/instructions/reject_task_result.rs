@@ -11,7 +11,7 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review, release_claim_slot,
-    sync_task_validation_status,
+    sync_task_validation_status, validate_contest_reject_window,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::AgentStats;
@@ -139,6 +139,12 @@ pub fn handler<'info>(
         ctx.accounts.task_submission.status == SubmissionStatus::Submitted,
         CoordinationError::SubmissionNotPending
     );
+    // Temporal partition, REJECT side (fix round — symmetric with the accept
+    // window): for contests the creator may reject strictly BEFORE `ghost_at`;
+    // from `ghost_at` onward every live submission belongs to the ghost crank.
+    // Without this a creator could front-run the cranks after ghosting, reject
+    // every entry, drive the task to Open, cancel, and claw back the prize.
+    validate_contest_reject_window(&ctx.accounts.task, clock.unix_timestamp)?;
     require!(
         rejection_hash != [0u8; HASH_SIZE],
         CoordinationError::InvalidEvidenceHash

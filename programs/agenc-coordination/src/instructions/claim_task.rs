@@ -3,10 +3,13 @@
 use crate::errors::CoordinationError;
 use crate::events::{reputation_reason, ReputationChanged, TaskClaimed};
 use crate::instructions::constants::{
-    MAX_REPUTATION, REPUTATION_DECAY_MIN, REPUTATION_DECAY_PERIOD, REPUTATION_DECAY_RATE,
+    CONTEST_ENTRY_DEPOSIT_LAMPORTS, MAX_REPUTATION, REPUTATION_DECAY_MIN, REPUTATION_DECAY_PERIOD,
+    REPUTATION_DECAY_RATE,
 };
 use crate::instructions::launch_controls::require_task_type_enabled;
-use crate::instructions::task_validation_helpers::is_manual_validation_task;
+use crate::instructions::task_validation_helpers::{
+    is_contest_configured_task, is_manual_validation_task,
+};
 use crate::state::{
     AgentRegistration, AgentStatus, ProtocolConfig, Task, TaskClaim, TaskJobSpec, TaskStatus,
     TaskType,
@@ -120,7 +123,31 @@ pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
         worker_key,
         ctx.accounts.worker.as_mut(),
         ctx.bumps.claim,
-    )
+    )?;
+
+    // FIX 4 (anti-slop contest entry deposit): a contest-configured claim carries
+    // a refundable CONTEST_ENTRY_DEPOSIT_LAMPORTS as SURPLUS LAMPORTS on the claim
+    // PDA (no TaskClaim layout change). Refunded in full on every exit where the
+    // worker submitted (accept/reject/ghost-split close the claim with all its
+    // lamports to the worker — losers lose nothing); forfeited to the protocol
+    // treasury on no-show exits (expire_claim / reclaim_terminal_claim). Prices
+    // the slot-squat DoS that fully-refundable claim rent made free. Only contest
+    // claims pay; every other task type (and schema-0) is unchanged. (Canary
+    // builds are contest-incapable by construction, so this branch is dead there.)
+    if is_contest_configured_task(&ctx.accounts.task) {
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.authority.to_account_info(),
+                    to: ctx.accounts.claim.to_account_info(),
+                },
+            ),
+            CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+        )?;
+    }
+
+    Ok(())
 }
 
 fn validate_job_spec_pointer(task_job_spec: &TaskJobSpec) -> Result<()> {

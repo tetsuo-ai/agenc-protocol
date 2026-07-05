@@ -2655,6 +2655,34 @@ export type AgencCoordination = {
           ],
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "protocolConfig",
+          "docs": [
+            "Protocol config (fix round, FIX 5) — supplies the canonical treasury",
+            "pubkey for the deregistered-worker straggler path below. Optional so",
+            "existing close paths (no stragglers, or stragglers with live agents)",
+            "keep working without it; REQUIRED (fail-closed) whenever a straggler",
+            "submission's worker agent is provably closed."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -6051,6 +6079,17 @@ export type AgencCoordination = {
         },
         {
           "name": "taskSubmission",
+          "docs": [
+            "The derived `[\"task_submission\", claim]` PDA. The address is seeds-pinned",
+            "(unfakeable), so what lives AT it is honest evidence: a live program-owned",
+            "`TaskSubmission` is deserialized and inspected; a system-owned, zero-data",
+            "account at this address PROVES no submission exists for this claim (the",
+            "PDA was either never initialized — a no-show — or already closed by a",
+            "settlement path that also closed the claim). This is what lets a no-show",
+            "claim be expired during `PendingValidation` (another entrant's submission",
+            "moved the task there) without reopening the caller-omission attack: the",
+            "caller must still PASS the account, and cannot fake its contents."
+          ],
           "optional": true,
           "pda": {
             "seeds": [
@@ -6133,6 +6172,19 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Receives the FORFEITED contest entry-deposit surplus on a no-show expiry",
+            "(never the creator). Required whenever the expiring claim carries a",
+            "contest deposit; enforced in the handler (non-skippable). Full-surface",
+            "only — canary builds are contest-incapable (see",
+            "`validate_task_supports_validation_mode`), so the frozen canary account",
+            "list for `expire_claim` is unchanged."
+          ],
+          "writable": true,
+          "optional": true
         },
         {
           "name": "systemProgram",
@@ -9236,6 +9288,188 @@ export type AgencCoordination = {
           "type": "u8"
         }
       ]
+    },
+    {
+      "name": "reclaimTerminalClaim",
+      "docs": [
+        "Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim",
+        "stranded on an already-terminal (Completed/Cancelled) task (fix round):",
+        "claim rent to the worker, contest entry-deposit surplus forfeited to the",
+        "treasury, slot counters freed (un-bricks close_task + the worker's",
+        "active_tasks budget). Requires unfakeable proof there is no live",
+        "submission (the derived submission PDA must be empty). Exit path —",
+        "settles even while paused (money never locks)."
+      ],
+      "discriminator": [
+        224,
+        135,
+        44,
+        9,
+        88,
+        5,
+        32,
+        20
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Permissionless caller; pays only the transaction fee."
+          ],
+          "signer": true
+        },
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "worker"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskSubmission",
+          "docs": [
+            "The derived `[\"task_submission\", claim]` PDA — the unfakeable liveness",
+            "probe. It must be system-owned with zero data (no submission was ever",
+            "made for this claim, or it was already closed together with the claim by",
+            "a settlement path — in which case THIS claim would not exist). A live",
+            "program-owned submission here means the claim is still settleable by the",
+            "normal paths and must not be short-circuited."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  115,
+                  117,
+                  98,
+                  109,
+                  105,
+                  115,
+                  115,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "worker",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Receives the forfeited contest entry-deposit surplus (never the creator);",
+            "0 lamports for non-contest claims."
+          ],
+          "writable": true
+        },
+        {
+          "name": "rentRecipient",
+          "docs": [
+            "worker authority (stored pubkey; no caller-supplied-account trust)."
+          ],
+          "writable": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "recordAgentVerification",
@@ -15807,6 +16041,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "contestDepositForfeited",
+      "discriminator": [
+        30,
+        223,
+        26,
+        66,
+        255,
+        92,
+        100,
+        233
+      ]
+    },
+    {
       "name": "defaultTrustListUpdated",
       "discriminator": [
         92,
@@ -16740,6 +16987,19 @@ export type AgencCoordination = {
         123,
         232,
         163
+      ]
+    },
+    {
+      "name": "terminalClaimReclaimed",
+      "discriminator": [
+        211,
+        154,
+        175,
+        230,
+        62,
+        173,
+        108,
+        51
       ]
     },
     {
@@ -18472,6 +18732,21 @@ export type AgencCoordination = {
       "code": 6337,
       "name": "submissionRentAccountsRequired",
       "msg": "Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator)"
+    },
+    {
+      "code": 6338,
+      "name": "contestForfeitTreasuryRequired",
+      "msg": "Contest no-show forfeit requires the protocol treasury account"
+    },
+    {
+      "code": 6339,
+      "name": "claimReclaimRequiresTerminalTask",
+      "msg": "reclaim_terminal_claim requires a terminal (Completed/Cancelled) task"
+    },
+    {
+      "code": 6340,
+      "name": "claimReclaimRequiresNoSubmission",
+      "msg": "reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)"
     }
   ],
   "types": [
@@ -20015,6 +20290,46 @@ export type AgencCoordination = {
                 16
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "contestDepositForfeited",
+      "docs": [
+        "Emitted when a contest entry deposit is FORFEITED to the protocol treasury on",
+        "a no-show exit (`expire_claim` with a provably-absent submission PDA, or",
+        "`reclaim_terminal_claim`). Workers who submitted are always refunded in full",
+        "(their claim closes with all lamports — deposit included — to them)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "docs": [
+              "The no-show worker's `AgentRegistration` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Lamports forfeited to the treasury (the surplus above the claim's rent)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -26815,6 +27130,55 @@ export type AgencCoordination = {
                 5
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "terminalClaimReclaimed",
+      "docs": [
+        "Emitted by `reclaim_terminal_claim`: a claimed-but-never-submitted (no-show)",
+        "claim on an already-terminal (Completed/Cancelled) task was reclaimed —",
+        "claim rent back to the worker, any contest entry-deposit surplus forfeited",
+        "to the protocol treasury, and the task/worker slot counters freed (which",
+        "un-bricks `close_task` and the worker's `active_tasks` budget)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "claim",
+            "type": "pubkey"
+          },
+          {
+            "name": "workerAgent",
+            "docs": [
+              "The no-show worker's `AgentRegistration` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "workerRefund",
+            "docs": [
+              "Lamports returned to the worker authority (the claim's rent-exempt minimum)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "forfeited",
+            "docs": [
+              "Lamports forfeited to the protocol treasury (the contest entry-deposit",
+              "surplus above rent; 0 for non-contest claims)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }

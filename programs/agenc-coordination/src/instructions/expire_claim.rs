@@ -108,11 +108,21 @@ pub struct ExpireClaim<'info> {
     )]
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 
+    /// The derived `["task_submission", claim]` PDA. The address is seeds-pinned
+    /// (unfakeable), so what lives AT it is honest evidence: a live program-owned
+    /// `TaskSubmission` is deserialized and inspected; a system-owned, zero-data
+    /// account at this address PROVES no submission exists for this claim (the
+    /// PDA was either never initialized — a no-show — or already closed by a
+    /// settlement path that also closed the claim). This is what lets a no-show
+    /// claim be expired during `PendingValidation` (another entrant's submission
+    /// moved the task there) without reopening the caller-omission attack: the
+    /// caller must still PASS the account, and cannot fake its contents.
+    /// CHECK: seeds-pinned; owner/data inspected in the handler.
     #[account(
         seeds = [b"task_submission", claim.key().as_ref()],
-        bump = task_submission.bump
+        bump
     )]
-    pub task_submission: Option<Box<Account<'info, TaskSubmission>>>,
+    pub task_submission: Option<UncheckedAccount<'info>>,
 
     /// CHECK: Receives rent from closed claim account - validated to be worker authority
     #[account(
@@ -145,7 +155,32 @@ pub struct ExpireClaim<'info> {
     )]
     pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
 
+    /// CHECK: the protocol treasury, validated against `protocol_config.treasury`.
+    /// Receives the FORFEITED contest entry-deposit surplus on a no-show expiry
+    /// (never the creator). Required whenever the expiring claim carries a
+    /// contest deposit; enforced in the handler (non-skippable). Full-surface
+    /// only — canary builds are contest-incapable (see
+    /// `validate_task_supports_validation_mode`), so the frozen canary account
+    /// list for `expire_claim` is unchanged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        mut,
+        constraint = treasury.key() == protocol_config.treasury @ CoordinationError::ContestForfeitTreasuryRequired
+    )]
+    pub treasury: Option<UncheckedAccount<'info>>,
+
     pub system_program: Program<'info, System>,
+}
+
+/// What the seeds-pinned `["task_submission", claim]` address proves.
+enum SubmissionEvidence {
+    /// The caller did not pass the account — nothing is proven.
+    NotProvided,
+    /// System-owned + zero-data at the derived address: no live submission
+    /// exists for this claim (never initialized, or closed by settlement).
+    Absent,
+    /// A live program-owned `TaskSubmission` bound to this claim, with its status.
+    Live(SubmissionStatus),
 }
 
 /// Expires a stale claim after its deadline passes.
@@ -196,29 +231,54 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         task.status != TaskStatus::Disputed,
         CoordinationError::InvalidStatusTransition
     );
-    // A PendingValidation task has a live `["task_submission", claim]` PDA by
-    // construction (submit_task_result init's it and leaves the claim open). The
-    // account MUST be supplied here so we can honestly evaluate whether the claim
-    // still holds Submitted work. Trusting a caller-omitted optional account (the
-    // old `.unwrap_or(false)`) let an attacker pass `task_submission = None`, read
-    // the guard as "no pending submission", and close a claim that actually had
-    // live Submitted work — permanently locking escrow (a closed claim leaves no
-    // accept/reject/dispute settlement path on mainnet). The genuine no-show path
-    // is `InProgress` with no submission PDA, which stays permitted via the `None`
-    // arm. When supplied, the `["task_submission", claim]` seed already pins the
-    // account to THIS claim, so a present submission is the canonical one.
-    let claim_has_pending_submission = match (task.status, ctx.accounts.task_submission.as_ref()) {
-        (TaskStatus::PendingValidation, None) => {
+    // The `["task_submission", claim]` seed pins the supplied account to THIS
+    // claim, so whatever lives at the derived address is honest evidence.
+    // Trusting a caller-omitted optional account (the old `.unwrap_or(false)`)
+    // let an attacker pass `task_submission = None`, read the guard as "no
+    // pending submission", and close a claim that actually had live Submitted
+    // work — permanently locking escrow. During `PendingValidation` the account
+    // therefore MUST be supplied; but (fix round) a system-owned, zero-data
+    // account at the derived address PROVES this claim never submitted — a
+    // multi-entrant task (contest/Collaborative) sits in PendingValidation on
+    // ANOTHER entrant's submission, and this claim's no-show must stay
+    // expirable or it strands forever (current_workers > 0 bricks close_task,
+    // and the worker's active_tasks slot leaks).
+    let submission_evidence = match ctx.accounts.task_submission.as_ref() {
+        None => SubmissionEvidence::NotProvided,
+        Some(info) => {
+            let info = info.to_account_info();
+            if info.owner == &crate::ID {
+                let data = info.try_borrow_data()?;
+                let submission = TaskSubmission::try_deserialize(&mut &data[..])
+                    .map_err(|_| error!(CoordinationError::TaskSubmissionRequired))?;
+                // Seeds already pin the address; assert the stored back-references
+                // anyway (defense in depth against any future seed drift).
+                require!(
+                    submission.claim == claim.key() && submission.task == task.key(),
+                    CoordinationError::TaskSubmissionRequired
+                );
+                SubmissionEvidence::Live(submission.status)
+            } else if info.owner == &anchor_lang::system_program::ID && info.data_is_empty() {
+                SubmissionEvidence::Absent
+            } else {
+                return Err(CoordinationError::TaskSubmissionRequired.into());
+            }
+        }
+    };
+    let claim_has_pending_submission = match (task.status, &submission_evidence) {
+        (TaskStatus::PendingValidation, SubmissionEvidence::NotProvided) => {
             return Err(CoordinationError::TaskSubmissionRequired.into());
         }
-        (_, Some(submission)) => submission.status == SubmissionStatus::Submitted,
-        (_, None) => false,
+        (_, SubmissionEvidence::Live(status)) => *status == SubmissionStatus::Submitted,
+        (_, _) => false,
     };
     require!(
         task.status == TaskStatus::InProgress
             || (task.status == TaskStatus::PendingValidation && !claim_has_pending_submission),
         CoordinationError::TaskNotInProgress
     );
+    #[cfg(not(feature = "mainnet-canary"))]
+    let submission_proven_absent = matches!(submission_evidence, SubmissionEvidence::Absent);
 
     // Grace period protection (Issue #421):
     // During the grace period after expiry, only the worker authority can expire
@@ -257,11 +317,61 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         .checked_sub(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
-    // A pure no-show is an InProgress claim that expired without a submission
-    // (a submission would have moved the task to PendingValidation). Capture it
+    // A pure no-show is a claim that expired without THIS worker ever submitting:
+    // either an InProgress expiry (a live submission would have moved the task to
+    // PendingValidation; the request_changes/Revisable edge still counts as a
+    // missed deadline, matching pre-fix-round behavior), or (fix round) a
+    // PendingValidation expiry whose derived submission PDA is PROVABLY absent —
+    // the task is pending on another entrant's work, not this claim's. Capture it
     // BEFORE the status is mutated (the reopen below flips InProgress -> Open).
     #[cfg(not(feature = "mainnet-canary"))]
-    let is_pure_noshow = task.status == TaskStatus::InProgress;
+    let is_pure_noshow = task.status == TaskStatus::InProgress
+        || (task.status == TaskStatus::PendingValidation && submission_proven_absent);
+
+    // FIX 4 (anti-slop entry deposit): a contest-configured claim carries
+    // CONTEST_ENTRY_DEPOSIT_LAMPORTS as surplus on the claim PDA. Reaching THIS
+    // point on a contest claim means the worker never submitted (a Submitted
+    // entry is blocked above; contests have no revision rounds, and every
+    // settled entry closes its claim) — a no-show. The deposit is FORFEITED to
+    // the protocol treasury, never the creator; the claim's own rent still
+    // closes to the worker via `close = rent_recipient`. Non-skippable: the
+    // absence proof AND the treasury account are both required, so a worker
+    // self-expiring in the grace window cannot dodge the forfeit by omitting
+    // accounts. Full-surface only: canary builds are contest-incapable by
+    // construction, so no canary claim can ever carry a deposit.
+    #[cfg(not(feature = "mainnet-canary"))]
+    if crate::instructions::task_validation_helpers::is_contest_configured_task(task) {
+        require!(
+            submission_proven_absent,
+            CoordinationError::TaskSubmissionRequired
+        );
+        let claim_info = claim.to_account_info();
+        let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
+        let surplus = claim_info.lamports().saturating_sub(rent_min);
+        if surplus > 0 {
+            let treasury = ctx
+                .accounts
+                .treasury
+                .as_ref()
+                .ok_or(CoordinationError::ContestForfeitTreasuryRequired)?;
+            let treasury_info = treasury.to_account_info();
+            **claim_info.try_borrow_mut_lamports()? = claim_info
+                .lamports()
+                .checked_sub(surplus)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
+            **treasury_info.try_borrow_mut_lamports()? = treasury_info
+                .lamports()
+                .checked_add(surplus)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
+            emit!(crate::events::ContestDepositForfeited {
+                task: task.key(),
+                claim: claim.key(),
+                worker_agent: worker.key(),
+                amount: surplus,
+                timestamp: clock.unix_timestamp,
+            });
+        }
+    }
 
     if is_manual_validation_task(task) {
         let validation_config = ctx
@@ -407,8 +517,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
 
     // P6.6: a pure no-show expiry folds into the worker agent's `claims_expired` track
     // record (no-op when the optional `agent_stats` account is absent). Telemetry only.
-    // Only pure no-shows count — a PendingValidation expiry (work was submitted) is not a
-    // no-show and must not be charged.
+    // Only pure no-shows count — a PendingValidation expiry counts only when THIS
+    // claim's submission PDA is provably absent (the task pends on another entrant's
+    // work); a claim whose worker actually submitted is never charged.
     #[cfg(not(feature = "mainnet-canary"))]
     if is_pure_noshow {
         apply_track_record(

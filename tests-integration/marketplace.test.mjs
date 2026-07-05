@@ -669,7 +669,7 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: workerBond, bondCreator: w.buyer.publicKey,
-      systemProgram: SystemProgram.programId, agentStats: null,
+      treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
     })
     .instruction(), [cleaner]), "expire_claim with no-show bond forfeit");
 
@@ -744,7 +744,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: null, bondCreator: null,
-      systemProgram: SystemProgram.programId, agentStats: null,
+      treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
     })
     .instruction(), [w.provider]),
     "MissingCompletionBondAccount", "self-expire omitting the worker bond is rejected (#71)");
@@ -763,7 +763,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: junkBond, bondCreator: w.buyer.publicKey,
-      systemProgram: SystemProgram.programId, agentStats: null,
+      treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
     })
     .instruction(), [w.provider]),
     "MissingCompletionBondAccount", "self-expire with a non-canonical bond PDA is rejected (#71)");
@@ -778,7 +778,7 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: workerBond, bondCreator: w.buyer.publicKey,
-      systemProgram: SystemProgram.programId, agentStats: null,
+      treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
     })
     .instruction(), [w.provider]), "honest self-expire forfeits the bond");
   assert.ok(isClosed(w.svm, workerBond), "worker bond forfeited + closed on honest expire");
@@ -811,7 +811,7 @@ test("completion bond (#71): an UN-BONDED no-show still expires cleanly (fix mus
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: null,
       taskSubmission: null, rentRecipient: w.provider.publicKey,
       workerCompletionBond: workerBondPda, bondCreator: w.buyer.publicKey,
-      systemProgram: SystemProgram.programId, agentStats: null,
+      treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
     })
     .instruction(), [cleaner]), "un-bonded no-show expires cleanly with the canonical empty PDA");
 
@@ -868,7 +868,7 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
         worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: validation,
         taskSubmission: null, rentRecipient: w.provider.publicKey,
         workerCompletionBond: null, bondCreator: null,
-        systemProgram: SystemProgram.programId, agentStats: null,
+        treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
       })
       .instruction(), [cleaner]), `${name} no-show expires with null bond accounts (no freeze)`);
     assert.ok(isClosed(w.svm, claim), `${name} no-show claim closed`);
@@ -1427,7 +1427,7 @@ test("expire_claim: a PendingValidation claim with live submitted work cannot be
       worker: w.providerAgent, protocolConfig: w.protocolPda, taskValidationConfig: r.validation,
       taskSubmission, rentRecipient: w.provider.publicKey,
       workerCompletionBond: null, bondCreator: null,
-      systemProgram: SystemProgram.programId, agentStats: null,
+      treasury: null, systemProgram: SystemProgram.programId, agentStats: null,
     })
     .instruction(), [cleaner]);
 

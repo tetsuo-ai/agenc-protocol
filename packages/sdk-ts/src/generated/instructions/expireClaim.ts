@@ -71,6 +71,7 @@ export type ExpireClaimInstruction<
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountBondCreator extends string | AccountMeta<string> = string,
   TAccountAgentStats extends string | AccountMeta<string> = string,
+  TAccountTreasury extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -115,6 +116,9 @@ export type ExpireClaimInstruction<
       TAccountAgentStats extends string
         ? WritableAccount<TAccountAgentStats>
         : TAccountAgentStats,
+      TAccountTreasury extends string
+        ? WritableAccount<TAccountTreasury>
+        : TAccountTreasury,
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
@@ -162,6 +166,7 @@ export type ExpireClaimAsyncInput<
   TAccountWorkerCompletionBond extends string = string,
   TAccountBondCreator extends string = string,
   TAccountAgentStats extends string = string,
+  TAccountTreasury extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   /** Caller who triggers the expiration - receives cleanup reward */
@@ -172,6 +177,17 @@ export type ExpireClaimAsyncInput<
   worker: Address<TAccountWorker>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
+  /**
+   * The derived `["task_submission", claim]` PDA. The address is seeds-pinned
+   * (unfakeable), so what lives AT it is honest evidence: a live program-owned
+   * `TaskSubmission` is deserialized and inspected; a system-owned, zero-data
+   * account at this address PROVES no submission exists for this claim (the
+   * PDA was either never initialized — a no-show — or already closed by a
+   * settlement path that also closed the claim). This is what lets a no-show
+   * claim be expired during `PendingValidation` (another entrant's submission
+   * moved the task there) without reopening the caller-omission attack: the
+   * caller must still PASS the account, and cannot fake its contents.
+   */
   taskSubmission?: Address<TAccountTaskSubmission>;
   rentRecipient: Address<TAccountRentRecipient>;
   /**
@@ -187,6 +203,15 @@ export type ExpireClaimAsyncInput<
    * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
    */
   agentStats?: Address<TAccountAgentStats>;
+  /**
+   * Receives the FORFEITED contest entry-deposit surplus on a no-show expiry
+   * (never the creator). Required whenever the expiring claim carries a
+   * contest deposit; enforced in the handler (non-skippable). Full-surface
+   * only — canary builds are contest-incapable (see
+   * `validate_task_supports_validation_mode`), so the frozen canary account
+   * list for `expire_claim` is unchanged.
+   */
+  treasury?: Address<TAccountTreasury>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
 
@@ -203,6 +228,7 @@ export async function getExpireClaimInstructionAsync<
   TAccountWorkerCompletionBond extends string,
   TAccountBondCreator extends string,
   TAccountAgentStats extends string,
+  TAccountTreasury extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -219,6 +245,7 @@ export async function getExpireClaimInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
     TAccountAgentStats,
+    TAccountTreasury,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -237,6 +264,7 @@ export async function getExpireClaimInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
     TAccountAgentStats,
+    TAccountTreasury,
     TAccountSystemProgram
   >
 > {
@@ -264,6 +292,7 @@ export async function getExpireClaimInstructionAsync<
     },
     bondCreator: { value: input.bondCreator ?? null, isWritable: true },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
+    treasury: { value: input.treasury ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -339,6 +368,7 @@ export async function getExpireClaimInstructionAsync<
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondCreator", accounts.bondCreator),
       getAccountMeta("agentStats", accounts.agentStats),
+      getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getExpireClaimInstructionDataEncoder().encode({}),
@@ -357,6 +387,7 @@ export async function getExpireClaimInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
     TAccountAgentStats,
+    TAccountTreasury,
     TAccountSystemProgram
   >);
 }
@@ -374,6 +405,7 @@ export type ExpireClaimInput<
   TAccountWorkerCompletionBond extends string = string,
   TAccountBondCreator extends string = string,
   TAccountAgentStats extends string = string,
+  TAccountTreasury extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   /** Caller who triggers the expiration - receives cleanup reward */
@@ -384,6 +416,17 @@ export type ExpireClaimInput<
   worker: Address<TAccountWorker>;
   protocolConfig: Address<TAccountProtocolConfig>;
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
+  /**
+   * The derived `["task_submission", claim]` PDA. The address is seeds-pinned
+   * (unfakeable), so what lives AT it is honest evidence: a live program-owned
+   * `TaskSubmission` is deserialized and inspected; a system-owned, zero-data
+   * account at this address PROVES no submission exists for this claim (the
+   * PDA was either never initialized — a no-show — or already closed by a
+   * settlement path that also closed the claim). This is what lets a no-show
+   * claim be expired during `PendingValidation` (another entrant's submission
+   * moved the task there) without reopening the caller-omission attack: the
+   * caller must still PASS the account, and cannot fake its contents.
+   */
   taskSubmission?: Address<TAccountTaskSubmission>;
   rentRecipient: Address<TAccountRentRecipient>;
   /**
@@ -399,6 +442,15 @@ export type ExpireClaimInput<
    * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
    */
   agentStats?: Address<TAccountAgentStats>;
+  /**
+   * Receives the FORFEITED contest entry-deposit surplus on a no-show expiry
+   * (never the creator). Required whenever the expiring claim carries a
+   * contest deposit; enforced in the handler (non-skippable). Full-surface
+   * only — canary builds are contest-incapable (see
+   * `validate_task_supports_validation_mode`), so the frozen canary account
+   * list for `expire_claim` is unchanged.
+   */
+  treasury?: Address<TAccountTreasury>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
 
@@ -415,6 +467,7 @@ export function getExpireClaimInstruction<
   TAccountWorkerCompletionBond extends string,
   TAccountBondCreator extends string,
   TAccountAgentStats extends string,
+  TAccountTreasury extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -431,6 +484,7 @@ export function getExpireClaimInstruction<
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
     TAccountAgentStats,
+    TAccountTreasury,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -448,6 +502,7 @@ export function getExpireClaimInstruction<
   TAccountWorkerCompletionBond,
   TAccountBondCreator,
   TAccountAgentStats,
+  TAccountTreasury,
   TAccountSystemProgram
 > {
   // Program address.
@@ -474,6 +529,7 @@ export function getExpireClaimInstruction<
     },
     bondCreator: { value: input.bondCreator ?? null, isWritable: true },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
+    treasury: { value: input.treasury ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -502,6 +558,7 @@ export function getExpireClaimInstruction<
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondCreator", accounts.bondCreator),
       getAccountMeta("agentStats", accounts.agentStats),
+      getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getExpireClaimInstructionDataEncoder().encode({}),
@@ -520,6 +577,7 @@ export function getExpireClaimInstruction<
     TAccountWorkerCompletionBond,
     TAccountBondCreator,
     TAccountAgentStats,
+    TAccountTreasury,
     TAccountSystemProgram
   >);
 }
@@ -538,6 +596,17 @@ export type ParsedExpireClaimInstruction<
     worker: TAccountMetas[4];
     protocolConfig: TAccountMetas[5];
     taskValidationConfig?: TAccountMetas[6] | undefined;
+    /**
+     * The derived `["task_submission", claim]` PDA. The address is seeds-pinned
+     * (unfakeable), so what lives AT it is honest evidence: a live program-owned
+     * `TaskSubmission` is deserialized and inspected; a system-owned, zero-data
+     * account at this address PROVES no submission exists for this claim (the
+     * PDA was either never initialized — a no-show — or already closed by a
+     * settlement path that also closed the claim). This is what lets a no-show
+     * claim be expired during `PendingValidation` (another entrant's submission
+     * moved the task there) without reopening the caller-omission attack: the
+     * caller must still PASS the account, and cannot fake its contents.
+     */
     taskSubmission?: TAccountMetas[7] | undefined;
     rentRecipient: TAccountMetas[8];
     /**
@@ -553,7 +622,16 @@ export type ParsedExpireClaimInstruction<
      * list for `expire_claim` is unchanged. Paid by the (permissionless) caller.
      */
     agentStats?: TAccountMetas[11] | undefined;
-    systemProgram: TAccountMetas[12];
+    /**
+     * Receives the FORFEITED contest entry-deposit surplus on a no-show expiry
+     * (never the creator). Required whenever the expiring claim carries a
+     * contest deposit; enforced in the handler (non-skippable). Full-surface
+     * only — canary builds are contest-incapable (see
+     * `validate_task_supports_validation_mode`), so the frozen canary account
+     * list for `expire_claim` is unchanged.
+     */
+    treasury?: TAccountMetas[12] | undefined;
+    systemProgram: TAccountMetas[13];
   };
   data: ExpireClaimInstructionData;
 };
@@ -566,12 +644,12 @@ export function parseExpireClaimInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedExpireClaimInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 13) {
+  if (instruction.accounts.length < 14) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 13,
+        expectedAccountMetas: 14,
       },
     );
   }
@@ -602,6 +680,7 @@ export function parseExpireClaimInstruction<
       workerCompletionBond: getNextOptionalAccount(),
       bondCreator: getNextOptionalAccount(),
       agentStats: getNextOptionalAccount(),
+      treasury: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
     },
     data: getExpireClaimInstructionDataDecoder().decode(instruction.data),
