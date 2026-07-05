@@ -45,6 +45,7 @@ export * from "./recordListingModerationModerationAttestor";
 export * from "./reputationStake";
 export * from "./skill";
 export * from "./state";
+export * from "./store";
 export * from "./task";
 export * from "./taskAttestorConfig";
 export * from "./taskJobSpec";

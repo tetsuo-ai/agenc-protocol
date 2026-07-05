@@ -19,6 +19,14 @@ export {
   decodeListingTags,
 } from "./listing.js";
 export {
+  STORE_HANDLE_BYTES,
+  STORE_HANDLE_MIN_LEN,
+  STORE_HANDLE_MAX_LEN,
+  STORE_HANDLE_PATTERN,
+  encodeStoreHandle,
+  decodeStoreHandle,
+} from "./store.js";
+export {
   canonicalJobSpecJson,
   canonicalJobSpecHash,
   type CanonicalJobSpecHash,

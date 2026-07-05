@@ -1,6 +1,34 @@
 # @tetsuo-ai/marketplace-sdk
 
-## Unreleased
+## 0.9.0
+
+### Minor Changes (additive, no wire change — batch-2 store surface)
+
+- The batch-2 on-chain Store surface is now reachable from TypeScript (it has
+  been LIVE on mainnet since the batch-2 upgrade, but the generated client
+  predated it): regenerated Codama client with `register_store` /
+  `update_store` / `close_store` / `moderation_heartbeat`, the `Store` account
+  (`fetchStore` / `fetchMaybeStore` / `decodeStore`), `findStorePda`
+  (`["store", owner]`), the four batch-2 events (`StoreRegistered`,
+  `StoreUpdated`, `StoreClosed`, `ModerationHeartbeatRecorded` — event table
+  94 -> 98), the batch-2 dispute referrer legs on `resolve_dispute` /
+  `expire_dispute`, and the new store/liveness error codes.
+- New `facade/stores.ts` namespace: `registerStore` (permissionless, one Store
+  per wallet, rent + the 0.05 SOL bond — exported as
+  `STORE_REGISTRATION_BOND_LAMPORTS`), `updateStore`, `closeStore` (full
+  refund, never confiscatable), with the store PDA auto-derived from the
+  `owner` signer. `handle` accepts the raw 32-byte zero-padded field OR a
+  plain string validated + encoded via the new `values` codec
+  (`encodeStoreHandle` / `decodeStoreHandle` / `STORE_HANDLE_PATTERN`,
+  mirror of the on-chain `validate_store_handle` charset floor).
+- New client named methods: `client.registerStore` / `client.updateStore` /
+  `client.closeStore` (the full store-identity lifecycle through the same
+  send pipeline as the rest of the first-party surface).
+- New `facade.moderationHeartbeat` (batch-2 A2 moderation liveness): the
+  config/moderation authority bumps the deadman timestamp, optionally
+  retuning the window via `newWindowSecs`; silence past the window relaxes
+  the ALLOW gates to moderation-optional, the multisig BLOCK floor never
+  relaxes.
 
 ### Patch Changes (docs only, no code change — WP-D5 part 2)
 

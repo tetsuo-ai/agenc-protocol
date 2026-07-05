@@ -772,6 +772,11 @@ describe("MarketplaceClient first-party lifecycle surface", () => {
       // are first-class named methods (post AND the reclaim recovery crank).
       "postCompletionBond",
       "reclaimCompletionBond",
+      // Batch-2 on-chain store identity (P5.2): the full register/update/close
+      // lifecycle is first-class on the client.
+      "registerStore",
+      "updateStore",
+      "closeStore",
     ] as const) {
       expect(typeof client[name]).toBe("function");
     }

@@ -216,6 +216,21 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.createServiceListing>,
     options?: SendOptions,
   ): Promise<SendResult>;
+  /** Build (facade.registerStore) and send a register_store transaction. */
+  registerStore(
+    input: FacadeInput<typeof facade.registerStore>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.updateStore) and send an update_store transaction. */
+  updateStore(
+    input: FacadeInput<typeof facade.updateStore>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.closeStore) and send a close_store transaction. */
+  closeStore(
+    input: FacadeInput<typeof facade.closeStore>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
   /** Build (facade.hireFromListing) and send a hire_from_listing transaction. */
   hireFromListing(
     input: FacadeInput<typeof facade.hireFromListing>,
@@ -552,6 +567,11 @@ export function createMarketplaceClient(
     send,
     registerAgent: viaFacade(facade.registerAgent),
     createServiceListing: viaFacade(facade.createServiceListing),
+    // Batch-2 on-chain store identity (P5.2): permissionless register (rent +
+    // the 0.05 SOL bond), in-place update, and the full-refund close.
+    registerStore: viaFacade(facade.registerStore),
+    updateStore: viaFacade(facade.updateStore),
+    closeStore: viaFacade(facade.closeStore),
     // P6.2: hires carry the client's configured `referrer` default unless the
     // per-call input overrides it (the embedder's wallet+bps on every job).
     hireFromListing: viaFacadeWithReferral(facade.hireFromListing),

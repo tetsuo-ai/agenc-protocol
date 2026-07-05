@@ -73,7 +73,11 @@ export type AgentStats = {
   lastUpdated: bigint;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future track-record counters. MUST stay zeroed. */
+  /**
+   * Reserved for future track-record counters (the per-agent rating rollup is
+   * deferred to P6.6, which will carve these bytes value-only with no migration).
+   * MUST stay zeroed.
+   */
   reserved: ReadonlyUint8Array;
 };
 
@@ -100,7 +104,11 @@ export type AgentStatsArgs = {
   lastUpdated: number | bigint;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future track-record counters. MUST stay zeroed. */
+  /**
+   * Reserved for future track-record counters (the per-agent rating rollup is
+   * deferred to P6.6, which will carve these bytes value-only with no migration).
+   * MUST stay zeroed.
+   */
   reserved: ReadonlyUint8Array;
 };
 

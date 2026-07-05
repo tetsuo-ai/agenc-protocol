@@ -1,6 +1,7 @@
 // Facade barrel — ergonomic, named entry points over the generated kit client.
 export * from "./agents.js";
 export * from "./listings.js";
+export * from "./stores.js";
 export * from "./tasks.js";
 export * from "./bonds.js";
 export * from "./disputes.js";
