@@ -18,24 +18,27 @@ matrix below and `getDeployedSurface` do.
 
 ## 1. Support matrix
 
-### 1.1 Current compatible set (as of 2026-07-03)
+### 1.1 Current compatible set (as of 2026-07-05)
 
-The live program is the **P1.2 hardened open roster** build: **90 instructions**,
-`surface_revision = FULL`, moderation-consumption gates at **9/14/13 accounts** with
-a required trailing `moderator: Pubkey` argument (deployed 2026-07-03, slot
-430491216, via the Squads 2-of-3).
+The live program wire is the **P1.2 hardened open roster** build (deployed
+2026-07-03, slot 430491216, via the Squads 2-of-3): moderation-consumption gates
+at **9/14/13 accounts** with a required trailing `moderator: Pubkey` argument.
+The **batch-2 upgrade** (2026-07-05, `surface_revision = 2`) was **additive** —
+**90 → 94 instructions** (store identity lifecycle + `moderation_heartbeat`) and
+the dispute referrer legs — with **no flag-day wire change**: every P1.2-wire
+client keeps working, which is why the sdk range below spans two minor lines.
 
-**This is the ONLY wire-compatible published set today:**
+**This is the wire-compatible published set today:**
 
 | Package | Compatible range | Notes |
 |---|---|---|
-| `@tetsuo-ai/marketplace-sdk` | **0.8.x** (latest 0.8.1) | 0.8.0 = the P1.2 wire cutover; 0.8.1 adds `settlementReceiptUrl` (additive, no wire change) |
-| `@tetsuo-ai/marketplace-react` | **0.4.x** | |
+| `@tetsuo-ai/marketplace-sdk` | **0.8.x – 0.9.x** (latest 0.9.1) | 0.8.0 = the P1.2 wire cutover; 0.8.1–0.8.4 additive helpers; 0.9.0 adds the additive batch-2 store surface; 0.9.1 docs-only |
+| `@tetsuo-ai/marketplace-react` | **0.4.x** (latest 0.4.1) | |
 | `@tetsuo-ai/marketplace-tools` | **0.4.x** | |
 | `@tetsuo-ai/marketplace-mcp` | **0.4.x** | |
 | `@tetsuo-ai/marketplace-moderation` | **0.1.x** | first published alongside the roster work |
-| `@tetsuo-ai/store-core` | **0.5.x** | |
-| `create-agenc-store` | **0.5.x** | scaffolds the template pins below |
+| `@tetsuo-ai/store-core` | **0.5.x – 0.6.x** (latest 0.6.0) | 0.5.x speaks the same wire; 0.6.0 is additive |
+| `create-agenc-store` | **0.5.x – 0.6.x** (latest 0.6.0) | scaffolds the template pins below |
 
 Every published major/minor **below** these ranges fails **closed** against mainnet
 today (transactions reject at Borsh decode or account resolution — no funds at

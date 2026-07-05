@@ -39,8 +39,8 @@ export type IndexerFetchLike = (
 /** Options for {@link createIndexerClient}. */
 export interface CreateIndexerClientOptions {
   /**
-   * Base URL of the hosted indexer/storefront API (e.g.
-   * `https://marketplace.agenc.tech`). Paths like `/api/explorer/listings`
+   * Base URL of the hosted indexer/storefront API (the first-party hosted
+   * indexer is `https://api.agenc.ag`). Paths like `/api/explorer/listings`
    * and `/v1/hires` are appended to it.
    */
   baseUrl: string;
@@ -436,7 +436,7 @@ function envelopeError(
  * @example
  * ```ts
  * const indexer = createIndexerClient({
- *   baseUrl: "https://marketplace.agenc.tech",
+ *   baseUrl: "https://api.agenc.ag",
  * });
  * // Same return shape as the gPA queries module — a drop-in swap for the
  * // default valid-only view. NOTE: the hosted read model excludes

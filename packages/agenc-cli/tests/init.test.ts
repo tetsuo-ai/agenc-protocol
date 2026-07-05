@@ -103,6 +103,49 @@ describe("runInit", () => {
     expect(readFileSync(pagePath, "utf8")).not.toBe("// user edited this\n");
   });
 
+  it("scaffolds a package.json (pinned AgenC deps) when the project has none", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agenc-cli-init-NO-Pkg "));
+    const result = runInit(dir);
+    expect(result.kind).toBe("worker");
+    const pkgFile = result.files.find((f) => f.path === "package.json");
+    expect(pkgFile?.status).toBe("written");
+    const pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"));
+    // Name derived from the dir basename, sanitized to a valid npm name.
+    expect(pkg.name).toMatch(/^[a-z0-9-._~]+$/);
+    expect(pkg.private).toBe(true);
+    // Deps pinned inside the support matrix so `npm install` works HERE
+    // (no hoisting into an ancestor) and `agenc promote` finds the sdk.
+    expect(pkg.dependencies["@tetsuo-ai/marketplace-sdk"]).toMatch(/^\^0\.9\./);
+    expect(pkg.dependencies["@tetsuo-ai/agenc-worker"]).toMatch(/^\^0\.1\./);
+    expect(pkg.dependencies["@solana/kit"]).toBeDefined();
+    // The printed next step is a plain `npm install`.
+    expect(result.instructions.some((l) => l.includes("npm install"))).toBe(true);
+  });
+
+  it("never touches an existing package.json", () => {
+    const dir = workerDir(); // has its own package.json
+    const before = readFileSync(path.join(dir, "package.json"), "utf8");
+    const result = runInit(dir);
+    expect(result.files.some((f) => f.path === "package.json")).toBe(false);
+    expect(readFileSync(path.join(dir, "package.json"), "utf8")).toBe(before);
+  });
+
+  it("is idempotent after scaffolding a package.json (second run leaves it alone)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agenc-cli-init-"));
+    runInit(dir);
+    // User customizes the scaffolded file…
+    const pkgPath = path.join(dir, "package.json");
+    const customized = JSON.parse(readFileSync(pkgPath, "utf8"));
+    customized.dependencies.express = "^5.0.0";
+    writeFileSync(pkgPath, JSON.stringify(customized, null, 2));
+    // …and a re-run (even --force) does not plan package.json at all.
+    const second = runInit(dir, { force: true });
+    expect(second.refused).toBe(false);
+    expect(second.files.some((f) => f.path === "package.json")).toBe(false);
+    const after = JSON.parse(readFileSync(pkgPath, "utf8"));
+    expect(after.dependencies.express).toBe("^5.0.0");
+  });
+
   it("preserves tuned config values on re-run", () => {
     const dir = workerDir();
     runInit(dir);

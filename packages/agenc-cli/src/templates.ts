@@ -6,6 +6,53 @@ import type { AgencConfig } from "./config.js";
 const MARKER = "Written by `agenc init` (@tetsuo-ai/agenc-cli).";
 
 /**
+ * Dependency pins written into a scaffolded package.json. Keep them inside
+ * the agenc-protocol docs/VERSIONING.md §1.1 support matrix (the same truth
+ * `agenc promote` checks against).
+ */
+export const SDK_DEP_RANGE = "^0.9.1";
+export const WORKER_DEP_RANGE = "^0.1.0";
+export const KIT_DEP_RANGE = "^6.9.0";
+
+/** Make a directory/config name a valid npm package name. */
+export function npmPackageName(name: string): string {
+  const cleaned = name
+    .toLowerCase()
+    .replace(/[^a-z0-9-._~]+/gu, "-")
+    .replace(/^[-._]+/u, "")
+    .replace(/-+$/u, "")
+    .slice(0, 214);
+  return cleaned === "" ? "agenc-project" : cleaned;
+}
+
+/**
+ * package.json scaffolded when the project has none — so `npm install` puts
+ * node_modules HERE instead of hoisting into an ancestor project (where
+ * `agenc promote` and the templates would never find the sdk), with the
+ * AgenC deps pre-pinned inside the support matrix.
+ */
+export function scaffoldPackageJson(config: AgencConfig): string {
+  const dependencies: Record<string, string> = {
+    "@solana/kit": KIT_DEP_RANGE,
+    "@tetsuo-ai/marketplace-sdk": SDK_DEP_RANGE,
+  };
+  if (config.kind === "worker") {
+    dependencies["@tetsuo-ai/agenc-worker"] = WORKER_DEP_RANGE;
+  }
+  return `${JSON.stringify(
+    {
+      name: npmPackageName(config.name),
+      private: true,
+      version: "0.1.0",
+      type: "module",
+      dependencies,
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/**
  * Next.js App Router checkout page — GET /agenc. Server component, zero
  * client JS: shows the service and posts to the checkout route handler.
  */

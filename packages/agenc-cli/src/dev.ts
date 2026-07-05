@@ -1,7 +1,12 @@
-// `agenc dev` — the show: ensure a localnet sandbox, spin up throwaway
-// funded wallets, list the project's service, and run in-process
-// counterparty bots (buyer + worker) until the settlement lands — then print
-// the live 4-way split read from the chain.
+// `agenc dev` — the show: run counterparty bots (buyer + worker) against a
+// sandbox until the settlement lands, then print the live 4-way split read
+// from the chain. Two sandbox modes, SAME lifecycle, SAME table:
+//
+//   - "localnet": the WP-D4 solana-test-validator stack (reused when healthy,
+//     booted via the sdk repo's tooling when discoverable).
+//   - "sandbox": the in-process litesvm fallback — the REAL compiled program
+//     shipped inside the sdk, zero toolchain, seconds on a cold machine.
+//     This is what a fresh `npx @tetsuo-ai/agenc-cli dev` hits.
 import { readFile } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +26,7 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import { loadConfig, defaultConfig, type AgencConfig } from "./config.js";
 import { detectProject } from "./detect.js";
-import { runDevLoop, type DevActor, type DevLoopResult } from "./bots.js";
+import { runDevLoop, type DevActor, type DevListingTerms, type DevLoopResult } from "./bots.js";
 import {
   bootLocalnet,
   checkLocalnetHealth,
@@ -31,15 +36,28 @@ import {
   SETUP_INSTRUCTIONS,
   type LocalnetEnv,
 } from "./localnet.js";
+import { runDevSandbox } from "./sandbox.js";
 import { formatSplitTable, lamportsToSol } from "./split.js";
 
 export interface DevOptions {
-  /** Explicit `.localnet/env.json` path (beats discovery). */
+  /** Explicit `.localnet/env.json` path (beats discovery; implies localnet). */
   envFile?: string;
-  /** Kill + re-boot the localnet stack before running the bots. */
+  /** Kill + re-boot the localnet stack before running the bots (implies localnet). */
   purge?: boolean;
+  /** Force the in-process litesvm sandbox, skipping localnet discovery. */
+  sandbox?: boolean;
+  /** Require the localnet stack — fail instead of falling back in-process. */
+  localnet?: boolean;
   log?: (line: string) => void;
 }
+
+/** Which sandbox `agenc dev` settled in. */
+export type DevMode = "localnet" | "sandbox";
+
+const MODE_LABEL: Record<DevMode, string> = {
+  localnet: "localnet",
+  sandbox: "in-process sandbox (litesvm)",
+};
 
 const AIRDROP_SOL = 5n;
 const LAMPORTS_PER_SOL = 1_000_000_000n;
@@ -89,15 +107,31 @@ async function loadKeypairSigner(filePath: string): Promise<KeyPairSigner> {
   return createKeyPairSignerFromBytes(bytes);
 }
 
-/** Resolve a healthy localnet stack, booting/purging when possible. */
-async function ensureLocalnet(
+/**
+ * Resolve a healthy localnet stack. Returns `null` when `agenc dev` should
+ * fall back to the in-process litesvm sandbox instead: no stack discoverable,
+ * or a dead stack with no tooling to boot it. When localnet was explicitly
+ * required (`--localnet`, `--purge`, or `--env-file`) those cases keep the
+ * old fail-with-instructions behavior instead of falling back.
+ */
+async function resolveLocalnet(
   dir: string,
   options: DevOptions,
   log: (line: string) => void,
-): Promise<LocalnetEnv> {
+): Promise<LocalnetEnv | null> {
+  const required =
+    options.localnet === true ||
+    options.purge === true ||
+    options.envFile !== undefined;
   const env = findLocalnetEnv(dir, options.envFile);
   if (env === null) {
-    throw new LocalnetError(`no localnet sandbox found.\n\n${SETUP_INSTRUCTIONS}`);
+    if (required) {
+      throw new LocalnetError(`no localnet sandbox found.\n\n${SETUP_INSTRUCTIONS}`);
+    }
+    log(
+      "localnet: no stack discoverable — falling back to the in-process sandbox (litesvm)",
+    );
+    return null;
   }
   if (options.purge === true) {
     await bootLocalnet(env.repoRoot, { purge: true, log });
@@ -115,15 +149,69 @@ async function ensureLocalnet(
     await bootLocalnet(env.repoRoot, { log });
     return findLocalnetEnv(dir, options.envFile) ?? env;
   }
-  throw new LocalnetError(
-    `localnet stack at ${env.rpcUrl} is not healthy and no tooling was found to boot it.\n\n${SETUP_INSTRUCTIONS}`,
+  if (required) {
+    throw new LocalnetError(
+      `localnet stack at ${env.rpcUrl} is not healthy and no tooling was found to boot it.\n\n${SETUP_INSTRUCTIONS}`,
+    );
+  }
+  log(
+    `localnet: stack at ${env.rpcUrl} is down and no tooling was found to boot it — ` +
+      "falling back to the in-process sandbox (litesvm)",
   );
+  return null;
 }
 
 export interface DevRunSummary {
   result: DevLoopResult;
   config: AgencConfig;
-  rpcUrl: string;
+  /** Which sandbox ran: the localnet stack or the in-process litesvm fallback. */
+  mode: DevMode;
+  /** Localnet RPC endpoint, or `null` in in-process sandbox mode. */
+  rpcUrl: string | null;
+}
+
+function printSettlement(
+  log: (line: string) => void,
+  config: AgencConfig,
+  result: DevLoopResult,
+  mode: DevMode,
+): void {
+  log("");
+  log("  == SETTLEMENT: the 4-way split (real lamport deltas from the chain) ==");
+  log("");
+  log(
+    formatSplitTable(
+      [
+        // The worker row shows the reward cut; the raw delta additionally
+        // includes claim/submission rent refunds, itemized below the table.
+        { ...result.legs.worker, deltaLamports: result.workerRewardCutLamports },
+        result.legs.operator,
+        result.legs.referrer,
+        result.legs.treasury,
+      ],
+      result.rewardLamports,
+    ),
+  );
+  if (result.workerRentRefundLamports > 0n) {
+    log(
+      `  + ${lamportsToSol(result.workerRentRefundLamports)} SOL rent refunded to the worker ` +
+        `(its claim/submission accounts close at settlement; raw worker delta ` +
+        `${lamportsToSol(result.legs.worker.deltaLamports)} SOL)`,
+    );
+  }
+  log("");
+  log(`  mode:             ${MODE_LABEL[mode]}`);
+  log(`  reward escrowed:  ${lamportsToSol(result.rewardLamports)} SOL ("${config.name}")`);
+  log(`  settlement tx:    ${result.acceptSignature}`);
+  log(
+    `  receipt:          on mainnet this settlement gets a shareable receipt at ` +
+      `${settlementReceiptUrl(result.acceptSignature)}`,
+  );
+  log(
+    "                    (receipts are an agenc.ag mainnet surface — in the dev " +
+      "sandbox the split above + the tx signature ARE the proof)",
+  );
+  log(`  bot loop wall-clock: ${(result.durationMs / 1000).toFixed(1)}s`);
 }
 
 /** Run `agenc dev` against `dir`. Prints progress + the split via `log`. */
@@ -132,6 +220,14 @@ export async function runDev(
   options: DevOptions = {},
 ): Promise<DevRunSummary> {
   const log = options.log ?? ((line: string) => console.log(line));
+  if (
+    options.sandbox === true &&
+    (options.localnet === true || options.purge === true || options.envFile !== undefined)
+  ) {
+    throw new LocalnetError(
+      "--sandbox cannot be combined with --localnet, --purge, or --env-file (those force the localnet stack)",
+    );
+  }
 
   // Listing terms come from agenc.config.json; fall back to detection so
   // `agenc dev` still demos in a repo that skipped `agenc init`.
@@ -144,8 +240,32 @@ export async function runDev(
     config = defaultConfig(detection.name, detection.kind);
     log(`no ${path.join(dir, "agenc.config.json")} — using defaults (run \`agenc init\` to pin them)`);
   }
+  const listing: DevListingTerms = {
+    name: config.name,
+    priceLamports: BigInt(config.listing.priceLamports),
+    operatorFeeBps: config.listing.operatorFeeBps,
+    referrerFeeBps: config.listing.referrerFeeBps,
+  };
+  const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-dev-worker-"));
 
-  const env = await ensureLocalnet(dir, options, log);
+  const env =
+    options.sandbox === true ? null : await resolveLocalnet(dir, options, log);
+
+  if (env === null) {
+    // ---- in-process sandbox (litesvm) — the zero-toolchain cold path ----
+    if (options.sandbox === true) {
+      log("sandbox: --sandbox forced the in-process litesvm mode");
+    }
+    log(
+      "sandbox: nothing to install or boot — the compiled program ships with the sdk " +
+        "(for the full validator experience set up the localnet stack; `agenc dev --localnet` prints setup)",
+    );
+    const result = await runDevSandbox({ listing, stateDir, log });
+    printSettlement(log, config, result, "sandbox");
+    return { result, config, mode: "sandbox", rpcUrl: null };
+  }
+
+  // ---- localnet stack ----
   const moderatorPath = env.keypairs?.moderator;
   if (moderatorPath === undefined || moderatorPath === null) {
     throw new LocalnetError(
@@ -181,7 +301,6 @@ export async function runDev(
     client: createMarketplaceClient({ rpcUrl: env.rpcUrl, signer }),
   });
 
-  const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-dev-worker-"));
   const result = await runDevLoop({
     buyer: actor(buyerSigner),
     provider: actor(providerSigner),
@@ -193,48 +312,9 @@ export async function runDev(
     gpa: rpc,
     stateDir,
     log,
-    listing: {
-      name: config.name,
-      priceLamports: BigInt(config.listing.priceLamports),
-      operatorFeeBps: config.listing.operatorFeeBps,
-      referrerFeeBps: config.listing.referrerFeeBps,
-    },
+    listing,
   });
 
-  log("");
-  log("  == SETTLEMENT: the 4-way split (real lamport deltas from the chain) ==");
-  log("");
-  log(
-    formatSplitTable(
-      [
-        // The worker row shows the reward cut; the raw delta additionally
-        // includes claim/submission rent refunds, itemized below the table.
-        { ...result.legs.worker, deltaLamports: result.workerRewardCutLamports },
-        result.legs.operator,
-        result.legs.referrer,
-        result.legs.treasury,
-      ],
-      result.rewardLamports,
-    ),
-  );
-  if (result.workerRentRefundLamports > 0n) {
-    log(
-      `  + ${lamportsToSol(result.workerRentRefundLamports)} SOL rent refunded to the worker ` +
-        `(its claim/submission accounts close at settlement; raw worker delta ` +
-        `${lamportsToSol(result.legs.worker.deltaLamports)} SOL)`,
-    );
-  }
-  log("");
-  log(`  reward escrowed:  ${lamportsToSol(result.rewardLamports)} SOL ("${config.name}")`);
-  log(`  settlement tx:    ${result.acceptSignature}`);
-  log(
-    `  receipt:          on mainnet this settlement gets a shareable receipt at ` +
-      `${settlementReceiptUrl(result.acceptSignature)}`,
-  );
-  log(
-    "                    (receipts are an agenc.ag mainnet surface — on localnet the " +
-      "split above + the tx signature ARE the proof)",
-  );
-  log(`  bot loop wall-clock: ${(result.durationMs / 1000).toFixed(1)}s`);
-  return { result, config, rpcUrl: env.rpcUrl };
+  printSettlement(log, config, result, "localnet");
+  return { result, config, mode: "localnet", rpcUrl: env.rpcUrl };
 }

@@ -29,7 +29,13 @@ export {
   type DevLoopDeps,
   type DevLoopResult,
 } from "./bots.js";
-export { runDev, type DevOptions, type DevRunSummary } from "./dev.js";
+export { runDev, type DevMode, type DevOptions, type DevRunSummary } from "./dev.js";
+export {
+  runDevSandbox,
+  SANDBOX_PROTOCOL_FEE_BPS,
+  type SandboxRunOptions,
+} from "./sandbox.js";
+export { GpaSimulator } from "./gpa-sim.js";
 export {
   assertLocalOnly,
   bootLocalnet,

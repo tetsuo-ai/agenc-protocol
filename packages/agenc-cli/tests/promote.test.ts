@@ -25,17 +25,20 @@ function statusOf(report: ReturnType<typeof runPromoteChecks>, id: string) {
 }
 
 describe("versionInMatrix", () => {
-  it("accepts patch releases inside the line", () => {
-    expect(versionInMatrix("0.8.2", "0.8")).toBe(true);
-    expect(versionInMatrix("0.8.11", "0.8")).toBe(true);
+  it("accepts patch releases inside any supported line", () => {
+    expect(versionInMatrix("0.8.2", ["0.8", "0.9"])).toBe(true);
+    expect(versionInMatrix("0.8.11", ["0.8", "0.9"])).toBe(true);
+    expect(versionInMatrix("0.9.0", ["0.8", "0.9"])).toBe(true);
+    expect(versionInMatrix("0.9.1", ["0.8", "0.9"])).toBe(true);
   });
   it("rejects older and newer lines", () => {
-    expect(versionInMatrix("0.7.9", "0.8")).toBe(false);
-    expect(versionInMatrix("0.9.0", "0.8")).toBe(false);
-    expect(versionInMatrix("1.8.0", "0.8")).toBe(false);
+    expect(versionInMatrix("0.7.9", ["0.8", "0.9"])).toBe(false);
+    expect(versionInMatrix("0.10.0", ["0.8", "0.9"])).toBe(false);
+    expect(versionInMatrix("0.9.0", ["0.8"])).toBe(false);
+    expect(versionInMatrix("1.8.0", ["0.8", "0.9"])).toBe(false);
   });
   it("rejects garbage", () => {
-    expect(versionInMatrix("not-a-version", "0.8")).toBe(false);
+    expect(versionInMatrix("not-a-version", ["0.8"])).toBe(false);
   });
 });
 
@@ -97,7 +100,35 @@ describe("runPromoteChecks", () => {
     expect(report.ready).toBe(false);
     const pin = report.checks.find((c) => c.id === "pin:@tetsuo-ai/marketplace-sdk");
     expect(pin?.status).toBe("fail");
-    expect(pin?.action).toContain("npm install @tetsuo-ai/marketplace-sdk@^0.8.0");
+    expect(pin?.action).toContain("npm install @tetsuo-ai/marketplace-sdk@^0.9.0");
+  });
+
+  it("passes BOTH supported sdk lines — 0.8.x and 0.9.x speak the live wire", () => {
+    // Regression guard for the 0.2.0 fix: promote used to flag sdk 0.9.0
+    // (the current published sdk, which reads mainnet fine) as outside a
+    // 0.8-only matrix — poisoning every fresh install.
+    for (const version of ["0.8.2", "0.9.0", "0.9.1"]) {
+      const input = readyInput();
+      input.installedVersions["@tetsuo-ai/marketplace-sdk"] = version;
+      const report = runPromoteChecks(input);
+      expect(statusOf(report, "pin:@tetsuo-ai/marketplace-sdk")).toBe("pass");
+    }
+  });
+
+  it("gives actionable wallet and RPC hints on FAIL lines", () => {
+    const input = readyInput();
+    input.config!.walletPath = null;
+    input.config!.rpcUrl = null;
+    const report = runPromoteChecks(input);
+    const wallet = report.checks.find((c) => c.id === "wallet");
+    expect(wallet?.action).toContain("solana-keygen new");
+    const rpc = report.checks.find((c) => c.id === "rpc");
+    expect(rpc?.action).toContain("api.mainnet-beta.solana.com");
+
+    const missing = readyInput();
+    missing.walletExists = false;
+    const missingWallet = runPromoteChecks(missing).checks.find((c) => c.id === "wallet");
+    expect(missingWallet?.action).toContain("solana-keygen new");
   });
 
   it("checks every installed first-party package against the matrix", () => {

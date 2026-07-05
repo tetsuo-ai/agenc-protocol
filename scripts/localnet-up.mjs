@@ -59,7 +59,10 @@ const AIRDROP_FLOOR = 100n * LAMPORTS_PER_SOL; // top up below this
 // requires stake_amount >= this, so local seeding must stake >= 0.001 SOL.
 const PROTOCOL_PARAMS = {
   disputeThreshold: 60,
-  protocolFeeBps: 250,
+  // 500 bps = the LIVE mainnet protocol fee — keep the local demo split
+  // production-truthful (docs/VERSIONING.md; agenc-cli's sandbox mode
+  // stamps the same value).
+  protocolFeeBps: 500,
   minStake: 1_000_000n,
   minStakeForDispute: 1_000_000n,
   multisigThreshold: 2,

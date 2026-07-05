@@ -4,20 +4,25 @@
 //
 // The version matrix mirrors docs/VERSIONING.md §1.1 (the human-maintained
 // source of truth for which published pins speak the live mainnet wire —
-// P1.2 hardened open roster, 2026-07-03). Update BOTH on the next lockstep
-// republish.
+// P1.2 wire + additive batch-2, 2026-07-05). Update BOTH on the next
+// lockstep republish. A package may have MULTIPLE compatible minor lines
+// when a program upgrade was additive (batch-2: sdk 0.8.x and 0.9.x both
+// speak the live wire).
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, type AgencConfig, AgencConfigError, CONFIG_FILENAME } from "./config.js";
 
-/** docs/VERSIONING.md §1.1 — compatible `major.minor` per package. */
-export const SUPPORT_MATRIX: Record<string, string> = {
-  "@tetsuo-ai/marketplace-sdk": "0.8",
-  "@tetsuo-ai/marketplace-react": "0.4",
-  "@tetsuo-ai/marketplace-tools": "0.4",
-  "@tetsuo-ai/marketplace-mcp": "0.4",
-  "@tetsuo-ai/marketplace-moderation": "0.1",
-  "@tetsuo-ai/store-core": "0.5",
+/**
+ * docs/VERSIONING.md §1.1 — compatible `major.minor` lines per package,
+ * oldest first (the LAST entry is the current line install hints point at).
+ */
+export const SUPPORT_MATRIX: Record<string, readonly string[]> = {
+  "@tetsuo-ai/marketplace-sdk": ["0.8", "0.9"],
+  "@tetsuo-ai/marketplace-react": ["0.4"],
+  "@tetsuo-ai/marketplace-tools": ["0.4"],
+  "@tetsuo-ai/marketplace-mcp": ["0.4"],
+  "@tetsuo-ai/marketplace-moderation": ["0.1"],
+  "@tetsuo-ai/store-core": ["0.5", "0.6"],
 };
 
 export type CheckStatus = "pass" | "fail" | "warn";
@@ -59,11 +64,14 @@ function isLoopback(rpcUrl: string): boolean {
   }
 }
 
-/** `version` is inside the supported `major.minor` line. */
-export function versionInMatrix(version: string, majorMinor: string): boolean {
+/** `version` is inside one of the supported `major.minor` lines. */
+export function versionInMatrix(
+  version: string,
+  lines: readonly string[],
+): boolean {
   const match = /^(\d+)\.(\d+)\./u.exec(`${version}.`);
   if (match === null) return false;
-  return `${match[1]}.${match[2]}` === majorMinor;
+  return lines.includes(`${match[1]}.${match[2]}`);
 }
 
 /** Pure checklist logic (unit-testable without a filesystem). */
@@ -103,7 +111,10 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       label: "production RPC endpoint",
       status: "fail",
       detail: "rpcUrl is not set (the dev sandbox uses localnet automatically)",
-      action: `set "rpcUrl" in ${CONFIG_FILENAME} to your mainnet RPC endpoint`,
+      action:
+        `set "rpcUrl" in ${CONFIG_FILENAME} to your mainnet RPC endpoint — ` +
+        "https://api.mainnet-beta.solana.com works to start (rate-limited; development only); " +
+        "use a dedicated provider (Helius / Triton / QuickNode class) for production traffic",
     });
   } else if (isLoopback(rpcUrl)) {
     checks.push({
@@ -111,7 +122,10 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       label: "production RPC endpoint",
       status: "fail",
       detail: `rpcUrl points at a local endpoint (${rpcUrl})`,
-      action: `set "rpcUrl" in ${CONFIG_FILENAME} to a real mainnet RPC endpoint`,
+      action:
+        `set "rpcUrl" in ${CONFIG_FILENAME} to a real mainnet RPC endpoint — ` +
+        "https://api.mainnet-beta.solana.com works to start (rate-limited; development only); " +
+        "use a dedicated provider (Helius / Triton / QuickNode class) for production traffic",
     });
   } else {
     checks.push({
@@ -130,7 +144,10 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       label: "signer wallet",
       status: "fail",
       detail: "walletPath is not set",
-      action: `set "walletPath" in ${CONFIG_FILENAME} to your production keypair (never a .localnet key)`,
+      action:
+        `set "walletPath" in ${CONFIG_FILENAME} to your production keypair (never a .localnet key) — ` +
+        "no wallet yet? `solana-keygen new --outfile ~/.config/solana/agenc-mainnet.json`, " +
+        "then fund it with SOL before going live",
     });
   } else if (walletPath.split(path.sep).includes(".localnet")) {
     checks.push({
@@ -146,7 +163,9 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       label: "signer wallet",
       status: "fail",
       detail: `walletPath does not exist: ${walletPath}`,
-      action: "create/copy the keypair to that path (or fix the path)",
+      action:
+        "create/copy the keypair to that path (or fix the path) — " +
+        `\`solana-keygen new --outfile ${walletPath}\` creates one; fund it with SOL before going live`,
     });
   } else {
     checks.push({
@@ -159,24 +178,26 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
 
   // 4) installed package pins inside the VERSIONING.md support matrix
   let sawAnyPackage = false;
-  for (const [pkg, majorMinor] of Object.entries(SUPPORT_MATRIX)) {
+  for (const [pkg, lines] of Object.entries(SUPPORT_MATRIX)) {
     const version = input.installedVersions[pkg];
     if (version == null) continue; // not a dependency of this project — fine
     sawAnyPackage = true;
-    if (versionInMatrix(version, majorMinor)) {
+    const supported = lines.map((line) => `${line}.x`).join(" / ");
+    const current = lines[lines.length - 1];
+    if (versionInMatrix(version, lines)) {
       checks.push({
         id: `pin:${pkg}`,
         label: `${pkg} pin`,
         status: "pass",
-        detail: `${version} (matrix: ${majorMinor}.x)`,
+        detail: `${version} (matrix: ${supported})`,
       });
     } else {
       checks.push({
         id: `pin:${pkg}`,
         label: `${pkg} pin`,
         status: "fail",
-        detail: `${version} is OUTSIDE the supported ${majorMinor}.x line — it fails closed against the live mainnet program`,
-        action: `npm install ${pkg}@^${majorMinor}.0 (see agenc-protocol docs/VERSIONING.md §1.1)`,
+        detail: `${version} is OUTSIDE the supported ${supported} lines — it fails closed against the live mainnet program`,
+        action: `npm install ${pkg}@^${current}.0 (see agenc-protocol docs/VERSIONING.md §1.1)`,
       });
     }
   }
@@ -186,7 +207,8 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       label: "@tetsuo-ai/marketplace-sdk pin",
       status: "fail",
       detail: "@tetsuo-ai/marketplace-sdk is not installed in this project",
-      action: "npm install @tetsuo-ai/marketplace-sdk@^0.8.2",
+      action:
+        "npm install @tetsuo-ai/marketplace-sdk@^0.9.1 (run it in the project root — `agenc init` scaffolds a package.json when the project has none)",
     });
   }
 
