@@ -10,6 +10,8 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./POLICY_CHANGES.md](./POLICY_CHANGES.md) - dated log of authority-signed mainnet POLICY mutations (fees, rate limits — config changes, not deploys)
 - [./CODEBASE_MAP.md](./CODEBASE_MAP.md) - path-by-path map for programs, artifacts, packages, scripts, migrations, zkVM, and workflows
 - [./PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md) - grouped instruction and account model for the Anchor program
+- [./reference/INSTRUCTIONS.md](./reference/INSTRUCTIONS.md) - **generated** per-instruction reference (docs, accounts with writable/signer/optional flags and PDA seeds, args with types) built from the committed IDL; regenerate with `npm run docs:idl-reference` — drift fails `npm run check:idl-reference` (part of `validate` + CI)
+- [./reference/ERRORS.md](./reference/ERRORS.md) - **generated** error catalog (every program error: code, name, message) from the same IDL pipeline
 - [./MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md) - RFC for bid-book accounts, lifecycle, settlement hooks, and anti-spam controls
 - [./ARTIFACT_PIPELINE.md](./ARTIFACT_PIPELINE.md) - how `anchor build` output becomes committed and published artifacts
 - [./VALIDATION.md](./VALIDATION.md) - local toolchain and CI-equivalent commands

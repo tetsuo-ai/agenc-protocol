@@ -25,9 +25,15 @@ npm run artifacts:check
 npm run build
 npm run typecheck
 npm run pack:smoke
+npm run check:idl-reference
 ```
 
 Those are the same gates enforced by CI for Marketplace V2 work.
+
+`check:idl-reference` regenerates the IDL-derived reference docs
+(`docs/reference/INSTRUCTIONS.md`, `docs/reference/ERRORS.md`) and fails when the
+committed copies drift from `artifacts/anchor/idl/agenc_coordination.json`. After
+an intentional IDL change, run `npm run docs:idl-reference` and commit the result.
 
 ## Devnet Marketplace Readiness
 
