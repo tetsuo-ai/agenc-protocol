@@ -110,6 +110,34 @@ pub const REGISTRATION_BOND_LAMPORTS: u64 = 250_000_000;
 pub const ATTESTOR_EXIT_COOLDOWN: i64 = 604_800;
 
 // ============================================================================
+// P1.3 Moderation Liveness Constants (batch-2 A2 — docs/MODERATION_LIVENESS.md)
+// ============================================================================
+
+/// Default moderation liveness window: 90 days of authority silence
+/// (no `configure_task_moderation` / `moderation_heartbeat`) relaxes the
+/// consumption gates to moderation-optional. Used when the config's carved
+/// `liveness_window_secs` is 0 (the live mainnet config's zeroed reserve).
+pub const DEFAULT_MODERATION_LIVENESS_WINDOW_SECS: u32 = 7_776_000;
+
+/// Floor for a configured moderation liveness window (1 day). Purely a foot-gun
+/// guard: a sub-day window could make the gate effectively always-relaxed by
+/// accident. It is NOT a trust boundary — the protocol authority can already
+/// disable moderation openly.
+pub const MIN_MODERATION_LIVENESS_WINDOW_SECS: u32 = 86_400;
+
+// ============================================================================
+// P5.2 Store Identity Constants (batch-2 — docs/P5_2_STORE_IDENTITY_SPEC.md)
+// ============================================================================
+
+/// Registration bond for permissionless store registration (0.05 SOL), deposited
+/// as excess lamports on the `["store", owner]` PDA and refunded IN FULL at
+/// `close_store`. Smaller than the attestor roster's 0.25 SOL because a Store
+/// gates no consumption path — the bond only prices gPA-namespace spam (spec §8
+/// Q1, ratified). HARDCODED for the same no-repricing-rivals reason as the roster
+/// bond: changing it is a visible multisig'd upgrade, never a config dial.
+pub const STORE_REGISTRATION_BOND_LAMPORTS: u64 = 50_000_000;
+
+// ============================================================================
 // Default Rate Limit Constants
 // ============================================================================
 

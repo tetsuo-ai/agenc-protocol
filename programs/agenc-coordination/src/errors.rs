@@ -977,4 +977,21 @@ pub enum CoordinationError {
     InvalidTrustList,
     #[msg("Moderation record account is not the canonical PDA, not program-owned, or not a moderation record")]
     InvalidModerationRecord,
+
+    // === Batch 2 (appended — never reorder/delete): P5.2 store identity,
+    //     P1.3 moderation liveness, A5 rating rollup ===
+    #[msg("Store handle must be 3-20 chars of lowercase [a-z0-9-], starting alphanumeric, zero-padded")]
+    InvalidStoreHandle,
+    #[msg("Store metadata URI exceeds the maximum length")]
+    InvalidStoreMetadataUri,
+    #[msg("Store domain is not a valid DNS name")]
+    InvalidStoreDomain,
+    #[msg("Store operator fee requires a non-default operator payee (and vice versa)")]
+    InvalidStoreOperatorTerms,
+    #[msg("Store PDA is missing the registration bond after deposit")]
+    StoreBondMissing,
+    #[msg("Only the moderation config authority or the moderation authority may heartbeat")]
+    UnauthorizedModerationHeartbeat,
+    #[msg("Moderation liveness window is below the 1-day floor")]
+    InvalidModerationLivenessWindow,
 }

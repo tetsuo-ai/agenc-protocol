@@ -252,7 +252,7 @@ async function resolveWithStats(w, r, approve) {
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
       authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
-      hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId,
+      hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,

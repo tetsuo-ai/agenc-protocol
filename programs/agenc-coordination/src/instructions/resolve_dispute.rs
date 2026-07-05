@@ -11,7 +11,7 @@ use crate::instructions::completion_helpers::update_protocol_stats;
 use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::dispute_helpers::{
     check_duplicate_workers, defendant_claim_required, expected_worker_pairs,
-    pay_dispute_operator_fee, process_worker_claim_pair, resolve_task_operator_terms,
+    pay_dispute_marketplace_legs, process_worker_claim_pair, resolve_task_marketplace_terms,
     validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
@@ -196,10 +196,17 @@ pub struct ResolveDispute<'info> {
     )]
     pub hire_record: UncheckedAccount<'info>,
 
-    /// CHECK: operator payee — validated against hire_record.operator; required only when
-    /// a live hire carries a non-zero operator fee. Receives the operator leg (SOL).
+    /// CHECK: operator payee — validated against the resolved marketplace terms (Task-first,
+    /// HireRecord fallback); required only when those terms carry a non-zero operator fee.
+    /// Receives the operator leg (SOL).
     #[account(mut)]
     pub dispute_operator: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: referrer payee — validated against the resolved marketplace terms (P3.6 §3.3:
+    /// dispute exits honor the snapshotted referrer leg); required only when those terms
+    /// carry a non-zero referrer fee. Receives the referrer leg (SOL).
+    #[account(mut)]
+    pub dispute_referrer: Option<UncheckedAccount<'info>>,
 
     pub system_program: Program<'info, System>,
 
@@ -372,11 +379,14 @@ pub fn handler<'info>(
     // Prepare token context if this is a token-denominated task
     let is_token_task = task.reward_mint.is_some();
     let task_key = task.key();
-    // §4 operator leg (Task-first, HireRecord fallback) resolved once for the SOL
-    // Complete/Split branches below; hires are SOL-only so token paths take no leg.
-    let (dispute_operator_pubkey, dispute_operator_fee_bps) = resolve_task_operator_terms(
+    // §4 marketplace legs (operator + referrer; Task-first, HireRecord fallback)
+    // resolved once for the SOL Complete/Split branches below; hires are SOL-only
+    // so token paths take no leg.
+    let dispute_terms = resolve_task_marketplace_terms(
         task.operator,
         task.operator_fee_bps,
+        task.referrer,
+        task.referrer_fee_bps,
         &ctx.accounts.hire_record.to_account_info(),
         &task_key,
     )?;
@@ -580,20 +590,26 @@ pub fn handler<'info>(
                         token_program,
                     )?;
                 } else {
-                    // §4 3-way split: pay the operator leg first if this is a hired task,
-                    // so dispute resolution can't bypass the operator fee. No-op otherwise.
-                    let op_fee = pay_dispute_operator_fee(
-                        dispute_operator_pubkey,
-                        dispute_operator_fee_bps,
+                    // §4 split: pay the marketplace legs (operator + referrer) first so
+                    // dispute resolution can't bypass them. No-op for a non-hired,
+                    // unreferred task.
+                    let legs_fee = pay_dispute_marketplace_legs(
+                        &dispute_terms,
                         ctx.accounts
                             .dispute_operator
                             .as_ref()
                             .map(|a| a.to_account_info()),
+                        ctx.accounts
+                            .dispute_referrer
+                            .as_ref()
+                            .map(|a| a.to_account_info()),
                         &escrow.to_account_info(),
                         remaining_funds,
+                        task.task_id,
+                        clock.unix_timestamp,
                     )?;
                     let worker_net = remaining_funds
-                        .checked_sub(op_fee)
+                        .checked_sub(legs_fee)
                         .ok_or(CoordinationError::ArithmeticOverflow)?;
                     transfer_lamports(
                         &escrow.to_account_info(),
@@ -698,26 +714,32 @@ pub fn handler<'info>(
                             )?;
                         }
                     } else {
-                        // §4 3-way split: carve the operator leg from the worker's half so
-                        // a Split resolution can't bypass the operator fee (no-op if not hired).
-                        let op_fee = pay_dispute_operator_fee(
-                            dispute_operator_pubkey,
-                            dispute_operator_fee_bps,
+                        // §4 split: carve the marketplace legs (operator + referrer) from
+                        // the worker's half so a Split resolution can't bypass them
+                        // (no-op for a non-hired, unreferred task).
+                        let legs_fee = pay_dispute_marketplace_legs(
+                            &dispute_terms,
                             ctx.accounts
                                 .dispute_operator
                                 .as_ref()
                                 .map(|a| a.to_account_info()),
+                            ctx.accounts
+                                .dispute_referrer
+                                .as_ref()
+                                .map(|a| a.to_account_info()),
                             &escrow.to_account_info(),
                             worker_share,
+                            task.task_id,
+                            clock.unix_timestamp,
                         )?;
                         let worker_net = worker_share
-                            .checked_sub(op_fee)
+                            .checked_sub(legs_fee)
                             .ok_or(CoordinationError::ArithmeticOverflow)?;
-                        // The operator leg was already debited from escrow by the helper.
+                        // The marketplace legs were already debited from escrow by the helper.
                         debit_lamports(
                             &escrow.to_account_info(),
                             remaining_funds
-                                .checked_sub(op_fee)
+                                .checked_sub(legs_fee)
                                 .ok_or(CoordinationError::ArithmeticOverflow)?,
                         )?;
                         let creator_info = ctx.accounts.creator.to_account_info();

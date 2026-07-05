@@ -194,7 +194,8 @@ serving edge per endpoint (the P5.1 envelope already distinguishes
   reviewed task, unreclaimable — ~1,782 SOL at 1M tasks.
   **R1: add `TaskAttestorConfig` to the `close_task_child` whitelist** in the
   next full-module batch (one `else if` arm + a litesvm test; additive,
-  no migration). Until then it is the dominant per-task burn.
+  no migration). SHIPPED in batch-2 (`close_task.rs` whitelist arm +
+  `tests-integration/batch2-surface.test.mjs` reclaim test).
 - **F2 — collaborative-dispute account cliff (§3).**
   **R2: bound it explicitly** — either document "disputed collaborative tasks
   support at most N live claims per resolution tx" with a chunked-resolution

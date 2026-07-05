@@ -1108,3 +1108,77 @@ pub struct AgentTrackRecordUpdated {
     pub new_value: u64,
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Batch 2 events (P5.2 store identity, P1.3 moderation liveness, A5 rating rollup)
+// ============================================================================
+
+/// Emitted when a store registers its on-chain identity (P5.2).
+#[event]
+pub struct StoreRegistered {
+    /// The `["store", owner]` PDA.
+    pub store: Pubkey,
+    /// Owner wallet (the identity key).
+    pub owner: Pubkey,
+    /// Display handle (zero-padded; NOT unique on-chain).
+    pub handle: [u8; 32],
+    /// Registration bond deposited on the PDA.
+    pub bond_lamports: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a store updates its advertised identity/terms (P5.2).
+#[event]
+pub struct StoreUpdated {
+    pub store: Pubkey,
+    pub owner: Pubkey,
+    pub handle: [u8; 32],
+    /// Monotonic version AFTER this update (indexer staleness/CAS signal).
+    pub version: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a store closes its identity PDA; rent + bond are refunded in
+/// full to the owner (P5.2 — no exit cooldown: nothing money-bearing reads
+/// `Store` in v1).
+#[event]
+pub struct StoreClosed {
+    pub store: Pubkey,
+    pub owner: Pubkey,
+    /// Bond refunded (informational; the close returns rent + bond together).
+    pub bond_lamports: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted on every `moderation_heartbeat` (P1.3 liveness deadman). Surfaces and
+/// indexers can watch this to display gate-armed status; silence past the window
+/// relaxes the consumption gates (docs/MODERATION_LIVENESS.md).
+#[event]
+pub struct ModerationHeartbeatRecorded {
+    /// The signer that heartbeated (config authority or moderation authority).
+    pub by: Pubkey,
+    /// The EFFECTIVE liveness window after this call (seconds; the default is
+    /// substituted when the stored value is 0).
+    pub window_secs: u32,
+    pub timestamp: i64,
+}
+
+/// Emitted when `rate_hire` folds a score into the provider agent's rating
+/// rollup on `AgentStats` (batch-2 A5). Carries the new aggregate so indexers
+/// can recompute the average without re-reading the account.
+#[event]
+pub struct AgentRatingUpdated {
+    /// The provider `AgentRegistration` PDA whose rollup changed.
+    pub agent: Pubkey,
+    /// The `AgentStats` PDA that was written.
+    pub agent_stats: Pubkey,
+    /// The rated hired task.
+    pub task: Pubkey,
+    /// Score in [1, 5].
+    pub score: u8,
+    /// `rating_total` after this rating.
+    pub new_rating_total: u64,
+    /// `rating_count` after this rating.
+    pub new_rating_count: u64,
+    pub timestamp: i64,
+}

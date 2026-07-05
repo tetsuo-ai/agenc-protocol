@@ -1349,6 +1349,80 @@ pub mod agenc_coordination {
     ) -> Result<()> {
         instructions::rate_hire::handler(ctx, score, review_hash, review_uri)
     }
+
+    /// Register a permissionless on-chain store identity (P5.2, batch 2). The
+    /// signer pays rent + the hardcoded 0.05 SOL bond onto its own `["store",
+    /// owner]` PDA. The handle is display-only (NOT unique on-chain); fee fields
+    /// are advertised defaults, not enforcement.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_store(
+        ctx: Context<RegisterStore>,
+        handle: [u8; 32],
+        metadata_hash: [u8; 32],
+        metadata_uri: String,
+        referrer_fee_bps: u16,
+        operator: Pubkey,
+        operator_fee_bps: u16,
+        domain: String,
+    ) -> Result<()> {
+        instructions::store_identity::register_handler(
+            ctx,
+            handle,
+            metadata_hash,
+            metadata_uri,
+            referrer_fee_bps,
+            operator,
+            operator_fee_bps,
+            domain,
+        )
+    }
+
+    /// Update a store's advertised identity/terms (owner-only, P5.2). Bumps the
+    /// monotonic `version` for indexer staleness/CAS.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_store(
+        ctx: Context<UpdateStore>,
+        handle: [u8; 32],
+        metadata_hash: [u8; 32],
+        metadata_uri: String,
+        referrer_fee_bps: u16,
+        operator: Pubkey,
+        operator_fee_bps: u16,
+        domain: String,
+    ) -> Result<()> {
+        instructions::store_identity::update_handler(
+            ctx,
+            handle,
+            metadata_hash,
+            metadata_uri,
+            referrer_fee_bps,
+            operator,
+            operator_fee_bps,
+            domain,
+        )
+    }
+
+    /// Close a store identity PDA (owner-only, P5.2), refunding rent + bond in
+    /// full. No exit cooldown: nothing money-bearing consumes `Store` in v1.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn close_store(ctx: Context<CloseStore>) -> Result<()> {
+        instructions::store_identity::close_handler(ctx)
+    }
+
+    /// P1.3 moderation liveness heartbeat (batch-2 A2). The config authority or
+    /// the moderation authority bumps the deadman timestamp; the config authority
+    /// may also retune the liveness window (floored at 1 day). Silence past the
+    /// window relaxes the moderation ALLOW gates to moderation-optional
+    /// (docs/MODERATION_LIVENESS.md); the multisig BLOCK floor never relaxes.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn moderation_heartbeat(
+        ctx: Context<ModerationHeartbeat>,
+        new_window_secs: Option<u32>,
+    ) -> Result<()> {
+        instructions::moderation_heartbeat::handler(ctx, new_window_secs)
+    }
 }
 
 #[cfg(feature = "mainnet-canary")]

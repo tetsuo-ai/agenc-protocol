@@ -26,7 +26,7 @@ use crate::instructions::completion_helpers::resolve_referrer_snapshot;
 use crate::instructions::constants::MIN_SKILL_PRICE;
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::moderation_gate_helpers::{
-    load_listing_moderation_record, require_content_not_blocked,
+    load_listing_moderation_record, moderation_gate_relaxed, require_content_not_blocked,
 };
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use crate::instructions::task_init_helpers::{
@@ -402,8 +402,15 @@ pub fn handler(
     // underwriter via the EXPLICIT `moderator` argument; the optional attestor entry
     // is bound to that argument in the handler, and the record (v2-else-legacy slot)
     // must have been authored by it.
+    // P1.3 liveness deadman (batch-2 A2, docs/MODERATION_LIVENESS.md): once the
+    // moderation authority has been silent past the liveness window, the ALLOW
+    // gate relaxes to moderation-optional and no listing attestation is required.
+    // The BLOCK floor above already ran and is NEVER relaxed; a heartbeat
+    // instantly re-arms the strict path.
     let mut unlocking_attestor: Option<Pubkey> = None;
-    if ctx.accounts.moderation_config.enabled {
+    if ctx.accounts.moderation_config.enabled
+        && !moderation_gate_relaxed(ctx.accounts.moderation_config.as_ref(), clock.unix_timestamp)
+    {
         let record_info = ctx
             .accounts
             .listing_moderation

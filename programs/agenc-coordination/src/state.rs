@@ -427,9 +427,10 @@ impl Default for ProtocolConfig {
             // P6.5: a freshly initialized config has the full surface available
             // (init only runs on dev/devnet/localnet — the mainnet canary config
             // already exists and is brought forward by migrate_protocol). Stamp it
-            // to the full-surface revision so a fresh full-surface deploy advertises
-            // `listings: true` without a manual stamp.
-            surface_revision: ProtocolConfig::SURFACE_REVISION_FULL,
+            // to the CURRENT batch revision so a fresh full-surface deploy
+            // advertises every capability without a manual stamp (batch 2: the
+            // default full build now IS the batch-2 surface).
+            surface_revision: ProtocolConfig::SURFACE_REVISION_BATCH2,
         }
     }
 }
@@ -471,7 +472,23 @@ impl ProtocolConfig {
     /// `surface_revision` value meaning "the full 84-instruction surface is live".
     /// An operator stamps this via `update_launch_controls` after deploying the full
     /// surface; the SDK maps it to a complete `CapabilitySet`.
+    ///
+    /// HISTORY NOTE: revision 1 was stamped for BOTH the 2026-06-11 84-ix surface
+    /// AND the 2026-07-03 breaking 90-ix P1.2 surface — the binary 0|1 stamp could
+    /// not distinguish them (the audit finding batch 2 fixes). From batch 2 onward,
+    /// EVERY additive instruction batch bumps the revision (see
+    /// `SURFACE_REVISION_BATCH2` and `docs/VERSIONING.md`), so `getDeployedSurface`
+    /// capability detection is real again.
     pub const SURFACE_REVISION_FULL: u16 = 1;
+
+    /// `surface_revision` value meaning "the batch-2 surface is live": the 90-ix
+    /// P1.2 surface PLUS Store identity (`register_store`/`update_store`/
+    /// `close_store`), the moderation liveness deadman (`moderation_heartbeat` +
+    /// relaxed gates), the dispute/freeze-exit referrer legs, the `rate_hire`
+    /// agent-rating rollup, and the `close_task` TaskAttestorConfig reclaim.
+    /// Monotonic and additive: any revision >= FULL still implies the full
+    /// capability set (see `docs/VERSIONS.md` deprecation policy).
+    pub const SURFACE_REVISION_BATCH2: u16 = 2;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -889,16 +906,42 @@ pub struct ModerationConfig {
     pub enabled: bool,
     /// Creation timestamp.
     pub created_at: i64,
-    /// Last update timestamp.
+    /// Last update timestamp. ALSO the P1.3 liveness heartbeat: bumped by
+    /// `configure_task_moderation` and `moderation_heartbeat`; when it goes stale
+    /// past the liveness window the consumption gates relax to moderation-optional
+    /// (`docs/MODERATION_LIVENESS.md`).
     pub updated_at: i64,
     /// PDA bump.
     pub bump: u8,
-    /// Reserved for future moderation policy flags.
+    /// Reserved bytes. `[0..4]` carry the P1.3 liveness window (LE `u32` seconds,
+    /// 0 = default 90 days) via the accessors below — the value-only,
+    /// size-identical reserved-carve precedent (ModerationAttestor P1.2). `[4..6]`
+    /// MUST stay zeroed.
     pub _reserved: [u8; 6],
 }
 
 impl ModerationConfig {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    /// P1.3 liveness window in seconds, carved from `_reserved[0..4]`.
+    /// 0 = "use `DEFAULT_MODERATION_LIVENESS_WINDOW_SECS`" (the live mainnet config
+    /// has zeroed reserved bytes, so it reads the default with no migration).
+    pub fn liveness_window_secs(&self) -> u32 {
+        u32::from_le_bytes([
+            self._reserved[0],
+            self._reserved[1],
+            self._reserved[2],
+            self._reserved[3],
+        ])
+    }
+
+    pub fn set_liveness_window_secs(&mut self, window_secs: u32) {
+        let bytes = window_secs.to_le_bytes();
+        self._reserved[0] = bytes[0];
+        self._reserved[1] = bytes[1];
+        self._reserved[2] = bytes[2];
+        self._reserved[3] = bytes[3];
+    }
 }
 
 /// On-chain moderation attestation for a task/job-spec hash.
@@ -1883,15 +1926,24 @@ pub struct AgentStats {
     pub last_updated: i64,
     /// PDA bump.
     pub bump: u8,
+    // === Batch-2 A5 per-agent rating rollup — carved from the former
+    // `_reserved: [u8; 32]` (value-only, size-identical, NO migration; the
+    // ModerationAttestor P1.2 / DisputeResolver P6.4 precedent). Pre-batch-2
+    // AgentStats accounts read both as 0 = "no ratings yet".
+    /// Sum of all `rate_hire` scores received by this agent (as the provider of
+    /// the rated listing). Average = `rating_total / rating_count`.
+    pub rating_total: u64,
+    /// Number of `rate_hire` ratings folded into `rating_total`.
+    pub rating_count: u64,
     /// Reserved for future track-record counters. MUST stay zeroed.
-    pub _reserved: [u8; 32],
+    pub _reserved: [u8; 16],
 }
 
 impl AgentStats {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // + 8 discriminator
 
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved == [0u8; 32]
+        self._reserved == [0u8; 16]
     }
 
     /// Initialize the identity fields on first write (idempotent: only sets the
@@ -1900,10 +1952,15 @@ impl AgentStats {
         if self.agent == Pubkey::default() {
             self.agent = agent;
             self.bump = bump;
-            self._reserved = [0u8; 32];
+            self._reserved = [0u8; 16];
         }
     }
 }
+
+/// Compile-time pin for the A5 reserved-carve: `rating_total` + `rating_count`
+/// replaced the first 16 of the former 32 reserved bytes, so the account size (and
+/// every live lazily-created `AgentStats`) must be byte-identical.
+const _: () = assert!(AgentStats::SIZE == 8 + 32 + 5 * 8 + 8 + 1 + 16 + 16);
 
 /// Symmetric 25/25 completion bond (spec §8). Both the creator and the worker post
 /// a bond equal to 25% of the reward into their own PDA; the loser of a dispute
@@ -2453,6 +2510,122 @@ pub struct ReputationDelegation {
 
 impl ReputationDelegation {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // _reserved
+}
+
+/// Maximum length of a `Store.metadata_uri` (the `MODERATION_URI_MAX_LEN` /
+/// `TASK_JOB_SPEC_URI_MAX_LEN` house content-pointer bound).
+pub const STORE_METADATA_URI_MAX_LEN: usize = 256;
+
+/// Store display-handle charset bounds (mirror of the product `HANDLE_RE`:
+/// lowercase `[a-z0-9-]`, 3-20 chars, starts alphanumeric — P5.2 spec §6).
+pub const STORE_HANDLE_MIN_LEN: usize = 3;
+pub const STORE_HANDLE_MAX_LEN: usize = 20;
+
+/// P5.2 — permissionless store/marketplace identity. Address-keyed: the owner
+/// wallet is the identity; `handle` is DISPLAY-ONLY and not unique on-chain
+/// (uniqueness is a surface concern — see `docs/P5_2_STORE_IDENTITY_SPEC.md` §6).
+/// Fee fields are advertised DEFAULTS, not enforcement: listings and hires keep
+/// snapshotting terms exactly as today (`ServiceListing` / `HireRecord`); NO money
+/// path reads this account in v1 (spec §8 Q6, ratified).
+///
+/// PDA seeds: ["store", owner]
+#[account]
+#[derive(InitSpace)]
+pub struct Store {
+    /// Owner wallet (signer of register/update/close; the future P5.3 referral payee).
+    pub owner: Pubkey,
+    /// Display handle, lowercase `[a-z0-9-]`, zero-padded. NOT a uniqueness key.
+    pub handle: [u8; 32],
+    /// sha256 of the canonical `agenc.storeManifest.v1` body this store points at
+    /// (all-zero = no manifest pinned yet).
+    pub metadata_hash: [u8; 32],
+    /// Manifest URI (typically `https://<domain>/.well-known/agenc-store.json`;
+    /// empty = no manifest pinned yet).
+    #[max_len(STORE_METADATA_URI_MAX_LEN)]
+    pub metadata_uri: String,
+    /// Advertised default referral fee (bps, <= MAX_REFERRER_FEE_BPS).
+    pub referrer_fee_bps: u16,
+    /// Advertised default operator payee (`Pubkey::default()` = none).
+    pub operator: Pubkey,
+    /// Advertised default operator fee (bps, <= MAX_OPERATOR_FEE_BPS; requires a
+    /// non-default `operator` when > 0 — the `create_service_listing` pairing rule).
+    pub operator_fee_bps: u16,
+    /// Self-declared domain (empty = hosted-only store). Verified only by the
+    /// MUTUAL manifest check (spec §3b) — never trusted alone. Same charset floor
+    /// as `validate_verified_domain`.
+    #[max_len(AGENT_VERIFICATION_DOMAIN_MAX)]
+    pub domain: String,
+    /// Registration bond held as excess lamports on this PDA (P1.2 §4.1 framing:
+    /// an identity deposit, never confiscatable; refunded in full at `close_store`).
+    pub bond_lamports: u64,
+    /// Monotonic version, bumped on every update (staleness/CAS for indexers).
+    pub version: u64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// PDA bump.
+    pub bump: u8,
+    /// Reserved (future: verification refs, P5.3 referrer bookkeeping). MUST stay
+    /// zeroed.
+    pub _reserved: [u8; 64],
+}
+
+// Manual impl: `derive(Default)` cannot see through `[u8; 64]` (std only
+// implements `Default` for arrays up to 32 without const-generic support here).
+impl Default for Store {
+    fn default() -> Self {
+        Self {
+            owner: Pubkey::default(),
+            handle: [0u8; 32],
+            metadata_hash: [0u8; 32],
+            metadata_uri: String::new(),
+            referrer_fee_bps: 0,
+            operator: Pubkey::default(),
+            operator_fee_bps: 0,
+            domain: String::new(),
+            bond_lamports: 0,
+            version: 0,
+            created_at: 0,
+            updated_at: 0,
+            bump: 0,
+            _reserved: [0u8; 64],
+        }
+    }
+}
+
+impl Store {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    pub fn validate_reserved_fields(&self) -> bool {
+        self._reserved == [0u8; 64]
+    }
+}
+
+/// Compile-time pin for the P5.2 `Store` layout (spec §7.1: INIT_SPACE 746 + 8
+/// discriminator = 754). A field add/reorder fails the build instead of silently
+/// drifting the spec'd size/rent math.
+const _: () = assert!(Store::SIZE == 754);
+
+/// Validate a zero-padded `Store.handle`: an on-chain charset floor for every
+/// downstream UI, NOT a uniqueness claim (P5.2 spec §6). Rules (mirror of the
+/// product `HANDLE_RE`): effective length 3-20, lowercase `[a-z0-9-]` only, first
+/// char alphanumeric, and all bytes after the first NUL are NUL (canonical
+/// zero-padding — no embedded-NUL games).
+pub fn validate_store_handle(handle: &[u8; 32]) -> bool {
+    let len = handle.iter().position(|b| *b == 0).unwrap_or(handle.len());
+    if !(STORE_HANDLE_MIN_LEN..=STORE_HANDLE_MAX_LEN).contains(&len) {
+        return false;
+    }
+    // Canonical padding: nothing but NULs after the terminator.
+    if handle[len..].iter().any(|b| *b != 0) {
+        return false;
+    }
+    for (i, b) in handle[..len].iter().enumerate() {
+        let ok = matches!(b, b'a'..=b'z' | b'0'..=b'9') || (*b == b'-' && i != 0);
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -3046,16 +3219,19 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_config_surface_revision_default_is_full() {
-        // A freshly initialized config (full-surface deploy) advertises the full
-        // surface; the live mainnet config is brought to 0 by migrate_protocol and
-        // stamped later by an operator.
+    fn test_protocol_config_surface_revision_default_is_current_batch() {
+        // A freshly initialized config (full-surface deploy) advertises the CURRENT
+        // batch revision; the live mainnet config is brought to 0 by migrate_protocol
+        // and stamped later by an operator. Revisions are monotonic + additive:
+        // batch 2 must sit strictly above FULL.
         let config = ProtocolConfig::default();
         assert_eq!(
             config.surface_revision,
-            ProtocolConfig::SURFACE_REVISION_FULL
+            ProtocolConfig::SURFACE_REVISION_BATCH2
         );
         assert_eq!(ProtocolConfig::SURFACE_REVISION_FULL, 1);
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH2, 2);
+        assert!(ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL);
     }
 
     #[test]
@@ -3077,5 +3253,94 @@ mod tests {
         let mut task = Task::default();
         task._reserved[0] = 0xFF;
         assert!(!task.validate_reserved_fields());
+    }
+
+    // === Batch-2 P5.2: Store size + handle floor ===
+
+    #[test]
+    fn test_store_size() {
+        test_size_constant!(Store);
+    }
+
+    /// Spec pin (P5.2 §7.1): the ratified layout is exactly 754 bytes incl.
+    /// discriminator. Revert-sensitive against any field add/reorder.
+    #[test]
+    fn test_store_size_matches_spec() {
+        assert_eq!(Store::SIZE, 754);
+        assert_eq!(<Store as anchor_lang::Space>::INIT_SPACE, 746);
+    }
+
+    #[test]
+    fn test_store_reserved_fields_guard() {
+        let mut s = Store::default();
+        assert!(s.validate_reserved_fields());
+        s._reserved[63] = 1;
+        assert!(!s.validate_reserved_fields());
+    }
+
+    fn handle_bytes(s: &str) -> [u8; 32] {
+        let mut h = [0u8; 32];
+        h[..s.len()].copy_from_slice(s.as_bytes());
+        h
+    }
+
+    #[test]
+    fn test_store_handle_accepts_valid_handles() {
+        for h in ["abc", "acme", "a-1", "store-1", "abcdefghij0123456789"] {
+            assert!(validate_store_handle(&handle_bytes(h)), "rejected {h}");
+        }
+    }
+
+    // Revert-sensitive: dropping the length / charset / first-char / padding
+    // checks in validate_store_handle turns the matching case red.
+    #[test]
+    fn test_store_handle_rejects_bad_handles() {
+        // Too short / too long (21 chars).
+        assert!(!validate_store_handle(&handle_bytes("ab")));
+        assert!(!validate_store_handle(&handle_bytes("abcdefghij0123456789x")));
+        // Empty / all-zero.
+        assert!(!validate_store_handle(&[0u8; 32]));
+        // Uppercase, underscore, dot, space.
+        assert!(!validate_store_handle(&handle_bytes("Acme")));
+        assert!(!validate_store_handle(&handle_bytes("ac_me")));
+        assert!(!validate_store_handle(&handle_bytes("ac.me")));
+        assert!(!validate_store_handle(&handle_bytes("ac me")));
+        // Leading dash (first char must be alphanumeric).
+        assert!(!validate_store_handle(&handle_bytes("-abc")));
+        // Embedded NUL then junk (non-canonical padding).
+        let mut sneaky = handle_bytes("abc");
+        sneaky[10] = b'x';
+        assert!(!validate_store_handle(&sneaky));
+    }
+
+    // === Batch-2 A5: AgentStats reserved-carve rating rollup ===
+
+    /// The rating fields were carved from the FIRST 16 of the former 32 reserved
+    /// bytes — the account byte size must be unchanged (no migration), and a
+    /// pre-carve account (all-zero reserved region) must read as "no ratings".
+    #[test]
+    fn test_agent_stats_size_unchanged_by_rating_carve() {
+        test_size_constant!(AgentStats);
+        assert_eq!(AgentStats::SIZE, 8 + 32 + 5 * 8 + 8 + 1 + 8 + 8 + 16);
+        let s = AgentStats::default();
+        assert_eq!(s.rating_total, 0);
+        assert_eq!(s.rating_count, 0);
+        assert!(s.validate_reserved_fields());
+    }
+
+    // === Batch-2 A2: ModerationConfig liveness-window reserved accessors ===
+
+    #[test]
+    fn test_moderation_config_liveness_window_accessor_round_trip() {
+        let mut c = ModerationConfig::default();
+        // Zeroed reserved bytes (the live mainnet config) read as 0 = default.
+        assert_eq!(c.liveness_window_secs(), 0);
+        c.set_liveness_window_secs(7_776_000);
+        assert_eq!(c.liveness_window_secs(), 7_776_000);
+        // The accessor must not clobber the remaining reserved tail.
+        assert_eq!(c._reserved[4], 0);
+        assert_eq!(c._reserved[5], 0);
+        c.set_liveness_window_secs(0);
+        assert_eq!(c.liveness_window_secs(), 0);
     }
 }
