@@ -7,7 +7,10 @@
 // claim_task_with_job_spec (claim_task plain is fail-closed in the program — wrap
 // this instead), submit_task_result, accept/reject/auto_accept/validate result,
 // request_changes, reject_and_freeze, complete_task, cancel_task, close_task,
-// expire_claim. complete_task_private (ZK) is intentionally out of scope here.
+// expire_claim, and the Batch-3 contest lifecycle (create_task[Competitive] +
+// configure_task_validation[CreatorReview] via createContestTask,
+// distribute_ghost_share, reclaim_terminal_claim). complete_task_private (ZK) is
+// intentionally out of scope here.
 //
 // Never import from generated/ internals other than its public exports.
 import { AccountRole, type Address } from "@solana/kit";
@@ -31,6 +34,8 @@ import {
   getCloseTaskInstructionDataEncoder,
   getExpireClaimInstructionAsync,
   getConfigureTaskValidationInstructionAsync,
+  getDistributeGhostShareInstructionAsync,
+  getReclaimTerminalClaimInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
   findProtocolConfigPda,
@@ -57,7 +62,10 @@ import {
   type CloseTaskAsyncInput,
   type ExpireClaimAsyncInput,
   type ConfigureTaskValidationAsyncInput,
+  type DistributeGhostShareAsyncInput,
+  type ReclaimTerminalClaimAsyncInput,
   type SetTaskJobSpecAsyncInput,
+  ValidationMode,
 } from "../generated/index.js";
 
 // Re-export the PDA helpers callers most often need to pre-derive task-lifecycle
@@ -402,4 +410,130 @@ export async function setTaskJobSpec(input: SetTaskJobSpecInput) {
     moderationBlock,
     moderationAttestor,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Batch 3 WS-CONTEST: contest tasks (schema-1 Competitive + CreatorReview).
+// ---------------------------------------------------------------------------
+
+/**
+ * The refundable anti-slop contest entry deposit (0.01 SOL), carried as surplus
+ * lamports on a contest claim PDA. Charged when claiming a contest-configured
+ * task (Competitive + CreatorReview). Refunded in full on every exit where the
+ * worker SUBMITTED (accept / reject / ghost-split); FORFEITED to the protocol
+ * treasury (never the creator) on no-show exits (`expire_claim` with a
+ * provably-absent submission, and `reclaim_terminal_claim`). Mirrors the
+ * on-chain `CONTEST_ENTRY_DEPOSIT_LAMPORTS`.
+ */
+export const CONTEST_ENTRY_DEPOSIT_LAMPORTS = 10_000_000n;
+
+/**
+ * The creator's post-deadline selection window (48h). A contest task's
+ * `ghost_at = deadline + CONTEST_SELECTION_WINDOW_SECS`; strictly before it only
+ * the creator may settle (accept/reject), at/after it the permissionless
+ * {@link distributeGhostShare} crank takes over. Mirrors the on-chain
+ * `SELECTION_WINDOW_SECS`.
+ */
+export const CONTEST_SELECTION_WINDOW_SECS = 172_800n;
+
+/**
+ * Friendly input for {@link createContestTask}. Mirrors {@link createTask}'s
+ * input, minus the fields the contest rails pin on-chain: `taskType` is forced
+ * to `Competitive` and contests are SOL-only (`rewardMintArg: null`, no token
+ * accounts). Adds `reviewWindowSecs` for the bundled CreatorReview validation
+ * config. `deadline` must be > 0 (the program rejects deadlineless contests —
+ * `ghost_at` anchors on it).
+ */
+export type CreateContestTaskInput = Omit<
+  OptionalReferrer<CreateTaskAsyncInput>,
+  | "taskType"
+  | "rewardMintArg"
+  | "rewardMint"
+  | "creatorTokenAccount"
+  | "tokenEscrowAta"
+  | "tokenProgram"
+  | "associatedTokenProgram"
+> & {
+  /**
+   * The creator's per-submission review window in seconds for the CreatorReview
+   * config (must be > 0). Distinct from the post-deadline selection window,
+   * which is fixed on-chain at {@link CONTEST_SELECTION_WINDOW_SECS}.
+   */
+  reviewWindowSecs: number | bigint;
+};
+
+/**
+ * Create a contest task: a schema-1 `Competitive` task actually configured for
+ * CreatorReview — the conjunction that enters the Batch-3 contest lifecycle
+ * (entry deposits, the 48h selection window, and the permissionless ghost-split
+ * crank after `ghost_at`). Returns the derived `task` address plus TWO
+ * instructions to land atomically in one transaction:
+ *
+ * 1. `create_task` — forced `taskType: Competitive`, SOL-only
+ *    (`rewardMintArg: null`; the program rejects SPL contests), deadline-bearing.
+ * 2. `configure_task_validation` — CreatorReview with `reviewWindowSecs`
+ *    (quorum 0, no attestor), signed by the same `creator`.
+ *
+ * The P6.2 demand-side referral leg is optional and defaults to the no-leg skip
+ * path (`referrer: null`, `referrerFeeBps: 0`).
+ */
+export async function createContestTask(input: CreateContestTaskInput) {
+  const { reviewWindowSecs, ...rest } = input;
+  if (BigInt(rest.deadline) <= 0n) {
+    throw new Error(
+      "createContestTask: contests are deadline-bearing — pass a deadline > 0 (ghost_at anchors on it).",
+    );
+  }
+  const createIx = await getCreateTaskInstructionAsync(
+    withReferrerDefaults({
+      ...rest,
+      taskType: 2, // TaskType::Competitive
+      rewardMintArg: null, // contests are SOL-only (ContestSolRewardOnly)
+    } as OptionalReferrer<CreateTaskAsyncInput>),
+  );
+  const [task] = await findTaskPda({
+    creator: rest.creator.address,
+    taskId: rest.taskId as Parameters<typeof findTaskPda>[0]["taskId"],
+  });
+  const configureIx = await getConfigureTaskValidationInstructionAsync({
+    task,
+    creator: rest.creator,
+    mode: ValidationMode.CreatorReview,
+    reviewWindowSecs,
+    validatorQuorum: 0,
+    attestor: null,
+  });
+  return { task, instructions: [createIx, configureIx] as const };
+}
+
+/**
+ * Permissionlessly crank one live contest submission's ghost share once the
+ * selection window has elapsed (`now >= ghost_at = deadline + 48h`): pays the
+ * worker their equal share of the prize pool (plus the refunded entry deposit
+ * and claim/submission rent), settles the fee legs, and closes the claim +
+ * submission. Run once per live submission. The `cranker` signer pays only the
+ * transaction fee. Caller supplies the settlement parties (`treasury`,
+ * `creator`, `workerAuthority`, and `operator`/`referrer` only when the task
+ * carries those fee legs); claim/escrow/validation/submission/protocol PDAs
+ * auto-derive from `task`/`worker`.
+ */
+export async function distributeGhostShare(
+  input: DistributeGhostShareAsyncInput,
+) {
+  return getDistributeGhostShareInstructionAsync(input);
+}
+
+/**
+ * Permissionlessly reclaim a claim stranded on an already-terminal task (the
+ * Batch-3 janitor): requires a provably-absent submission (the derived
+ * submission PDA must be an empty system account — a live submission means the
+ * normal settlement paths still apply). Returns claim rent to the worker
+ * authority and forfeits any contest entry-deposit surplus to the protocol
+ * `treasury` (never the creator). Claim, submission, and protocol-config PDAs
+ * auto-derive from `task`/`worker`.
+ */
+export async function reclaimTerminalClaim(
+  input: ReclaimTerminalClaimAsyncInput,
+) {
+  return getReclaimTerminalClaimInstructionAsync(input);
 }

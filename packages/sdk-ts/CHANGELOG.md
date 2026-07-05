@@ -1,5 +1,37 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.10.0
+
+### Minor Changes (additive, no wire change — batch-3 contest surface)
+
+- The batch-3 contest-task surface (LIVE on mainnet, `surface_revision = 3`,
+  96 instructions) is now first-class in the facade. The regenerated client
+  already carried `distribute_ghost_share`, `reclaim_terminal_claim`, the
+  updated `expire_claim` (optional `treasury` for the forfeited entry-deposit
+  leg) and `close_task` (optional `protocol_config`); this release adds the
+  ergonomic entry points.
+- New `facade.createContestTask`: creates a contest-CONFIGURED task — the
+  schema-1 `Competitive` + CreatorReview conjunction that actually enters the
+  contest lifecycle. Returns the derived `task` address plus TWO instructions
+  to land atomically: `create_task` pinned to the contest rails (`taskType`
+  forced to `Competitive`, SOL-only — the program rejects SPL contests — and
+  deadline-bearing, with a fail-fast throw on `deadline <= 0`) and
+  `configure_task_validation` (CreatorReview, caller-supplied
+  `reviewWindowSecs`, quorum 0, no attestor). The P6.2 referral leg stays
+  optional with the same no-leg defaults as `createTask`.
+- New `facade.distributeGhostShare`: the permissionless post-`ghost_at` crank
+  (`ghost_at = deadline + 48h`) that pays one live contest submission its
+  equal share of the prize pool plus the refunded entry deposit and rent,
+  settles the fee legs, and closes the claim + submission.
+- New `facade.reclaimTerminalClaim`: the permissionless janitor for claims
+  stranded on already-terminal tasks — requires a provably-absent submission,
+  returns claim rent to the worker authority, and forfeits any contest
+  entry-deposit surplus to the protocol treasury (never the creator).
+- New exported constants (mirrors of the on-chain values):
+  `CONTEST_ENTRY_DEPOSIT_LAMPORTS` (0.01 SOL refundable anti-slop entry
+  deposit, carried as surplus on the contest claim PDA) and
+  `CONTEST_SELECTION_WINDOW_SECS` (the 48h creator selection window).
+
 ## 0.9.1
 
 ### Patch Changes (docs only, no code-behavior change — onboarding funnel fixes)

@@ -21,7 +21,10 @@ import {
   getCloseTaskInstructionDataDecoder,
   getExpireClaimInstructionDataDecoder,
   getConfigureTaskValidationInstructionDataDecoder,
+  getDistributeGhostShareInstructionDataDecoder,
+  getReclaimTerminalClaimInstructionDataDecoder,
   getSetTaskJobSpecInstructionDataDecoder,
+  findTaskPda,
 } from "../src/index.js";
 import {
   createTask,
@@ -41,6 +44,11 @@ import {
   expireClaim,
   configureTaskValidation,
   setTaskJobSpec,
+  createContestTask,
+  distributeGhostShare,
+  reclaimTerminalClaim,
+  CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+  CONTEST_SELECTION_WINDOW_SECS,
 } from "../src/facade/tasks.js";
 
 // Structural tests (the same pattern as agents.test.ts): build each lifecycle
@@ -542,5 +550,140 @@ describe("setTaskJobSpec facade instruction", () => {
     });
     const [expectedAttestor] = await findModerationAttestorPda({ attestor: D });
     expect(ix.accounts[4].address).toBe(expectedAttestor);
+  });
+});
+
+describe("contest constants (Batch 3 WS-CONTEST)", () => {
+  it("mirror the on-chain values", () => {
+    // programs/agenc-coordination/src/instructions/constants.rs
+    expect(CONTEST_ENTRY_DEPOSIT_LAMPORTS).toBe(10_000_000n);
+    expect(CONTEST_SELECTION_WINDOW_SECS).toBe(172_800n);
+  });
+});
+
+describe("createContestTask facade bundle", () => {
+  const base = {
+    creatorAgent: A,
+    authority: signerA,
+    creator: signerA,
+    taskId: ID32,
+    requiredCapabilities: 5n,
+    description: DESC64,
+    rewardAmount: 1000n,
+    maxWorkers: 3,
+    deadline: 9999n,
+    constraintHash: null,
+    minReputation: 0,
+    reviewWindowSecs: 3600n,
+  };
+
+  it("returns the derived task plus create+configure instructions", async () => {
+    const { task, instructions } = await createContestTask(base);
+
+    const [expectedTask] = await findTaskPda({
+      creator: signerA.address,
+      taskId: ID32,
+    });
+    expect(task).toBe(expectedTask);
+    expect(instructions).toHaveLength(2);
+
+    // Ix 0: create_task pinned to the contest rails — Competitive + SOL-only.
+    const [createIx, configureIx] = instructions;
+    expect(createIx.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const created = getCreateTaskInstructionDataDecoder().decode(createIx.data);
+    expect(created.taskType).toBe(2); // TaskType::Competitive
+    expect(created.rewardMint).toEqual({ __option: "None" }); // SOL-only
+    expect(created.deadline).toBe(9999n);
+    // Referrer defaults to the no-leg skip path.
+    expect(created.referrer).toEqual({ __option: "None" });
+    expect(created.referrerFeeBps).toBe(0);
+
+    // Ix 1: configure_task_validation — CreatorReview on the derived task.
+    expect(configureIx.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(configureIx.accounts[0].address).toBe(expectedTask);
+    const configured = getConfigureTaskValidationInstructionDataDecoder().decode(
+      configureIx.data,
+    );
+    expect(configured.mode).toBe(1); // ValidationMode::CreatorReview
+    expect(configured.reviewWindowSecs).toBe(3600n);
+    expect(configured.validatorQuorum).toBe(0);
+    expect(configured.attestor).toEqual({ __option: "None" });
+  });
+
+  it("passes an explicit referral leg through to create_task", async () => {
+    const { instructions } = await createContestTask({
+      ...base,
+      referrer: D,
+      referrerFeeBps: 50,
+    });
+    const created = getCreateTaskInstructionDataDecoder().decode(
+      instructions[0].data,
+    );
+    expect(created.referrer).toEqual({ __option: "Some", value: D });
+    expect(created.referrerFeeBps).toBe(50);
+  });
+
+  it("fails fast on a non-positive deadline (contests are deadline-bearing)", async () => {
+    await expect(
+      createContestTask({ ...base, deadline: 0n }),
+    ).rejects.toThrow(/deadline > 0/);
+  });
+});
+
+describe("distributeGhostShare facade instruction", () => {
+  it("targets the program, orders accounts, and round-trips data", async () => {
+    const ix = await distributeGhostShare({
+      task: A,
+      worker: B,
+      treasury: C,
+      creator: D,
+      workerAuthority: signerB.address,
+      cranker: signerA,
+    });
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const names = ix.accounts.map((a) => a.address);
+    expect(names[0]).toBe(A); // task
+    // claim, escrow, validation config, submission auto-derived (1..4).
+    expect(names[5]).toBe(B); // worker
+    // protocolConfig auto-derived (6).
+    expect(names[7]).toBe(C); // treasury
+    expect(names[8]).toBe(D); // creator
+    expect(names[9]).toBe(signerB.address); // workerAuthority
+    // operator (10) / referrer (11) omitted -> program-id placeholders (None).
+    expect(names[12]).toBe(signerA.address); // cranker (permissionless signer)
+    expect(names[13]).toBe(SYSTEM_PROGRAM);
+
+    const decoded = getDistributeGhostShareInstructionDataDecoder().decode(
+      ix.data,
+    );
+    expect(decoded.discriminator).toHaveLength(8);
+  });
+});
+
+describe("reclaimTerminalClaim facade instruction", () => {
+  it("targets the program, orders accounts, and round-trips data", async () => {
+    const ix = await reclaimTerminalClaim({
+      authority: signerA,
+      task: A,
+      worker: B,
+      treasury: C,
+      rentRecipient: D,
+    });
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    const names = ix.accounts.map((a) => a.address);
+    expect(names[0]).toBe(signerA.address); // authority (permissionless signer)
+    expect(names[1]).toBe(A); // task
+    // claim, submission auto-derived (2..3).
+    expect(names[4]).toBe(B); // worker
+    // protocolConfig auto-derived (5).
+    expect(names[6]).toBe(C); // treasury (forfeited deposit surplus, never creator)
+    expect(names[7]).toBe(D); // rentRecipient
+
+    const decoded = getReclaimTerminalClaimInstructionDataDecoder().decode(
+      ix.data,
+    );
+    expect(decoded.discriminator).toHaveLength(8);
   });
 });
