@@ -17,6 +17,7 @@ authorization.
 
 > Source of truth for layout/version semantics: [`VERSIONS.md`](./VERSIONS.md).
 > Branch-of-record policy: [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
+> Authority-signed mainnet POLICY mutations (fees, rate limits — config changes, not deploys): [`POLICY_CHANGES.md`](./POLICY_CHANGES.md).
 
 ---
 
