@@ -979,7 +979,7 @@ pub enum CoordinationError {
     InvalidModerationRecord,
 
     // === Batch 2 (appended — never reorder/delete): P5.2 store identity,
-    //     P1.3 moderation liveness, A5 rating rollup ===
+    //     P1.3 moderation liveness ===
     #[msg("Store handle must be 3-20 chars of lowercase [a-z0-9-], starting alphanumeric, zero-padded")]
     InvalidStoreHandle,
     #[msg("Store metadata URI exceeds the maximum length")]
@@ -992,6 +992,8 @@ pub enum CoordinationError {
     StoreBondMissing,
     #[msg("Only the moderation config authority or the moderation authority may heartbeat")]
     UnauthorizedModerationHeartbeat,
-    #[msg("Moderation liveness window is below the 1-day floor")]
+    #[msg("Moderation liveness window is outside the allowed [1 day, 400 day] range")]
     InvalidModerationLivenessWindow,
+    #[msg("Store manifest hash and URI must be pinned together (both set or both empty)")]
+    InvalidStoreManifest,
 }

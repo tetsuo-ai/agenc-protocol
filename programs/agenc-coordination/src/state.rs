@@ -1926,24 +1926,17 @@ pub struct AgentStats {
     pub last_updated: i64,
     /// PDA bump.
     pub bump: u8,
-    // === Batch-2 A5 per-agent rating rollup — carved from the former
-    // `_reserved: [u8; 32]` (value-only, size-identical, NO migration; the
-    // ModerationAttestor P1.2 / DisputeResolver P6.4 precedent). Pre-batch-2
-    // AgentStats accounts read both as 0 = "no ratings yet".
-    /// Sum of all `rate_hire` scores received by this agent (as the provider of
-    /// the rated listing). Average = `rating_total / rating_count`.
-    pub rating_total: u64,
-    /// Number of `rate_hire` ratings folded into `rating_total`.
-    pub rating_count: u64,
-    /// Reserved for future track-record counters. MUST stay zeroed.
-    pub _reserved: [u8; 16],
+    /// Reserved for future track-record counters (the per-agent rating rollup is
+    /// deferred to P6.6, which will carve these bytes value-only with no migration).
+    /// MUST stay zeroed.
+    pub _reserved: [u8; 32],
 }
 
 impl AgentStats {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // + 8 discriminator
 
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved == [0u8; 16]
+        self._reserved == [0u8; 32]
     }
 
     /// Initialize the identity fields on first write (idempotent: only sets the
@@ -1952,15 +1945,14 @@ impl AgentStats {
         if self.agent == Pubkey::default() {
             self.agent = agent;
             self.bump = bump;
-            self._reserved = [0u8; 16];
+            self._reserved = [0u8; 32];
         }
     }
 }
 
-/// Compile-time pin for the A5 reserved-carve: `rating_total` + `rating_count`
-/// replaced the first 16 of the former 32 reserved bytes, so the account size (and
-/// every live lazily-created `AgentStats`) must be byte-identical.
-const _: () = assert!(AgentStats::SIZE == 8 + 32 + 5 * 8 + 8 + 1 + 16 + 16);
+/// Compile-time pin for the `AgentStats` layout — the account size must stay fixed
+/// so a future P6.6 rating-rollup carve out of `_reserved` needs no migration.
+const _: () = assert!(AgentStats::SIZE == 8 + 32 + 5 * 8 + 8 + 1 + 32);
 
 /// Symmetric 25/25 completion bond (spec §8). Both the creator and the worker post
 /// a bond equal to 25% of the reward into their own PDA; the loser of a dispute
@@ -3315,16 +3307,13 @@ mod tests {
 
     // === Batch-2 A5: AgentStats reserved-carve rating rollup ===
 
-    /// The rating fields were carved from the FIRST 16 of the former 32 reserved
-    /// bytes — the account byte size must be unchanged (no migration), and a
-    /// pre-carve account (all-zero reserved region) must read as "no ratings".
+    /// The `AgentStats` layout is size-pinned so a future P6.6 rating-rollup carve
+    /// out of `_reserved` needs no migration.
     #[test]
-    fn test_agent_stats_size_unchanged_by_rating_carve() {
+    fn test_agent_stats_size_pinned() {
         test_size_constant!(AgentStats);
-        assert_eq!(AgentStats::SIZE, 8 + 32 + 5 * 8 + 8 + 1 + 8 + 8 + 16);
+        assert_eq!(AgentStats::SIZE, 8 + 32 + 5 * 8 + 8 + 1 + 32);
         let s = AgentStats::default();
-        assert_eq!(s.rating_total, 0);
-        assert_eq!(s.rating_count, 0);
         assert!(s.validate_reserved_fields());
     }
 

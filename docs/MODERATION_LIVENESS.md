@@ -76,12 +76,16 @@ signature, so no third party can either force or prevent relaxation.
    window in this program — exit cooldowns, review windows, deadlines), not epochs.
    Epoch length (~2–3 days) would add an irrelevant unit conversion; drift is
    negligible against a 90-day window.
-6. **Why the window is configurable but floored.** `0 = default (90 days)`;
-   the protocol authority may tune it (a livelier cadence for a paranoid operator,
-   longer for a sleepy one) but never below **1 day** — a sub-day window would let a
-   fat-fingered config make the gate effectively always-relaxed by accident. There is
-   no trust argument against a *short* window (the authority can already disable
-   moderation openly); the floor is purely a foot-gun guard.
+6. **Why the window is configurable but bounded on BOTH sides.** `0 = default
+   (90 days)`; the protocol authority may tune it (a livelier cadence for a paranoid
+   operator, longer for a sleepy one) but only within **[1 day, 400 days]**. The
+   floor stops a sub-day window from making the gate effectively always-relaxed by
+   accident. The ceiling is the symmetric guard on the *safety-critical* direction:
+   without it a units typo (seconds-vs-millis, an accidental multiply) could push the
+   deadman decades out, so a later authority-key death would never relax the gate
+   within any practical horizon — the exact D1/D2 failure the deadman exists to
+   prevent. Neither bound is a trust boundary (the authority can already disable
+   moderation openly); both are foot-gun guards.
 7. **Storage without a migration.** The window lives in
    `ModerationConfig._reserved[0..4]` as a little-endian `u32` seconds value (the
    ModerationAttestor P1.2 / DisputeResolver P6.4 "carve from reserved, value-only,
@@ -89,6 +93,23 @@ signature, so no third party can either force or prevent relaxation.
    its reserved bytes are zero, which reads as "default window". `updated_at` (already
    on the account, already maintained) is the heartbeat — zero new accounts on any
    gate, zero layout change.
+8. **`configure_task_moderation` also arms the deadman.** Any authority write that
+   bumps `ModerationConfig.updated_at` (not just `moderation_heartbeat`) resets the
+   window, so a routine reconfigure counts as liveness — the heartbeat ix exists so
+   the authority can prove liveness *without* changing any policy.
+
+### Operational note — the lapse is silent
+
+The transition into relaxed mode happens by pure passage of time: there is **no
+transaction at the moment the window elapses**, so **no event marks it**.
+`ModerationHeartbeatRecorded` fires only when the authority *arms* the gate, never
+when it lapses. Off-chain surfaces therefore cannot observe the strict→relaxed edge
+by watching logs; they must independently recompute
+`now > updated_at + effective_window` against the config account. **Operators should
+run a liveness alarm well inside the window** (e.g. alert at 50% elapsed) so a
+forgotten or key-lost heartbeat is caught long before the marketplace-wide ALLOW
+gate relaxes. The `[1 day, 400 day]` bounds cap the blast radius of a misconfigured
+window but do not remove the need for the alarm.
 
 ### Rejected alternatives
 

@@ -15253,19 +15253,6 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "agentRatingUpdated",
-      "discriminator": [
-        245,
-        140,
-        132,
-        8,
-        211,
-        10,
-        136,
-        205
-      ]
-    },
-    {
       "name": "agentRegistered",
       "discriminator": [
         191,
@@ -18166,7 +18153,12 @@ export type AgencCoordination = {
     {
       "code": 6327,
       "name": "invalidModerationLivenessWindow",
-      "msg": "Moderation liveness window is below the 1-day floor"
+      "msg": "Moderation liveness window is outside the allowed [1 day, 400 day] range"
+    },
+    {
+      "code": 6328,
+      "name": "invalidStoreManifest",
+      "msg": "Store manifest hash and URI must be pinned together (both set or both empty)"
     }
   ],
   "types": [
@@ -18190,65 +18182,6 @@ export type AgencCoordination = {
           {
             "name": "authority",
             "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "agentRatingUpdated",
-      "docs": [
-        "Emitted when `rate_hire` folds a score into the provider agent's rating",
-        "rollup on `AgentStats` (batch-2 A5). Carries the new aggregate so indexers",
-        "can recompute the average without re-reading the account."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "agent",
-            "docs": [
-              "The provider `AgentRegistration` PDA whose rollup changed."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "agentStats",
-            "docs": [
-              "The `AgentStats` PDA that was written."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "task",
-            "docs": [
-              "The rated hired task."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "score",
-            "docs": [
-              "Score in [1, 5]."
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "newRatingTotal",
-            "docs": [
-              "`rating_total` after this rating."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "newRatingCount",
-            "docs": [
-              "`rating_count` after this rating."
-            ],
-            "type": "u64"
           },
           {
             "name": "timestamp",
@@ -18589,29 +18522,16 @@ export type AgencCoordination = {
             "type": "u8"
           },
           {
-            "name": "ratingTotal",
-            "docs": [
-              "Sum of all `rate_hire` scores received by this agent (as the provider of",
-              "the rated listing). Average = `rating_total / rating_count`."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "ratingCount",
-            "docs": [
-              "Number of `rate_hire` ratings folded into `rating_total`."
-            ],
-            "type": "u64"
-          },
-          {
             "name": "reserved",
             "docs": [
-              "Reserved for future track-record counters. MUST stay zeroed."
+              "Reserved for future track-record counters (the per-agent rating rollup is",
+              "deferred to P6.6, which will carve these bytes value-only with no migration).",
+              "MUST stay zeroed."
             ],
             "type": {
               "array": [
                 "u8",
-                16
+                32
               ]
             }
           }
@@ -24503,7 +24423,16 @@ export type AgencCoordination = {
           {
             "name": "bondLamports",
             "docs": [
-              "Bond refunded (informational; the close returns rent + bond together)."
+              "The bond principal that was held (informational)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "refundedLamports",
+            "docs": [
+              "Total lamports actually refunded to the owner at close — the full PDA",
+              "balance (rent + bond + any lamports transferred to the PDA after",
+              "registration), which is what `close = owner` returns."
             ],
             "type": "u64"
           },

@@ -15,7 +15,8 @@
 use crate::errors::CoordinationError;
 use crate::events::ModerationHeartbeatRecorded;
 use crate::instructions::constants::{
-    DEFAULT_MODERATION_LIVENESS_WINDOW_SECS, MIN_MODERATION_LIVENESS_WINDOW_SECS,
+    DEFAULT_MODERATION_LIVENESS_WINDOW_SECS, MAX_MODERATION_LIVENESS_WINDOW_SECS,
+    MIN_MODERATION_LIVENESS_WINDOW_SECS,
 };
 use crate::state::ModerationConfig;
 use anchor_lang::prelude::*;
@@ -34,7 +35,8 @@ pub struct ModerationHeartbeat<'info> {
 
 /// Pure authorization + window-change rule, extracted for unit tests:
 /// - heartbeat: config authority OR moderation authority;
-/// - window change (`Some`): config authority ONLY, floored at 1 day.
+/// - window change (`Some`): config authority ONLY, bounded to
+///   `[MIN, MAX]_MODERATION_LIVENESS_WINDOW_SECS` (floor + ceiling).
 pub(crate) fn validate_heartbeat(
     signer: Pubkey,
     config_authority: Pubkey,
@@ -50,8 +52,11 @@ pub(crate) fn validate_heartbeat(
             signer == config_authority,
             CoordinationError::UnauthorizedModerationHeartbeat
         );
+        // Bounded on BOTH sides: the floor stops an always-relaxed gate; the
+        // ceiling stops a fat-fingered window from freezing the deadman forever.
         require!(
-            window >= MIN_MODERATION_LIVENESS_WINDOW_SECS,
+            (MIN_MODERATION_LIVENESS_WINDOW_SECS..=MAX_MODERATION_LIVENESS_WINDOW_SECS)
+                .contains(&window),
             CoordinationError::InvalidModerationLivenessWindow
         );
     }
@@ -142,6 +147,29 @@ mod tests {
             config_auth,
             mod_auth,
             Some(MIN_MODERATION_LIVENESS_WINDOW_SECS - 1),
+        )
+        .unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidModerationLivenessWindow.into());
+    }
+
+    // Revert-sensitive: widen the range check to floor-only (drop the ceiling) and
+    // the over-ceiling case goes red. The boundary itself (== MAX) stays valid.
+    #[test]
+    fn window_change_enforces_the_ceiling() {
+        let config_auth = Pubkey::new_unique();
+        let mod_auth = Pubkey::new_unique();
+        assert!(validate_heartbeat(
+            config_auth,
+            config_auth,
+            mod_auth,
+            Some(MAX_MODERATION_LIVENESS_WINDOW_SECS)
+        )
+        .is_ok());
+        let err = validate_heartbeat(
+            config_auth,
+            config_auth,
+            mod_auth,
+            Some(MAX_MODERATION_LIVENESS_WINDOW_SECS + 1),
         )
         .unwrap_err();
         assert_eq!(err, CoordinationError::InvalidModerationLivenessWindow.into());

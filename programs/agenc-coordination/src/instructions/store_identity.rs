@@ -76,6 +76,20 @@ pub(crate) fn validate_store_args(
     Ok(())
 }
 
+/// The manifest hash and URI must be pinned TOGETHER: both set (a fetchable
+/// manifest with an on-chain integrity commitment) or both empty (no manifest
+/// pinned). A non-zero hash with an empty URI advertises an integrity commitment
+/// for something unfetchable; a URI with an all-zero hash serves a manifest with
+/// no integrity pin. Both contradict the `Store` struct's "all-zero/empty = no
+/// manifest pinned" semantics, so reject them at register/update.
+pub(crate) fn validate_store_manifest(metadata_hash: &[u8; 32], metadata_uri: &str) -> Result<()> {
+    require!(
+        (*metadata_hash != [0u8; 32]) == !metadata_uri.is_empty(),
+        CoordinationError::InvalidStoreManifest
+    );
+    Ok(())
+}
+
 // ================================ register_store ================================
 
 #[derive(Accounts)]
@@ -118,6 +132,7 @@ pub fn register_handler(
         operator_fee_bps,
         &domain,
     )?;
+    validate_store_manifest(&metadata_hash, &metadata_uri)?;
     let clock = Clock::get()?;
 
     // Deposit the bond via an in-handler CPI that cannot be skipped (mirrors
@@ -204,6 +219,7 @@ pub fn update_handler(
         operator_fee_bps,
         &domain,
     )?;
+    validate_store_manifest(&metadata_hash, &metadata_uri)?;
     let clock = Clock::get()?;
 
     let owner_key = ctx.accounts.owner.key();
@@ -254,10 +270,15 @@ pub struct CloseStore<'info> {
 
 pub fn close_handler(ctx: Context<CloseStore>) -> Result<()> {
     let clock = Clock::get()?;
+    // The account is closed by Anchor (`close = owner`) AFTER this handler returns,
+    // so its current balance is exactly what will be refunded to the owner: rent +
+    // bond + any lamports sent to the PDA post-registration.
+    let refunded_lamports = ctx.accounts.store.to_account_info().lamports();
     emit!(StoreClosed {
         store: ctx.accounts.store.key(),
         owner: ctx.accounts.owner.key(),
         bond_lamports: ctx.accounts.store.bond_lamports,
+        refunded_lamports,
         timestamp: clock.unix_timestamp,
     });
     Ok(())
@@ -342,6 +363,27 @@ mod tests {
         // Payee with zero fee.
         let err = validate_store_args(&h, &uri, rbps, &op, 0, &domain).unwrap_err();
         assert_eq!(err, CoordinationError::InvalidStoreOperatorTerms.into());
+    }
+
+    // Revert-sensitive: drop the manifest pairing require! and both mismatch
+    // directions go red; the two matched cases must stay OK.
+    #[test]
+    fn manifest_hash_and_uri_must_be_paired() {
+        let nonzero = [7u8; 32];
+        let zero = [0u8; 32];
+        let uri = "https://acme.example/.well-known/agenc-store.json";
+        // Matched: both set, or both empty.
+        assert!(validate_store_manifest(&nonzero, uri).is_ok());
+        assert!(validate_store_manifest(&zero, "").is_ok());
+        // Mismatched: hash with no URI, or URI with no hash.
+        assert_eq!(
+            validate_store_manifest(&nonzero, "").unwrap_err(),
+            CoordinationError::InvalidStoreManifest.into()
+        );
+        assert_eq!(
+            validate_store_manifest(&zero, uri).unwrap_err(),
+            CoordinationError::InvalidStoreManifest.into()
+        );
     }
 
     // Revert-sensitive: drop the domain require! and this goes red.

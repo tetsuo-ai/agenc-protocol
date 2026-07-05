@@ -1110,7 +1110,7 @@ pub struct AgentTrackRecordUpdated {
 }
 
 // ============================================================================
-// Batch 2 events (P5.2 store identity, P1.3 moderation liveness, A5 rating rollup)
+// Batch 2 events (P5.2 store identity, P1.3 moderation liveness)
 // ============================================================================
 
 /// Emitted when a store registers its on-chain identity (P5.2).
@@ -1145,8 +1145,12 @@ pub struct StoreUpdated {
 pub struct StoreClosed {
     pub store: Pubkey,
     pub owner: Pubkey,
-    /// Bond refunded (informational; the close returns rent + bond together).
+    /// The bond principal that was held (informational).
     pub bond_lamports: u64,
+    /// Total lamports actually refunded to the owner at close — the full PDA
+    /// balance (rent + bond + any lamports transferred to the PDA after
+    /// registration), which is what `close = owner` returns.
+    pub refunded_lamports: u64,
     pub timestamp: i64,
 }
 
@@ -1160,25 +1164,5 @@ pub struct ModerationHeartbeatRecorded {
     /// The EFFECTIVE liveness window after this call (seconds; the default is
     /// substituted when the stored value is 0).
     pub window_secs: u32,
-    pub timestamp: i64,
-}
-
-/// Emitted when `rate_hire` folds a score into the provider agent's rating
-/// rollup on `AgentStats` (batch-2 A5). Carries the new aggregate so indexers
-/// can recompute the average without re-reading the account.
-#[event]
-pub struct AgentRatingUpdated {
-    /// The provider `AgentRegistration` PDA whose rollup changed.
-    pub agent: Pubkey,
-    /// The `AgentStats` PDA that was written.
-    pub agent_stats: Pubkey,
-    /// The rated hired task.
-    pub task: Pubkey,
-    /// Score in [1, 5].
-    pub score: u8,
-    /// `rating_total` after this rating.
-    pub new_rating_total: u64,
-    /// `rating_count` after this rating.
-    pub new_rating_count: u64,
     pub timestamp: i64,
 }

@@ -25,8 +25,7 @@ pub const MAX_COMBINED_FEE_BPS: u16 = 4000;
 /// per spec §4. With protocol ≤20% (MAX_PROTOCOL_FEE_BPS) + operator ≤20%
 /// (MAX_OPERATOR_FEE_BPS), the worker is left exactly ≥60% at the caps, so this
 /// floor is the *binding* invariant at maximum fees — enforced + tested at
-/// settlement (`calculate_operator_fee` / `calculate_combined_fees`), not merely
-/// emergent.
+/// settlement (`calculate_combined_fees`), not merely emergent.
 pub const WORKER_FLOOR_BPS: u16 = 6000;
 
 /// Base for percentage calculations (100 = 100%)
@@ -124,6 +123,14 @@ pub const DEFAULT_MODERATION_LIVENESS_WINDOW_SECS: u32 = 7_776_000;
 /// accident. It is NOT a trust boundary — the protocol authority can already
 /// disable moderation openly.
 pub const MIN_MODERATION_LIVENESS_WINDOW_SECS: u32 = 86_400;
+
+/// Ceiling for a configured moderation liveness window (400 days). Symmetric
+/// foot-gun guard on the SAFETY-critical direction: without it a units typo
+/// (e.g. seconds-vs-millis, an accidental multiply) could push the deadman so
+/// far out that a lost authority key never relaxes the gate within any practical
+/// horizon — defeating the exact failure the deadman exists to prevent. Like the
+/// floor, this is NOT a trust boundary.
+pub const MAX_MODERATION_LIVENESS_WINDOW_SECS: u32 = 34_560_000;
 
 // ============================================================================
 // P5.2 Store Identity Constants (batch-2 — docs/P5_2_STORE_IDENTITY_SPEC.md)
