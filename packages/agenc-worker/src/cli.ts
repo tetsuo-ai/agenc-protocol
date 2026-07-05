@@ -51,8 +51,17 @@ SUBCOMMANDS
   once     one sweep + claim + execute + submit, then exit (what the timers run)
   status   readonly: registration, balance, open claim, recent submissions
 
+FUNDING (first run is NOT free)
+  Registration stakes the live on-chain minimum (ProtocolConfig.minAgentStake,
+  0.01 SOL on mainnet) and pays account rents; working a task pays claim +
+  submission rents. Fund the hot wallet with at least ~0.021 SOL. The worker
+  preflights the balance BEFORE its first transaction and prints the exact
+  lamports needed and the address to fund if it is short.
+
 FLAGS (flags > AGENC_WORKER_* env > config file > defaults)
-  --rpc-url <url>            HTTP RPC endpoint (required)
+  --rpc-url <url>            HTTP RPC endpoint (required); task discovery polls
+                             getProgramAccounts, so the RPC must allow gPA
+                             (public mainnet-beta works but is rate-limited)
   --wallet <path>            LOW-FUNDED hot-wallet keypair JSON (required)
   --capabilities <bitmask>   capability bitmask (default 1)
   --min-reward <lamports>    minimum task reward (default 0)
@@ -160,6 +169,9 @@ async function buildContext(
     log: logLine,
     dryRun,
     findSettlementSignature,
+    // Pre-registration funding preflight: fail with the exact lamports needed
+    // BEFORE the first transaction instead of an on-chain revert.
+    getBalance: async (address) => BigInt((await rpc.getBalance(address).send()).value),
   };
   return { ctx, rpc };
 }
