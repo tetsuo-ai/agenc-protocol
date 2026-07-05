@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**94 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**95 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -39,6 +39,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`create_task_humanless`](#create_task_humanless)
 - [`delegate_reputation`](#delegate_reputation)
 - [`deregister_agent`](#deregister_agent)
+- [`distribute_ghost_share`](#distribute_ghost_share)
 - [`execute_proposal`](#execute_proposal)
 - [`expire_bid`](#expire_bid)
 - [`expire_claim`](#expire_claim)
@@ -843,6 +844,38 @@ Agent must have no active tasks.
 | 2 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
 | 3 | `reputation_stake` |  |  |  | PDA ["reputation_stake", account:agent] | The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit it to dodge the "stake must be withdrawn first" guard (audit). For an agent that never staked this is an empty system-owned PDA (the handler treats it as zero stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve `slash_count` history — so the agent must withdraw its stake before deregistering; otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the `agent_id` becomes re-registerable by anyone, withdrawable by a new owner. |
 | 4 | `authority` | yes | yes |  |  | has_one → agent |
+
+### Args (0)
+
+_None._
+
+## distribute_ghost_share
+
+Permissionless contest ghost-split crank (Batch 3 WS-CONTEST §3): from
+`ghost_at = deadline + SELECTION_WINDOW_SECS`, pay one live (Submitted)
+contest submission its equal slice of the remaining escrow pool — same fee
+legs as settlement — and close its submission + claim to the worker. The
+final slice sweeps the pool, completes the task, and closes the escrow.
+Exit path — settles even while paused (money never locks).
+
+### Accounts (14)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 2 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
+| 3 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
+| 4 | `task_validation_config` | yes |  |  | PDA ["task_validation", account:task] |  |
+| 5 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] |  |
+| 6 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
+| 7 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
+| 8 | `treasury` | yes |  |  |  |  |
+| 9 | `creator` | yes |  |  |  | validated against task.creator. Never receives pool funds. |
+| 10 | `worker_authority` | yes |  |  |  | against worker.authority (stored pubkey — spec invariant 2). |
+| 11 | `operator` | yes |  | yes |  | only when the task carries a non-zero operator fee. (A contest can never be a hire — configure_task_validation rejects live-HireRecord tasks — so the terms come from the Task alone; no HireRecord fallback.) |
+| 12 | `referrer` | yes |  | yes |  | split). Required only when the task carries a non-zero referrer fee. |
+| 13 | `cranker` |  | yes |  |  | Permissionless cranker; pays only the transaction fee. |
+| 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (0)
 

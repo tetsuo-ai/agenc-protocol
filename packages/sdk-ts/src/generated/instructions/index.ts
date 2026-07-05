@@ -34,6 +34,7 @@ export * from "./createTask";
 export * from "./createTaskHumanless";
 export * from "./delegateReputation";
 export * from "./deregisterAgent";
+export * from "./distributeGhostShare";
 export * from "./executeProposal";
 export * from "./expireBid";
 export * from "./expireClaim";

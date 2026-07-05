@@ -672,6 +672,24 @@ export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_HEARTBEAT = 0x18b
 export const AGENC_COORDINATION_ERROR__INVALID_MODERATION_LIVENESS_WINDOW = 0x18b7; // 6327
 /** InvalidStoreManifest: Store manifest hash and URI must be pinned together (both set or both empty) */
 export const AGENC_COORDINATION_ERROR__INVALID_STORE_MANIFEST = 0x18b8; // 6328
+/** ContestSolRewardOnly: Contest (schema-1 Competitive) tasks must use SOL rewards */
+export const AGENC_COORDINATION_ERROR__CONTEST_SOL_REWARD_ONLY = 0x18b9; // 6329
+/** ContestSelectionWindowElapsed: Selection window has closed; the contest settles via distribute_ghost_share */
+export const AGENC_COORDINATION_ERROR__CONTEST_SELECTION_WINDOW_ELAPSED = 0x18ba; // 6330
+/** ContestAcceptRequiresSoleLiveSubmission: Reject every other live submission before accepting a contest winner */
+export const AGENC_COORDINATION_ERROR__CONTEST_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION = 0x18bb; // 6331
+/** ContestAutoAcceptDisabled: Auto-accept is disabled for contest tasks; accept before ghost_at or crank distribute_ghost_share after */
+export const AGENC_COORDINATION_ERROR__CONTEST_AUTO_ACCEPT_DISABLED = 0x18bc; // 6332
+/** ContestGhostWindowNotReached: Ghost-split is not open yet; the creator's selection window is still active */
+export const AGENC_COORDINATION_ERROR__CONTEST_GHOST_WINDOW_NOT_REACHED = 0x18bd; // 6333
+/** ContestGhostShareUnavailable: distribute_ghost_share requires a schema-1 Competitive task pending validation */
+export const AGENC_COORDINATION_ERROR__CONTEST_GHOST_SHARE_UNAVAILABLE = 0x18be; // 6334
+/** ContestHasLiveSubmissions: Contest tasks cannot be cancelled while live submissions exist */
+export const AGENC_COORDINATION_ERROR__CONTEST_HAS_LIVE_SUBMISSIONS = 0x18bf; // 6335
+/** ContestFlowUnsupported: Dispute/freeze/revision flows are disabled for contest tasks */
+export const AGENC_COORDINATION_ERROR__CONTEST_FLOW_UNSUPPORTED = 0x18c0; // 6336
+/** SubmissionRentAccountsRequired: Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator) */
+export const AGENC_COORDINATION_ERROR__SUBMISSION_RENT_ACCOUNTS_REQUIRED = 0x18c1; // 6337
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -724,6 +742,14 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE
   | typeof AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__CONTENT_BLOCKED
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_AUTO_ACCEPT_DISABLED
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_FLOW_UNSUPPORTED
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_GHOST_SHARE_UNAVAILABLE
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_GHOST_WINDOW_NOT_REACHED
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_HAS_LIVE_SUBMISSIONS
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_SELECTION_WINDOW_ELAPSED
+  | typeof AGENC_COORDINATION_ERROR__CONTEST_SOL_REWARD_ONLY
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE
   | typeof AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG
@@ -937,6 +963,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_PENDING
   | typeof AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_RESOLVED
   | typeof AGENC_COORDINATION_ERROR__SUBMISSION_NOT_PENDING
+  | typeof AGENC_COORDINATION_ERROR__SUBMISSION_RENT_ACCOUNTS_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_ALREADY_COMPLETED
   | typeof AGENC_COORDINATION_ERROR__TASK_ATTESTOR_CONFIG_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_CANNOT_BE_CANCELLED
@@ -1059,6 +1086,14 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE]: `ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)`,
     [AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH]: `Proof constraint hash does not match task's stored constraint hash`,
     [AGENC_COORDINATION_ERROR__CONTENT_BLOCKED]: `Content hash is blocked by the multisig takedown floor`,
+    [AGENC_COORDINATION_ERROR__CONTEST_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION]: `Reject every other live submission before accepting a contest winner`,
+    [AGENC_COORDINATION_ERROR__CONTEST_AUTO_ACCEPT_DISABLED]: `Auto-accept is disabled for contest tasks; accept before ghost_at or crank distribute_ghost_share after`,
+    [AGENC_COORDINATION_ERROR__CONTEST_FLOW_UNSUPPORTED]: `Dispute/freeze/revision flows are disabled for contest tasks`,
+    [AGENC_COORDINATION_ERROR__CONTEST_GHOST_SHARE_UNAVAILABLE]: `distribute_ghost_share requires a schema-1 Competitive task pending validation`,
+    [AGENC_COORDINATION_ERROR__CONTEST_GHOST_WINDOW_NOT_REACHED]: `Ghost-split is not open yet; the creator's selection window is still active`,
+    [AGENC_COORDINATION_ERROR__CONTEST_HAS_LIVE_SUBMISSIONS]: `Contest tasks cannot be cancelled while live submissions exist`,
+    [AGENC_COORDINATION_ERROR__CONTEST_SELECTION_WINDOW_ELAPSED]: `Selection window has closed; the contest settles via distribute_ghost_share`,
+    [AGENC_COORDINATION_ERROR__CONTEST_SOL_REWARD_ONLY]: `Contest (schema-1 Competitive) tasks must use SOL rewards`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_NOT_ELAPSED]: `Cooldown period has not elapsed since last action`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LARGE]: `Cooldown value exceeds maximum (24 hours)`,
     [AGENC_COORDINATION_ERROR__COOLDOWN_TOO_LONG]: `Cooldown value exceeds maximum allowed (1 week)`,
@@ -1272,6 +1307,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_PENDING]: `Task submission already pending review`,
     [AGENC_COORDINATION_ERROR__SUBMISSION_ALREADY_RESOLVED]: `Task submission has already been resolved`,
     [AGENC_COORDINATION_ERROR__SUBMISSION_NOT_PENDING]: `Task submission is not pending review`,
+    [AGENC_COORDINATION_ERROR__SUBMISSION_RENT_ACCOUNTS_REQUIRED]: `Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator)`,
     [AGENC_COORDINATION_ERROR__TASK_ALREADY_COMPLETED]: `Task is already completed`,
     [AGENC_COORDINATION_ERROR__TASK_ATTESTOR_CONFIG_REQUIRED]: `Task attestor configuration is required`,
     [AGENC_COORDINATION_ERROR__TASK_CANNOT_BE_CANCELLED]: `Task cannot be cancelled`,

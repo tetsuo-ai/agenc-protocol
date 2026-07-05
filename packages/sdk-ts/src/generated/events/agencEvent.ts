@@ -135,6 +135,10 @@ import {
   type DisputeResolverRevokedEventData,
 } from "./disputeResolverRevoked";
 import {
+  getGhostShareDistributedEventDecoder,
+  type GhostShareDistributedEventData,
+} from "./ghostShareDistributed";
+import {
   getGovernanceInitializedEventDecoder,
   type GovernanceInitializedEventData,
 } from "./governanceInitialized";
@@ -443,6 +447,7 @@ export type AgencEvent =
   | { eventName: "DisputeResolved"; data: DisputeResolvedEventData }
   | { eventName: "DisputeResolverAssigned"; data: DisputeResolverAssignedEventData }
   | { eventName: "DisputeResolverRevoked"; data: DisputeResolverRevokedEventData }
+  | { eventName: "GhostShareDistributed"; data: GhostShareDistributedEventData }
   | { eventName: "GovernanceInitialized"; data: GovernanceInitializedEventData }
   | { eventName: "GovernanceVoteCast"; data: GovernanceVoteCastEventData }
   | { eventName: "LaunchControlsUpdated"; data: LaunchControlsUpdatedEventData }
@@ -752,6 +757,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "DisputeResolverRevoked",
       data: getDisputeResolverRevokedEventDecoder().decode(payload),
+    }),
+  },
+  "c48f8a1aa81d6f62": {
+    eventName: "GhostShareDistributed",
+    decode: (payload) => ({
+      eventName: "GhostShareDistributed",
+      data: getGhostShareDistributedEventDecoder().decode(payload),
     }),
   },
   "29bb671a2a2c1e0f": {

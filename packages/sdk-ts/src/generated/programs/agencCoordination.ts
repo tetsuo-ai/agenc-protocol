@@ -196,6 +196,7 @@ import {
   getCreateTaskInstructionAsync,
   getDelegateReputationInstructionAsync,
   getDeregisterAgentInstructionAsync,
+  getDistributeGhostShareInstructionAsync,
   getExecuteProposalInstructionAsync,
   getExpireBidInstructionAsync,
   getExpireClaimInstructionAsync,
@@ -290,6 +291,7 @@ import {
   parseCreateTaskInstruction,
   parseDelegateReputationInstruction,
   parseDeregisterAgentInstruction,
+  parseDistributeGhostShareInstruction,
   parseExecuteProposalInstruction,
   parseExpireBidInstruction,
   parseExpireClaimInstruction,
@@ -384,6 +386,7 @@ import {
   type CreateTaskHumanlessAsyncInput,
   type DelegateReputationAsyncInput,
   type DeregisterAgentAsyncInput,
+  type DistributeGhostShareAsyncInput,
   type ExecuteProposalAsyncInput,
   type ExpireBidAsyncInput,
   type ExpireClaimAsyncInput,
@@ -429,6 +432,7 @@ import {
   type ParsedCreateTaskInstruction,
   type ParsedDelegateReputationInstruction,
   type ParsedDeregisterAgentInstruction,
+  type ParsedDistributeGhostShareInstruction,
   type ParsedExecuteProposalInstruction,
   type ParsedExpireBidInstruction,
   type ParsedExpireClaimInstruction,
@@ -1172,6 +1176,7 @@ export enum AgencCoordinationInstruction {
   CreateTaskHumanless,
   DelegateReputation,
   DeregisterAgent,
+  DistributeGhostShare,
   ExecuteProposal,
   ExpireBid,
   ExpireClaim,
@@ -1551,6 +1556,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.DeregisterAgent;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([238, 29, 21, 234, 93, 251, 101, 47]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.DistributeGhostShare;
   }
   if (
     containsBytes(
@@ -2372,6 +2388,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.DeregisterAgent;
     } & ParsedDeregisterAgentInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.DistributeGhostShare;
+    } & ParsedDistributeGhostShareInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.ExecuteProposal;
     } & ParsedExecuteProposalInstruction<TProgram>)
   | ({
@@ -2769,6 +2788,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.DeregisterAgent,
         ...parseDeregisterAgentInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.DistributeGhostShare: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.DistributeGhostShare,
+        ...parseDistributeGhostShareInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.ExecuteProposal: {
@@ -3455,6 +3481,10 @@ export type AgencCoordinationPluginInstructions = {
     input: DeregisterAgentAsyncInput,
   ) => ReturnType<typeof getDeregisterAgentInstructionAsync> &
     SelfPlanAndSendFunctions;
+  distributeGhostShare: (
+    input: DistributeGhostShareAsyncInput,
+  ) => ReturnType<typeof getDistributeGhostShareInstructionAsync> &
+    SelfPlanAndSendFunctions;
   executeProposal: (
     input: ExecuteProposalAsyncInput,
   ) => ReturnType<typeof getExecuteProposalInstructionAsync> &
@@ -4055,6 +4085,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getDeregisterAgentInstructionAsync(input),
+            ),
+          distributeGhostShare: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getDistributeGhostShareInstructionAsync(input),
             ),
           executeProposal: (input) =>
             addSelfPlanAndSendFunctions(

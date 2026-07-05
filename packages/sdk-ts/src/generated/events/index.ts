@@ -37,6 +37,7 @@ export * from "./disputeInitiated";
 export * from "./disputeResolved";
 export * from "./disputeResolverAssigned";
 export * from "./disputeResolverRevoked";
+export * from "./ghostShareDistributed";
 export * from "./governanceInitialized";
 export * from "./governanceVoteCast";
 export * from "./launchControlsUpdated";

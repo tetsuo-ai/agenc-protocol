@@ -146,7 +146,16 @@ export type Task = {
   operatorFeeBps: number;
   /**
    * Reserved padding so future field adds become value-only migrates rather
-   * than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
+   * than another realloc-all sweep.
+   *
+   * Batch 3 (WS-CONTEST) carves the first two bytes in place — a value-only
+   * migrate, NO size change, NO realloc (live pre-batch-3 accounts read back as
+   * zeros == schema 0 / no live submissions, which is exactly their meaning):
+   * * `_reserved[0]` = `task_schema` (0 = pre-batch-3, 1 = contest-aware;
+   * see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).
+   * * `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with
+   * status `Submitted`; maintained ONLY for schema-1 tasks).
+   * Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**
@@ -240,7 +249,16 @@ export type TaskArgs = {
   operatorFeeBps: number;
   /**
    * Reserved padding so future field adds become value-only migrates rather
-   * than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
+   * than another realloc-all sweep.
+   *
+   * Batch 3 (WS-CONTEST) carves the first two bytes in place — a value-only
+   * migrate, NO size change, NO realloc (live pre-batch-3 accounts read back as
+   * zeros == schema 0 / no live submissions, which is exactly their meaning):
+   * * `_reserved[0]` = `task_schema` (0 = pre-batch-3, 1 = contest-aware;
+   * see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).
+   * * `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with
+   * status `Submitted`; maintained ONLY for schema-1 tasks).
+   * Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**
