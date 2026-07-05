@@ -126,7 +126,7 @@ async function resolveAsAssigned(w, r, { resolver, resolverEntry, approve, ratio
       authority: resolver.publicKey, resolverAssignment: resolverEntry, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
       agentStats: null,
-      hireRecord: r.hireRecord, disputeOperator: null, systemProgram: SystemProgram.programId,
+      hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,

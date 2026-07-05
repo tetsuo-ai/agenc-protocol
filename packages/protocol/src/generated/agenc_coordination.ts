@@ -2357,6 +2357,60 @@ export type AgencCoordination = {
       "args": []
     },
     {
+      "name": "closeStore",
+      "docs": [
+        "Close a store identity PDA (owner-only, P5.2), refunding rent + bond in",
+        "full. No exit cooldown: nothing money-bearing consumes `Store` in v1."
+      ],
+      "discriminator": [
+        87,
+        18,
+        213,
+        192,
+        63,
+        136,
+        65,
+        205
+      ],
+      "accounts": [
+        {
+          "name": "store",
+          "docs": [
+            "`close = owner` refunds rent + the bond (held as excess lamports on the",
+            "PDA) to the owner in one step — never confiscatable, owner-only."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  111,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "store"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "closeTask",
       "docs": [
         "Reclaim a terminal task's account rent (and optional leftover job-spec",
@@ -6028,7 +6082,17 @@ export type AgencCoordination = {
         {
           "name": "disputeOperator",
           "docs": [
-            "live hire carries a non-zero operator fee and the worker is paid. Receives SOL."
+            "HireRecord fallback); required only when those terms carry a non-zero operator fee",
+            "and the worker is paid. Receives SOL."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "disputeReferrer",
+          "docs": [
+            "dispute exits honor the snapshotted referrer leg); required only when those terms",
+            "carry a non-zero referrer fee and the worker is paid. Receives SOL."
           ],
           "writable": true,
           "optional": true
@@ -7918,6 +7982,70 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "moderationHeartbeat",
+      "docs": [
+        "P1.3 moderation liveness heartbeat (batch-2 A2). The config authority or",
+        "the moderation authority bumps the deadman timestamp; the config authority",
+        "may also retune the liveness window (floored at 1 day). Silence past the",
+        "window relaxes the moderation ALLOW gates to moderation-optional",
+        "(docs/MODERATION_LIVENESS.md); the multisig BLOCK floor never relaxes."
+      ],
+      "discriminator": [
+        215,
+        182,
+        250,
+        219,
+        71,
+        134,
+        198,
+        0
+      ],
+      "accounts": [
+        {
+          "name": "moderationConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "newWindowSecs",
+          "type": {
+            "option": "u32"
+          }
+        }
+      ]
+    },
+    {
       "name": "postCompletionBond",
       "docs": [
         "Post a symmetric 25% completion bond (Batch 3 §8). `role`: 0 = creator,",
@@ -9800,6 +9928,107 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "registerStore",
+      "docs": [
+        "Register a permissionless on-chain store identity (P5.2, batch 2). The",
+        "signer pays rent + the hardcoded 0.05 SOL bond onto its own `[\"store\",",
+        "owner]` PDA. The handle is display-only (NOT unique on-chain); fee fields",
+        "are advertised defaults, not enforcement."
+      ],
+      "discriminator": [
+        63,
+        55,
+        152,
+        6,
+        167,
+        127,
+        89,
+        129
+      ],
+      "accounts": [
+        {
+          "name": "store",
+          "docs": [
+            "`init` ⇒ one store per wallet (the live product invariant); registering",
+            "twice fails at account creation, and a re-register after close re-inits a",
+            "fresh entry."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  111,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "docs": [
+            "The self-registering store owner. No authority constraint — this is the",
+            "permissionless path. Pays rent AND the registration bond."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "handle",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataUri",
+          "type": "string"
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
+        },
+        {
+          "name": "operator",
+          "type": "pubkey"
+        },
+        {
+          "name": "operatorFeeBps",
+          "type": "u16"
+        },
+        {
+          "name": "domain",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "rejectAndFreeze",
       "docs": [
         "Terminally reject a submission and freeze the task for review (Batch 3 §8).",
@@ -10768,7 +10997,17 @@ export type AgencCoordination = {
         {
           "name": "disputeOperator",
           "docs": [
-            "a live hire carries a non-zero operator fee. Receives the operator leg (SOL)."
+            "HireRecord fallback); required only when those terms carry a non-zero operator fee.",
+            "Receives the operator leg (SOL)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "disputeReferrer",
+          "docs": [
+            "dispute exits honor the snapshotted referrer leg); required only when those terms",
+            "carry a non-zero referrer fee. Receives the referrer leg (SOL)."
           ],
           "writable": true,
           "optional": true
@@ -13532,6 +13771,94 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "updateStore",
+      "docs": [
+        "Update a store's advertised identity/terms (owner-only, P5.2). Bumps the",
+        "monotonic `version` for indexer staleness/CAS."
+      ],
+      "discriminator": [
+        169,
+        49,
+        137,
+        251,
+        233,
+        234,
+        172,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "store",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  111,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "store"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "handle",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataUri",
+          "type": "string"
+        },
+        {
+          "name": "referrerFeeBps",
+          "type": "u16"
+        },
+        {
+          "name": "operator",
+          "type": "pubkey"
+        },
+        {
+          "name": "operatorFeeBps",
+          "type": "u16"
+        },
+        {
+          "name": "domain",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "name": "updateTreasury",
       "docs": [
         "Update protocol treasury destination (multisig gated).",
@@ -14742,6 +15069,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "store",
+      "discriminator": [
+        130,
+        48,
+        247,
+        244,
+        182,
+        191,
+        30,
+        26
+      ]
+    },
+    {
       "name": "task",
       "discriminator": [
         79,
@@ -15459,6 +15799,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "moderationHeartbeatRecorded",
+      "discriminator": [
+        25,
+        255,
+        220,
+        114,
+        183,
+        234,
+        227,
+        204
+      ]
+    },
+    {
       "name": "multisigUpdated",
       "discriminator": [
         242,
@@ -15872,6 +16225,45 @@ export type AgencCoordination = {
         210,
         78,
         173
+      ]
+    },
+    {
+      "name": "storeClosed",
+      "discriminator": [
+        184,
+        145,
+        107,
+        98,
+        153,
+        0,
+        214,
+        211
+      ]
+    },
+    {
+      "name": "storeRegistered",
+      "discriminator": [
+        8,
+        21,
+        234,
+        141,
+        147,
+        227,
+        16,
+        145
+      ]
+    },
+    {
+      "name": "storeUpdated",
+      "discriminator": [
+        218,
+        7,
+        142,
+        56,
+        57,
+        63,
+        185,
+        211
       ]
     },
     {
@@ -17727,6 +18119,46 @@ export type AgencCoordination = {
       "code": 6320,
       "name": "invalidModerationRecord",
       "msg": "Moderation record account is not the canonical PDA, not program-owned, or not a moderation record"
+    },
+    {
+      "code": 6321,
+      "name": "invalidStoreHandle",
+      "msg": "Store handle must be 3-20 chars of lowercase [a-z0-9-], starting alphanumeric, zero-padded"
+    },
+    {
+      "code": 6322,
+      "name": "invalidStoreMetadataUri",
+      "msg": "Store metadata URI exceeds the maximum length"
+    },
+    {
+      "code": 6323,
+      "name": "invalidStoreDomain",
+      "msg": "Store domain is not a valid DNS name"
+    },
+    {
+      "code": 6324,
+      "name": "invalidStoreOperatorTerms",
+      "msg": "Store operator fee requires a non-default operator payee (and vice versa)"
+    },
+    {
+      "code": 6325,
+      "name": "storeBondMissing",
+      "msg": "Store PDA is missing the registration bond after deposit"
+    },
+    {
+      "code": 6326,
+      "name": "unauthorizedModerationHeartbeat",
+      "msg": "Only the moderation config authority or the moderation authority may heartbeat"
+    },
+    {
+      "code": 6327,
+      "name": "invalidModerationLivenessWindow",
+      "msg": "Moderation liveness window is outside the allowed [1 day, 400 day] range"
+    },
+    {
+      "code": 6328,
+      "name": "invalidStoreManifest",
+      "msg": "Store manifest hash and URI must be pinned together (both set or both empty)"
     }
   ],
   "types": [
@@ -18092,7 +18524,9 @@ export type AgencCoordination = {
           {
             "name": "reserved",
             "docs": [
-              "Reserved for future track-record counters. MUST stay zeroed."
+              "Reserved for future track-record counters (the per-agent rating rollup is",
+              "deferred to P6.6, which will carve these bytes value-only with no migration).",
+              "MUST stay zeroed."
             ],
             "type": {
               "array": [
@@ -21385,7 +21819,10 @@ export type AgencCoordination = {
           {
             "name": "updatedAt",
             "docs": [
-              "Last update timestamp."
+              "Last update timestamp. ALSO the P1.3 liveness heartbeat: bumped by",
+              "`configure_task_moderation` and `moderation_heartbeat`; when it goes stale",
+              "past the liveness window the consumption gates relax to moderation-optional",
+              "(`docs/MODERATION_LIVENESS.md`)."
             ],
             "type": "i64"
           },
@@ -21399,7 +21836,10 @@ export type AgencCoordination = {
           {
             "name": "reserved",
             "docs": [
-              "Reserved for future moderation policy flags."
+              "Reserved bytes. `[0..4]` carry the P1.3 liveness window (LE `u32` seconds,",
+              "0 = default 90 days) via the accessors below — the value-only,",
+              "size-identical reserved-carve precedent (ModerationAttestor P1.2). `[4..6]`",
+              "MUST stay zeroed."
             ],
             "type": {
               "array": [
@@ -21407,6 +21847,38 @@ export type AgencCoordination = {
                 6
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "moderationHeartbeatRecorded",
+      "docs": [
+        "Emitted on every `moderation_heartbeat` (P1.3 liveness deadman). Surfaces and",
+        "indexers can watch this to display gate-armed status; silence past the window",
+        "relaxes the consumption gates (docs/MODERATION_LIVENESS.md)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "by",
+            "docs": [
+              "The signer that heartbeated (config authority or moderation authority)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "windowSecs",
+            "docs": [
+              "The EFFECTIVE liveness window after this call (seconds; the default is",
+              "substituted when the stored value is 0)."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -23789,6 +24261,266 @@ export type AgencCoordination = {
           },
           {
             "name": "version",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "store",
+      "docs": [
+        "P5.2 — permissionless store/marketplace identity. Address-keyed: the owner",
+        "wallet is the identity; `handle` is DISPLAY-ONLY and not unique on-chain",
+        "(uniqueness is a surface concern — see `docs/P5_2_STORE_IDENTITY_SPEC.md` §6).",
+        "Fee fields are advertised DEFAULTS, not enforcement: listings and hires keep",
+        "snapshotting terms exactly as today (`ServiceListing` / `HireRecord`); NO money",
+        "path reads this account in v1 (spec §8 Q6, ratified).",
+        "",
+        "PDA seeds: [\"store\", owner]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "docs": [
+              "Owner wallet (signer of register/update/close; the future P5.3 referral payee)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "handle",
+            "docs": [
+              "Display handle, lowercase `[a-z0-9-]`, zero-padded. NOT a uniqueness key."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "metadataHash",
+            "docs": [
+              "sha256 of the canonical `agenc.storeManifest.v1` body this store points at",
+              "(all-zero = no manifest pinned yet)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "metadataUri",
+            "docs": [
+              "Manifest URI (typically `https://<domain>/.well-known/agenc-store.json`;",
+              "empty = no manifest pinned yet)."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "referrerFeeBps",
+            "docs": [
+              "Advertised default referral fee (bps, <= MAX_REFERRER_FEE_BPS)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Advertised default operator payee (`Pubkey::default()` = none)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operatorFeeBps",
+            "docs": [
+              "Advertised default operator fee (bps, <= MAX_OPERATOR_FEE_BPS; requires a",
+              "non-default `operator` when > 0 — the `create_service_listing` pairing rule)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "domain",
+            "docs": [
+              "Self-declared domain (empty = hosted-only store). Verified only by the",
+              "MUTUAL manifest check (spec §3b) — never trusted alone. Same charset floor",
+              "as `validate_verified_domain`."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "bondLamports",
+            "docs": [
+              "Registration bond held as excess lamports on this PDA (P1.2 §4.1 framing:",
+              "an identity deposit, never confiscatable; refunded in full at `close_store`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "version",
+            "docs": [
+              "Monotonic version, bumped on every update (staleness/CAS for indexers)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "createdAt",
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved (future: verification refs, P5.3 referrer bookkeeping). MUST stay",
+              "zeroed."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "storeClosed",
+      "docs": [
+        "Emitted when a store closes its identity PDA; rent + bond are refunded in",
+        "full to the owner (P5.2 — no exit cooldown: nothing money-bearing reads",
+        "`Store` in v1)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "store",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "bondLamports",
+            "docs": [
+              "The bond principal that was held (informational)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "refundedLamports",
+            "docs": [
+              "Total lamports actually refunded to the owner at close — the full PDA",
+              "balance (rent + bond + any lamports transferred to the PDA after",
+              "registration), which is what `close = owner` returns."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "storeRegistered",
+      "docs": [
+        "Emitted when a store registers its on-chain identity (P5.2)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "store",
+            "docs": [
+              "The `[\"store\", owner]` PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "docs": [
+              "Owner wallet (the identity key)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "handle",
+            "docs": [
+              "Display handle (zero-padded; NOT unique on-chain)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "bondLamports",
+            "docs": [
+              "Registration bond deposited on the PDA."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "storeUpdated",
+      "docs": [
+        "Emitted when a store updates its advertised identity/terms (P5.2)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "store",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "handle",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "version",
+            "docs": [
+              "Monotonic version AFTER this update (indexer staleness/CAS signal)."
+            ],
             "type": "u64"
           },
           {

@@ -20,8 +20,8 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
     check_duplicate_workers, defendant_claim_required, expected_worker_pairs,
-    pay_dispute_operator_fee, process_worker_claim_pair, resolve_task_operator_terms,
-    validate_remaining_accounts_structure,
+    pay_dispute_marketplace_legs, process_worker_claim_pair, resolve_task_marketplace_terms,
+    validate_remaining_accounts_structure, MarketplaceTerms,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::token_helpers::{
@@ -127,10 +127,17 @@ pub struct ExpireDispute<'info> {
     )]
     pub hire_record: UncheckedAccount<'info>,
 
-    /// CHECK: operator payee — validated against hire_record.operator; required only when a
-    /// live hire carries a non-zero operator fee and the worker is paid. Receives SOL.
+    /// CHECK: operator payee — validated against the resolved marketplace terms (Task-first,
+    /// HireRecord fallback); required only when those terms carry a non-zero operator fee
+    /// and the worker is paid. Receives SOL.
     #[account(mut)]
     pub dispute_operator: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: referrer payee — validated against the resolved marketplace terms (P3.6 §3.3:
+    /// dispute exits honor the snapshotted referrer leg); required only when those terms
+    /// carry a non-zero referrer fee and the worker is paid. Receives SOL.
+    #[account(mut)]
+    pub dispute_referrer: Option<UncheckedAccount<'info>>,
 
     // === Optional SPL Token accounts (only required for token-denominated tasks) ===
     /// Token escrow ATA holding reward tokens (optional)
@@ -276,10 +283,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     // Fair refund distribution based on context (fix #418)
     let is_token_task = task.reward_mint.is_some();
     let task_key = task.key();
-    // §4 operator leg (Task-first, HireRecord fallback); SOL-only path below.
-    let (expire_operator_pubkey, expire_operator_fee_bps) = resolve_task_operator_terms(
+    // §4 marketplace legs (operator + referrer; Task-first, HireRecord fallback);
+    // SOL-only path below.
+    let expire_terms = resolve_task_marketplace_terms(
         task.operator,
         task.operator_fee_bps,
+        task.referrer,
+        task.referrer_fee_bps,
         &ctx.accounts.hire_record.to_account_info(),
         &task_key,
     )?;
@@ -440,12 +450,17 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
                     .as_ref()
                     .ok_or(CoordinationError::IncompleteWorkerAccounts)?
                     .to_account_info(),
-                expire_operator_pubkey,
-                expire_operator_fee_bps,
+                &expire_terms,
                 ctx.accounts
                     .dispute_operator
                     .as_ref()
                     .map(|a| a.to_account_info()),
+                ctx.accounts
+                    .dispute_referrer
+                    .as_ref()
+                    .map(|a| a.to_account_info()),
+                task.task_id,
+                clock.unix_timestamp,
                 remaining_funds,
                 worker_completed,
                 no_votes,
@@ -683,9 +698,11 @@ fn distribute_expired_funds<'a>(
     escrow_info: &AccountInfo<'a>,
     creator_info: &AccountInfo<'a>,
     worker_wallet_info: &AccountInfo<'a>,
-    operator_pubkey: Pubkey,
-    operator_fee_bps: u16,
+    terms: &MarketplaceTerms,
     operator: Option<AccountInfo<'a>>,
+    referrer: Option<AccountInfo<'a>>,
+    task_id: [u8; 32],
+    now: i64,
     remaining_funds: u64,
     worker_completed: bool,
     no_votes: bool,
@@ -694,17 +711,20 @@ fn distribute_expired_funds<'a>(
     let mut worker_amount: u64 = 0;
 
     if no_votes && worker_completed {
-        // Worker gets 100% minus the operator leg (hired tasks) so an expired dispute
-        // cannot bypass the §4 operator fee. No-op for non-hired tasks.
-        let op_fee = pay_dispute_operator_fee(
-            operator_pubkey,
-            operator_fee_bps,
+        // Worker gets 100% minus the marketplace legs (operator + referrer) so an
+        // expired dispute cannot bypass the §4 split. No-op for non-hired,
+        // unreferred tasks.
+        let legs_fee = pay_dispute_marketplace_legs(
+            terms,
             operator,
+            referrer,
             escrow_info,
             remaining_funds,
+            task_id,
+            now,
         )?;
         worker_amount = remaining_funds
-            .checked_sub(op_fee)
+            .checked_sub(legs_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         transfer_lamports(escrow_info, worker_wallet_info, worker_amount)?;
     } else if no_votes {
@@ -714,25 +734,28 @@ fn distribute_expired_funds<'a>(
         let creator_share = remaining_funds
             .checked_sub(worker_share)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
-        // Carve the operator leg from the worker's half (no-op for non-hired tasks).
-        let op_fee = pay_dispute_operator_fee(
-            operator_pubkey,
-            operator_fee_bps,
+        // Carve the marketplace legs from the worker's half (no-op for non-hired,
+        // unreferred tasks).
+        let legs_fee = pay_dispute_marketplace_legs(
+            terms,
             operator,
+            referrer,
             escrow_info,
             worker_share,
+            task_id,
+            now,
         )?;
         let worker_net = worker_share
-            .checked_sub(op_fee)
+            .checked_sub(legs_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         creator_amount = creator_share;
         worker_amount = worker_net;
 
-        // The operator leg was already debited from escrow by the helper.
+        // The marketplace legs were already debited from escrow by the helper.
         debit_lamports(
             escrow_info,
             remaining_funds
-                .checked_sub(op_fee)
+                .checked_sub(legs_fee)
                 .ok_or(CoordinationError::ArithmeticOverflow)?,
         )?;
         credit_lamports(creator_info, creator_share)?;

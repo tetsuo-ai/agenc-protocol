@@ -17,7 +17,40 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
-use crate::state::{ListingModeration, ModerationBlock, TaskModeration, HASH_SIZE};
+use crate::instructions::constants::DEFAULT_MODERATION_LIVENESS_WINDOW_SECS;
+use crate::state::{ListingModeration, ModerationBlock, ModerationConfig, TaskModeration, HASH_SIZE};
+
+/// P1.3 liveness deadman (batch-2 A2, `docs/MODERATION_LIVENESS.md`): `true` when
+/// the moderation authority has been silent — no `configure_task_moderation` /
+/// `moderation_heartbeat` bump of `updated_at` — for longer than the liveness
+/// window, so the ALLOW gates relax to moderation-optional. Pure + revert-sensitive.
+///
+/// Trigger analysis: `updated_at` moves only under an authority signature, so no
+/// third party can force or prevent relaxation; one heartbeat instantly re-arms.
+/// `window_secs == 0` reads as the 90-day default (the live mainnet config's
+/// zeroed reserved bytes). `updated_at == 0` (an account that was never written —
+/// unreachable for a real config, whose `configure` always stamps it) stays STRICT:
+/// the deadman only fires on evidence of a once-live, now-silent authority.
+///
+/// The BLOCK floor (`require_content_not_blocked`) is deliberately NOT consulted
+/// here and is never relaxed.
+pub fn moderation_liveness_relaxed(updated_at: i64, window_secs: u32, now: i64) -> bool {
+    if updated_at <= 0 {
+        return false;
+    }
+    let effective_window: i64 = if window_secs > 0 {
+        window_secs as i64
+    } else {
+        DEFAULT_MODERATION_LIVENESS_WINDOW_SECS as i64
+    };
+    now > updated_at.saturating_add(effective_window)
+}
+
+/// Convenience wrapper reading the heartbeat + carved window off the config the
+/// gates already load.
+pub fn moderation_gate_relaxed(config: &ModerationConfig, now: i64) -> bool {
+    moderation_liveness_relaxed(config.updated_at, config.liveness_window_secs(), now)
+}
 
 /// Which seed generation a presented moderation-record account matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,5 +261,70 @@ mod tests {
             classify_moderation_record_address(&same, &same, &same).unwrap(),
             ModerationRecordSlot::V2
         );
+    }
+
+    // === P1.3 liveness deadman (batch-2 A2) ===
+    use crate::instructions::constants::MIN_MODERATION_LIVENESS_WINDOW_SECS;
+
+    const DAY: i64 = 86_400;
+
+    // Revert-sensitive: forcing the predicate to `false` (reverting the deadman)
+    // turns the past-the-window assertions red; forcing it `true` turns the
+    // inside-the-window assertions red.
+    #[test]
+    fn liveness_relaxes_only_past_the_default_window() {
+        let heartbeat = 1_700_000_000i64;
+        let window = DEFAULT_MODERATION_LIVENESS_WINDOW_SECS as i64;
+        // Inside the window (incl. the exact boundary): STRICT.
+        assert!(!moderation_liveness_relaxed(heartbeat, 0, heartbeat));
+        assert!(!moderation_liveness_relaxed(heartbeat, 0, heartbeat + window - 1));
+        assert!(!moderation_liveness_relaxed(heartbeat, 0, heartbeat + window));
+        // One past the boundary: RELAXED.
+        assert!(moderation_liveness_relaxed(heartbeat, 0, heartbeat + window + 1));
+    }
+
+    #[test]
+    fn liveness_default_window_is_90_days() {
+        assert_eq!(DEFAULT_MODERATION_LIVENESS_WINDOW_SECS as i64, 90 * DAY);
+        assert!(MIN_MODERATION_LIVENESS_WINDOW_SECS as i64 == DAY);
+    }
+
+    #[test]
+    fn liveness_respects_a_configured_window() {
+        let heartbeat = 1_700_000_000i64;
+        let window: u32 = 7 * DAY as u32;
+        assert!(!moderation_liveness_relaxed(heartbeat, window, heartbeat + 7 * DAY));
+        assert!(moderation_liveness_relaxed(heartbeat, window, heartbeat + 7 * DAY + 1));
+        // A configured window overrides the default entirely (7d << 90d).
+        assert!(moderation_liveness_relaxed(heartbeat, window, heartbeat + 8 * DAY));
+    }
+
+    // A never-written heartbeat (0) or corrupt negative timestamp stays STRICT —
+    // the deadman fires only on evidence of a once-live, now-silent authority.
+    #[test]
+    fn liveness_never_relaxes_without_a_recorded_heartbeat() {
+        assert!(!moderation_liveness_relaxed(0, 0, i64::MAX));
+        assert!(!moderation_liveness_relaxed(-1, 0, i64::MAX));
+    }
+
+    // Overflow edge: a heartbeat near i64::MAX must not wrap into "relaxed".
+    #[test]
+    fn liveness_saturates_instead_of_wrapping() {
+        assert!(!moderation_liveness_relaxed(i64::MAX - 10, 0, i64::MAX));
+    }
+
+    #[test]
+    fn gate_relaxed_reads_config_heartbeat_and_carved_window() {
+        let mut config = ModerationConfig {
+            updated_at: 1_000,
+            ..ModerationConfig::default()
+        };
+        let window = DEFAULT_MODERATION_LIVENESS_WINDOW_SECS as i64;
+        assert!(!moderation_gate_relaxed(&config, 1_000 + window));
+        assert!(moderation_gate_relaxed(&config, 1_001 + window));
+        // Carved custom window is honored through the accessor.
+        config.set_liveness_window_secs(2 * DAY as u32);
+        assert!(!moderation_gate_relaxed(&config, 1_000 + 2 * DAY));
+        assert!(moderation_gate_relaxed(&config, 1_001 + 2 * DAY));
     }
 }

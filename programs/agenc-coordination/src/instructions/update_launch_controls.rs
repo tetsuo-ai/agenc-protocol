@@ -32,9 +32,9 @@ pub struct UpdateLaunchControls<'info> {
 /// `migrate_protocol` before this can load it. That ordering is the intended
 /// deploy → migrate → stamp choreography.
 ///
-/// Allowed `surface_revision` values: `0` (unstamped / conservative) or
-/// `SURFACE_REVISION_FULL`. Unknown values are rejected so an operator cannot stamp
-/// a surface the SDK does not understand.
+/// Allowed `surface_revision` values: `0` (unstamped / conservative),
+/// `SURFACE_REVISION_FULL`, or `SURFACE_REVISION_BATCH2`. Unknown values are
+/// rejected so an operator cannot stamp a surface the SDK does not understand.
 pub fn handler(
     ctx: Context<UpdateLaunchControls>,
     protocol_paused: bool,

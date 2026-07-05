@@ -1108,3 +1108,61 @@ pub struct AgentTrackRecordUpdated {
     pub new_value: u64,
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Batch 2 events (P5.2 store identity, P1.3 moderation liveness)
+// ============================================================================
+
+/// Emitted when a store registers its on-chain identity (P5.2).
+#[event]
+pub struct StoreRegistered {
+    /// The `["store", owner]` PDA.
+    pub store: Pubkey,
+    /// Owner wallet (the identity key).
+    pub owner: Pubkey,
+    /// Display handle (zero-padded; NOT unique on-chain).
+    pub handle: [u8; 32],
+    /// Registration bond deposited on the PDA.
+    pub bond_lamports: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a store updates its advertised identity/terms (P5.2).
+#[event]
+pub struct StoreUpdated {
+    pub store: Pubkey,
+    pub owner: Pubkey,
+    pub handle: [u8; 32],
+    /// Monotonic version AFTER this update (indexer staleness/CAS signal).
+    pub version: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a store closes its identity PDA; rent + bond are refunded in
+/// full to the owner (P5.2 — no exit cooldown: nothing money-bearing reads
+/// `Store` in v1).
+#[event]
+pub struct StoreClosed {
+    pub store: Pubkey,
+    pub owner: Pubkey,
+    /// The bond principal that was held (informational).
+    pub bond_lamports: u64,
+    /// Total lamports actually refunded to the owner at close — the full PDA
+    /// balance (rent + bond + any lamports transferred to the PDA after
+    /// registration), which is what `close = owner` returns.
+    pub refunded_lamports: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted on every `moderation_heartbeat` (P1.3 liveness deadman). Surfaces and
+/// indexers can watch this to display gate-armed status; silence past the window
+/// relaxes the consumption gates (docs/MODERATION_LIVENESS.md).
+#[event]
+pub struct ModerationHeartbeatRecorded {
+    /// The signer that heartbeated (config authority or moderation authority).
+    pub by: Pubkey,
+    /// The EFFECTIVE liveness window after this call (seconds; the default is
+    /// substituted when the stored value is 0).
+    pub window_secs: u32,
+    pub timestamp: i64,
+}

@@ -7,72 +7,148 @@
 use std::collections::HashSet;
 
 use crate::errors::CoordinationError;
-use crate::instructions::completion_helpers::calculate_operator_fee;
+use crate::events::{OperatorFeePaid, ReferrerFeePaid};
+use crate::instructions::completion_helpers::calculate_combined_fees;
 use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::validation::validate_account_owner;
 use crate::state::{AgentRegistration, HireRecord, TaskClaim};
 use anchor_lang::prelude::*;
 
-/// Pay the operator (embedding-site) leg out of a HIRED task's dispute payout so a
-/// dispute cannot bypass the §4 3-way split (audit: operators were unpaid when a hired
-/// task settled via resolve_dispute/expire_dispute instead of complete_task).
-///
-/// `hire_record` is the REQUIRED ["hire", task] account: a live, program-owned
-/// HireRecord means the task was hired. When hired with a non-zero operator fee, this
-/// carves `operator_fee` from `worker_gross` (the lamports the worker is about to be
-/// paid), transfers it to the operator from the escrow, and returns the fee so the
-/// caller pays the worker `worker_gross - fee`. Returns 0 for a non-hired task (empty,
-/// system-owned PDA) or a zero-fee hire. Hired tasks are SOL-only, so this is a
-/// lamport-only path. Defense-in-depth: validates the HireRecord is bound to this task
-/// and that the operator account matches the snapshot.
-/// Resolve the operator terms (payee + fee bps) for a task settling via a dispute,
-/// Task-first with a HireRecord fallback. A Batch-2 hire stamps the operator onto the
-/// Task itself (trusted program-owned state); the 149 pre-Batch-2 tasks carry
-/// `task.operator == default`, so fall back to the live ["hire", task] HireRecord —
-/// never drop this fallback or those operators go unpaid. Returns (default, 0) for a
-/// non-hired / non-operator task.
-pub(crate) fn resolve_task_operator_terms(
+/// The marketplace fee terms (operator + referrer snapshots) a dispute exit must
+/// honor. Both legs ride together (P3.6 §3.3: dispute settlements honor the
+/// snapshotted marketplace legs, waive the protocol fee).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MarketplaceTerms {
+    pub operator: Pubkey,
+    pub operator_fee_bps: u16,
+    pub referrer: Pubkey,
+    pub referrer_fee_bps: u16,
+}
+
+impl MarketplaceTerms {
+    pub(crate) const NONE: MarketplaceTerms = MarketplaceTerms {
+        operator: Pubkey::new_from_array([0u8; 32]),
+        operator_fee_bps: 0,
+        referrer: Pubkey::new_from_array([0u8; 32]),
+        referrer_fee_bps: 0,
+    };
+}
+
+/// Resolve the marketplace terms (operator + referrer payees and fee bps) for a task
+/// settling via a dispute exit — Task-first with a HireRecord fallback, mirroring
+/// `accept_task_result`. A Batch-2 hire (and every referred `create_task`) stamps the
+/// terms onto the Task itself (trusted program-owned state); the 149 pre-Batch-2
+/// tasks carry `task.operator == default`, so fall back to the live ["hire", task]
+/// HireRecord — never drop this fallback or those operators go unpaid. Returns
+/// `MarketplaceTerms::NONE` for a non-hired / non-operator / non-referred task.
+pub(crate) fn resolve_task_marketplace_terms(
     task_operator: Pubkey,
     task_operator_fee_bps: u16,
+    task_referrer: Pubkey,
+    task_referrer_fee_bps: u16,
     hire_record: &AccountInfo,
     task_key: &Pubkey,
-) -> Result<(Pubkey, u16)> {
-    if task_operator != Pubkey::default() {
-        return Ok((task_operator, task_operator_fee_bps));
+) -> Result<MarketplaceTerms> {
+    if task_operator != Pubkey::default() || task_referrer != Pubkey::default() {
+        return Ok(MarketplaceTerms {
+            operator: task_operator,
+            operator_fee_bps: task_operator_fee_bps,
+            referrer: task_referrer,
+            referrer_fee_bps: task_referrer_fee_bps,
+        });
     }
     if hire_record.owner != &crate::ID {
-        return Ok((Pubkey::default(), 0)); // non-hired task: empty system-owned PDA
+        return Ok(MarketplaceTerms::NONE); // non-hired task: empty system-owned PDA
     }
     let hire = {
         let data = hire_record.try_borrow_data()?;
         HireRecord::try_deserialize(&mut &data[..])?
     };
     require!(hire.task == *task_key, CoordinationError::InvalidHireRecord);
-    Ok((hire.operator, hire.operator_fee_bps))
+    Ok(MarketplaceTerms {
+        operator: hire.operator,
+        operator_fee_bps: hire.operator_fee_bps,
+        referrer: hire.referrer,
+        referrer_fee_bps: hire.referrer_fee_bps,
+    })
 }
 
-pub(crate) fn pay_dispute_operator_fee<'info>(
-    operator_pubkey: Pubkey,
-    operator_fee_bps: u16,
+/// Pay the operator (embedding-site) AND referrer (demand-side embedder) legs out of
+/// a dispute exit's worker payout, so a dispute cannot bypass the §4 3-/4-way split
+/// (P3.6 §3.3: the operator retrofit precedent, now completed with the referrer leg —
+/// previously a referred task disputed to Complete/Split silently over-paid the
+/// worker the referrer's share).
+///
+/// Carves both fees from `worker_gross` (the lamports the worker is about to be
+/// paid), transfers each to its snapshotted payee from the escrow, and returns the
+/// combined fee so the caller pays the worker `worker_gross - total`. Disputes take
+/// no protocol fee (ratified policy), so `calculate_combined_fees` runs with
+/// `protocol_fee_bps = 0` — it still enforces both per-leg caps and the worker
+/// floor against the gross, with the SAME math the settlement paths use. Absent
+/// legs (default payee / zero bps) are no-ops, so an unreferred, non-hired dispute
+/// is byte-identical to before. Both legs are SOL-only (the snapshots originate
+/// from SOL hires/creates). Emits `OperatorFeePaid` / `ReferrerFeePaid` for each
+/// non-zero leg so indexers see dispute-path fee legs like any other settlement.
+pub(crate) fn pay_dispute_marketplace_legs<'info>(
+    terms: &MarketplaceTerms,
     operator: Option<AccountInfo<'info>>,
+    referrer: Option<AccountInfo<'info>>,
     escrow: &AccountInfo<'info>,
     worker_gross: u64,
+    task_id: [u8; 32],
+    now: i64,
 ) -> Result<u64> {
-    if operator_fee_bps == 0 || operator_pubkey == Pubkey::default() {
+    let operator_active =
+        terms.operator_fee_bps > 0 && terms.operator != Pubkey::default();
+    let referrer_active =
+        terms.referrer_fee_bps > 0 && terms.referrer != Pubkey::default();
+    if !operator_active && !referrer_active {
         return Ok(0);
     }
-    let op = operator.ok_or(CoordinationError::MissingOperatorAccount)?;
-    require!(
-        op.key() == operator_pubkey,
-        CoordinationError::InvalidOperatorAccount
-    );
-    // Disputes take no protocol fee, so pass protocol_fee_bps = 0; calculate_operator_fee
-    // still enforces the operator cap and the worker floor against the gross.
-    let fee = calculate_operator_fee(worker_gross, 0, operator_fee_bps)?;
-    if fee > 0 {
-        transfer_lamports(escrow, &op, fee)?;
+    let operator_fee_bps = if operator_active { terms.operator_fee_bps } else { 0 };
+    let referrer_fee_bps = if referrer_active { terms.referrer_fee_bps } else { 0 };
+    // Disputes take no protocol fee, so protocol_fee_bps = 0; the combined-cap +
+    // worker-floor invariants still bind against the gross.
+    let (operator_fee, referrer_fee) =
+        calculate_combined_fees(worker_gross, 0, operator_fee_bps, referrer_fee_bps)?;
+
+    if operator_active {
+        let op = operator.ok_or(CoordinationError::MissingOperatorAccount)?;
+        require!(
+            op.key() == terms.operator,
+            CoordinationError::InvalidOperatorAccount
+        );
+        if operator_fee > 0 {
+            transfer_lamports(escrow, &op, operator_fee)?;
+            emit!(OperatorFeePaid {
+                task_id,
+                operator: terms.operator,
+                amount: operator_fee,
+                operator_fee_bps,
+                timestamp: now,
+            });
+        }
     }
-    Ok(fee)
+    if referrer_active {
+        let rf = referrer.ok_or(CoordinationError::MissingReferrerAccount)?;
+        require!(
+            rf.key() == terms.referrer,
+            CoordinationError::InvalidReferrerAccount
+        );
+        if referrer_fee > 0 {
+            transfer_lamports(escrow, &rf, referrer_fee)?;
+            emit!(ReferrerFeePaid {
+                task_id,
+                referrer: terms.referrer,
+                amount: referrer_fee,
+                referrer_fee_bps,
+                timestamp: now,
+            });
+        }
+    }
+    operator_fee
+        .checked_add(referrer_fee)
+        .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
 }
 
 /// Validates the structure of `remaining_accounts` for dispute processing.
@@ -250,5 +326,69 @@ mod tests {
         assert!(defendant_claim_required(0));
         assert!(defendant_claim_required(1));
         assert!(defendant_claim_required(u8::MAX));
+    }
+
+    // === Batch-2 A3: marketplace-terms resolution for dispute exits ===
+
+    #[test]
+    fn marketplace_terms_none_is_all_defaults() {
+        assert_eq!(MarketplaceTerms::NONE.operator, Pubkey::default());
+        assert_eq!(MarketplaceTerms::NONE.operator_fee_bps, 0);
+        assert_eq!(MarketplaceTerms::NONE.referrer, Pubkey::default());
+        assert_eq!(MarketplaceTerms::NONE.referrer_fee_bps, 0);
+    }
+
+    fn system_owned_empty_account() -> (Pubkey, Pubkey) {
+        (Pubkey::new_unique(), anchor_lang::system_program::ID)
+    }
+
+    // Task-first: a referred-but-not-hired task (create_task with a referrer)
+    // must resolve its referrer terms from the Task even though the hire PDA is
+    // the empty system-owned account. Revert-sensitive: against the operator-only
+    // helper this returned (default, 0) for the referrer and the dispute leaked
+    // the referrer's share to the worker.
+    #[test]
+    fn resolves_referred_task_terms_from_the_task() {
+        let (key, owner) = system_owned_empty_account();
+        let mut lamports = 0u64;
+        let mut data: [u8; 0] = [];
+        let hire_info = AccountInfo::new(
+            &key, false, false, &mut lamports, &mut data, &owner, false, 0,
+        );
+        let referrer = Pubkey::new_unique();
+        let task_key = Pubkey::new_unique();
+        let terms = resolve_task_marketplace_terms(
+            Pubkey::default(),
+            0,
+            referrer,
+            500,
+            &hire_info,
+            &task_key,
+        )
+        .unwrap();
+        assert_eq!(terms.referrer, referrer);
+        assert_eq!(terms.referrer_fee_bps, 500);
+        assert_eq!(terms.operator, Pubkey::default());
+        assert_eq!(terms.operator_fee_bps, 0);
+    }
+
+    #[test]
+    fn resolves_non_hired_non_referred_task_to_none() {
+        let (key, owner) = system_owned_empty_account();
+        let mut lamports = 0u64;
+        let mut data: [u8; 0] = [];
+        let hire_info = AccountInfo::new(
+            &key, false, false, &mut lamports, &mut data, &owner, false, 0,
+        );
+        let terms = resolve_task_marketplace_terms(
+            Pubkey::default(),
+            0,
+            Pubkey::default(),
+            0,
+            &hire_info,
+            &Pubkey::new_unique(),
+        )
+        .unwrap();
+        assert_eq!(terms, MarketplaceTerms::NONE);
     }
 }

@@ -5,7 +5,7 @@ use crate::events::TaskJobSpecSet;
 use crate::instructions::launch_controls::require_task_type_enabled;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::moderation_gate_helpers::{
-    load_task_moderation_record, require_content_not_blocked,
+    load_task_moderation_record, moderation_gate_relaxed, require_content_not_blocked,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::ModerationAttestor;
@@ -137,6 +137,13 @@ pub fn handler(
         &job_spec_hash,
     )?;
 
+    // P1.3 liveness deadman (batch-2 A2, docs/MODERATION_LIVENESS.md): when the
+    // moderation authority has been silent past the liveness window, the ALLOW
+    // gate relaxes to moderation-optional — the record slot may be an empty PDA
+    // and no attestation is required. The BLOCK floor above already ran and is
+    // NEVER relaxed. A heartbeat instantly re-arms the strict path.
+    let relaxed = moderation_gate_relaxed(&ctx.accounts.moderation_config, clock.unix_timestamp);
+
     // Roster path: the attestor entry is Anchor-bound to ["moderation_attestor",
     // moderator]. A revoked attestor's PDA is closed and fails to load (fail-closed,
     // unchanged from WP-A1); an EXITING attestor no longer unlocks — the window
@@ -150,25 +157,27 @@ pub fn handler(
         require!(!entry.is_exiting(), CoordinationError::AttestorExiting);
     }
 
-    // §4.4 v2-else-legacy record load: canonical PDA, owner, discriminator and
-    // task/creator/hash/moderator bindings all re-checked manually.
-    let record = load_task_moderation_record(
-        &ctx.accounts.task_moderation.to_account_info(),
-        &task_key,
-        &task.creator,
-        &job_spec_hash,
-        &moderator,
-    )?;
+    if !relaxed {
+        // §4.4 v2-else-legacy record load: canonical PDA, owner, discriminator and
+        // task/creator/hash/moderator bindings all re-checked manually.
+        let record = load_task_moderation_record(
+            &ctx.accounts.task_moderation.to_account_info(),
+            &task_key,
+            &task.creator,
+            &job_spec_hash,
+            &moderator,
+        )?;
 
-    validate_task_moderation_for_job_spec(
-        &ctx.accounts.moderation_config,
-        &record,
-        task_key,
-        task,
-        &job_spec_hash,
-        clock.unix_timestamp,
-        unlocking_attestor.is_some(),
-    )?;
+        validate_task_moderation_for_job_spec(
+            &ctx.accounts.moderation_config,
+            &record,
+            task_key,
+            task,
+            &job_spec_hash,
+            clock.unix_timestamp,
+            unlocking_attestor.is_some(),
+        )?;
+    }
 
     let task_creator = task.creator;
     write_job_spec(

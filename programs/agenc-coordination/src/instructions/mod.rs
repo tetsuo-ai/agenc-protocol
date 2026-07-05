@@ -104,6 +104,8 @@ pub mod moderation_block;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod moderation_gate_helpers;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod moderation_heartbeat;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod post_completion_bond;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod post_to_feed;
@@ -149,6 +151,8 @@ pub mod set_service_listing_state;
 pub mod set_task_job_spec;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod stake_reputation;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod store_identity;
 pub mod submit_task_result;
 pub mod suspend_agent;
 pub mod unsuspend_agent;
@@ -272,6 +276,9 @@ pub use migrate::*;
 #[allow(ambiguous_glob_reexports)]
 pub use moderation_block::*;
 #[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use moderation_heartbeat::*;
+#[cfg(not(feature = "mainnet-canary"))]
 pub use post_completion_bond::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
@@ -336,6 +343,9 @@ pub use set_task_job_spec::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use stake_reputation::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use store_identity::*;
 #[allow(ambiguous_glob_reexports)]
 pub use submit_task_result::*;
 #[allow(ambiguous_glob_reexports)]

@@ -463,44 +463,6 @@ pub struct OperatorLeg<'info> {
     pub fee_bps: u16,
 }
 
-/// Compute the operator fee leg from a settlement `base` (= reward-per-worker, i.e.
-/// `worker_reward + protocol_fee` of the 2-way split) and enforce the spec §4
-/// economic invariants.
-///
-/// Invariants (defense in depth — the bps are already bounded at listing creation
-/// by `MAX_OPERATOR_FEE_BPS`, and protocol fees by `MAX_PROTOCOL_FEE_BPS`):
-///   * operator fee ≤ `MAX_OPERATOR_FEE_BPS`
-///   * after both the AgenC (protocol) and operator legs, the worker keeps
-///     ≥ `WORKER_FLOOR_BPS` of `base`
-pub fn calculate_operator_fee(
-    base: u64,
-    protocol_fee_bps: u16,
-    operator_fee_bps: u16,
-) -> Result<u64> {
-    require!(
-        operator_fee_bps <= MAX_OPERATOR_FEE_BPS,
-        CoordinationError::ListingOperatorFeeTooHigh
-    );
-    // Worker floor, checked in bps to avoid rounding ambiguity: the combined fee
-    // legs must leave the worker at least WORKER_FLOOR_BPS.
-    let combined_bps = (protocol_fee_bps as u64)
-        .checked_add(operator_fee_bps as u64)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let worker_bps = BASIS_POINTS_DIVISOR
-        .checked_sub(combined_bps)
-        .ok_or(CoordinationError::WorkerRewardBelowFloor)?;
-    require!(
-        worker_bps >= WORKER_FLOOR_BPS as u64,
-        CoordinationError::WorkerRewardBelowFloor
-    );
-    let operator_fee = base
-        .checked_mul(operator_fee_bps as u64)
-        .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(BASIS_POINTS_DIVISOR)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    Ok(operator_fee)
-}
-
 /// The optional referrer (demand-side embedder) leg of a 4-way settlement (spec §4,
 /// P6.2). Present only for tasks whose hire/create snapshotted a non-zero referrer
 /// fee onto the `Task` (or its `HireRecord`). `payee` receives the referrer fee in
@@ -927,45 +889,9 @@ mod tests {
     use super::*;
     use crate::state::{DependencyType, TaskStatus};
 
-    // ---- §4 3-way operator-fee split ----
-
-    #[test]
-    fn test_operator_fee_basic_math() {
-        // base 1_000_000, protocol 100 bps (1%), operator 1000 bps (10%)
-        // operator leg = 1_000_000 * 1000 / 10000 = 100_000
-        let fee = calculate_operator_fee(1_000_000, 100, 1000).unwrap();
-        assert_eq!(fee, 100_000);
-    }
-
-    #[test]
-    fn test_operator_fee_zero_bps_is_zero() {
-        assert_eq!(calculate_operator_fee(1_000_000, 100, 0).unwrap(), 0);
-    }
-
-    #[test]
-    fn test_operator_fee_rejects_over_cap() {
-        // operator_fee_bps above MAX_OPERATOR_FEE_BPS must be rejected.
-        assert!(calculate_operator_fee(1_000_000, 100, MAX_OPERATOR_FEE_BPS + 1).is_err());
-        assert!(calculate_operator_fee(1_000_000, 100, MAX_OPERATOR_FEE_BPS).is_ok());
-    }
-
-    #[test]
-    fn test_operator_fee_enforces_worker_floor() {
-        // Combined fee legs must leave the worker >= WORKER_FLOOR_BPS (6000).
-        // protocol 2001 + operator 2000 = 4001 combined -> worker 5999 < 6000 -> err.
-        // (operator stays within its own cap so this isolates the floor check.)
-        assert!(calculate_operator_fee(1_000_000, 2001, MAX_OPERATOR_FEE_BPS).is_err());
-        // Boundary: 2000 + 2000 = 4000 combined -> worker exactly 6000 -> ok.
-        assert!(calculate_operator_fee(1_000_000, 2000, MAX_OPERATOR_FEE_BPS).is_ok());
-    }
-
-    #[test]
-    fn test_operator_fee_rounds_down() {
-        // 7 * 1000 / 10000 = 0.7 -> floors to 0 (worker keeps the dust).
-        assert_eq!(calculate_operator_fee(7, 100, 1000).unwrap(), 0);
-    }
-
     // ---- §4 4-way combined operator + referrer split (P6.2) ----
+    // (`calculate_combined_fees` subsumes the retired `calculate_operator_fee`:
+    // pass `referrer_fee_bps = 0` for the pure operator leg.)
 
     #[test]
     fn test_combined_fees_4way_basic_math() {
@@ -996,6 +922,14 @@ mod tests {
         // referrer_fee_bps above MAX_REFERRER_FEE_BPS is rejected.
         assert!(calculate_combined_fees(1_000_000, 100, 0, MAX_REFERRER_FEE_BPS + 1).is_err());
         assert!(calculate_combined_fees(1_000_000, 100, 0, MAX_REFERRER_FEE_BPS).is_ok());
+    }
+
+    #[test]
+    fn test_combined_fees_rejects_operator_over_cap() {
+        // Per-leg operator cap is enforced independently of the referrer leg — the
+        // coverage the retired `calculate_operator_fee` used to carry.
+        assert!(calculate_combined_fees(1_000_000, 100, MAX_OPERATOR_FEE_BPS + 1, 0).is_err());
+        assert!(calculate_combined_fees(1_000_000, 100, MAX_OPERATOR_FEE_BPS, 0).is_ok());
     }
 
     #[test]

@@ -26,8 +26,8 @@
 use crate::errors::CoordinationError;
 use crate::events::TaskClosed;
 use crate::state::{
-    HireRecord, ServiceListing, Task, TaskEscrow, TaskJobSpec, TaskModeration, TaskStatus,
-    TaskSubmission, TaskValidationConfig,
+    HireRecord, ServiceListing, Task, TaskAttestorConfig, TaskEscrow, TaskJobSpec, TaskModeration,
+    TaskStatus, TaskSubmission, TaskValidationConfig,
 };
 use anchor_lang::prelude::*;
 
@@ -257,8 +257,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
 
 /// Drain rent from a terminal task's auxiliary child PDA to the creator and
 /// tombstone it. Only program-owned accounts recognized as one of this task's
-/// child records (`TaskModeration` / `TaskValidationConfig` / `TaskSubmission`)
-/// AND whose stored `task` equals `task_key` are touched; anything else is
+/// child records (`TaskModeration` / `TaskValidationConfig` / `TaskSubmission`
+/// / `TaskAttestorConfig`) AND whose stored `task` equals `task_key` are touched; anything else is
 /// rejected so a caller cannot close an unrelated or another task's account.
 fn close_task_child<'info>(
     child: &AccountInfo<'info>,
@@ -279,6 +279,8 @@ fn close_task_child<'info>(
             v.task
         } else if let Ok(s) = TaskSubmission::try_deserialize(&mut &data[..]) {
             s.task
+        } else if let Ok(a) = TaskAttestorConfig::try_deserialize(&mut &data[..]) {
+            a.task
         } else {
             return err!(CoordinationError::InvalidInput);
         }
