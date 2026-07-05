@@ -2217,16 +2217,20 @@ pub fn is_valid_agent_verification_method(method: u8) -> bool {
 
 /// On-chain domain-verification attestation for an agent (P7.3).
 ///
-/// A trusted attestor (the global moderation authority OR a registered, non-revoked
-/// `ModerationAttestor`) records that operator domain `D` was proven to control agent
-/// `A`. The off-chain proof (a DNS `TXT` record or `.well-known` file containing the
-/// agent PDA + a signed challenge) is the attestor SERVICE's job; on-chain this account
-/// only records the trusted attestor's verdict so `verified` + domain is trustlessly
-/// readable. Re-verification overwrites the same PDA (`init_if_needed`); a revocation
-/// marks `revoked = true`.
+/// The GLOBAL moderation authority (`ModerationConfig.moderation_authority`) records
+/// that operator domain `D` was proven to control agent `A`. The off-chain proof (a DNS
+/// `TXT` record or `.well-known` file containing the agent PDA + a signed challenge) is
+/// the attestor SERVICE's job; on-chain this account only records the authority's
+/// verdict so `verified` + domain is trustlessly readable. Re-verification overwrites
+/// the same PDA (`init_if_needed`); a revocation marks `revoked = true`.
 ///
-/// Authorization mirrors `record_*_moderation` EXACTLY (same trusted roster), so domain
-/// verifications come from the same set of attestors that gate moderation.
+/// Authorization (P1.2 §4.6, DECOUPLED from the roster): `record_agent_verification` /
+/// `revoke_agent_verification` accept ONLY the global moderation authority — NOT
+/// `ModerationAttestor` roster entries. With permissionless roster registration
+/// (`register_moderation_attestor`), a bonded self-registered key could otherwise mint
+/// domain badges for domains it does not control and clobber the single per-agent
+/// `["agent_verification", agent]` slot. Domain verification is a different trust
+/// question from content moderation and does not ride the open roster in v1.
 ///
 /// PDA seeds: ["agent_verification", agent]
 #[account]
