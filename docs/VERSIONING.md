@@ -27,6 +27,11 @@ The **batch-2 upgrade** (2026-07-05, `surface_revision = 2`) was **additive** �
 **90 → 94 instructions** (store identity lifecycle + `moderation_heartbeat`) and
 the dispute referrer legs — with **no flag-day wire change**: every P1.2-wire
 client keeps working, which is why the sdk range below spans two minor lines.
+The authoritative per-instruction wire reference (accounts, flags, PDA seeds,
+args) is generated from the committed IDL at
+[`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) (errors:
+[`reference/ERRORS.md`](./reference/ERRORS.md)); `npm run check:idl-reference`
+keeps it from drifting.
 
 **This is the wire-compatible published set today:**
 
