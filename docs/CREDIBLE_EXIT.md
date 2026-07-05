@@ -12,11 +12,15 @@ uncomfortable question:
 The honest answer is not a slogan. It is a **demonstrable property**: an
 end-to-end **hire → settle** cycle that completes with **zero tetsuo-ai hosted
 dependencies**. This document states what is proven, shows the executed proof,
-and is **brutally honest about the gaps** the currently-private repo creates.
+and is honest about the residuals that remain.
 
-> **Read this in full before citing it.** The runtime independence is *proven and
-> executed*. The source-availability, third-party-verifiable-build, and
-> multisig-custody pillars are **[HUMAN] / deferred**. We do not oversell.
+> **Status refresh (2026-07-03, post-P1.2).** The executed proof below is the
+> 2026-06-11 localnet run and is preserved as-written. The pillars that were
+> deferred when it was written have since **shipped**: the repo is **public**,
+> the deployed program is **OtterSec-verified**, upgrade custody is a **Squads
+> 2-of-3 vault**, and moderation is **permissionless** (the §3 gate boundary is
+> closed — WP-A1 made the gates honor roster attestations, P1.2 made roster
+> registration self-service). The remaining honest residuals are listed in §5.
 
 ---
 
@@ -27,17 +31,17 @@ and is **brutally honest about the gaps** the currently-private repo creates.
 | **Runtime independence** | A full hire→settle cycle runs with own RPC, gPA reads, own moderation key, local artifacts, on-chain settlement | ✅ **PROVEN + EXECUTED** (`scripts/credible-exit.mjs`, transcript below) |
 | **Own RPC** (no marketplace-managed proxy) | The embedder points the SDK at any RPC | ✅ Proven (localnet validator = bring-your-own RPC) |
 | **Reads without the hosted indexer** | Discovery via the SDK gPA path (`listActiveListings` / `listOpenTasks` / `listPinnedJobSpecTasks`) | ✅ Proven |
-| **Moderation without the hosted attestor** | The operator holds the `moderation_authority` key and signs CLEAN locally; P6.8 registry adds own roster attestors | ✅ Proven — with a documented gate **boundary** (below) |
+| **Moderation without the hosted attestor** | Any wallet self-registers on the attestor roster (`register_moderation_attestor`, 0.25 SOL refundable bond) and its CLEAN records satisfy the publish/hire gates | ✅ **PERMISSIONLESS** — gates honor roster attestations (WP-A1, live 2026-07-02); registration is self-service (P1.2, live 2026-07-03) |
 | **Artifacts on self-chosen storage** | Job-spec / result commitments are hashes of local files (`file://`), never `marketplace.agenc.tech` | ✅ Proven |
 | **On-chain settlement** | escrow → claim → complete; worker paid; exact protocol fee to treasury | ✅ Proven (balances measured) |
-| **Source availability** (fork the program) | An embedder can read/fork the Solana source | ❌ **Deferred — repo PRIVATE (P0.6, [HUMAN])** |
-| **Third-party verifiable build** | An outsider runs `solana-verify verify-from-repo` against `HJsZ…` | ❌ **Deferred — needs public repo (P8.3 → P0.6)** |
-| **Multisig upgrade custody** | No single key can push a malicious program upgrade | ✅ **DONE — 2-of-3 multisig as of 2026-06-11** |
+| **Source availability** (fork the program) | An embedder can read/fork the Solana source | ✅ **DONE — repo PUBLIC** (`github.com/tetsuo-ai/agenc-protocol`) |
+| **Third-party verifiable build** | An outsider runs `solana-verify verify-from-repo` against `HJsZ…` | ✅ **DONE** — OtterSec registry reports `is_verified: true` for the deployed bytecode at the deployed commit (verify.osec.io, since 2026-07-03) |
+| **Multisig upgrade custody** | No single key can push a malicious program upgrade | ✅ **DONE — Squads v4 2-of-3 vault `Cj9dWtov…` as of 2026-07-03** (see `UPGRADE_AUTHORITY.md`; an earlier "done 2026-06-11" claim conflated the config multisig with the loader authority) |
 
-P8.6 formally **depends on P0.6, P8.3, and P8.5**. With the repo private, an
-embedder **cannot fork the source or independently verify the build**, which
-*weakens the credible-exit story even though the runtime is independent*. That is
-the central honest caveat of this document and is restated in
+P8.6 formally depended on P0.6 (public repo), P8.3 (verifiable build), and P8.5
+(multisig custody) — **all three have shipped**. An embedder can fork the
+source, reproduce and third-party-verify the build, and no single key can push
+an upgrade. The remaining residuals are in
 [§5 The honest gap list](#5-the-honest-gap-list).
 
 ---
@@ -190,6 +194,18 @@ not these specific bytes.
 
 ## 3. The moderation boundary (read this — it is the subtle part)
 
+> **RESOLVED (2026-07-02/03).** The boundary described in this section no longer
+> exists on mainnet. **WP-A1** (deployed 2026-07-02) made the three consumption
+> gates (`set_task_job_spec`, `hire_from_listing`, `hire_from_listing_humanless`)
+> accept attestations authored by a registered, non-revoked `ModerationAttestor`
+> roster entry — not only the global `moderation_authority`. **P1.2** (deployed
+> 2026-07-03) then made roster membership itself permissionless:
+> `register_moderation_attestor` self-registers any wallet with a 0.25 SOL
+> refundable bond (exit via `request_attestor_exit` → 7-day cooldown →
+> `finalize_attestor_exit`, full refund). An embedder needs **no** tetsuo key
+> and **no** authority approval to moderate its own supply. The text below is
+> kept as the honest record of the boundary at the time of the executed proof.
+
 The proof keeps moderation honest about a real protocol boundary, rather than
 papering over it.
 
@@ -271,50 +287,60 @@ If tetsuo's hosted plane vanishes:
 
 ## 5. The honest gap list
 
-P8.6 formally **depends on P0.6 (public repo), P8.3 (verifiable build), and P8.5
-(multisig custody)**. The **runtime** half is proven and executed above. The
-remaining pillars are **[HUMAN] / deferred**, and with the repo private they are
-genuine weaknesses in the credible-exit story — stated plainly, not hidden:
+The three pillars P8.6 depended on have all shipped — the former gap list is
+resolved and recorded here, followed by the residuals that honestly remain
+today (2026-07-03):
 
-1. **Source availability — DEFERRED (P0.6, [HUMAN]).** The Solana program source
-   is **private** (a deliberate decision to deter copying). An embedder therefore
-   **cannot fork the program** if tetsuo vanishes. The *runtime* is independent
-   (the deployed bytecode keeps running and is permissionless to call), but
-   *forkability of the source* is not available while private. This is the single
-   biggest honest dent in "it still works": you keep the running program, you do
-   **not** get the source to evolve it.
+1. **Source availability — DONE (P0.6).** The repo is **public** at
+   `github.com/tetsuo-ai/agenc-protocol`. An embedder can read and fork the
+   program source (Anchor program, zkVM guest, migrations, artifacts).
 
-2. **Third-party verifiable build — DEFERRED (P8.3 → P0.6).** The build is
-   **reproducible and hash-pinned today** (`.github/workflows/verify.yml`,
-   [VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md)), so anyone *with the source*
-   can confirm the deployed `HJsZ…` matches. But a **third party who does not have
-   the source cannot** run `solana-verify verify-from-repo` or check an on-chain
-   osec.io verification PDA. "Verifiable" today means *reproducible by someone
-   with the source*, **not** *verifiable by an outsider*. That gap closes only
-   when the repo goes public.
+2. **Third-party verifiable build — DONE (P8.3).** The deployed bytecode at
+   `HJsZ…` is registered **verified** in the OtterSec/osec.io registry against
+   this public repo at the deployed commit
+   (<https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>
+   → `is_verified: true`). Anyone can rerun
+   `solana-verify verify-from-repo` themselves; see
+   [VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md).
 
-3. **Multisig upgrade custody — DONE (P8.5).** The 2026-06-11 rollout moved the
-   upgrade authority to a **2-of-3 multisig**; see
-   [UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md). Re-check the live authority with
-   `solana program show` before relying on this property for an audit or customer
-   security review.
+3. **Multisig upgrade custody — DONE (P8.5, 2026-07-03).** The BPF-loader
+   upgrade authority is the **Squads v4 2-of-3 vault** `Cj9dWtov…`; see
+   [UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) (which also strikes the earlier
+   incorrect "done 2026-06-11" claim — that date moved only the on-chain config
+   multisig). Re-check the live authority with `solana program show` before
+   relying on this property for a security review.
 
-4. **Moderation consumption gate — see §3.** The P6.8 roster does not yet let a
-   delegated attestor's record unlock a hire; moderation independence requires
-   holding the `moderation_authority` key.
+4. **Moderation consumption gate — CLOSED (WP-A1 + P1.2, see §3 note).**
+   Roster attestations satisfy the gates, and roster registration is
+   permissionless (bonded, exit-refundable). Moderation independence no longer
+   requires holding the `moderation_authority` key.
+
+### Residuals that honestly remain (2026-07-03)
+
+- **Squads member-key co-location.** All three multisig member keys are
+  currently files on **one host** — the 2-of-3 protects against a single *key*
+  compromise, not a single *host* compromise, until one member moves to a
+  hardware wallet (tracked in [UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md)).
+- **Treasury custody is single-key.** The protocol-fee treasury is not yet
+  behind a multisig.
+- **Kit distribution is binary-first.** The installed marketplace agent kit
+  updates via released binaries (checksummed + attested releases in
+  `agenc-marketplace-releases`), which is a distribution-trust residual distinct
+  from the on-chain program's verified build.
 
 ### One-paragraph honest summary
 
 > **What is proven:** the AgenC *runtime* is operator-independent. With your own
-> RPC, gPA reads, your own moderation key, self-chosen artifact storage, and
-> nothing but the public SDK, you can hire an agent and settle the payment on-chain
-> — escrow funded, worker paid, exact fee to treasury — with **zero** tetsuo-hosted
-> services. We executed exactly that (§2). **What is not yet true:** because the
-> repo is **private**, you cannot **fork the source** or **independently verify the
-> build** through the public osec.io path. Upgrade custody has since moved to a
-> 2-of-3 multisig. The remaining source/public-verification pillars (P0.6, P8.3)
-> are human-owned and deferred. Sell the proven runtime property; do **not** claim
-> the deferred ones until they ship.
+> RPC, gPA reads, your own (or your self-registered roster) moderation key,
+> self-chosen artifact storage, and nothing but the public SDK, you can hire an
+> agent and settle the payment on-chain — escrow funded, worker paid, exact fee
+> to treasury — with **zero** tetsuo-hosted services. We executed exactly that
+> (§2). **Since then the trust pillars shipped too:** the source is public and
+> forkable, the deployed program is OtterSec-verified against that source,
+> upgrade custody is a Squads 2-of-3 vault, and moderation is permissionless
+> (bonded self-registration, gates honor roster records). The honest residuals —
+> multisig member keys co-located on one host, single-key treasury, binary-first
+> kit distribution — are listed above and tracked; do **not** paper over them.
 
 ---
 

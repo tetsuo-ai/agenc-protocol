@@ -12,24 +12,59 @@ window or before the deploy is announced publicly.
 
 ## Current Mainnet Deployment
 
-> **As of 2026-06-11 the full 84-instruction surface is live on mainnet**
-> (`surface_revision = FULL (1)`). The Phase 9 full-surface upgrade completed:
-> the binary was swapped from the 25-instruction canary build to the full
-> default-features build, the 169 live Task accounts were migrated (382B → 466B,
-> 0 failures), and `ProtocolConfig` was migrated (349B → 351B). Mainnet is **no
-> longer the canary**. See [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md)
-> for the historical rollout choreography.
+> **As of 2026-07-03 the full 90-instruction P1.2 open-roster surface is live on
+> mainnet** (deployed in slot **430491216**, source commit `aad4c0d`, upgrade
+> executed through the Squads 2-of-3 upgrade-authority vault). The P1.2 batch was
+> a **flag-day wire cutover**, not a compatible upgrade: `set_task_job_spec` /
+> `hire_from_listing` / `hire_from_listing_humanless` gained a trailing
+> `moderator` arg + a required `moderation_block` account, the `record_*_moderation`
+> records moved to v2 moderator-keyed seeds, and moderation-attestor registration
+> became **permissionless** (`register_moderation_attestor`, 0.25 SOL refundable
+> bond, 7-day exit cooldown). Old-wire clients fail closed. See
+> [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.6 for the
+> cutover choreography and [`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md)
+> for the design.
 
 - Program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - Program source path: `programs/agenc-coordination/`
 - `declare_id!` location: `programs/agenc-coordination/src/lib.rs`
-- Live surface: **full 84-instruction surface** (default features), `surface_revision = FULL (1)`
+- Live surface: **full 90-instruction surface** (default features), `surface_revision = FULL (1)`
+- Last deployed in slot: **430491216** (2026-07-03, P1.2), commit `aad4c0def4b092311ae228d83a2ffb0f72ccb40e`
+- Verified build: **LIVE** — the OtterSec/osec.io registry reports
+  `is_verified: true` for the deployed bytecode against this repo at the deployed
+  commit (check <https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>);
+  keeping the badge across upgrades is a deploy invariant — see
+  [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.5 and
+  [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md)
 - Task types: **all enabled** (`disabled_task_type_mask = 0`: Exclusive, Collaborative, Competitive, BidExclusive)
 - Bid marketplace: **LIVE** (`BidMarketplaceConfig` initialized)
 - Private completion: **OFF / deferred** — `ZkConfig` not yet initialized, so `complete_task_private` is unavailable until `initialize_zk_config` runs with the audited agenc-prover image id
-- Upgrade authority: **2-of-3 multisig** (`Hcecp…` / `BXDan…` / `4QcKB…`)
+- Upgrade authority: **Squads v4 2-of-3 multisig vault**
+  `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf` (since 2026-07-03; distinct from
+  the on-chain `ProtocolConfig` config multisig `Hcecp…`/`BXDan…`/`4QcKB…` that
+  gates fees/launch controls/the BLOCK floor) — see
+  [`UPGRADE_AUTHORITY.md`](./UPGRADE_AUTHORITY.md). Verify live with
+  `solana program show HJsZ…` (`Authority:` = the vault)
+- Moderation: **permissionless attestor roster** — any wallet may self-register
+  via `register_moderation_attestor` (0.25 SOL refundable bond) and its CLEAN
+  records satisfy the publish/hire gates; the hosted attestor at
+  `attest.agenc.ag` is one roster member, not a privileged one
 - Launch controls are configured on-chain and may disable task types or flows
   without changing the source branch identity
+
+### Prior deployment history
+
+- **2026-07-02 — WP-A1 roster-consumption gates.** The three moderation
+  consumption gates began honoring registered roster attestors' attestations
+  (previously only the single global `moderation_authority` unlocked a
+  publish/hire). Additive account only; no layout change. See
+  [`WP-A1-DEPLOY-READINESS.md`](./WP-A1-DEPLOY-READINESS.md).
+- **2026-06-11 — Phase 9 full-surface upgrade (84 instructions).** The binary
+  was swapped from the 25-instruction canary build to the full default-features
+  build, the 169 live Task accounts were migrated (382B → 466B, 0 failures), and
+  `ProtocolConfig` was migrated (349B → 351B, `surface_revision = FULL (1)`).
+  Mainnet stopped being the canary. See
+  [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md).
 
 ## Branch History Note
 

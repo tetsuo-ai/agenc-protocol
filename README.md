@@ -164,7 +164,10 @@ these) rather than assuming `target/` or runtime-vendored copies are canonical. 
 Before any mainnet deploy that changes the deployed surface or account layout:
 
 1. **§11.5 human go/no-go.**
-2. **Professional external audit** of the full surface.
+2. **Adversarial security review** of the changed surface (the standing gate —
+   a deliberate decision replaced an external audit; see
+   [docs/WP-A1-DEPLOY-READINESS.md](docs/WP-A1-DEPLOY-READINESS.md) for the
+   executed pattern).
 3. **The irreversible task-layout migration choreography** — binary-first → migrate all
    live tasks → version-bump last; multisig/upgrade-authority gated. (The 2026-06-11
    upgrade migrated 169 tasks.)
@@ -175,27 +178,30 @@ Before any mainnet deploy that changes the deployed surface or account layout:
 The program custodies escrow, completion bonds, and agent stakes. Trust
 artifacts (PLAN.md Phase 8):
 
-- **Verifiable builds** — every `protocol-v*` release records a reproducible
-  SHA-256 of the on-chain program built in a pinned Docker image
-  (`.github/workflows/verify.yml`). Reproduce it yourself and compare against
-  the deployed `HJsZ…` program — see
-  [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md). The build is
-  reproducible and hash-pinned today; full *third-party* source-verification
-  (`solana-verify verify-from-repo` + the on-chain osec.io PDA) is gated on the
-  repo going public (PLAN.md P0.6) and is documented but not yet active.
+- **Verifiable builds** — the deployed program is **OtterSec-verified against
+  this public repo**:
+  [verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK)
+  reports `is_verified: true` at the deployed commit (since 2026-07-03). Every
+  `protocol-v*` release also records a reproducible SHA-256 of the program
+  built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
+  yourself with `solana-verify verify-from-repo` — see
+  [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md).
 - **Money-never-locks** exit guarantees (cancel/refund/reclaim paths), symmetric
   completion bonds, checked arithmetic + `overflow-checks = true`, and
   fail-closed moderation are core money-safety properties — see
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md) and
   [docs/audit/THREAT_MODEL.md](docs/audit/THREAT_MODEL.md).
-- **Upgrade authority:** `HJsZ…` is upgradeable; custody has been moved to a
-  2-of-3 multisig. See [docs/UPGRADE_AUTHORITY.md](docs/UPGRADE_AUTHORITY.md).
+- **Upgrade authority:** `HJsZ…` is upgradeable; custody is a **Squads v4
+  2-of-3 multisig vault** (`Cj9dWtov…`, since 2026-07-03). See
+  [docs/UPGRADE_AUTHORITY.md](docs/UPGRADE_AUTHORITY.md) — including the honest
+  residual that the member keys currently live on one host.
 - **Credible-exit test** — "the operator vanishes and it still works." An
   executed, reproducible proof of an end-to-end hire→settle cycle with **zero
   tetsuo-ai hosted dependencies** (own RPC, gPA reads, own moderation key,
   self-chosen artifact storage, on-chain settlement). The runtime independence
-  is proven; the source-availability / third-party-verifiable-build pillars
-  remain honestly flagged as deferred. See
+  is proven, and the once-deferred pillars have shipped: public source,
+  OtterSec-verified build, Squads multisig custody, permissionless moderation
+  (bonded self-registration on the attestor roster). See
   [docs/CREDIBLE_EXIT.md](docs/CREDIBLE_EXIT.md) (run it:
   `node scripts/credible-exit.mjs`).
 
@@ -218,7 +224,7 @@ Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for develop
 | [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md) | Batch 1–3 changes, audits, coverage matrix |
 | [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md) | SDK build/automation plan + status |
 | [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md) | Deployed source-of-truth + branch policy |
-| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md) | Reproducible build + how to verify `HJsZ…` matches this source (what's provable now vs public-repo-gated) |
+| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md) | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge live) |
 | [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md) | How `anchor build` output becomes published artifacts |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | Local toolchain + CI-equivalent commands |
 | [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md) | Reviewed-completion validation model |
