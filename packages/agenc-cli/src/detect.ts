@@ -10,6 +10,8 @@ export interface DetectedProject {
   kind: ProjectKind;
   /** Project name (package.json "name", else the directory basename). */
   name: string;
+  /** True when a package.json file exists in the project dir (even invalid). */
+  hasPackageJson: boolean;
   /** True when package.json deps/devDeps include `next`. */
   nextDetected: boolean;
   /** App-router directory relative to the project ("app" | "src/app"), if any. */
@@ -66,6 +68,7 @@ export function detectProject(dir: string): DetectedProject {
   return {
     kind: nextDetected ? "checkout" : "worker",
     name,
+    hasPackageJson: existsSync(path.join(dir, "package.json")),
     nextDetected,
     appDir,
     pagesDir,

@@ -14,11 +14,13 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: false,
-  // The SDK/worker runtime are deps resolved by the consumer; never inline
-  // them into this bundle. litesvm is test-only and must never be bundled.
+  // The SDK/worker runtime are deps resolved at install time; never inline
+  // them into this bundle. The sdk regex also keeps its subpaths external
+  // (`@tetsuo-ai/marketplace-sdk/testing` powers the in-process dev
+  // sandbox). litesvm is a native module and must never be bundled.
   external: [
     "@solana/kit",
-    "@tetsuo-ai/marketplace-sdk",
+    /^@tetsuo-ai\/marketplace-sdk(\/.*)?$/,
     "@tetsuo-ai/agenc-worker",
     "litesvm",
   ],

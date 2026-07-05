@@ -30,8 +30,10 @@ USAGE
 SUBCOMMANDS
   init      wire THIS repo into an AgenC node (Next.js -> checkout surface,
             anything else -> worker loop; writes agenc.config.json + owned files)
-  dev       localnet sandbox show: counterparty bots hire + complete your
-            listing and the LIVE 4-way settlement split is printed
+  dev       sandbox show: counterparty bots hire + complete your listing and
+            the LIVE 4-way settlement split is printed. Uses the localnet
+            stack when one is discoverable, else falls back to the in-process
+            sandbox (litesvm) — zero setup on a cold machine
   promote   readonly go-live checklist diff (RPC, wallet, version pins, ...)
 
 FLAGS
@@ -39,8 +41,10 @@ FLAGS
     --kind <checkout|worker>   override framework detection
     --force                    overwrite files whose content differs
   dev:
-    --env-file <path>          explicit .localnet/env.json (beats discovery)
-    --purge                    kill + re-boot the localnet stack first
+    --env-file <path>          explicit .localnet/env.json (beats discovery; implies --localnet)
+    --purge                    kill + re-boot the localnet stack first (implies --localnet)
+    --sandbox                  force the in-process litesvm sandbox (skip localnet discovery)
+    --localnet                 require the localnet stack (fail instead of falling back)
   promote:
     --json                     machine-readable checklist output
   --dir <path>                 project directory (default: cwd)
@@ -57,6 +61,8 @@ async function main(): Promise<number> {
       force: { type: "boolean" },
       "env-file": { type: "string" },
       purge: { type: "boolean" },
+      sandbox: { type: "boolean" },
+      localnet: { type: "boolean" },
       json: { type: "boolean" },
       dir: { type: "string" },
       help: { type: "boolean" },
@@ -104,6 +110,8 @@ async function main(): Promise<number> {
     await runDev(dir, {
       ...(values["env-file"] !== undefined ? { envFile: values["env-file"] } : {}),
       ...(values.purge === true ? { purge: true } : {}),
+      ...(values.sandbox === true ? { sandbox: true } : {}),
+      ...(values.localnet === true ? { localnet: true } : {}),
     });
     return 0;
   }

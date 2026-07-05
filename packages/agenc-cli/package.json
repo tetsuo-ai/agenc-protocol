@@ -1,7 +1,7 @@
 {
   "name": "@tetsuo-ai/agenc-cli",
-  "version": "0.1.0",
-  "description": "The Stripe-4242 moment for AgenC: `agenc init` wires the current repo into an AgenC node, `agenc dev` boots a localnet sandbox and runs counterparty bots that hire + complete your listing (printing the live 4-way settlement split), `agenc promote` diffs against the go-live checklist",
+  "version": "0.2.0",
+  "description": "The Stripe-4242 moment for AgenC: `agenc init` wires the current repo into an AgenC node, `agenc dev` runs counterparty bots that hire + complete your listing (printing the live 4-way settlement split) against a localnet stack or the zero-setup in-process litesvm sandbox, `agenc promote` diffs against the go-live checklist",
   "packageManager": "npm@11.7.0",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -21,6 +21,7 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./cli": "./dist/cli.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -39,14 +40,14 @@
   },
   "dependencies": {
     "@tetsuo-ai/agenc-worker": "^0.1.0",
-    "@tetsuo-ai/marketplace-sdk": "^0.8.2 || ^0.9.0"
+    "@tetsuo-ai/marketplace-sdk": "^0.8.2 || ^0.9.0",
+    "litesvm": "^1.1.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"
   },
   "devDependencies": {
     "@solana/kit": "6.9.0",
-    "litesvm": "1.1.0",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "4.1.8"

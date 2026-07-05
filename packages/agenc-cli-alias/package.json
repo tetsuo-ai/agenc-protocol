@@ -1,0 +1,41 @@
+{
+  "name": "agenc-cli",
+  "version": "0.2.0",
+  "description": "Unscoped alias for @tetsuo-ai/agenc-cli — `npx agenc-cli dev` runs the AgenC marketplace dev loop (init / dev / promote)",
+  "type": "module",
+  "bin": {
+    "agenc-cli": "./bin/agenc-cli.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@tetsuo-ai/agenc-cli": "^0.2.0"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetsuo-ai/agenc-protocol.git",
+    "directory": "packages/agenc-cli-alias"
+  },
+  "homepage": "https://github.com/tetsuo-ai/agenc-protocol/tree/main/packages/agenc-cli#readme",
+  "bugs": {
+    "url": "https://github.com/tetsuo-ai/agenc-protocol/issues"
+  },
+  "keywords": [
+    "solana",
+    "agenc",
+    "marketplace",
+    "cli",
+    "agents"
+  ],
+  "author": "Tetsuo AI",
+  "engines": {
+    "node": ">=20.18.0"
+  }
+}

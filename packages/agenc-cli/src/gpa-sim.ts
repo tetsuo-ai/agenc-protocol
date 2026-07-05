@@ -1,11 +1,15 @@
 // GpaSimulator: a ProgramAccountsTransport over litesvm (litesvm has no
-// getProgramAccounts). Mirrors packages/agenc-worker/tests-e2e/gpa-sim.ts:
-// the test world registers the addresses it creates; filters use EXACT RPC
-// semantics.
+// getProgramAccounts). Used by the `agenc dev` in-process sandbox fallback
+// AND by the e2e suite; mirrors packages/agenc-worker/tests-e2e/gpa-sim.ts.
+// The world that creates accounts registers their addresses; filters use
+// EXACT RPC semantics.
 import type { Address } from "@solana/kit";
 import type { LiteSVM } from "litesvm";
-import type { GpaFilter, ProgramAccountsTransport } from "@tetsuo-ai/marketplace-sdk";
-import { PROGRAM } from "./harness.js";
+import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
+  type GpaFilter,
+  type ProgramAccountsTransport,
+} from "@tetsuo-ai/marketplace-sdk";
 
 function matchesFilter(filter: GpaFilter, data: Uint8Array): boolean {
   if ("dataSize" in filter) {
@@ -27,7 +31,7 @@ export class GpaSimulator implements ProgramAccountsTransport {
     this.#svm = svm;
   }
 
-  /** Register addresses created by the test world (idempotent). */
+  /** Register addresses created by the sandbox world (idempotent). */
   register(...addresses: Address[]): void {
     for (const a of addresses) this.#addresses.add(a);
   }
@@ -41,7 +45,7 @@ export class GpaSimulator implements ProgramAccountsTransport {
     for (const address of this.#addresses) {
       const acct = this.#svm.getAccount(address);
       if (!acct || !acct.exists) continue;
-      if (acct.programAddress !== PROGRAM) continue;
+      if (acct.programAddress !== AGENC_COORDINATION_PROGRAM_ADDRESS) continue;
       const data = Uint8Array.from(acct.data);
       if (filters.every((f) => matchesFilter(f, data))) {
         out.push({ address, data });

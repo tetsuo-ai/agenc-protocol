@@ -42,7 +42,8 @@ files under a kept ledger), it fails loudly rather than silently adopting them.
      co-signs as the required distinct `second_signer`, multisig owners =
      `[authority, moderator, seeder]` with threshold 2, treasury = authority (a system
      account must co-sign at init; using the authority keeps localnet to three keys),
-     `disputeThreshold=60`, `protocolFeeBps=250`, `minStake=0.001 SOL` (the program
+     `disputeThreshold=60`, `protocolFeeBps=500` (the LIVE mainnet fee, so the
+     local demo split is production-truthful), `minStake=0.001 SOL` (the program
      floor), `minStakeForDispute=0.001 SOL`.
    - `configure_task_moderation` — `moderation_authority` = the **moderator** key,
      `enabled=true` (fail-closed moderation, same shape as devnet/mainnet).
@@ -191,8 +192,8 @@ attestor (http://127.0.0.1:4174/api/sandbox/attest):
   task attestation signature: 2dRTmXkeSwVRWXsmTiPByTNX2GaAxiiQEhGcnTsB5GuGEeQFSNFEnUdoGaHELaQNLfpwDTgbs6dsdZ9hHAXUSBJo
 provider: completed — settlement signature 2HCeDXhJtMbhUws6A2QuQy21htGgKmry4mQfjrGH6aNmQkbx2EigGGq8hQB45zrPnfBXGJLs7rtVU6ZYYzZfw7f3
 Task.status === Completed; Task.rewardAmount === 1000000
-treasury delta: 25000 lamports (exactly the 250 bps protocol fee)
-provider authority delta: +965000 lamports (975000 payout - 2 tx fees)
+treasury delta: 50000 lamports (exactly the 500 bps protocol fee)
+provider authority delta: +940000 lamports (950000 payout - 2 tx fees)
 # 4.6s wall clock, end to end
 
 $ node scripts/localnet-status.mjs

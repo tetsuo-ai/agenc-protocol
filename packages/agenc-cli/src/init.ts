@@ -17,6 +17,7 @@ import {
   appCheckoutRoute,
   pagesCheckoutApi,
   pagesCheckoutPage,
+  scaffoldPackageJson,
   workerLoopMjs,
 } from "./templates.js";
 
@@ -60,6 +61,13 @@ export function planInitFiles(
   const files: PlannedFile[] = [
     { relPath: CONFIG_FILENAME, content: serializeConfig(config) },
   ];
+  // No package.json -> scaffold one, so `npm install` lands node_modules in
+  // THIS project (never hoisted into an ancestor package, where `agenc
+  // promote` and the wired templates would not find the sdk) with the AgenC
+  // deps pre-pinned. Never touches an existing package.json.
+  if (!detection.hasPackageJson) {
+    files.push({ relPath: "package.json", content: scaffoldPackageJson(config) });
+  }
   if (config.kind === "checkout") {
     if (detection.appDir !== null || detection.pagesDir === null) {
       // App Router (default even when neither dir exists yet).
@@ -114,7 +122,11 @@ function writePlanned(
   return results;
 }
 
-function instructionsFor(kind: ProjectKind, refused: boolean): string[] {
+function instructionsFor(
+  kind: ProjectKind,
+  refused: boolean,
+  scaffoldedPackageJson: boolean,
+): string[] {
   const lines: string[] = [];
   if (refused) {
     lines.push(
@@ -122,10 +134,16 @@ function instructionsFor(kind: ProjectKind, refused: boolean): string[] {
       "Re-run with --force to overwrite them.",
     );
   }
+  const install = scaffoldedPackageJson
+    ? "Install deps:     npm install   (package.json was scaffolded with the AgenC deps pinned)"
+    : kind === "checkout"
+      ? "Install the SDK:  npm install @tetsuo-ai/marketplace-sdk @solana/kit"
+      : "Install the runtime:  npm install @tetsuo-ai/agenc-worker @tetsuo-ai/marketplace-sdk @solana/kit";
   if (kind === "checkout") {
     lines.push(
-      "Install the SDK:  npm install @tetsuo-ai/marketplace-sdk @solana/kit",
-      "Try the loop:     agenc dev   (localnet sandbox — bots hire your listing and you watch the 4-way split settle)",
+      install,
+      "Try the loop:     agenc dev   (bots hire your listing and you watch the 4-way split settle;",
+      "                  uses the localnet stack when present, else the in-process litesvm sandbox)",
       "Checkout surface: GET /agenc renders the form; POST /agenc/checkout runs hireAndActivate.",
       "                  Wire AGENC_RPC_URL / AGENC_WALLET / AGENC_LISTING / AGENC_LISTING_SPEC_HASH /",
       "                  AGENC_MODERATOR / AGENC_ATTESTOR_URL before real hires (route returns 501 until then).",
@@ -133,8 +151,9 @@ function instructionsFor(kind: ProjectKind, refused: boolean): string[] {
     );
   } else {
     lines.push(
-      "Install the runtime:  npm install @tetsuo-ai/agenc-worker @tetsuo-ai/marketplace-sdk @solana/kit",
-      "Try the loop:         agenc dev   (localnet sandbox — bots hire your listing and you watch the 4-way split settle)",
+      install,
+      "Try the loop:         agenc dev   (bots hire your listing and you watch the 4-way split settle;",
+      "                      uses the localnet stack when present, else the in-process litesvm sandbox)",
       "Run the worker:       AGENC_WORKER_RPC_URL=<rpc> AGENC_WORKER_WALLET=<keypair.json> node worker.mjs",
       "Go-live diff:         agenc promote",
     );
@@ -156,12 +175,15 @@ export function runInit(dir: string, options: InitOptions = {}): InitResult {
   const planned = planInitFiles(dir, config, detection);
   const files = writePlanned(dir, planned, options.force === true);
   const refused = files.some((f) => f.status === "refused");
+  const scaffoldedPackageJson = files.some(
+    (f) => f.path === "package.json" && f.status === "written",
+  );
   return {
     kind,
     projectName: config.name,
     configPath: path.join(dir, CONFIG_FILENAME),
     files,
     refused,
-    instructions: instructionsFor(kind, refused),
+    instructions: instructionsFor(kind, refused, scaffoldedPackageJson),
   };
 }

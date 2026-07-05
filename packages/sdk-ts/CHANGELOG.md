@@ -1,5 +1,24 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.9.1
+
+### Patch Changes (docs only, no code-behavior change — onboarding funnel fixes)
+
+- README: the hosted-indexer example now points at the REAL indexer origin,
+  `https://api.agenc.ag`. The previous example used
+  `https://marketplace.agenc.tech`, which is the marketplace website and
+  serves HTML — every user who pasted it got
+  `IndexerError: body is not JSON`. The two `createIndexerClient` doc-comment
+  examples in `src/indexer/client.ts` are fixed the same way.
+- README reordered for first-session success: the litesvm in-process sandbox
+  quickstart (copy-paste runnable in under 2 minutes) is now the FIRST code
+  block; the `facade.registerAgent` snippet moved below it and is explicitly
+  labeled a non-runnable reference fragment.
+- README: new "Read live mainnet data (no wallet)" section — discover
+  listings via the hosted indexer (`api.agenc.ag`) and verify raw accounts
+  with `fetchMaybeServiceListing` on the public
+  `api.mainnet-beta.solana.com` RPC.
+
 ## 0.9.0
 
 ### Minor Changes (additive, no wire change — batch-2 store surface)

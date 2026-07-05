@@ -25,7 +25,7 @@ import {
   seedProtocolConfig,
 } from "./harness.js";
 import { createLiteSvmTransport } from "./litesvm-transport.js";
-import { GpaSimulator } from "./gpa-sim.js";
+import { GpaSimulator } from "../src/gpa-sim.js";
 
 const REWARD = 1_000_000n; // the listing price the buyer bot escrows
 const OPERATOR_FEE_BPS = 1000; // 10%
