@@ -428,9 +428,9 @@ impl Default for ProtocolConfig {
             // (init only runs on dev/devnet/localnet — the mainnet canary config
             // already exists and is brought forward by migrate_protocol). Stamp it
             // to the CURRENT batch revision so a fresh full-surface deploy
-            // advertises every capability without a manual stamp (batch 2: the
-            // default full build now IS the batch-2 surface).
-            surface_revision: ProtocolConfig::SURFACE_REVISION_BATCH2,
+            // advertises every capability without a manual stamp (batch 3: the
+            // default full build now IS the batch-3 contest surface).
+            surface_revision: ProtocolConfig::SURFACE_REVISION_BATCH3,
         }
     }
 }
@@ -489,6 +489,16 @@ impl ProtocolConfig {
     /// Monotonic and additive: any revision >= FULL still implies the full
     /// capability set (see `docs/VERSIONS.md` deprecation policy).
     pub const SURFACE_REVISION_BATCH2: u16 = 2;
+
+    /// `surface_revision` value meaning "the batch-3 contest surface is live"
+    /// (WS-CONTEST, docs/design/batch-3-contest-tasks.md): submission rent returns
+    /// to the worker on every settle path, `Task._reserved` carries the
+    /// `task_schema`/`live_submissions` carve-out, schema-1 `Competitive` tasks are
+    /// contests (CreatorReview enabled, auto-accept disabled, `distribute_ghost_share`
+    /// crank after the selection window, cancel requires zero live submissions).
+    /// Monotonic and additive: any revision >= FULL still implies the full
+    /// capability set (see `docs/VERSIONING.md` deprecation policy).
+    pub const SURFACE_REVISION_BATCH3: u16 = 3;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -1049,7 +1059,16 @@ pub struct Task {
     /// 0 = no operator leg. Capped at MAX_OPERATOR_FEE_BPS by listing creation.
     pub operator_fee_bps: u16,
     /// Reserved padding so future field adds become value-only migrates rather
-    /// than another realloc-all sweep. MUST stay zeroed (validate_reserved_fields).
+    /// than another realloc-all sweep.
+    ///
+    /// Batch 3 (WS-CONTEST) carves the first two bytes in place — a value-only
+    /// migrate, NO size change, NO realloc (live pre-batch-3 accounts read back as
+    /// zeros == schema 0 / no live submissions, which is exactly their meaning):
+    ///   * `_reserved[0]` = `task_schema` (0 = pre-batch-3, 1 = contest-aware;
+    ///     see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).
+    ///   * `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with
+    ///     status `Submitted`; maintained ONLY for schema-1 tasks).
+    /// Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
     // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
     /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
@@ -1116,10 +1135,55 @@ impl Task {
     /// migrated to 432 before this P6.2 deploy (on mainnet today they are still 382).
     pub const BATCH2_TASK_SIZE: usize = 432;
 
+    /// `task_schema` value for every pre-batch-3 task account (the zero default the
+    /// live mainnet tasks read back). Pre-batch-3 tasks keep today's EXACT semantics:
+    /// none of the contest behavior changes (ghost-split, auto-accept disable, cancel
+    /// guard, live-submission accounting) applies to them.
+    pub const TASK_SCHEMA_PRE_BATCH3: u8 = 0;
+    /// `task_schema` value stamped on every task created from the batch-3 build
+    /// onward: the task participates in `live_submissions` accounting, and — when it
+    /// is `Competitive` — in the contest lifecycle (creator accept before `ghost_at`,
+    /// permissionless `distribute_ghost_share` after; auto-accept disabled; cancel
+    /// requires zero live submissions).
+    pub const TASK_SCHEMA_CONTEST_AWARE: u8 = 1;
+
+    /// Batch-3 carve-out accessor: the task's schema byte (`_reserved[0]`).
+    pub fn task_schema(&self) -> u8 {
+        self._reserved[0]
+    }
+
+    /// Batch-3 carve-out accessor: stamp the task's schema byte (`_reserved[0]`).
+    pub fn set_task_schema(&mut self, schema: u8) {
+        self._reserved[0] = schema;
+    }
+
+    /// Batch-3 carve-out accessor: count of `Submitted` submissions (`_reserved[1]`).
+    /// Only meaningful (and only maintained) when `task_schema >= 1`.
+    pub fn live_submissions(&self) -> u8 {
+        self._reserved[1]
+    }
+
+    /// Batch-3 carve-out accessor: overwrite the live-submission counter
+    /// (`_reserved[1]`). Prefer the checked increment/decrement helpers in
+    /// `task_validation_helpers` on instruction paths.
+    pub fn set_live_submissions(&mut self, count: u8) {
+        self._reserved[1] = count;
+    }
+
+    /// A contest task: schema-1 (contest-aware) AND `Competitive`. Every batch-3
+    /// behavior change gates on this predicate, so schema-0 tasks and every other
+    /// task type keep byte-identical semantics.
+    pub fn is_contest_task(&self) -> bool {
+        self.task_schema() >= Self::TASK_SCHEMA_CONTEST_AWARE
+            && self.task_type == TaskType::Competitive
+    }
+
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
+    /// Batch 3 carves `_reserved[0..2]` (task_schema + live_submissions), so only
+    /// the remaining tail `[2..16]` is validated.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved == [0u8; 16]
+        self._reserved[2..] == [0u8; 14]
     }
 }
 
@@ -3219,15 +3283,17 @@ mod tests {
         // A freshly initialized config (full-surface deploy) advertises the CURRENT
         // batch revision; the live mainnet config is brought to 0 by migrate_protocol
         // and stamped later by an operator. Revisions are monotonic + additive:
-        // batch 2 must sit strictly above FULL.
+        // each batch must sit strictly above its predecessor.
         let config = ProtocolConfig::default();
         assert_eq!(
             config.surface_revision,
-            ProtocolConfig::SURFACE_REVISION_BATCH2
+            ProtocolConfig::SURFACE_REVISION_BATCH3
         );
         assert_eq!(ProtocolConfig::SURFACE_REVISION_FULL, 1);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH2, 2);
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH3, 3);
         assert!(ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL);
+        assert!(ProtocolConfig::SURFACE_REVISION_BATCH3 > ProtocolConfig::SURFACE_REVISION_BATCH2);
     }
 
     #[test]
@@ -3246,9 +3312,59 @@ mod tests {
 
     #[test]
     fn test_task_validate_reserved_fields_corrupted() {
+        // Batch 3 carves _reserved[0..2]; the guard now protects the TAIL [2..16].
         let mut task = Task::default();
-        task._reserved[0] = 0xFF;
+        task._reserved[2] = 0xFF;
         assert!(!task.validate_reserved_fields());
+        let mut tail = Task::default();
+        tail._reserved[15] = 1;
+        assert!(!tail.validate_reserved_fields());
+    }
+
+    // === Batch-3 WS-CONTEST: Task._reserved carve-out (task_schema + live_submissions) ===
+
+    #[test]
+    fn test_task_schema_carveout_round_trip() {
+        let mut task = Task::default();
+        // A default (pre-batch-3-shaped) task reads schema 0 / no live submissions.
+        assert_eq!(task.task_schema(), Task::TASK_SCHEMA_PRE_BATCH3);
+        assert_eq!(task.live_submissions(), 0);
+        assert!(!task.is_contest_task());
+
+        task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+        task.set_live_submissions(7);
+        assert_eq!(task.task_schema(), 1);
+        assert_eq!(task.live_submissions(), 7);
+        // The carved bytes are NOT corruption: the tail guard still passes.
+        assert!(task.validate_reserved_fields());
+        // Carve-out lands exactly in the first two reserved bytes (layout pin).
+        assert_eq!(task._reserved[0], 1);
+        assert_eq!(task._reserved[1], 7);
+        assert_eq!(&task._reserved[2..], &[0u8; 14]);
+    }
+
+    #[test]
+    fn test_task_is_contest_task_requires_schema_and_type() {
+        // Schema-1 Competitive is a contest…
+        let mut contest = Task {
+            task_type: TaskType::Competitive,
+            ..Task::default()
+        };
+        contest.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+        assert!(contest.is_contest_task());
+
+        // …but schema-0 Competitive (a live pre-batch-3 task) is NOT — it keeps
+        // today's exact semantics (backward-compatibility rule, spec §2).
+        let legacy = Task {
+            task_type: TaskType::Competitive,
+            ..Task::default()
+        };
+        assert!(!legacy.is_contest_task());
+
+        // …and a schema-1 non-Competitive task is not a contest either.
+        let mut exclusive = Task::default();
+        exclusive.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+        assert!(!exclusive.is_contest_task());
     }
 
     // === Batch-2 P5.2: Store size + handle floor ===

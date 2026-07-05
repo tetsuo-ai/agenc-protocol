@@ -151,6 +151,13 @@ pub const STORE_REGISTRATION_BOND_LAMPORTS: u64 = 50_000_000;
 /// Maximum deadline relative to current time (1 year in seconds)
 pub const MAX_DEADLINE_SECONDS: i64 = 31_536_000;
 
+/// Batch 3 WS-CONTEST: the creator's post-deadline selection window (48h). A
+/// schema-1 `Competitive` task's `ghost_at = deadline + SELECTION_WINDOW_SECS`;
+/// before it only the creator may settle (accept/reject), at/after it the
+/// permissionless `distribute_ghost_share` crank takes over — an airtight
+/// temporal partition, so the judge and the crank can never interleave.
+pub const SELECTION_WINDOW_SECS: i64 = 172_800;
+
 /// Default cooldown between task creations in seconds
 pub const DEFAULT_TASK_CREATION_COOLDOWN: i64 = 60;
 

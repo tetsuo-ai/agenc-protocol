@@ -210,9 +210,12 @@ fn process_claim(
     }
 
     // Validate task state - manual-validation collaborative tasks may continue to accept
-    // new claims while earlier submissions are pending review.
+    // new claims while earlier submissions are pending review. Batch 3 WS-CONTEST:
+    // contests (schema-1 Competitive, CreatorReview) behave the same way — the first
+    // entrant's submission must not lock later entrants out of the contest (any
+    // registered agent may enter up to max_workers until the deadline).
     let claimable_during_pending_validation = task.status == TaskStatus::PendingValidation
-        && task.task_type == TaskType::Collaborative
+        && (task.task_type == TaskType::Collaborative || task.is_contest_task())
         && is_manual_validation_task(task);
     require!(
         task.status == TaskStatus::Open

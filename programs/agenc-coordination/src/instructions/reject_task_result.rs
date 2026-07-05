@@ -10,7 +10,8 @@ use crate::instructions::bid_settlement_helpers::{
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
-    is_manual_validation_task, release_claim_slot, sync_task_validation_status,
+    is_manual_validation_task, note_submission_left_review, release_claim_slot,
+    sync_task_validation_status,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::AgentStats;
@@ -155,6 +156,7 @@ pub fn handler<'info>(
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
 
     let task = &mut ctx.accounts.task;
+    note_submission_left_review(task)?;
     let worker = &mut ctx.accounts.worker;
     release_claim_slot(task, worker, clock.unix_timestamp)?;
 
@@ -214,6 +216,14 @@ pub fn handler<'info>(
 
     ctx.accounts
         .claim
+        .close(ctx.accounts.worker_authority.to_account_info())?;
+
+    // Batch 3 WS-CONTEST §1 (submission-rent return, ALL task types): the claim is
+    // closed above, so this submission round is over — return the worker-funded
+    // TaskSubmission rent to the worker instead of stranding it for the close_task
+    // sweep. A resubmission re-claims and re-inits both PDAs.
+    ctx.accounts
+        .task_submission
         .close(ctx.accounts.worker_authority.to_account_info())?;
 
     Ok(())

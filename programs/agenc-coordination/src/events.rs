@@ -1166,3 +1166,25 @@ pub struct ModerationHeartbeatRecorded {
     pub window_secs: u32,
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Batch 3 events (WS-CONTEST — docs/design/batch-3-contest-tasks.md)
+// ============================================================================
+
+/// Emitted by each `distribute_ghost_share` crank: an unjudged contest
+/// (schema-1 Competitive) submission was paid its equal slice of the remaining
+/// escrow worker pool after the selection window elapsed (`ghost_at`). The paid
+/// submission + claim are closed to the worker in the same instruction, so a
+/// submission can be ghost-paid at most once.
+#[event]
+pub struct GhostShareDistributed {
+    /// The contest task being ghost-split.
+    pub task: Pubkey,
+    /// The paid submitter's `AgentRegistration` PDA.
+    pub worker_agent: Pubkey,
+    /// Lamports paid to the worker for this slice (net of the fee legs).
+    pub lamports: u64,
+    /// Live submissions REMAINING after this slice (0 = the contest is fully
+    /// distributed and the task is Completed).
+    pub remaining: u8,
+}

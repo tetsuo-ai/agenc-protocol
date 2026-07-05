@@ -31,7 +31,9 @@ use core::marker::PhantomData;
 ///
 /// For collaborative tasks, splits reward among required completions.
 /// For exclusive/competitive tasks, uses full reward amount.
-fn calculate_reward_split_for_amount(
+/// pub(crate): Batch 3 `distribute_ghost_share` reuses the SAME split math for
+/// each ghost slice (spec §3 — never fork the settlement math).
+pub(crate) fn calculate_reward_split_for_amount(
     reward_per_worker: u64,
     protocol_fee_bps: u16,
 ) -> Result<(u64, u64)> {

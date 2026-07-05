@@ -12,6 +12,7 @@ use crate::events::TaskChangesRequested;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task,
+    note_submission_left_review,
 };
 use crate::state::{
     ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
@@ -93,6 +94,15 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
         ctx.accounts.task_submission.status == SubmissionStatus::Submitted,
         CoordinationError::SubmissionNotPending
     );
+    // Batch 3 WS-CONTEST: revision rounds are an Exclusive-review concept. On a
+    // contest they would let the creator EXTEND task.deadline (below), sliding
+    // `ghost_at` outward indefinitely and defeating the ghost-split guarantee, and
+    // they stomp the shared task status while other entries are pending. Contest
+    // entries settle only via reject / accept / distribute_ghost_share.
+    require!(
+        !ctx.accounts.task.is_contest_task(),
+        CoordinationError::ContestFlowUnsupported
+    );
     require!(
         changes_hash != [0u8; HASH_SIZE],
         CoordinationError::InvalidEvidenceHash
@@ -139,6 +149,7 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     }
 
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
+    note_submission_left_review(&mut ctx.accounts.task)?;
 
     let submission = &mut ctx.accounts.task_submission;
     submission.status = SubmissionStatus::Rejected; // resubmittable per submit_task_result

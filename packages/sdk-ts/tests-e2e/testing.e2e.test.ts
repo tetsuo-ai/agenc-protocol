@@ -319,10 +319,8 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
     expect(getTaskDecoder().decode(accountData(market, task)!).status).toBe(
       TaskStatus.Completed,
     );
-    expect(
-      getTaskSubmissionDecoder().decode(accountData(market, submission)!)
-        .status,
-    ).toBe(SubmissionStatus.Accepted);
+    // Batch 3 WS-CONTEST §1: the accepted submission closes to the worker.
+    expect(accountData(market, submission)).toBeNull();
     expect(market.svm.getBalance(worker.address) ?? 0n).toBeGreaterThan(
       workerBalBefore,
     );

@@ -4,6 +4,7 @@ use crate::errors::CoordinationError;
 use crate::events::TaskResultSubmitted;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, increment_pending_submission_count, is_manual_validation_task,
+    note_submission_entered_review,
 };
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
@@ -147,6 +148,10 @@ pub fn handler(
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     let result_bytes = result_data.unwrap_or([0u8; RESULT_DATA_SIZE]);
     increment_pending_submission_count(validation_config)?;
+    // Batch 3 WS-CONTEST: mirror the pending count on the Task itself so cancel /
+    // ghost-split can read it without the validation config. Schema-gated no-op
+    // for pre-batch-3 tasks (spec §2).
+    note_submission_entered_review(task)?;
 
     claim.proof_hash = proof_hash;
     claim.result_data = result_bytes;

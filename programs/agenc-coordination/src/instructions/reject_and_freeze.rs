@@ -13,6 +13,7 @@ use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task,
+    note_submission_left_review,
 };
 use crate::state::{
     AgentStats, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
@@ -147,6 +148,10 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
 
     let task = &mut ctx.accounts.task;
+    // Batch 3 WS-CONTEST: keep the Task-level live-submission mirror in lockstep
+    // with the pending count (schema-gated no-op for pre-batch-3 tasks). Freezing
+    // is Exclusive-only, so a contest can never reach here.
+    note_submission_left_review(task)?;
     task.status = TaskStatus::RejectFrozen;
 
     emit!(TaskRejectFrozen {

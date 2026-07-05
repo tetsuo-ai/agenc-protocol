@@ -14,7 +14,7 @@ use crate::instructions::completion_helpers::{
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
-    is_manual_validation_task, sync_task_validation_status,
+    is_manual_validation_task, note_submission_left_review, sync_task_validation_status,
 };
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 #[cfg(not(feature = "mainnet-canary"))]
@@ -188,6 +188,15 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         ctx.accounts.task_submission.status == SubmissionStatus::Submitted,
         CoordinationError::SubmissionNotPending
     );
+    // Batch 3 WS-CONTEST (spec §3): auto-accept is DISABLED for contests. Contest
+    // winner protection is the temporal partition — creator accept before
+    // `ghost_at`, permissionless ghost-split after — never a single submission
+    // auto-winning the whole pot on a review timeout. Exclusive/Collaborative and
+    // all schema-0 tasks keep auto-accept unchanged.
+    require!(
+        !ctx.accounts.task.is_contest_task(),
+        CoordinationError::ContestAutoAcceptDisabled
+    );
     require!(
         clock.unix_timestamp >= ctx.accounts.task_submission.review_deadline_at,
         CoordinationError::ReviewWindowNotElapsed
@@ -199,6 +208,7 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         ctx.program_id,
     )?;
     decrement_pending_submission_count(&mut ctx.accounts.task_validation_config)?;
+    note_submission_left_review(&mut ctx.accounts.task)?;
 
     let bid_completion_meta = load_bid_task_completion_meta(
         ctx.accounts.task.as_ref(),
@@ -401,6 +411,12 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
 
     ctx.accounts
         .claim
+        .close(ctx.accounts.worker_authority.to_account_info())?;
+
+    // Batch 3 WS-CONTEST §1 (submission-rent return, ALL task types): the worker
+    // funded the TaskSubmission PDA — close it back to them at settle.
+    ctx.accounts
+        .task_submission
         .close(ctx.accounts.worker_authority.to_account_info())?;
 
     // Batch 3 §8: auto-accept is a success — refund BOTH completion bonds. Required +

@@ -131,6 +131,15 @@ pub fn handler<'info>(
         .map(|(_, status)| is_disputable_submission_status(*status))
         .unwrap_or(false);
 
+    // Batch 3 WS-CONTEST: contests carry NO dispute apparatus (founder ruling —
+    // losers lose nothing; the winner is protected by the ghost-split guarantee).
+    // A Disputed transition would also freeze accept AND the ghost crank for every
+    // entrant, breaking the spec's "no re-entry via Disputed" partition invariant.
+    require!(
+        !task.is_contest_task(),
+        CoordinationError::ContestFlowUnsupported
+    );
+
     // Verify task is in a disputable state
     validate_disputable_task_state(task.status, submission_is_disputable)?;
 

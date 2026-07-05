@@ -33,7 +33,8 @@ pub struct UpdateLaunchControls<'info> {
 /// deploy → migrate → stamp choreography.
 ///
 /// Allowed `surface_revision` values: `0` (unstamped / conservative),
-/// `SURFACE_REVISION_FULL`, or `SURFACE_REVISION_BATCH2`. Unknown values are
+/// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`, or `SURFACE_REVISION_BATCH3`.
+/// Unknown values are
 /// rejected so an operator cannot stamp a surface the SDK does not understand.
 pub fn handler(
     ctx: Context<UpdateLaunchControls>,

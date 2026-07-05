@@ -533,6 +533,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     );
     expect(workerAgentBeforeAccept.activeTasks).toBe(1);
     const claimRentBefore = balance(svm, claim);
+    const submissionRentBefore = balance(svm, submission);
     const workerBalBefore = balance(svm, provider.address);
     const treasuryBalBefore = balance(svm, admin.address);
     const operatorBalBefore = balance(svm, operator.address);
@@ -551,16 +552,17 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
       TaskStatus.Completed,
     );
-    expect(
-      getTaskSubmissionDecoder().decode(accountData(svm, submission)!).status,
-    ).toBe(SubmissionStatus.Accepted);
+    // Batch 3 WS-CONTEST §1: the accepted submission is CLOSED at settle and its
+    // rent returns to the worker (it used to survive as `Accepted` and its rent
+    // was later swept to the CREATOR by close_task — the submission-rent sink).
+    expect(accountData(svm, submission)).toBeNull();
     expect(accountData(svm, claim)).toBeNull();
     expect(accountData(svm, escrow)).toBeNull();
     expectLamportDelta(
       svm,
       provider.address,
       workerBalBefore,
-      expectedPayouts.workerReward + claimRentBefore,
+      expectedPayouts.workerReward + claimRentBefore + submissionRentBefore,
     );
     expectLamportDelta(
       svm,
@@ -957,9 +959,8 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
       TaskStatus.Completed,
     );
-    expect(
-      getTaskSubmissionDecoder().decode(accountData(svm, submission)!).status,
-    ).toBe(SubmissionStatus.Accepted);
+    // Batch 3 WS-CONTEST §1: the accepted submission closes to the worker.
+    expect(accountData(svm, submission)).toBeNull();
     expect(svm.getBalance(worker.address) ?? 0n).toBeGreaterThan(
       workerBalBefore,
     );
@@ -1089,6 +1090,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const workerBalBefore = balance(svm, worker.address);
     const treasuryBalBefore = balance(svm, admin.address);
     const claimRentBefore = balance(svm, claim);
+    const submissionRentBefore = balance(svm, submission);
     const rejectionHash = new Uint8Array(32).fill(120);
     await creatorClient.rejectTaskResult({
       task,
@@ -1102,19 +1104,20 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const rejectedTask = getTaskDecoder().decode(accountData(svm, task)!);
     expect(rejectedTask.status).toBe(TaskStatus.Open);
     expect(rejectedTask.currentWorkers).toBe(0);
-    const rejectedSubmission = getTaskSubmissionDecoder().decode(
-      accountData(svm, submission)!,
-    );
-    expect(rejectedSubmission.status).toBe(SubmissionStatus.Rejected);
-    expect(Array.from(rejectedSubmission.rejectionHash)).toEqual(
-      Array.from(rejectionHash),
-    );
+    // Batch 3 WS-CONTEST §1: a creator reject closes the submission (with the
+    // claim) and returns BOTH rents to the worker — no straggler, no rent sink.
+    expect(accountData(svm, submission)).toBeNull();
     expect(accountData(svm, claim)).toBeNull();
     const escrowAfter = getTaskEscrowDecoder().decode(accountData(svm, escrow)!);
     expect(escrowAfter.amount).toBe(escrowBefore.amount);
     expect(escrowAfter.distributed).toBe(escrowBefore.distributed);
     expect(escrowAfter.isClosed).toBe(false);
-    expectLamportDelta(svm, worker.address, workerBalBefore, claimRentBefore);
+    expectLamportDelta(
+      svm,
+      worker.address,
+      workerBalBefore,
+      claimRentBefore + submissionRentBefore,
+    );
     expectLamportDelta(svm, admin.address, treasuryBalBefore, 0n);
     const workerAgentAfterReject = getAgentRegistrationDecoder().decode(
       accountData(svm, workerAgent)!,
@@ -1301,6 +1304,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       accountData(svm, providerAgent)!,
     );
     const claimRentBefore = balance(svm, claim);
+    const submissionRentBefore = balance(svm, submission);
     const workerBalBefore = balance(svm, provider.address);
     const treasuryBalBefore = balance(svm, admin.address);
     const operatorBalBefore = balance(svm, operator.address);
@@ -1320,16 +1324,17 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
       TaskStatus.Completed,
     );
-    expect(
-      getTaskSubmissionDecoder().decode(accountData(svm, submission)!).status,
-    ).toBe(SubmissionStatus.Accepted);
+    // Batch 3 WS-CONTEST §1: the accepted submission is CLOSED at settle and its
+    // rent returns to the worker (it used to survive as `Accepted` and its rent
+    // was later swept to the CREATOR by close_task — the submission-rent sink).
+    expect(accountData(svm, submission)).toBeNull();
     expect(accountData(svm, claim)).toBeNull();
     expect(accountData(svm, escrow)).toBeNull();
     expectLamportDelta(
       svm,
       provider.address,
       workerBalBefore,
-      expectedPayouts.workerReward + claimRentBefore,
+      expectedPayouts.workerReward + claimRentBefore + submissionRentBefore,
     );
     expectLamportDelta(
       svm,

@@ -195,6 +195,20 @@ fn validate_cancel_prereqs(task: &Task, now: i64) -> Result<()> {
     };
 
     require!(can_cancel, CoordinationError::TaskCannotBeCancelled);
+
+    // Batch 3 WS-CONTEST (spec §4): a contest that received work is NEVER silently
+    // refunded — cancel requires zero live submissions, as a program invariant
+    // rather than a status accident. (Status guards above already block
+    // PendingValidation; this closes any Open/InProgress-with-live-submission gap.
+    // The documented escape stays: a creator who explicitly REJECTS every entry
+    // drives live_submissions to 0 — each rejection is public and rent-returned —
+    // and may then cancel.)
+    if task.is_contest_task() {
+        require!(
+            task.live_submissions() == 0,
+            CoordinationError::ContestHasLiveSubmissions
+        );
+    }
     Ok(())
 }
 
@@ -651,5 +665,52 @@ mod tests {
             validate_cancel_prereqs(&task, 100),
             CoordinationError::InvalidStatusTransition,
         );
+    }
+
+    // === Batch 3 WS-CONTEST cancel guard (spec §4) ===
+
+    fn build_contest_task(status: TaskStatus, deadline: i64, live: u8) -> Task {
+        let mut task = Task {
+            status,
+            deadline,
+            task_type: crate::state::TaskType::Competitive,
+            ..Task::default()
+        };
+        task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+        task.set_live_submissions(live);
+        task
+    }
+
+    // Revert-sensitive: removing the contest live_submissions require turns this red.
+    #[test]
+    fn contest_with_live_submissions_cannot_be_cancelled() {
+        let task = build_contest_task(TaskStatus::Open, 100, 1);
+        assert_anchor_error_code(
+            validate_cancel_prereqs(&task, 50),
+            CoordinationError::ContestHasLiveSubmissions,
+        );
+        // InProgress-with-live-submission gap is closed too.
+        let task = build_contest_task(TaskStatus::InProgress, 100, 2);
+        assert_anchor_error_code(
+            validate_cancel_prereqs(&task, 101),
+            CoordinationError::ContestHasLiveSubmissions,
+        );
+    }
+
+    #[test]
+    fn contest_with_zero_live_submissions_can_be_cancelled() {
+        // The documented reject-all-refund escape: every entry rejected -> live 0.
+        let task = build_contest_task(TaskStatus::Open, 100, 0);
+        validate_cancel_prereqs(&task, 50).unwrap();
+    }
+
+    #[test]
+    fn schema0_competitive_cancel_is_unchanged() {
+        // A live pre-batch-3 Competitive task never hits the contest guard, even
+        // with a (structurally impossible today) non-zero counter byte.
+        let mut task = build_test_task(TaskStatus::Open, 100, 0);
+        task.task_type = crate::state::TaskType::Competitive;
+        task.set_live_submissions(3); // schema stays 0
+        validate_cancel_prereqs(&task, 50).unwrap();
     }
 }
