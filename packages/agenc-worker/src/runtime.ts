@@ -14,7 +14,9 @@ import {
   AgencError,
   findAgentPda,
   findClaimPda,
+  findProtocolConfigPda,
   getAgentRegistrationDecoder,
+  getProtocolConfigDecoder,
   getTaskDecoder,
   listOpenTasks,
   listPinnedJobSpecTasks,
@@ -96,6 +98,14 @@ export type WorkerContext = {
    * when absent the report falls back to earnings + task PDA.
    */
   findSettlementSignature?: (task: Address) => Promise<string | null>;
+  /**
+   * Wallet balance lookup, used by the pre-registration funding preflight so
+   * an underfunded new wallet fails with one clear "fund exactly this much"
+   * message BEFORE any transaction instead of a mid-flight on-chain revert.
+   * The CLI always wires this; when absent (programmatic embedding) the
+   * preflight is skipped and registration may revert on-chain if underfunded.
+   */
+  getBalance?: (address: Address) => Promise<bigint>;
 };
 
 /** The worker's on-chain identity. */
@@ -108,6 +118,54 @@ export type WorkerAgent = {
 };
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+// Rent-exempt minimums for the accounts a worker pays to create, derived from
+// the program's fixed account layouts ((space + 128) * 6960 lamports):
+//   AgentRegistration 566 bytes — paid once at registration (returned if the
+//   agent is ever deregistered, alongside the stake held in the agent PDA).
+//   TaskClaim 203 bytes + TaskSubmission 273 bytes — paid per worked task.
+/** One-time rent for the worker's AgentRegistration account. */
+export const AGENT_ACCOUNT_RENT_LAMPORTS = 4_830_240n;
+/** Per-task rent for the TaskClaim account. */
+export const CLAIM_ACCOUNT_RENT_LAMPORTS = 2_303_760n;
+/** Per-task rent for the TaskSubmission account. */
+export const SUBMISSION_ACCOUNT_RENT_LAMPORTS = 2_790_960n;
+/** Headroom for transaction fees across the register→claim→submit flow. */
+export const FEE_HEADROOM_LAMPORTS = 1_000_000n;
+
+/**
+ * Read the live `ProtocolConfig.minAgentStake` — the on-chain floor that
+ * `register_agent` enforces (`InsufficientStake` below it). There is NO
+ * fallback value: guessing low bricks registration and guessing high
+ * over-stakes the hot wallet, so an unreadable config is a hard error.
+ */
+export async function readMinAgentStake(readAccount: AccountReader): Promise<bigint> {
+  const [configPda] = await findProtocolConfigPda();
+  const data = await readAccount(configPda);
+  if (data === null) {
+    throw new Error(
+      `ProtocolConfig ${configPda} not found on this RPC — cannot determine the ` +
+        `on-chain minimum registration stake (refusing to guess). Check that ` +
+        `--rpc-url points at a network where the AgenC program is initialized.`,
+    );
+  }
+  return getProtocolConfigDecoder().decode(data).minAgentStake;
+}
+
+/**
+ * Lamports a fresh wallet needs before its FIRST transaction: the live
+ * registration stake + agent-account rent + one task's claim + submission
+ * rents + fee headroom (~0.021 SOL on mainnet with the live 0.01 SOL stake).
+ */
+export function registrationFundingRequirement(minAgentStake: bigint): bigint {
+  return (
+    minAgentStake +
+    AGENT_ACCOUNT_RENT_LAMPORTS +
+    CLAIM_ACCOUNT_RENT_LAMPORTS +
+    SUBMISSION_ACCOUNT_RENT_LAMPORTS +
+    FEE_HEADROOM_LAMPORTS
+  );
+}
 
 /** Format lamports as a SOL decimal string (full precision, trimmed). */
 export function lamportsToSol(lamports: bigint): string {
@@ -206,15 +264,45 @@ export async function ensureRegistered(ctx: WorkerContext): Promise<WorkerAgent>
     ctx.log({ event: "agent.would-register", agentPda, dryRun: true });
     return { agentId, agentPda, registered: false, justRegistered: false };
   }
+
+  // The stake is NOT optional: register_agent enforces
+  // `stake_amount >= ProtocolConfig.minAgentStake` (InsufficientStake), so the
+  // worker reads the live floor and stakes exactly that (0.01 SOL on mainnet).
+  const minAgentStake = await readMinAgentStake(ctx.readAccount);
+
+  // Funding preflight BEFORE the first transaction: a new operator should hit
+  // one clear "fund this address with exactly this much" error, never an
+  // on-chain revert halfway through their first tick.
+  if (ctx.getBalance !== undefined) {
+    const required = registrationFundingRequirement(minAgentStake);
+    const balance = await ctx.getBalance(ctx.signer.address);
+    if (balance < required) {
+      throw new Error(
+        `insufficient funds: wallet ${ctx.signer.address} holds ${balance} lamports ` +
+          `(${lamportsToSol(balance)} SOL) but registering and working one task needs at least ` +
+          `${required} lamports (${lamportsToSol(required)} SOL) — registration stake ${minAgentStake} ` +
+          `(live ProtocolConfig.minAgentStake) + agent rent ${AGENT_ACCOUNT_RENT_LAMPORTS} + ` +
+          `claim rent ${CLAIM_ACCOUNT_RENT_LAMPORTS} + submission rent ${SUBMISSION_ACCOUNT_RENT_LAMPORTS} + ` +
+          `fee headroom ${FEE_HEADROOM_LAMPORTS}. ` +
+          `Fund ${ctx.signer.address} with at least ${required - balance} more lamports and retry.`,
+      );
+    }
+  }
+
   const { signature } = await ctx.client.registerAgent({
     authority: ctx.signer,
     agentId,
     capabilities: ctx.config.capabilities,
     endpoint: ctx.config.endpoint,
     metadataUri: null,
-    stakeAmount: 0n,
+    stakeAmount: minAgentStake,
   });
-  ctx.log({ event: "agent.registered", agentPda, signature });
+  ctx.log({
+    event: "agent.registered",
+    agentPda,
+    signature,
+    stakedLamports: minAgentStake.toString(),
+  });
   return { agentId, agentPda, registered: true, justRegistered: true };
 }
 
@@ -641,10 +729,12 @@ export async function runTickOnce(ctx: WorkerContext): Promise<TickResult> {
 
 /**
  * Long-running mode (`agenc-worker up`): resume any crash-left claim, then
- * watch claimable tasks via the SDK's `watchClaimableTasks` (event +
- * catch-up/poll fusion), processing them strictly one at a time, with a
- * settlement reconciliation between candidates and on a timer. Stops when
- * `signal` aborts.
+ * watch claimable tasks via the SDK's `watchClaimableTasks`, processing them
+ * strictly one at a time, with a settlement reconciliation between candidates
+ * and on a timer. With the CLI's wiring (an HTTP `Rpc` as the read source and
+ * no `rpcSubscriptions`) discovery is `getProgramAccounts` POLLING on
+ * `pollIntervalMs` — there is no live WebSocket push. Stops when `signal`
+ * aborts.
  */
 export async function runUp(
   ctx: WorkerContext,

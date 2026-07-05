@@ -65,7 +65,12 @@ describe("e2e: one worker tick against the real program", () => {
     const modAuth = await fundedSigner(svm);
     const creator = await fundedSigner(svm);
     const workerWallet = await fundedSigner(svm);
-    await seedProtocolConfig(svm, admin.address);
+    // Live-mainnet-shaped config: registration REQUIRES a nonzero stake, so
+    // this run proves against the real program that the worker reads the
+    // on-chain minimum and stakes exactly that (the 0.1.0 hardcoded 0n
+    // reverted here with InsufficientStake).
+    const MIN_AGENT_STAKE = 10_000_000n;
+    await seedProtocolConfig(svm, admin.address, { minAgentStake: MIN_AGENT_STAKE });
     await seedModerationConfig(svm, admin.address, modAuth.address, true);
 
     const transport = createLiteSvmTransport(svm);
@@ -81,7 +86,7 @@ describe("e2e: one worker tick against the real program", () => {
       capabilities: 1n,
       endpoint: "http://creator.test",
       metadataUri: null,
-      stakeAmount: 0n,
+      stakeAmount: MIN_AGENT_STAKE,
     });
     const [creatorAgent] = await findAgentPda({ agentId: creatorAgentId });
 
@@ -184,6 +189,9 @@ describe("e2e: one worker tick against the real program", () => {
         expect(uri).toBe(jobSpecUri);
         return SPEC_BODY;
       },
+      // Exercises the pre-registration funding preflight (the wallet is
+      // funded well past the requirement, so registration proceeds).
+      getBalance: async (addr) => svm.getBalance(addr) ?? 0n,
     };
 
     const tick = await runTickOnce(ctx);
@@ -205,7 +213,12 @@ describe("e2e: one worker tick against the real program", () => {
       accountData(svm, workerAgent)!,
     );
     expect(registration.authority).toBe(workerWallet.address);
-    expect(events.some((e) => e.event === "agent.registered")).toBe(true);
+    // The worker staked EXACTLY the live on-chain minimum, recorded in the
+    // agent account by the real program.
+    expect(registration.stake).toBe(MIN_AGENT_STAKE);
+    const registeredEvent = events.find((e) => e.event === "agent.registered");
+    expect(registeredEvent).toBeDefined();
+    expect(registeredEvent!.stakedLamports).toBe(MIN_AGENT_STAKE.toString());
 
     // The submission account EXISTS on-chain with our proof hash: sha256 of
     // the executor stdout (`console.log("result")` emits "result\n").

@@ -49,6 +49,7 @@ export async function fundedSigner(svm: LiteSVM): Promise<KeyPairSigner> {
 export async function seedProtocolConfig(
   svm: LiteSVM,
   admin: Address,
+  overrides: { minAgentStake?: bigint } = {},
 ): Promise<Address> {
   const [pda, bump] = await findProtocolConfigPda();
   const data = getProtocolConfigEncoder().encode({
@@ -57,7 +58,7 @@ export async function seedProtocolConfig(
     disputeThreshold: 50,
     protocolFeeBps: 100,
     minArbiterStake: 0n,
-    minAgentStake: 0n,
+    minAgentStake: overrides.minAgentStake ?? 0n,
     maxClaimDuration: 604800n,
     maxDisputeDuration: 604800n,
     totalAgents: 0n,
