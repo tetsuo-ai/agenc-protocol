@@ -8,7 +8,9 @@
 //   category — same 32-byte rule PLUS lowercase-kebab (`[a-z0-9]+(-[a-z0-9]+)*`).
 //   tags     — lowercase-kebab tokens joined with ",", UTF-8, NUL-padded to
 //              exactly 64 bytes.
-// Decoders strip trailing NUL padding and validate the same constraints.
+// Decoders strip canonical trailing NUL padding and validate the same
+// constraints: after the first NUL terminator, every remaining byte must also
+// be NUL.
 
 /** Exact on-chain byte width of `ServiceListing.name`. */
 export const LISTING_NAME_BYTES = 32;
@@ -49,16 +51,22 @@ function encodeFixedUtf8(value: string, size: number, field: string): Uint8Array
 }
 
 /**
- * Strips trailing NUL padding from an exactly-`size`-byte field and decodes
+ * Strips canonical NUL padding from an exactly-`size`-byte field and decodes
  * the remainder as UTF-8. Throws `RangeError` on a wrong-length input and
- * `TypeError` on malformed UTF-8.
+ * `TypeError` on malformed UTF-8 or non-canonical padding (a non-NUL byte
+ * after the first NUL).
  */
 function decodeFixedUtf8(bytes: Uint8Array, size: number, field: string): string {
   if (bytes.length !== size) {
     throw new RangeError(`${field}: expected exactly ${size} bytes, got ${bytes.length}`);
   }
-  let end = bytes.length;
-  while (end > 0 && bytes[end - 1] === 0) end -= 1;
+  const terminator = bytes.indexOf(0);
+  const end = terminator === -1 ? bytes.length : terminator;
+  if (bytes.subarray(end).some((b) => b !== 0)) {
+    throw new TypeError(
+      `${field}: non-canonical padding (non-NUL byte after the first NUL)`,
+    );
+  }
   return utf8Decoder.decode(bytes.subarray(0, end));
 }
 
@@ -84,12 +92,13 @@ export function encodeListingName(name: string): Uint8Array {
 
 /**
  * Decodes a 32-byte on-chain listing name back to a string by stripping
- * trailing NUL padding.
+ * canonical trailing NUL padding.
  *
  * @param bytes - Exactly 32 bytes of on-chain `ServiceListing.name` data.
  * @returns The decoded name (empty string for an all-NUL field).
  * @throws RangeError when `bytes` is not exactly 32 bytes long.
- * @throws TypeError when the unpadded bytes are not valid UTF-8.
+ * @throws TypeError when the unpadded bytes are not valid UTF-8 or the padding
+ *   is non-canonical.
  */
 export function decodeListingName(bytes: Uint8Array): string {
   return decodeFixedUtf8(bytes, LISTING_NAME_BYTES, "listing name");
@@ -122,14 +131,14 @@ export function encodeListingCategory(category: string): Uint8Array {
 }
 
 /**
- * Decodes a 32-byte on-chain listing category by stripping trailing NUL
- * padding and validating the lowercase-kebab rule.
+ * Decodes a 32-byte on-chain listing category by stripping canonical trailing
+ * NUL padding and validating the lowercase-kebab rule.
  *
  * @param bytes - Exactly 32 bytes of on-chain `ServiceListing.category` data.
  * @returns The decoded category token, or `""` for an all-NUL (unset) field.
  * @throws RangeError when `bytes` is not exactly 32 bytes long.
  * @throws TypeError when the decoded value is non-empty and not
- *   lowercase-kebab, or is not valid UTF-8.
+ *   lowercase-kebab, is not valid UTF-8, or the padding is non-canonical.
  */
 export function decodeListingCategory(bytes: Uint8Array): string {
   const category = decodeFixedUtf8(bytes, LISTING_CATEGORY_BYTES, "listing category");
@@ -170,14 +179,14 @@ export function encodeListingTags(tags: readonly string[]): Uint8Array {
 
 /**
  * Decodes a 64-byte on-chain tags field back into the tag array: strips
- * trailing NUL padding, splits on commas, and validates each token against
- * the lowercase-kebab rule.
+ * canonical trailing NUL padding, splits on commas, and validates each token
+ * against the lowercase-kebab rule.
  *
  * @param bytes - Exactly 64 bytes of on-chain `ServiceListing.tags` data.
  * @returns The decoded tags; an empty array for an all-NUL field.
  * @throws RangeError when `bytes` is not exactly 64 bytes long.
- * @throws TypeError when any decoded token is not lowercase-kebab, or the
- *   bytes are not valid UTF-8.
+ * @throws TypeError when any decoded token is not lowercase-kebab, the bytes
+ *   are not valid UTF-8, or the padding is non-canonical.
  */
 export function decodeListingTags(bytes: Uint8Array): string[] {
   const joined = decodeFixedUtf8(bytes, LISTING_TAGS_BYTES, "listing tags");
