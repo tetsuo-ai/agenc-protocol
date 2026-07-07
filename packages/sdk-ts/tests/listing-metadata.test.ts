@@ -134,6 +134,20 @@ describe("string <-> bytes round-trip (values codecs)", () => {
     expect(decodeListingCategory(categoryBytes)).toBe(category);
     expect(decodeListingTags(tagsBytes)).toEqual(tags);
   });
+
+  it("rejects non-canonical padding after the first NUL terminator", () => {
+    const name = encodeListingName("ab");
+    name[3] = 0x63; // "ab\0c..." — content after the first NUL terminator.
+    expect(() => decodeListingName(name)).toThrow(/non-canonical padding/);
+
+    const category = encodeListingCategory("code");
+    category[5] = 0x78; // "code\0x..."
+    expect(() => decodeListingCategory(category)).toThrow(/non-canonical padding/);
+
+    const tags = encodeListingTags(["docs"]);
+    tags[5] = 0x78; // "docs\0x..."
+    expect(() => decodeListingTags(tags)).toThrow(/non-canonical padding/);
+  });
 });
 
 describe("createServiceListing (facade, LISTING_METADATA v1 string form)", () => {

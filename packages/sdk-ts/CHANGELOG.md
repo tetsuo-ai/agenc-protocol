@@ -1,5 +1,15 @@
 # @tetsuo-ai/marketplace-sdk
 
+## Unreleased
+
+### Patch Changes (SDK codec hardening, no wire change)
+
+- Listing metadata decoders now reject non-canonical NUL padding in fixed-width
+  fields. `decodeListingName`, `decodeListingCategory`, and
+  `decodeListingTags` stop at the first NUL terminator and require every
+  remaining byte to also be NUL, matching `decodeStoreHandle` and the encoder's
+  no-embedded-NUL invariant.
+
 ## 0.10.0
 
 ### Minor Changes (additive, no wire change — batch-3 contest surface)
