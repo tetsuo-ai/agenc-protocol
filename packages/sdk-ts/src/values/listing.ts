@@ -50,15 +50,26 @@ function encodeFixedUtf8(value: string, size: number, field: string): Uint8Array
 
 /**
  * Strips trailing NUL padding from an exactly-`size`-byte field and decodes
- * the remainder as UTF-8. Throws `RangeError` on a wrong-length input and
- * `TypeError` on malformed UTF-8.
+ * the remainder as UTF-8. The value ends at the FIRST NUL; everything after
+ * it must also be NUL (canonical padding). Throws `RangeError` on a
+ * wrong-length input and `TypeError` on malformed UTF-8 or an embedded NUL —
+ * `encodeFixedUtf8` can never produce one, so a non-NUL byte after the
+ * terminator means non-canonical bytes that could visually impersonate
+ * another value (NUL renders invisibly in most UIs).
  */
 function decodeFixedUtf8(bytes: Uint8Array, size: number, field: string): string {
   if (bytes.length !== size) {
     throw new RangeError(`${field}: expected exactly ${size} bytes, got ${bytes.length}`);
   }
-  let end = bytes.length;
-  while (end > 0 && bytes[end - 1] === 0) end -= 1;
+  const terminator = bytes.indexOf(0);
+  const end = terminator === -1 ? bytes.length : terminator;
+  for (let i = end; i < bytes.length; i += 1) {
+    if (bytes[i] !== 0) {
+      throw new TypeError(
+        `${field}: embedded NUL at byte ${end} — non-canonical padding is not allowed`,
+      );
+    }
+  }
   return utf8Decoder.decode(bytes.subarray(0, end));
 }
 
@@ -89,7 +100,8 @@ export function encodeListingName(name: string): Uint8Array {
  * @param bytes - Exactly 32 bytes of on-chain `ServiceListing.name` data.
  * @returns The decoded name (empty string for an all-NUL field).
  * @throws RangeError when `bytes` is not exactly 32 bytes long.
- * @throws TypeError when the unpadded bytes are not valid UTF-8.
+ * @throws TypeError when the unpadded bytes are not valid UTF-8, or when a
+ *   non-NUL byte follows the first NUL (embedded NUL / non-canonical padding).
  */
 export function decodeListingName(bytes: Uint8Array): string {
   return decodeFixedUtf8(bytes, LISTING_NAME_BYTES, "listing name");
