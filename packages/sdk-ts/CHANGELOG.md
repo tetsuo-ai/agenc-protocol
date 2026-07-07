@@ -1,5 +1,20 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.10.1
+
+### Patch Changes (decoder hardening, no wire change)
+
+- `decodeListingName` / `decodeListingCategory` / `decodeListingTags` now
+  reject non-canonical fixed-width bytes: the value ends at the FIRST NUL and
+  any non-NUL byte after it throws `TypeError`. Previously only trailing NULs
+  were stripped, so a raw (non-SDK) writer could publish a name like
+  `ab<NUL>cd` that decoded with the embedded NUL retained — rendering
+  indistinguishably from `abcd` in most UIs while being a distinct value
+  (display-spoofing vector). Encoders already rejected embedded NULs; the
+  decoders now enforce the same documented wire constraint, matching the kit
+  client's `decodeStoreHandle` semantics. Canonical layouts (NUL-padded,
+  exactly-full, all-NUL → `""`) decode unchanged.
+
 ## 0.10.0
 
 ### Minor Changes (additive, no wire change — batch-3 contest surface)
