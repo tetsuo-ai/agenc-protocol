@@ -116,6 +116,49 @@ describe("listing-metadata.schema.json", () => {
   });
 });
 
+describe("embedded NUL rejection (non-canonical padding)", () => {
+  /** `size`-byte field: `prefix` bytes, one NUL, `suffix` bytes, zero-padded. */
+  function fieldWithEmbeddedNul(prefix: string, suffix: string, size: number): Uint8Array {
+    const out = new Uint8Array(size);
+    const head = new TextEncoder().encode(prefix);
+    out.set(head);
+    out.set(new TextEncoder().encode(suffix), head.length + 1); // out[head.length] stays NUL
+    return out;
+  }
+
+  /** Canonical layout: `text` UTF-8 bytes, zero-padded to `size`. */
+  function canonicalField(text: string, size: number): Uint8Array {
+    const out = new Uint8Array(size);
+    out.set(new TextEncoder().encode(text));
+    return out;
+  }
+
+  it("decodeListingName throws TypeError on a non-NUL byte after the first NUL", () => {
+    // encodeListingName rejects embedded NULs, so bytes like these can only
+    // come from a non-SDK writer; a name of "ab", NUL, "cd" would render like
+    // "abcd" in most UIs while being a different value.
+    const spoofed = fieldWithEmbeddedNul("ab", "cd", LISTING_NAME_BYTES);
+    expect(() => decodeListingName(spoofed)).toThrow(TypeError);
+    expect(() => decodeListingName(spoofed)).toThrow(/embedded NUL/);
+  });
+
+  it("decodeListingCategory and decodeListingTags reject the same layouts", () => {
+    expect(() =>
+      decodeListingCategory(fieldWithEmbeddedNul("code", "generation", LISTING_CATEGORY_BYTES)),
+    ).toThrow(/embedded NUL/);
+    expect(() =>
+      decodeListingTags(fieldWithEmbeddedNul("docs", ",same-day", LISTING_TAGS_BYTES)),
+    ).toThrow(/embedded NUL/);
+  });
+
+  it("still decodes canonical layouts: padded, exactly-full, and all-NUL fields", () => {
+    expect(decodeListingName(canonicalField("ab", LISTING_NAME_BYTES))).toBe("ab");
+    expect(decodeListingName(new Uint8Array(LISTING_NAME_BYTES))).toBe("");
+    const full = "x".repeat(LISTING_NAME_BYTES); // no NUL anywhere
+    expect(decodeListingName(canonicalField(full, LISTING_NAME_BYTES))).toBe(full);
+  });
+});
+
 describe("string <-> bytes round-trip (values codecs)", () => {
   it("round-trips name/category/tags through the fixed-width wire form", () => {
     const name = "Café Translation Pro"; // multibyte UTF-8 on purpose
