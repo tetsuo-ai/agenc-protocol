@@ -180,6 +180,31 @@ export function getSurfaceRevision(svm) {
   return cfg.surface_revision;
 }
 
+/// Set `surface_revision` on the live ProtocolConfig in place (batch 4: goods
+/// require >= 4). Mutates only the one field (mirrors the on-chain
+/// all-three-field `update_launch_controls` write — the ceremony must re-pass
+/// paused+mask; here we preserve them by decoding first).
+export async function setSurfaceRevision(svm, revision) {
+  const [protocolPda] = pda([enc("protocol")]);
+  const acct = svm.getAccount(protocolPda);
+  if (!acct) throw new Error("ProtocolConfig not present — call injectProtocolConfig first");
+  const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+  cfg.surface_revision = revision;
+  const data = await coder.accounts.encode("ProtocolConfig", cfg);
+  svm.setAccount(protocolPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
+/// Set `protocol_fee_bps` on the live ProtocolConfig in place.
+export async function setProtocolFeeBps(svm, bps) {
+  const [protocolPda] = pda([enc("protocol")]);
+  const acct = svm.getAccount(protocolPda);
+  if (!acct) throw new Error("ProtocolConfig not present — call injectProtocolConfig first");
+  const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+  cfg.protocol_fee_bps = bps;
+  const data = await coder.accounts.encode("ProtocolConfig", cfg);
+  svm.setAccount(protocolPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
 /// Set min_arbiter_stake on the live ProtocolConfig (so arbiter votes carry weight).
 export async function setMinArbiterStake(svm, amount) {
   const [protocolPda] = pda([enc("protocol")]);
