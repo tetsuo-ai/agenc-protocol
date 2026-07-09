@@ -73,6 +73,8 @@ pub mod configure_task_validation;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_dependent_task;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod create_goods_listing;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod create_proposal;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod create_service_listing;
@@ -111,6 +113,8 @@ pub mod moderation_heartbeat;
 pub mod post_completion_bond;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod post_to_feed;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod purchase_good;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod purchase_skill;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -160,6 +164,8 @@ pub mod submit_task_result;
 pub mod suspend_agent;
 pub mod unsuspend_agent;
 pub mod update_agent;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod update_goods_listing;
 pub mod update_launch_controls;
 pub mod update_multisig;
 pub mod update_protocol_fee;
@@ -237,6 +243,9 @@ pub use configure_task_validation::*;
 pub use create_dependent_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
+pub use create_goods_listing::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
 pub use create_proposal::*;
 #[cfg(not(feature = "mainnet-canary"))]
 pub use create_service_listing::*;
@@ -289,6 +298,9 @@ pub use post_completion_bond::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use post_to_feed::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use purchase_good::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use purchase_skill::*;
@@ -361,6 +373,9 @@ pub use suspend_agent::*;
 pub use unsuspend_agent::*;
 #[allow(ambiguous_glob_reexports)]
 pub use update_agent::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use update_goods_listing::*;
 #[allow(ambiguous_glob_reexports)]
 pub use update_launch_controls::*;
 #[allow(ambiguous_glob_reexports)]

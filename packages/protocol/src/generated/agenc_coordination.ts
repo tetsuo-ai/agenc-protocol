@@ -4263,6 +4263,180 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "createGoodsListing",
+      "docs": [
+        "Batch 4 (docs/design/batch-4-goods.md): list a FINITE, transferable good.",
+        "Seller must be an active agent. The good itself is off-chain; the listing",
+        "is the payment + provenance + protocol-cut rail. Requires the batch-4",
+        "surface stamp (`surface_revision >= 4`)."
+      ],
+      "discriminator": [
+        47,
+        95,
+        35,
+        219,
+        15,
+        80,
+        134,
+        20
+      ],
+      "accounts": [
+        {
+          "name": "good",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  111,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "seller"
+              },
+              {
+                "kind": "arg",
+                "path": "goodId"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seller",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "seller.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationBlock",
+          "docs": [
+            "The moderation BLOCK floor over `metadata_hash` (§5.2). The handler",
+            "derives `[\"moderation_block\", metadata_hash]` itself and rejects a",
+            "mismatched address, so it can be neither omitted nor substituted; a",
+            "multisig-BLOCKED hash cannot be listed.",
+            ""
+          ]
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "seller"
+          ]
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "goodId",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "name",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "metadataUri",
+          "type": "string"
+        },
+        {
+          "name": "price",
+          "type": "u64"
+        },
+        {
+          "name": "priceMint",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "tags",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        },
+        {
+          "name": "totalSupply",
+          "type": "u64"
+        },
+        {
+          "name": "operator",
+          "type": "pubkey"
+        },
+        {
+          "name": "operatorFeeBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "createProposal",
       "docs": [
         "Create a governance proposal.",
@@ -8583,6 +8757,214 @@ export type AgencCoordination = {
           "type": {
             "option": "pubkey"
           }
+        }
+      ]
+    },
+    {
+      "name": "purchaseGood",
+      "docs": [
+        "Batch 4: purchase ONE unit of a finite good (SOL or SPL token).",
+        "The buyer is a bare wallet (no agent registration). Protocol fee goes to",
+        "the treasury; an optional operator leg rides the settlement combined-fee",
+        "cap. `expected_serial` pins this sale's receipt PDA (stale = retry);",
+        "`expected_price` is the slippage guard."
+      ],
+      "discriminator": [
+        29,
+        214,
+        83,
+        30,
+        102,
+        121,
+        47,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "good",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  111,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "good.seller",
+                "account": "goodsListing"
+              },
+              {
+                "kind": "account",
+                "path": "good.good_id",
+                "account": "goodsListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "saleReceipt",
+          "docs": [
+            "One receipt per sold UNIT: seeded on the serial passed as an argument.",
+            "The `expected_serial == good.sold_count` gate in the handler is",
+            "LOAD-BEARING — without it a buyer could mint a receipt at an arbitrary",
+            "future serial and corrupt the provenance namespace."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  111,
+                  111,
+                  100,
+                  115,
+                  95,
+                  115,
+                  97,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "good"
+              },
+              {
+                "kind": "arg",
+                "path": "expectedSerial"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sellerAgent",
+          "docs": [
+            "Seller's agent registration (payee identity source)"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "seller_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sellerWallet",
+          "writable": true
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "moderationBlock",
+          "docs": [
+            "The moderation BLOCK floor over the listing's CURRENT `metadata_hash` —",
+            "checked at every sale, so a post-listing block (or a blocked hash swapped",
+            "in via update) stops purchases immediately.",
+            ""
+          ]
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "The BUYER — a bare wallet signer; no agent registration required."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "operatorWallet",
+          "docs": [
+            "the listing carries an operator leg (validated in the handler — Anchor",
+            "optional-account constraints don't run when the account is absent)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "priceMint",
+          "optional": true
+        },
+        {
+          "name": "buyerTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "sellerTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "treasuryTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "operatorTokenAccount",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "tokenProgram",
+          "optional": true,
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "expectedSerial",
+          "type": "u64"
+        },
+        {
+          "name": "expectedPrice",
+          "type": "u64"
         }
       ]
     },
@@ -13560,6 +13942,161 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "updateGoodsListing",
+      "docs": [
+        "Batch 4: update a goods listing (seller only): price / active flag /",
+        "metadata (hash+uri together) / tags / operator terms, and RESTOCK via",
+        "additive delta only (never an absolute supply set)."
+      ],
+      "discriminator": [
+        241,
+        254,
+        37,
+        228,
+        78,
+        53,
+        110,
+        40
+      ],
+      "accounts": [
+        {
+          "name": "good",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  111,
+                  111,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "seller"
+              },
+              {
+                "kind": "account",
+                "path": "good.good_id",
+                "account": "goodsListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "seller",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "seller.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "seller"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "price",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "isActive",
+          "type": {
+            "option": "bool"
+          }
+        },
+        {
+          "name": "metadataHash",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        },
+        {
+          "name": "metadataUri",
+          "type": {
+            "option": "string"
+          }
+        },
+        {
+          "name": "tags",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        },
+        {
+          "name": "additionalSupply",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "operator",
+          "type": {
+            "option": "pubkey"
+          }
+        },
+        {
+          "name": "operatorFeeBps",
+          "type": {
+            "option": "u16"
+          }
+        }
+      ]
+    },
+    {
       "name": "updateLaunchControls",
       "docs": [
         "Update emergency launch controls (multisig gated).",
@@ -15337,6 +15874,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "goodsListing",
+      "discriminator": [
+        120,
+        149,
+        179,
+        150,
+        220,
+        115,
+        129,
+        110
+      ]
+    },
+    {
       "name": "governanceConfig",
       "discriminator": [
         81,
@@ -15516,6 +16066,19 @@ export type AgencCoordination = {
         108,
         99,
         212
+      ]
+    },
+    {
+      "name": "saleReceipt",
+      "discriminator": [
+        114,
+        79,
+        236,
+        216,
+        212,
+        117,
+        80,
+        21
       ]
     },
     {
@@ -16168,6 +16731,45 @@ export type AgencCoordination = {
         29,
         111,
         98
+      ]
+    },
+    {
+      "name": "goodPurchased",
+      "discriminator": [
+        232,
+        189,
+        14,
+        234,
+        45,
+        50,
+        89,
+        68
+      ]
+    },
+    {
+      "name": "goodsListingCreated",
+      "discriminator": [
+        140,
+        71,
+        233,
+        54,
+        133,
+        41,
+        64,
+        90
+      ]
+    },
+    {
+      "name": "goodsListingUpdated",
+      "discriminator": [
+        0,
+        112,
+        171,
+        44,
+        121,
+        241,
+        210,
+        34
       ]
     },
     {
@@ -18747,6 +19349,71 @@ export type AgencCoordination = {
       "code": 6340,
       "name": "claimReclaimRequiresNoSubmission",
       "msg": "reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)"
+    },
+    {
+      "code": 6341,
+      "name": "goodsSurfaceNotEnabled",
+      "msg": "Goods market requires surface revision 4 to be stamped (update_launch_controls)"
+    },
+    {
+      "code": 6342,
+      "name": "goodsInvalidId",
+      "msg": "Good id must be non-zero"
+    },
+    {
+      "code": 6343,
+      "name": "goodsInvalidName",
+      "msg": "Good name must be non-zero"
+    },
+    {
+      "code": 6344,
+      "name": "goodsInvalidMetadata",
+      "msg": "Good metadata hash and URI must both be set (hash non-zero, URI non-empty, URI <= 256 bytes)"
+    },
+    {
+      "code": 6345,
+      "name": "goodsPriceBelowMinimum",
+      "msg": "Good price is below the minimum"
+    },
+    {
+      "code": 6346,
+      "name": "goodsInvalidSupply",
+      "msg": "Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0)"
+    },
+    {
+      "code": 6347,
+      "name": "goodsSoldOut",
+      "msg": "Good is sold out"
+    },
+    {
+      "code": 6348,
+      "name": "goodsNotActive",
+      "msg": "Goods listing is not active"
+    },
+    {
+      "code": 6349,
+      "name": "goodsPriceChanged",
+      "msg": "Good price changed since preview; re-read the listing and retry"
+    },
+    {
+      "code": 6350,
+      "name": "goodsSerialStale",
+      "msg": "Stale sale serial: another purchase landed first; re-read sold_count and retry"
+    },
+    {
+      "code": 6351,
+      "name": "goodsSelfPurchase",
+      "msg": "A seller cannot purchase their own good"
+    },
+    {
+      "code": 6352,
+      "name": "goodsUnauthorizedUpdate",
+      "msg": "Only the seller can update a goods listing"
+    },
+    {
+      "code": 6353,
+      "name": "goodsInvalidOperatorTerms",
+      "msg": "Operator and operator_fee_bps must be set together, and the operator may not be the seller"
     }
   ],
   "types": [
@@ -21370,6 +22037,398 @@ export type AgencCoordination = {
               "distributed and the task is Completed)."
             ],
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "goodPurchased",
+      "docs": [
+        "Emitted on every unit sold — the indexer-facing provenance signal.",
+        "Carries the full fee split so the protocol cut is auditable per sale."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "docs": [
+              "Buyer WALLET (bare signer)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "docs": [
+              "Seller's agent PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "serial",
+            "docs": [
+              "This unit's receipt serial (== `sold_count` before the increment)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "metadataHash",
+            "docs": [
+              "Snapshot of the listing's metadata hash at sale time."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "pricePaid",
+            "type": "u64"
+          },
+          {
+            "name": "protocolFee",
+            "type": "u64"
+          },
+          {
+            "name": "operatorFee",
+            "type": "u64"
+          },
+          {
+            "name": "remainingSupply",
+            "docs": [
+              "Units still available after this sale (`total_supply - sold_count`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "goodsListing",
+      "docs": [
+        "A rivalrous goods listing: an agent selling a FINITE, transferable good.",
+        "The good itself is OFF-CHAIN (no NFT — e.g. a row in an app's item ledger,",
+        "pinned by `metadata_hash` + fetchable at `metadata_uri`); on-chain this is",
+        "the payment + provenance + protocol-cut rail. Unlike `SkillRegistration`",
+        "(reproducible: unlimited copies), supply is finite: `sold_count` burns down",
+        "against `total_supply` and each sold unit mints its own `SaleReceipt`.",
+        "",
+        "There is deliberately NO close instruction (skills have none either):",
+        "closing + re-creating the same `good_id` would reset `sold_count` while the",
+        "buyers' receipt PDAs survive at serials `0..N-1`, bricking the re-listed",
+        "good on its first purchase (`init` collision) and aliasing old-run receipts",
+        "into new-run provenance. Soft-delist via `is_active = false`. Any future",
+        "close MUST first add a per-listing-lifetime `generation` discriminator to",
+        "the receipt seeds.",
+        "",
+        "PDA seeds: [\"good\", seller_agent_pda, good_id]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "seller",
+            "docs": [
+              "Seller's agent PDA"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "goodId",
+            "docs": [
+              "Unique good identifier (unique per seller; PDA seed)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "docs": [
+              "Display name"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "metadataHash",
+            "docs": [
+              "Content hash of the off-chain good metadata (also the moderation",
+              "BLOCK-floor key — `require_content_not_blocked` gates create + purchase)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "metadataUri",
+            "docs": [
+              "Where the metadata pinned by `metadata_hash` can be fetched (display:",
+              "name/description/image). Mirrors `ServiceListing.spec_uri`."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "price",
+            "docs": [
+              "Price per unit in lamports (SOL) or token smallest units"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "priceMint",
+            "docs": [
+              "Optional SPL token mint for price denomination (None = SOL)"
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "tags",
+            "docs": [
+              "Tags for discovery (encoded by client)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "initialSupply",
+            "docs": [
+              "Supply at creation (immutable — lets indexers render \"initial N,",
+              "restocked K times\" honestly)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "totalSupply",
+            "docs": [
+              "Current total supply ceiling; grows ONLY via the additive-delta restock",
+              "in `update_goods_listing` (never set absolutely — a set would permit a",
+              "scarcity rug and a `sold_count` underflow)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "soldCount",
+            "docs": [
+              "Units sold; monotonic. Also the next sale's receipt serial.",
+              "Remaining supply = `total_supply - sold_count`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "restockCount",
+            "docs": [
+              "Number of restocks applied (transparency counter)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Operator payee (the embedding site/store); `Pubkey::default()` = no",
+              "operator leg. Mirrors `ServiceListing.operator`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operatorFeeBps",
+            "docs": [
+              "Operator fee in basis points; must be 0 iff `operator` is default.",
+              "Bounded per-leg by `MAX_OPERATOR_FEE_BPS` and at purchase by the",
+              "combined-fee cap (`calculate_combined_fees`)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "isActive",
+            "docs": [
+              "Whether the listing is purchasable (soft delist toggle)"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "createdAt",
+            "docs": [
+              "Creation timestamp"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updatedAt",
+            "docs": [
+              "Last update timestamp"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future use (rating rollups, generation discriminator, …)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                16
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "goodsListingCreated",
+      "docs": [
+        "Emitted when an agent lists a finite good for sale."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "docs": [
+              "Seller's agent PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "goodId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "name",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "metadataHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "priceMint",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "totalSupply",
+            "type": "u64"
+          },
+          {
+            "name": "operator",
+            "docs": [
+              "Operator payee (`Pubkey::default()` = no operator leg)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "operatorFeeBps",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "goodsListingUpdated",
+      "docs": [
+        "Emitted when a seller updates their goods listing (price / active /",
+        "metadata / operator terms / additive restock)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "type": "pubkey"
+          },
+          {
+            "name": "seller",
+            "docs": [
+              "Seller's agent PDA."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "price",
+            "type": "u64"
+          },
+          {
+            "name": "isActive",
+            "type": "bool"
+          },
+          {
+            "name": "totalSupply",
+            "type": "u64"
+          },
+          {
+            "name": "soldCount",
+            "type": "u64"
+          },
+          {
+            "name": "restockCount",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -24050,6 +25109,104 @@ export type AgencCoordination = {
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "saleReceipt",
+      "docs": [
+        "Per-UNIT sale receipt — the provenance witness for one sold good.",
+        "Unlike the skill `PurchaseRecord` (seeded per-buyer: one purchase ever),",
+        "the receipt is seeded on the sale SERIAL so a buyer can buy many units and",
+        "every unit carries its own on-chain record. `metadata_hash` is SNAPSHOTTED",
+        "at sale time so the receipt remains self-contained provenance even if the",
+        "listing's metadata is later updated.",
+        "",
+        "PDA seeds: [\"goods_sale\", listing_pda, serial.to_le_bytes()]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "listing",
+            "docs": [
+              "The goods listing sold from"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "docs": [
+              "Buyer WALLET (bare signer — buyers need no agent registration)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "serial",
+            "docs": [
+              "This unit's index in [0, total_supply) at sale time"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "metadataHash",
+            "docs": [
+              "Snapshot of the listing's `metadata_hash` at the moment of sale"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "pricePaid",
+            "docs": [
+              "Price paid (lamports or token smallest units)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "protocolFee",
+            "docs": [
+              "Protocol fee taken (provenance of the cut)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "operatorFee",
+            "docs": [
+              "Operator fee taken (0 when the listing has no operator leg)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "docs": [
+              "Sale timestamp"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved for future use"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
           }
         ]
       }

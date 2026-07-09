@@ -60,3 +60,7 @@ mod dispute_timing_tests;
 #[cfg(test)]
 #[path = "../fuzz_targets/bid_marketplace.rs"]
 mod bid_marketplace_tests;
+
+#[cfg(test)]
+#[path = "../fuzz_targets/purchase_good.rs"]
+mod purchase_good_tests;

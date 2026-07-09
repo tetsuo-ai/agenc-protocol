@@ -428,9 +428,9 @@ impl Default for ProtocolConfig {
             // (init only runs on dev/devnet/localnet — the mainnet canary config
             // already exists and is brought forward by migrate_protocol). Stamp it
             // to the CURRENT batch revision so a fresh full-surface deploy
-            // advertises every capability without a manual stamp (batch 3: the
-            // default full build now IS the batch-3 contest surface).
-            surface_revision: ProtocolConfig::SURFACE_REVISION_BATCH3,
+            // advertises every capability without a manual stamp (batch 4: the
+            // default full build now IS the batch-4 goods surface).
+            surface_revision: ProtocolConfig::SURFACE_REVISION_BATCH4,
         }
     }
 }
@@ -499,6 +499,18 @@ impl ProtocolConfig {
     /// Monotonic and additive: any revision >= FULL still implies the full
     /// capability set (see `docs/VERSIONING.md` deprecation policy).
     pub const SURFACE_REVISION_BATCH3: u16 = 3;
+
+    /// `surface_revision` value meaning "the batch-4 GOODS surface is live"
+    /// (docs/design/batch-4-goods.md): the rivalrous goods market —
+    /// `create_goods_listing` / `purchase_good` / `update_goods_listing`,
+    /// `GoodsListing` + per-unit `SaleReceipt` accounts, protocol fee +
+    /// optional operator leg on every sale. FIRST ENFORCING USE of the
+    /// revision: every goods handler requires `surface_revision >= 4`
+    /// (`require_goods_enabled`), so stamping 4 turns the market on and
+    /// rolling back to 3 is the coarse kill switch. Monotonic and additive:
+    /// any revision >= FULL still implies the full capability set (see
+    /// `docs/VERSIONING.md` deprecation policy).
+    pub const SURFACE_REVISION_BATCH4: u16 = 4;
 
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
@@ -2465,6 +2477,125 @@ impl PurchaseRecord {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // _reserved
 }
 
+// ============================================================================
+// Goods Market (Batch 4 — docs/design/batch-4-goods.md)
+// ============================================================================
+
+/// A rivalrous goods listing: an agent selling a FINITE, transferable good.
+/// The good itself is OFF-CHAIN (no NFT — e.g. a row in an app's item ledger,
+/// pinned by `metadata_hash` + fetchable at `metadata_uri`); on-chain this is
+/// the payment + provenance + protocol-cut rail. Unlike `SkillRegistration`
+/// (reproducible: unlimited copies), supply is finite: `sold_count` burns down
+/// against `total_supply` and each sold unit mints its own `SaleReceipt`.
+///
+/// There is deliberately NO close instruction (skills have none either):
+/// closing + re-creating the same `good_id` would reset `sold_count` while the
+/// buyers' receipt PDAs survive at serials `0..N-1`, bricking the re-listed
+/// good on its first purchase (`init` collision) and aliasing old-run receipts
+/// into new-run provenance. Soft-delist via `is_active = false`. Any future
+/// close MUST first add a per-listing-lifetime `generation` discriminator to
+/// the receipt seeds.
+///
+/// PDA seeds: ["good", seller_agent_pda, good_id]
+#[account]
+#[derive(InitSpace)]
+pub struct GoodsListing {
+    /// Seller's agent PDA
+    pub seller: Pubkey,
+    /// Unique good identifier (unique per seller; PDA seed)
+    pub good_id: [u8; 32],
+    /// Display name
+    pub name: [u8; 32],
+    /// Content hash of the off-chain good metadata (also the moderation
+    /// BLOCK-floor key — `require_content_not_blocked` gates create + purchase)
+    pub metadata_hash: [u8; 32],
+    /// Where the metadata pinned by `metadata_hash` can be fetched (display:
+    /// name/description/image). Mirrors `ServiceListing.spec_uri`.
+    #[max_len(256)]
+    pub metadata_uri: String,
+    /// Price per unit in lamports (SOL) or token smallest units
+    pub price: u64,
+    /// Optional SPL token mint for price denomination (None = SOL)
+    pub price_mint: Option<Pubkey>,
+    /// Tags for discovery (encoded by client)
+    pub tags: [u8; 64],
+    /// Supply at creation (immutable — lets indexers render "initial N,
+    /// restocked K times" honestly)
+    pub initial_supply: u64,
+    /// Current total supply ceiling; grows ONLY via the additive-delta restock
+    /// in `update_goods_listing` (never set absolutely — a set would permit a
+    /// scarcity rug and a `sold_count` underflow)
+    pub total_supply: u64,
+    /// Units sold; monotonic. Also the next sale's receipt serial.
+    /// Remaining supply = `total_supply - sold_count`.
+    pub sold_count: u64,
+    /// Number of restocks applied (transparency counter)
+    pub restock_count: u16,
+    /// Operator payee (the embedding site/store); `Pubkey::default()` = no
+    /// operator leg. Mirrors `ServiceListing.operator`.
+    pub operator: Pubkey,
+    /// Operator fee in basis points; must be 0 iff `operator` is default.
+    /// Bounded per-leg by `MAX_OPERATOR_FEE_BPS` and at purchase by the
+    /// combined-fee cap (`calculate_combined_fees`).
+    pub operator_fee_bps: u16,
+    /// Whether the listing is purchasable (soft delist toggle)
+    pub is_active: bool,
+    /// Creation timestamp
+    pub created_at: i64,
+    /// Last update timestamp
+    pub updated_at: i64,
+    /// Bump seed
+    pub bump: u8,
+    /// Reserved for future use (rating rollups, generation discriminator, …)
+    pub _reserved: [u8; 16],
+}
+
+impl GoodsListing {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // discriminator
+
+    /// True when the listing carries a live operator leg.
+    pub fn has_operator(&self) -> bool {
+        self.operator != Pubkey::default()
+    }
+}
+
+/// Per-UNIT sale receipt — the provenance witness for one sold good.
+/// Unlike the skill `PurchaseRecord` (seeded per-buyer: one purchase ever),
+/// the receipt is seeded on the sale SERIAL so a buyer can buy many units and
+/// every unit carries its own on-chain record. `metadata_hash` is SNAPSHOTTED
+/// at sale time so the receipt remains self-contained provenance even if the
+/// listing's metadata is later updated.
+///
+/// PDA seeds: ["goods_sale", listing_pda, serial.to_le_bytes()]
+#[account]
+#[derive(InitSpace)]
+pub struct SaleReceipt {
+    /// The goods listing sold from
+    pub listing: Pubkey,
+    /// Buyer WALLET (bare signer — buyers need no agent registration)
+    pub buyer: Pubkey,
+    /// This unit's index in [0, total_supply) at sale time
+    pub serial: u64,
+    /// Snapshot of the listing's `metadata_hash` at the moment of sale
+    pub metadata_hash: [u8; 32],
+    /// Price paid (lamports or token smallest units)
+    pub price_paid: u64,
+    /// Protocol fee taken (provenance of the cut)
+    pub protocol_fee: u64,
+    /// Operator fee taken (0 when the listing has no operator leg)
+    pub operator_fee: u64,
+    /// Sale timestamp
+    pub timestamp: i64,
+    /// Bump seed
+    pub bump: u8,
+    /// Reserved for future use
+    pub _reserved: [u8; 8],
+}
+
+impl SaleReceipt {
+    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // discriminator
+}
+
 /// Agent feed post (content hash stored on-chain, content on IPFS)
 /// PDA seeds: ["post", author_agent_pda, nonce]
 #[account]
@@ -3287,13 +3418,15 @@ mod tests {
         let config = ProtocolConfig::default();
         assert_eq!(
             config.surface_revision,
-            ProtocolConfig::SURFACE_REVISION_BATCH3
+            ProtocolConfig::SURFACE_REVISION_BATCH4
         );
         assert_eq!(ProtocolConfig::SURFACE_REVISION_FULL, 1);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH2, 2);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH3, 3);
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH4, 4);
         assert!(ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL);
         assert!(ProtocolConfig::SURFACE_REVISION_BATCH3 > ProtocolConfig::SURFACE_REVISION_BATCH2);
+        assert!(ProtocolConfig::SURFACE_REVISION_BATCH4 > ProtocolConfig::SURFACE_REVISION_BATCH3);
     }
 
     #[test]

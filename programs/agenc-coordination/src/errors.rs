@@ -1023,4 +1023,35 @@ pub enum CoordinationError {
     ClaimReclaimRequiresTerminalTask,
     #[msg("reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)")]
     ClaimReclaimRequiresNoSubmission,
+
+    // === Batch 4 GOODS (appended — never reorder/delete): the rivalrous goods
+    //     market (docs/design/batch-4-goods.md) ===
+    #[msg("Goods market requires surface revision 4 to be stamped (update_launch_controls)")]
+    GoodsSurfaceNotEnabled,
+    #[msg("Good id must be non-zero")]
+    GoodsInvalidId,
+    #[msg("Good name must be non-zero")]
+    GoodsInvalidName,
+    #[msg("Good metadata hash and URI must both be set (hash non-zero, URI non-empty, URI <= 256 bytes)")]
+    GoodsInvalidMetadata,
+    #[msg("Good price is below the minimum")]
+    GoodsPriceBelowMinimum,
+    #[msg("Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0)")]
+    GoodsInvalidSupply,
+    #[msg("Good is sold out")]
+    GoodsSoldOut,
+    #[msg("Goods listing is not active")]
+    GoodsNotActive,
+    #[msg("Good price changed since preview; re-read the listing and retry")]
+    GoodsPriceChanged,
+    #[msg("Stale sale serial: another purchase landed first; re-read sold_count and retry")]
+    GoodsSerialStale,
+    #[msg("A seller cannot purchase their own good")]
+    GoodsSelfPurchase,
+    #[msg("Only the seller can update a goods listing")]
+    GoodsUnauthorizedUpdate,
+    #[msg("Operator and operator_fee_bps must be set together, and the operator may not be the seller")]
+    GoodsInvalidOperatorTerms,
+    // NOTE: goods purchase reuses the existing `MissingOperatorAccount` variant
+    // (defined in the batch-2 hire path) for a missing/mismatched operator payee.
 }

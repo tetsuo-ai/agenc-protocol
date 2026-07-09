@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**341 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**354 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -352,3 +352,16 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6338 | 0x18c2 | `ContestForfeitTreasuryRequired` | Contest no-show forfeit requires the protocol treasury account |
 | 6339 | 0x18c3 | `ClaimReclaimRequiresTerminalTask` | reclaim_terminal_claim requires a terminal (Completed/Cancelled) task |
 | 6340 | 0x18c4 | `ClaimReclaimRequiresNoSubmission` | reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim) |
+| 6341 | 0x18c5 | `GoodsSurfaceNotEnabled` | Goods market requires surface revision 4 to be stamped (update_launch_controls) |
+| 6342 | 0x18c6 | `GoodsInvalidId` | Good id must be non-zero |
+| 6343 | 0x18c7 | `GoodsInvalidName` | Good name must be non-zero |
+| 6344 | 0x18c8 | `GoodsInvalidMetadata` | Good metadata hash and URI must both be set (hash non-zero, URI non-empty, URI <= 256 bytes) |
+| 6345 | 0x18c9 | `GoodsPriceBelowMinimum` | Good price is below the minimum |
+| 6346 | 0x18ca | `GoodsInvalidSupply` | Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0) |
+| 6347 | 0x18cb | `GoodsSoldOut` | Good is sold out |
+| 6348 | 0x18cc | `GoodsNotActive` | Goods listing is not active |
+| 6349 | 0x18cd | `GoodsPriceChanged` | Good price changed since preview; re-read the listing and retry |
+| 6350 | 0x18ce | `GoodsSerialStale` | Stale sale serial: another purchase landed first; re-read sold_count and retry |
+| 6351 | 0x18cf | `GoodsSelfPurchase` | A seller cannot purchase their own good |
+| 6352 | 0x18d0 | `GoodsUnauthorizedUpdate` | Only the seller can update a goods listing |
+| 6353 | 0x18d1 | `GoodsInvalidOperatorTerms` | Operator and operator_fee_bps must be set together, and the operator may not be the seller |
