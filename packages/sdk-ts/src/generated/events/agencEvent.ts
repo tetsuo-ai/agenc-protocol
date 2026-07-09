@@ -143,6 +143,18 @@ import {
   type GhostShareDistributedEventData,
 } from "./ghostShareDistributed";
 import {
+  getGoodPurchasedEventDecoder,
+  type GoodPurchasedEventData,
+} from "./goodPurchased";
+import {
+  getGoodsListingCreatedEventDecoder,
+  type GoodsListingCreatedEventData,
+} from "./goodsListingCreated";
+import {
+  getGoodsListingUpdatedEventDecoder,
+  type GoodsListingUpdatedEventData,
+} from "./goodsListingUpdated";
+import {
   getGovernanceInitializedEventDecoder,
   type GovernanceInitializedEventData,
 } from "./governanceInitialized";
@@ -457,6 +469,9 @@ export type AgencEvent =
   | { eventName: "DisputeResolverAssigned"; data: DisputeResolverAssignedEventData }
   | { eventName: "DisputeResolverRevoked"; data: DisputeResolverRevokedEventData }
   | { eventName: "GhostShareDistributed"; data: GhostShareDistributedEventData }
+  | { eventName: "GoodPurchased"; data: GoodPurchasedEventData }
+  | { eventName: "GoodsListingCreated"; data: GoodsListingCreatedEventData }
+  | { eventName: "GoodsListingUpdated"; data: GoodsListingUpdatedEventData }
   | { eventName: "GovernanceInitialized"; data: GovernanceInitializedEventData }
   | { eventName: "GovernanceVoteCast"; data: GovernanceVoteCastEventData }
   | { eventName: "LaunchControlsUpdated"; data: LaunchControlsUpdatedEventData }
@@ -781,6 +796,27 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "GhostShareDistributed",
       data: getGhostShareDistributedEventDecoder().decode(payload),
+    }),
+  },
+  "e8bd0eea2d325944": {
+    eventName: "GoodPurchased",
+    decode: (payload) => ({
+      eventName: "GoodPurchased",
+      data: getGoodPurchasedEventDecoder().decode(payload),
+    }),
+  },
+  "8c47e9368529405a": {
+    eventName: "GoodsListingCreated",
+    decode: (payload) => ({
+      eventName: "GoodsListingCreated",
+      data: getGoodsListingCreatedEventDecoder().decode(payload),
+    }),
+  },
+  "0070ab2c79f1d222": {
+    eventName: "GoodsListingUpdated",
+    decode: (payload) => ({
+      eventName: "GoodsListingUpdated",
+      data: getGoodsListingUpdatedEventDecoder().decode(payload),
     }),
   },
   "29bb671a2a2c1e0f": {

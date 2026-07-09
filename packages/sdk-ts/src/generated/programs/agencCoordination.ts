@@ -48,6 +48,7 @@ import {
   getDisputeResolverCodec,
   getFeedPostCodec,
   getFeedVoteCodec,
+  getGoodsListingCodec,
   getGovernanceConfigCodec,
   getGovernanceVoteCodec,
   getHireRatingCodec,
@@ -62,6 +63,7 @@ import {
   getPurchaseRecordCodec,
   getReputationDelegationCodec,
   getReputationStakeCodec,
+  getSaleReceiptCodec,
   getServiceListingCodec,
   getSkillRatingCodec,
   getSkillRegistrationCodec,
@@ -106,6 +108,8 @@ import {
   type FeedPostArgs,
   type FeedVote,
   type FeedVoteArgs,
+  type GoodsListing,
+  type GoodsListingArgs,
   type GovernanceConfig,
   type GovernanceConfigArgs,
   type GovernanceVote,
@@ -134,6 +138,8 @@ import {
   type ReputationDelegationArgs,
   type ReputationStake,
   type ReputationStakeArgs,
+  type SaleReceipt,
+  type SaleReceiptArgs,
   type ServiceListing,
   type ServiceListingArgs,
   type SkillRating,
@@ -190,6 +196,7 @@ import {
   getConfigureTaskValidationInstructionAsync,
   getCreateBidInstructionAsync,
   getCreateDependentTaskInstructionAsync,
+  getCreateGoodsListingInstructionAsync,
   getCreateProposalInstructionAsync,
   getCreateServiceListingInstructionAsync,
   getCreateTaskHumanlessInstructionAsync,
@@ -216,6 +223,7 @@ import {
   getModerationHeartbeatInstructionAsync,
   getPostCompletionBondInstructionAsync,
   getPostToFeedInstructionAsync,
+  getPurchaseGoodInstructionAsync,
   getPurchaseSkillInstructionAsync,
   getRateHireInstructionAsync,
   getRateSkillInstructionAsync,
@@ -249,6 +257,7 @@ import {
   getUpdateAgentInstruction,
   getUpdateBidInstructionAsync,
   getUpdateBidMarketplaceConfigInstructionAsync,
+  getUpdateGoodsListingInstructionAsync,
   getUpdateLaunchControlsInstructionAsync,
   getUpdateMinVersionInstructionAsync,
   getUpdateMultisigInstructionAsync,
@@ -286,6 +295,7 @@ import {
   parseConfigureTaskValidationInstruction,
   parseCreateBidInstruction,
   parseCreateDependentTaskInstruction,
+  parseCreateGoodsListingInstruction,
   parseCreateProposalInstruction,
   parseCreateServiceListingInstruction,
   parseCreateTaskHumanlessInstruction,
@@ -312,6 +322,7 @@ import {
   parseModerationHeartbeatInstruction,
   parsePostCompletionBondInstruction,
   parsePostToFeedInstruction,
+  parsePurchaseGoodInstruction,
   parsePurchaseSkillInstruction,
   parseRateHireInstruction,
   parseRateSkillInstruction,
@@ -345,6 +356,7 @@ import {
   parseUpdateAgentInstruction,
   parseUpdateBidInstruction,
   parseUpdateBidMarketplaceConfigInstruction,
+  parseUpdateGoodsListingInstruction,
   parseUpdateLaunchControlsInstruction,
   parseUpdateMinVersionInstruction,
   parseUpdateMultisigInstruction,
@@ -382,6 +394,7 @@ import {
   type ConfigureTaskValidationAsyncInput,
   type CreateBidAsyncInput,
   type CreateDependentTaskAsyncInput,
+  type CreateGoodsListingAsyncInput,
   type CreateProposalAsyncInput,
   type CreateServiceListingAsyncInput,
   type CreateTaskAsyncInput,
@@ -428,6 +441,7 @@ import {
   type ParsedConfigureTaskValidationInstruction,
   type ParsedCreateBidInstruction,
   type ParsedCreateDependentTaskInstruction,
+  type ParsedCreateGoodsListingInstruction,
   type ParsedCreateProposalInstruction,
   type ParsedCreateServiceListingInstruction,
   type ParsedCreateTaskHumanlessInstruction,
@@ -454,6 +468,7 @@ import {
   type ParsedModerationHeartbeatInstruction,
   type ParsedPostCompletionBondInstruction,
   type ParsedPostToFeedInstruction,
+  type ParsedPurchaseGoodInstruction,
   type ParsedPurchaseSkillInstruction,
   type ParsedRateHireInstruction,
   type ParsedRateSkillInstruction,
@@ -487,6 +502,7 @@ import {
   type ParsedUpdateAgentInstruction,
   type ParsedUpdateBidInstruction,
   type ParsedUpdateBidMarketplaceConfigInstruction,
+  type ParsedUpdateGoodsListingInstruction,
   type ParsedUpdateLaunchControlsInstruction,
   type ParsedUpdateMinVersionInstruction,
   type ParsedUpdateMultisigInstruction,
@@ -504,6 +520,7 @@ import {
   type ParsedWithdrawReputationStakeInstruction,
   type PostCompletionBondAsyncInput,
   type PostToFeedAsyncInput,
+  type PurchaseGoodAsyncInput,
   type PurchaseSkillAsyncInput,
   type RateHireAsyncInput,
   type RateSkillAsyncInput,
@@ -537,6 +554,7 @@ import {
   type UpdateAgentInput,
   type UpdateBidAsyncInput,
   type UpdateBidMarketplaceConfigAsyncInput,
+  type UpdateGoodsListingAsyncInput,
   type UpdateLaunchControlsAsyncInput,
   type UpdateMinVersionAsyncInput,
   type UpdateMultisigAsyncInput,
@@ -574,6 +592,7 @@ import {
   findDisputeResolverPda,
   findEscrowPda,
   findExpireClaimAgentStatsPda,
+  findGoodPda,
   findGovernanceConfigPda,
   findHireRatingPda,
   findHireRecordPda,
@@ -591,6 +610,7 @@ import {
   findRatingAccountPda,
   findRecordListingModerationModerationAttestorPda,
   findReputationStakePda,
+  findSaleReceiptPda,
   findSkillPda,
   findStatePda,
   findStorePda,
@@ -625,6 +645,7 @@ export enum AgencCoordinationAccount {
   DisputeResolver,
   FeedPost,
   FeedVote,
+  GoodsListing,
   GovernanceConfig,
   GovernanceVote,
   HireRating,
@@ -639,6 +660,7 @@ export enum AgencCoordinationAccount {
   PurchaseRecord,
   ReputationDelegation,
   ReputationStake,
+  SaleReceipt,
   ServiceListing,
   SkillRating,
   SkillRegistration,
@@ -819,6 +841,17 @@ export function identifyAgencCoordinationAccount(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([120, 149, 179, 150, 220, 115, 129, 110]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.GoodsListing;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([81, 63, 124, 107, 210, 100, 145, 70]),
       ),
       0,
@@ -968,6 +1001,17 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.ReputationStake;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([114, 79, 236, 216, 212, 117, 80, 21]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationAccount.SaleReceipt;
   }
   if (
     containsBytes(
@@ -1174,6 +1218,7 @@ export enum AgencCoordinationInstruction {
   ConfigureTaskValidation,
   CreateBid,
   CreateDependentTask,
+  CreateGoodsListing,
   CreateProposal,
   CreateServiceListing,
   CreateTask,
@@ -1200,6 +1245,7 @@ export enum AgencCoordinationInstruction {
   ModerationHeartbeat,
   PostCompletionBond,
   PostToFeed,
+  PurchaseGood,
   PurchaseSkill,
   RateHire,
   RateSkill,
@@ -1233,6 +1279,7 @@ export enum AgencCoordinationInstruction {
   UpdateAgent,
   UpdateBid,
   UpdateBidMarketplaceConfig,
+  UpdateGoodsListing,
   UpdateLaunchControls,
   UpdateMinVersion,
   UpdateMultisig,
@@ -1495,6 +1542,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.CreateDependentTask;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([47, 95, 35, 219, 15, 80, 134, 20]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.CreateGoodsListing;
   }
   if (
     containsBytes(
@@ -1781,6 +1839,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.PostToFeed;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([29, 214, 83, 30, 102, 121, 47, 92]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.PurchaseGood;
   }
   if (
     containsBytes(
@@ -2149,6 +2218,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([241, 254, 37, 228, 78, 53, 110, 40]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.UpdateGoodsListing;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([156, 19, 63, 86, 117, 245, 196, 182]),
       ),
       0,
@@ -2386,6 +2466,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.CreateDependentTask;
     } & ParsedCreateDependentTaskInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.CreateGoodsListing;
+    } & ParsedCreateGoodsListingInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.CreateProposal;
     } & ParsedCreateProposalInstruction<TProgram>)
   | ({
@@ -2463,6 +2546,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.PostToFeed;
     } & ParsedPostToFeedInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.PurchaseGood;
+    } & ParsedPurchaseGoodInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.PurchaseSkill;
     } & ParsedPurchaseSkillInstruction<TProgram>)
@@ -2562,6 +2648,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.UpdateBidMarketplaceConfig;
     } & ParsedUpdateBidMarketplaceConfigInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.UpdateGoodsListing;
+    } & ParsedUpdateGoodsListingInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.UpdateLaunchControls;
     } & ParsedUpdateLaunchControlsInstruction<TProgram>)
@@ -2767,6 +2856,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseCreateDependentTaskInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.CreateGoodsListing: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.CreateGoodsListing,
+        ...parseCreateGoodsListingInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.CreateProposal: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2947,6 +3043,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.PostToFeed,
         ...parsePostToFeedInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.PurchaseGood: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.PurchaseGood,
+        ...parsePurchaseGoodInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.PurchaseSkill: {
@@ -3182,6 +3285,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseUpdateBidMarketplaceConfigInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.UpdateGoodsListing: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.UpdateGoodsListing,
+        ...parseUpdateGoodsListingInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.UpdateLaunchControls: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3333,6 +3443,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<FeedPostArgs, FeedPost>;
   feedVote: ReturnType<typeof getFeedVoteCodec> &
     SelfFetchFunctions<FeedVoteArgs, FeedVote>;
+  goodsListing: ReturnType<typeof getGoodsListingCodec> &
+    SelfFetchFunctions<GoodsListingArgs, GoodsListing>;
   governanceConfig: ReturnType<typeof getGovernanceConfigCodec> &
     SelfFetchFunctions<GovernanceConfigArgs, GovernanceConfig>;
   governanceVote: ReturnType<typeof getGovernanceVoteCodec> &
@@ -3361,6 +3473,8 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<ReputationDelegationArgs, ReputationDelegation>;
   reputationStake: ReturnType<typeof getReputationStakeCodec> &
     SelfFetchFunctions<ReputationStakeArgs, ReputationStake>;
+  saleReceipt: ReturnType<typeof getSaleReceiptCodec> &
+    SelfFetchFunctions<SaleReceiptArgs, SaleReceipt>;
   serviceListing: ReturnType<typeof getServiceListingCodec> &
     SelfFetchFunctions<ServiceListingArgs, ServiceListing>;
   skillRating: ReturnType<typeof getSkillRatingCodec> &
@@ -3483,6 +3597,10 @@ export type AgencCoordinationPluginInstructions = {
     input: CreateDependentTaskAsyncInput,
   ) => ReturnType<typeof getCreateDependentTaskInstructionAsync> &
     SelfPlanAndSendFunctions;
+  createGoodsListing: (
+    input: CreateGoodsListingAsyncInput,
+  ) => ReturnType<typeof getCreateGoodsListingInstructionAsync> &
+    SelfPlanAndSendFunctions;
   createProposal: (
     input: CreateProposalAsyncInput,
   ) => ReturnType<typeof getCreateProposalInstructionAsync> &
@@ -3585,6 +3703,10 @@ export type AgencCoordinationPluginInstructions = {
   postToFeed: (
     input: PostToFeedAsyncInput,
   ) => ReturnType<typeof getPostToFeedInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  purchaseGood: (
+    input: PurchaseGoodAsyncInput,
+  ) => ReturnType<typeof getPurchaseGoodInstructionAsync> &
     SelfPlanAndSendFunctions;
   purchaseSkill: (
     input: PurchaseSkillAsyncInput,
@@ -3717,6 +3839,10 @@ export type AgencCoordinationPluginInstructions = {
     input: UpdateBidMarketplaceConfigAsyncInput,
   ) => ReturnType<typeof getUpdateBidMarketplaceConfigInstructionAsync> &
     SelfPlanAndSendFunctions;
+  updateGoodsListing: (
+    input: UpdateGoodsListingAsyncInput,
+  ) => ReturnType<typeof getUpdateGoodsListingInstructionAsync> &
+    SelfPlanAndSendFunctions;
   updateLaunchControls: (
     input: UpdateLaunchControlsAsyncInput,
   ) => ReturnType<typeof getUpdateLaunchControlsInstructionAsync> &
@@ -3804,6 +3930,7 @@ export type AgencCoordinationPluginPdas = {
   bidMarketplace: typeof findBidMarketplacePda;
   task: typeof findTaskPda;
   authorityRateLimit: typeof findAuthorityRateLimitPda;
+  good: typeof findGoodPda;
   proposal: typeof findProposalPda;
   governanceConfig: typeof findGovernanceConfigPda;
   listing: typeof findListingPda;
@@ -3814,6 +3941,7 @@ export type AgencCoordinationPluginPdas = {
   dispute: typeof findDisputePda;
   initiatorClaim: typeof findInitiatorClaimPda;
   post: typeof findPostPda;
+  saleReceipt: typeof findSaleReceiptPda;
   purchaseRecord: typeof findPurchaseRecordPda;
   hireRating: typeof findHireRatingPda;
   ratingAccount: typeof findRatingAccountPda;
@@ -3890,6 +4018,7 @@ export function agencCoordinationProgram() {
           ),
           feedPost: addSelfFetchFunctions(client, getFeedPostCodec()),
           feedVote: addSelfFetchFunctions(client, getFeedVoteCodec()),
+          goodsListing: addSelfFetchFunctions(client, getGoodsListingCodec()),
           governanceConfig: addSelfFetchFunctions(
             client,
             getGovernanceConfigCodec(),
@@ -3937,6 +4066,7 @@ export function agencCoordinationProgram() {
             client,
             getReputationStakeCodec(),
           ),
+          saleReceipt: addSelfFetchFunctions(client, getSaleReceiptCodec()),
           serviceListing: addSelfFetchFunctions(
             client,
             getServiceListingCodec(),
@@ -4086,6 +4216,11 @@ export function agencCoordinationProgram() {
               client,
               getCreateDependentTaskInstructionAsync(input),
             ),
+          createGoodsListing: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getCreateGoodsListingInstructionAsync(input),
+            ),
           createProposal: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4221,6 +4356,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getPostToFeedInstructionAsync(input),
+            ),
+          purchaseGood: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getPurchaseGoodInstructionAsync(input),
             ),
           purchaseSkill: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4387,6 +4527,11 @@ export function agencCoordinationProgram() {
               client,
               getUpdateBidMarketplaceConfigInstructionAsync(input),
             ),
+          updateGoodsListing: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getUpdateGoodsListingInstructionAsync(input),
+            ),
           updateLaunchControls: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4489,6 +4634,7 @@ export function agencCoordinationProgram() {
           bidMarketplace: findBidMarketplacePda,
           task: findTaskPda,
           authorityRateLimit: findAuthorityRateLimitPda,
+          good: findGoodPda,
           proposal: findProposalPda,
           governanceConfig: findGovernanceConfigPda,
           listing: findListingPda,
@@ -4500,6 +4646,7 @@ export function agencCoordinationProgram() {
           dispute: findDisputePda,
           initiatorClaim: findInitiatorClaimPda,
           post: findPostPda,
+          saleReceipt: findSaleReceiptPda,
           purchaseRecord: findPurchaseRecordPda,
           hireRating: findHireRatingPda,
           ratingAccount: findRatingAccountPda,

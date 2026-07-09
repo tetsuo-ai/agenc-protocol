@@ -114,7 +114,26 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     expect(caps.skills).toBe(true);
     expect(caps.reputation).toBe(true);
     expect(caps.bids).toBe(true);
+    // goods is revision-GATED (batch 4): NOT implied by the full surface at
+    // revision 1 — it needs surface_revision >= 4.
+    expect(caps.goods).toBe(false);
     expect(caps.surfaceRevision).toBe(SURFACE_REVISION_FULL);
+  });
+
+  it("goods capability is gated on surface_revision >= 4 (batch 4)", () => {
+    // Every revision below 4 leaves goods off, even though the rest of the full
+    // surface is on from revision 1.
+    for (const rev of [0, 1, 2, 3]) {
+      const caps = capabilitiesForRevision(rev);
+      expect(caps.goods).toBe(false);
+    }
+    // Revision 4 turns goods on; higher revisions keep it on (monotonic).
+    expect(capabilitiesForRevision(4).goods).toBe(true);
+    expect(capabilitiesForRevision(4).fullSurface).toBe(true);
+    expect(capabilitiesForRevision(7).goods).toBe(true);
+    // assertCapability throws below 4 and passes at/above.
+    expect(() => assertCapability(capabilitiesForRevision(3), "goods")).toThrow();
+    expect(() => assertCapability(capabilitiesForRevision(4), "goods")).not.toThrow();
   });
 });
 
