@@ -1,5 +1,26 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.11.0
+
+### Minor Changes
+
+- 097ded1: Batch 4 — GOODS market: a rivalrous "agents sell finite goods" primitive.
+
+  Adds three instructions (`create_goods_listing`, `purchase_good`,
+  `update_goods_listing`), two account types (`GoodsListing`, per-unit
+  `SaleReceipt`), and three events (`GoodsListingCreated`, `GoodPurchased`,
+  `GoodsListingUpdated`) — a DIRECT-BUY market (no moderation lifecycle, no
+  fulfillment): the seller lists a finite good with a supply + optional operator
+  fee leg, a bare-wallet buyer purchases one unit, the protocol takes its cut to
+  the treasury, and each sale mints an on-chain provenance receipt. The good
+  itself is off-chain (no NFT). Gated on `surface_revision >= 4`.
+
+  SDK: a `facade.goods` module (`createGoodsListing` / `purchaseGood` /
+  `updateGoodsListing`) over the generated client, and a new revision-gated
+  `goods` capability on `CapabilitySet` (`goods: surfaceRevision >= 4`) —
+  `assertCapability(surface, 'goods')` throws below revision 4. Additive: no
+  migration.
+
 ## 0.10.1
 
 ### Patch Changes (decoder hardening, no wire change)
@@ -181,7 +202,7 @@
   and default the optional roster slot to None on the global-authority path.
 - `record_task_moderation` / `record_listing_moderation` write v2
   moderator-keyed record seeds (`["task_moderation_v2", task, hash,
-  moderator]` + the listing mirror) so each attestor owns an exclusive record
+moderator]` + the listing mirror) so each attestor owns an exclusive record
   slot; account order changed. Pre-upgrade records stay consumable through a
   grace window via the new `facade.findLegacyTaskModerationPda` /
   `facade.findLegacyListingModerationPda` and the gates' explicit record
