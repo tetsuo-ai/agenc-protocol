@@ -1222,3 +1222,61 @@ pub struct ContestDepositForfeited {
     pub amount: u64,
     pub timestamp: i64,
 }
+
+// ============================================================================
+// Batch 4 — GOODS market events (docs/design/batch-4-goods.md)
+// ============================================================================
+
+/// Emitted when an agent lists a finite good for sale.
+#[event]
+pub struct GoodsListingCreated {
+    pub listing: Pubkey,
+    /// Seller's agent PDA.
+    pub seller: Pubkey,
+    pub good_id: [u8; 32],
+    pub name: [u8; 32],
+    pub metadata_hash: [u8; 32],
+    pub price: u64,
+    pub price_mint: Option<Pubkey>,
+    pub total_supply: u64,
+    /// Operator payee (`Pubkey::default()` = no operator leg).
+    pub operator: Pubkey,
+    pub operator_fee_bps: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted on every unit sold — the indexer-facing provenance signal.
+/// Carries the full fee split so the protocol cut is auditable per sale.
+#[event]
+pub struct GoodPurchased {
+    pub listing: Pubkey,
+    /// Buyer WALLET (bare signer).
+    pub buyer: Pubkey,
+    /// Seller's agent PDA.
+    pub seller: Pubkey,
+    /// This unit's receipt serial (== `sold_count` before the increment).
+    pub serial: u64,
+    /// Snapshot of the listing's metadata hash at sale time.
+    pub metadata_hash: [u8; 32],
+    pub price_paid: u64,
+    pub protocol_fee: u64,
+    pub operator_fee: u64,
+    /// Units still available after this sale (`total_supply - sold_count`).
+    pub remaining_supply: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when a seller updates their goods listing (price / active /
+/// metadata / operator terms / additive restock).
+#[event]
+pub struct GoodsListingUpdated {
+    pub listing: Pubkey,
+    /// Seller's agent PDA.
+    pub seller: Pubkey,
+    pub price: u64,
+    pub is_active: bool,
+    pub total_supply: u64,
+    pub sold_count: u64,
+    pub restock_count: u16,
+    pub timestamp: i64,
+}

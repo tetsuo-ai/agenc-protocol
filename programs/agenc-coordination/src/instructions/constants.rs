@@ -87,6 +87,11 @@ pub const MIN_DELEGATION_AMOUNT: u16 = 100;
 /// Minimum skill price in lamports to prevent free sybil rating attacks (~$0.0002)
 pub const MIN_SKILL_PRICE: u64 = 1_000;
 
+/// Batch 4: minimum goods price in lamports — same floor + rationale as
+/// `MIN_SKILL_PRICE` (free purchases would make receipt/serial spam and any
+/// future receipt-gated rating free to sybil).
+pub const MIN_GOOD_PRICE: u64 = 1_000;
+
 /// Minimum duration a delegation must be active before revocation (7 days in seconds)
 pub const MIN_DELEGATION_DURATION: i64 = 604_800;
 

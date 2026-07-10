@@ -1303,6 +1303,83 @@ pub mod agenc_coordination {
         instructions::purchase_skill::handler(ctx, expected_price)
     }
 
+    /// Batch 4 (docs/design/batch-4-goods.md): list a FINITE, transferable good.
+    /// Seller must be an active agent. The good itself is off-chain; the listing
+    /// is the payment + provenance + protocol-cut rail. Requires the batch-4
+    /// surface stamp (`surface_revision >= 4`).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_goods_listing(
+        ctx: Context<CreateGoodsListing>,
+        good_id: [u8; 32],
+        name: [u8; 32],
+        metadata_hash: [u8; 32],
+        metadata_uri: String,
+        price: u64,
+        price_mint: Option<Pubkey>,
+        tags: [u8; 64],
+        total_supply: u64,
+        operator: Pubkey,
+        operator_fee_bps: u16,
+    ) -> Result<()> {
+        instructions::create_goods_listing::handler(
+            ctx,
+            good_id,
+            name,
+            metadata_hash,
+            metadata_uri,
+            price,
+            price_mint,
+            tags,
+            total_supply,
+            operator,
+            operator_fee_bps,
+        )
+    }
+
+    /// Batch 4: purchase ONE unit of a finite good (SOL or SPL token).
+    /// The buyer is a bare wallet (no agent registration). Protocol fee goes to
+    /// the treasury; an optional operator leg rides the settlement combined-fee
+    /// cap. `expected_serial` pins this sale's receipt PDA (stale = retry);
+    /// `expected_price` is the slippage guard.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn purchase_good(
+        ctx: Context<PurchaseGood>,
+        expected_serial: u64,
+        expected_price: u64,
+    ) -> Result<()> {
+        instructions::purchase_good::handler(ctx, expected_serial, expected_price)
+    }
+
+    /// Batch 4: update a goods listing (seller only): price / active flag /
+    /// metadata (hash+uri together) / tags / operator terms, and RESTOCK via
+    /// additive delta only (never an absolute supply set).
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_goods_listing(
+        ctx: Context<UpdateGoodsListing>,
+        price: Option<u64>,
+        is_active: Option<bool>,
+        metadata_hash: Option<[u8; 32]>,
+        metadata_uri: Option<String>,
+        tags: Option<[u8; 64]>,
+        additional_supply: Option<u64>,
+        operator: Option<Pubkey>,
+        operator_fee_bps: Option<u16>,
+    ) -> Result<()> {
+        instructions::update_goods_listing::handler(
+            ctx,
+            price,
+            is_active,
+            metadata_hash,
+            metadata_uri,
+            tags,
+            additional_supply,
+            operator,
+            operator_fee_bps,
+        )
+    }
+
     /// Post to the agent feed.
     /// Author must be an active agent. Content is stored on IPFS, hash on-chain.
     #[cfg(not(feature = "mainnet-canary"))]

@@ -33,9 +33,16 @@ pub struct UpdateLaunchControls<'info> {
 /// deploy → migrate → stamp choreography.
 ///
 /// Allowed `surface_revision` values: `0` (unstamped / conservative),
-/// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`, or `SURFACE_REVISION_BATCH3`.
-/// Unknown values are
+/// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`, `SURFACE_REVISION_BATCH3`,
+/// or `SURFACE_REVISION_BATCH4`. Unknown values are
 /// rejected so an operator cannot stamp a surface the SDK does not understand.
+///
+/// BATCH-4 NOTE: stamping `SURFACE_REVISION_BATCH4` is ENFORCING, not advisory —
+/// it turns the goods market on (`require_goods_enabled` gates every goods
+/// handler); rolling back to `SURFACE_REVISION_BATCH3` is the coarse kill switch.
+/// CEREMONY HAZARD: this instruction rewrites ALL THREE fields — every stamp
+/// call must fetch the live config and re-pass the live `protocol_paused` +
+/// `disabled_task_type_mask` or it will silently reset them.
 pub fn handler(
     ctx: Context<UpdateLaunchControls>,
     protocol_paused: bool,

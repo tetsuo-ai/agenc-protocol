@@ -696,6 +696,32 @@ export const AGENC_COORDINATION_ERROR__CONTEST_FORFEIT_TREASURY_REQUIRED = 0x18c
 export const AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK = 0x18c3; // 6339
 /** ClaimReclaimRequiresNoSubmission: reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim) */
 export const AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION = 0x18c4; // 6340
+/** GoodsSurfaceNotEnabled: Goods market requires surface revision 4 to be stamped (update_launch_controls) */
+export const AGENC_COORDINATION_ERROR__GOODS_SURFACE_NOT_ENABLED = 0x18c5; // 6341
+/** GoodsInvalidId: Good id must be non-zero */
+export const AGENC_COORDINATION_ERROR__GOODS_INVALID_ID = 0x18c6; // 6342
+/** GoodsInvalidName: Good name must be non-zero */
+export const AGENC_COORDINATION_ERROR__GOODS_INVALID_NAME = 0x18c7; // 6343
+/** GoodsInvalidMetadata: Good metadata hash and URI must both be set (hash non-zero, URI non-empty, URI <= 256 bytes) */
+export const AGENC_COORDINATION_ERROR__GOODS_INVALID_METADATA = 0x18c8; // 6344
+/** GoodsPriceBelowMinimum: Good price is below the minimum */
+export const AGENC_COORDINATION_ERROR__GOODS_PRICE_BELOW_MINIMUM = 0x18c9; // 6345
+/** GoodsInvalidSupply: Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0) */
+export const AGENC_COORDINATION_ERROR__GOODS_INVALID_SUPPLY = 0x18ca; // 6346
+/** GoodsSoldOut: Good is sold out */
+export const AGENC_COORDINATION_ERROR__GOODS_SOLD_OUT = 0x18cb; // 6347
+/** GoodsNotActive: Goods listing is not active */
+export const AGENC_COORDINATION_ERROR__GOODS_NOT_ACTIVE = 0x18cc; // 6348
+/** GoodsPriceChanged: Good price changed since preview; re-read the listing and retry */
+export const AGENC_COORDINATION_ERROR__GOODS_PRICE_CHANGED = 0x18cd; // 6349
+/** GoodsSerialStale: Stale sale serial: another purchase landed first; re-read sold_count and retry */
+export const AGENC_COORDINATION_ERROR__GOODS_SERIAL_STALE = 0x18ce; // 6350
+/** GoodsSelfPurchase: A seller cannot purchase their own good */
+export const AGENC_COORDINATION_ERROR__GOODS_SELF_PURCHASE = 0x18cf; // 6351
+/** GoodsUnauthorizedUpdate: Only the seller can update a goods listing */
+export const AGENC_COORDINATION_ERROR__GOODS_UNAUTHORIZED_UPDATE = 0x18d0; // 6352
+/** GoodsInvalidOperatorTerms: Operator and operator_fee_bps must be set together, and the operator may not be the seller */
+export const AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS = 0x18d1; // 6353
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -777,6 +803,19 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__FEED_INVALID_TOPIC
   | typeof AGENC_COORDINATION_ERROR__FEED_POST_NOT_FOUND
   | typeof AGENC_COORDINATION_ERROR__FEED_SELF_UPVOTE
+  | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_ID
+  | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_METADATA
+  | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_NAME
+  | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS
+  | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_SUPPLY
+  | typeof AGENC_COORDINATION_ERROR__GOODS_NOT_ACTIVE
+  | typeof AGENC_COORDINATION_ERROR__GOODS_PRICE_BELOW_MINIMUM
+  | typeof AGENC_COORDINATION_ERROR__GOODS_PRICE_CHANGED
+  | typeof AGENC_COORDINATION_ERROR__GOODS_SELF_PURCHASE
+  | typeof AGENC_COORDINATION_ERROR__GOODS_SERIAL_STALE
+  | typeof AGENC_COORDINATION_ERROR__GOODS_SOLD_OUT
+  | typeof AGENC_COORDINATION_ERROR__GOODS_SURFACE_NOT_ENABLED
+  | typeof AGENC_COORDINATION_ERROR__GOODS_UNAUTHORIZED_UPDATE
   | typeof AGENC_COORDINATION_ERROR__GRACE_PERIOD_NOT_PASSED
   | typeof AGENC_COORDINATION_ERROR__HIRED_TASK_VALIDATION_UNSUPPORTED
   | typeof AGENC_COORDINATION_ERROR__INCOMPLETE_WORKER_ACCOUNTS
@@ -1124,6 +1163,19 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__FEED_INVALID_TOPIC]: `Feed topic cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__FEED_POST_NOT_FOUND]: `Feed post not found`,
     [AGENC_COORDINATION_ERROR__FEED_SELF_UPVOTE]: `Cannot upvote own post`,
+    [AGENC_COORDINATION_ERROR__GOODS_INVALID_ID]: `Good id must be non-zero`,
+    [AGENC_COORDINATION_ERROR__GOODS_INVALID_METADATA]: `Good metadata hash and URI must both be set (hash non-zero, URI non-empty, URI <= 256 bytes)`,
+    [AGENC_COORDINATION_ERROR__GOODS_INVALID_NAME]: `Good name must be non-zero`,
+    [AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS]: `Operator and operator_fee_bps must be set together, and the operator may not be the seller`,
+    [AGENC_COORDINATION_ERROR__GOODS_INVALID_SUPPLY]: `Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0)`,
+    [AGENC_COORDINATION_ERROR__GOODS_NOT_ACTIVE]: `Goods listing is not active`,
+    [AGENC_COORDINATION_ERROR__GOODS_PRICE_BELOW_MINIMUM]: `Good price is below the minimum`,
+    [AGENC_COORDINATION_ERROR__GOODS_PRICE_CHANGED]: `Good price changed since preview; re-read the listing and retry`,
+    [AGENC_COORDINATION_ERROR__GOODS_SELF_PURCHASE]: `A seller cannot purchase their own good`,
+    [AGENC_COORDINATION_ERROR__GOODS_SERIAL_STALE]: `Stale sale serial: another purchase landed first; re-read sold_count and retry`,
+    [AGENC_COORDINATION_ERROR__GOODS_SOLD_OUT]: `Good is sold out`,
+    [AGENC_COORDINATION_ERROR__GOODS_SURFACE_NOT_ENABLED]: `Goods market requires surface revision 4 to be stamped (update_launch_controls)`,
+    [AGENC_COORDINATION_ERROR__GOODS_UNAUTHORIZED_UPDATE]: `Only the seller can update a goods listing`,
     [AGENC_COORDINATION_ERROR__GRACE_PERIOD_NOT_PASSED]: `Grace period not passed: only worker authority can expire claim within 60 seconds of expiry`,
     [AGENC_COORDINATION_ERROR__HIRED_TASK_VALIDATION_UNSUPPORTED]: `A hired task cannot be reconfigured for manual validation; it settles on the hire completion path`,
     [AGENC_COORDINATION_ERROR__INCOMPLETE_WORKER_ACCOUNTS]: `All worker accounts must be provided when cancelling a task with active claims`,

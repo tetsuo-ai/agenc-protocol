@@ -44,6 +44,16 @@ export const NEW_PROTOCOL_CONFIG_SIZE = 351;
 export const SURFACE_REVISION_FULL = 1;
 
 /**
+ * `surface_revision` value meaning "the batch-4 GOODS market is live". Mirrors
+ * the on-chain `ProtocolConfig::SURFACE_REVISION_BATCH4`. Unlike the other
+ * capabilities (present since `SURFACE_REVISION_FULL`), the goods market is the
+ * FIRST revision-gated capability: the on-chain handlers require
+ * `surface_revision >= 4` (`require_goods_enabled`), so the SDK must NOT
+ * advertise `goods` below revision 4.
+ */
+export const SURFACE_REVISION_BATCH4 = 4;
+
+/**
  * A typed capability set describing which instruction families a deployed cluster
  * actually exposes. Conservative-by-default: an unstamped / old-layout account yields
  * every capability `false`.
@@ -69,6 +79,8 @@ export type CapabilitySet = {
   readonly reputation: boolean;
   /** On-chain bid-marketplace instructions (full surface only). */
   readonly bids: boolean;
+  /** Rivalrous goods-market instructions (batch 4 — requires `surface_revision >= 4`). */
+  readonly goods: boolean;
 };
 
 /** The conservative capability set: the canary / unstamped / old-layout surface. */
@@ -84,10 +96,12 @@ function canarySurface(surfaceRevision: number): CapabilitySet {
     skills: false,
     reputation: false,
     bids: false,
+    goods: false,
   };
 }
 
-/** The full capability set. */
+/** The full capability set. `goods` is revision-gated (batch 4) — it is the one
+ * capability NOT implied by `fullSurface`; it needs `surface_revision >= 4`. */
 function fullSurface(surfaceRevision: number): CapabilitySet {
   return {
     surfaceRevision,
@@ -100,6 +114,7 @@ function fullSurface(surfaceRevision: number): CapabilitySet {
     skills: true,
     reputation: true,
     bids: true,
+    goods: surfaceRevision >= SURFACE_REVISION_BATCH4,
   };
 }
 
