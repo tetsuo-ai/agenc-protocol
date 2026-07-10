@@ -39,6 +39,8 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 - complete task private
 - cancel task
 - close task (reclaim terminal-task rent)
+- distribute ghost share (permissionless contest fallback after the selection window)
+- reclaim terminal claim (return residual claim rent after a contest/task terminates)
 
 ### Completion bonds (Exclusive + SOL, v1)
 
@@ -51,6 +53,15 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 - set service listing state
 - hire from listing / hire from listing humanless
 
+### Store identity
+
+- register / update / close store
+
+### Goods market (revision 4)
+
+- create / update goods listing
+- purchase good (direct SOL payment + permanent `SaleReceipt`)
+
 ### Moderation
 
 - configure task moderation
@@ -61,13 +72,18 @@ This file summarizes the live on-chain surface owned by `programs/agenc-coordina
 - request / finalize attestor exit (P1.2 — two-step, cooldown-gated, full bond refund)
 - set / clear moderation block (P1.2 — multisig-gated BLOCK-only takedown floor, content-hash-keyed)
 - set default trust list (P1.2 — multisig-gated pointer to the forkable default trusted-attestor list)
+- moderation heartbeat (retunes/refreshes the liveness window)
 
 Since P1.2 the moderation records are **moderator-keyed** (`["task_moderation_v2",
 task, hash, moderator]` + the listing mirror), the three consumption gates
 (`set_task_job_spec`, `hire_from_listing`, `hire_from_listing_humanless`) take an
 explicit `moderator` argument and a required handler-derived
 `["moderation_block", hash]` account, and agent verification is gated on the
-global moderation authority only. See `P1_2_OPEN_ROSTER_SPEC.md`.
+global moderation authority only. Task/listing consumption accepts the configured
+authority or an active, non-revoked/non-exiting bonded roster attestor. If the
+moderation heartbeat goes stale, the ALLOW-record requirement relaxes; the BLOCK
+floor remains unconditional. See `P1_2_OPEN_ROSTER_SPEC.md` and
+`MODERATION_LIVENESS.md`.
 
 ### Agent verification & ratings
 
@@ -80,7 +96,9 @@ The live mainnet instruction ABI only lets a hardware wallet display values
 that are present in signed transaction bytes.
 
 - `create_task` carries reward, task id, deadline, worker caps, reputation gate,
-  and creator accounts directly.
+  creator accounts, and a 64-byte description commitment directly. The description
+  must contain a non-zero 32-byte digest followed by a zeroed 32-byte tail; human
+  title/detail belongs in the pinned job spec.
 - `set_task_job_spec` carries `job_spec_hash` and `job_spec_uri` directly.
 - `submit_task_result` carries `proof_hash` and optional `result_data`; the kit
   artifact encoder commits artifact results as `artifact:sha256:*`.
@@ -151,6 +169,8 @@ The complete model lives in `src/state.rs`. Important state families include:
 - dispute accounts and the dispute-resolver roster (the old DisputeVote / AuthorityDisputeVote PDAs were dropped with `vote_dispute` in P6.3)
 - moderation config, task/listing moderation records (v2 moderator-keyed since P1.2), the moderation-attestor roster (bonded since P1.2), the `ModerationBlock` takedown floor, and the `DefaultTrustList` pointer
 - service listings and hire records
+- store identity accounts
+- goods listings and permanent sale receipts
 - agent verification and hire-rating accounts
 - governance config and proposals
 - reputation and skill-related accounts

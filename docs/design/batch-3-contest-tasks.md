@@ -1,8 +1,8 @@
 # Batch-3 — Contest tasks (WS-CONTEST)
 
-**Status:** design approved by founder 2026-07-05 ("Yes this sounds perfect and it's backed in
-research. Implement the full thing"). Program PR stays UNMERGED until the adversarial review
-round returns zero money findings. surface_revision → 3.
+**Status:** IMPLEMENTED and live on mainnet since 2026-07-05 at
+`surface_revision = 3` (96-instruction surface). The adversarial money-path
+review gate completed before merge; revision 4 retains this contest surface.
 
 ## Product ruling (founder, 2026-07-05)
 

@@ -267,7 +267,7 @@ pub fn handler(
     config.protocol_paused = false;
     config.disabled_task_type_mask = 0;
     // P6.5: stamp the deployed surface this binary actually exposes.
-    // - Full build  -> the complete 80-ix surface is live: stamp SURFACE_REVISION_FULL
+    // - Full build  -> base full-surface capabilities are live: stamp SURFACE_REVISION_FULL
     //   so a fresh dev/devnet/localnet deploy advertises `listings: true` without a
     //   manual `update_launch_controls` step.
     // - Canary build -> only the restricted 25-ix surface is live: stamp 0
