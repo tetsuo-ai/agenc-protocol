@@ -115,7 +115,7 @@ describe("runInit", () => {
     expect(pkg.private).toBe(true);
     // Deps pinned inside the support matrix so `npm install` works HERE
     // (no hoisting into an ancestor) and `agenc promote` finds the sdk.
-    expect(pkg.dependencies["@tetsuo-ai/marketplace-sdk"]).toMatch(/^\^0\.9\./);
+    expect(pkg.dependencies["@tetsuo-ai/marketplace-sdk"]).toMatch(/^\^0\.11\./);
     expect(pkg.dependencies["@tetsuo-ai/agenc-worker"]).toMatch(/^\^0\.1\./);
     expect(pkg.dependencies["@solana/kit"]).toBeDefined();
     // The printed next step is a plain `npm install`.

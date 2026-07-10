@@ -1,14 +1,13 @@
 # P1.2 — Permissionless Moderation: the Hardened Open Roster
 
-> **Status:** DESIGN — reviewed. Direction decided 2026-07-03 by an 18-agent
-> design search (6 lenses → 4 steel-manned models → attack → scored judge, HIGH
-> confidence); this spec then went through a 36-agent adversarial review
-> (5 reviewer lenses → per-finding verification → synthesis) that raised 30
-> findings, 29 code-confirmed. Verdict: **FIX_SPEC_FIRST — the model is sound,
-> the spec had holes** (all in the two hardenings, §5). **This revision folds
-> in every confirmed fix.** Input to the batch-2 program upgrade. **Nothing
-> here is deployed.** The deploy is a human-owned Moment (`CLAUDE.md` golden
-> rules + `UPGRADE_AUTHORITY.md`).
+> **Status:** **IMPLEMENTED + LIVE on mainnet** since 2026-07-03 (P1.2 open-roster
+> deploy, slot 430491216; see `docs/MAINNET_MAINLINE.md` and root `CHANGELOG.md`).
+> Design history: direction decided 2026-07-03 by an 18-agent design search
+> (6 lenses → 4 steel-manned models → attack → scored judge, HIGH confidence);
+> this spec then went through a 36-agent adversarial review (5 reviewer lenses →
+> per-finding verification → synthesis) that raised 30 findings, 29
+> code-confirmed. Verdict was **FIX_SPEC_FIRST** — every confirmed fix was folded
+> into this document before the program upgrade shipped.
 >
 > Supersedes the recommendation in `MODERATION_NEUTRALITY.md` (whose central
 > premise — "consumption gates require `moderator == moderation_authority`" —

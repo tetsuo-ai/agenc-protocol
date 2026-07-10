@@ -122,7 +122,7 @@ RPC configured (and not localhost), wallet path set + existing + **not** a
 `.localnet` throwaway key, installed `@tetsuo-ai/*` pins inside the
 [`docs/VERSIONING.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/docs/VERSIONING.md)
 support matrix (a package may have multiple compatible minor lines — sdk
-0.8.x AND 0.9.x both speak the live wire; genuinely stale pins fail closed
+0.8.x through 0.11.x all speak the live wire (see `docs/VERSIONING.md` §1.1); genuinely stale pins fail closed
 against the live mainnet program), a fee-leg rent-exemption advisory, and the
 receipts surface. Prints pass/fail with the exact next action per gap —
 including where to get a wallet (`solana-keygen new`) and which RPC to use;

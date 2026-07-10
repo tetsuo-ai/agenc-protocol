@@ -130,9 +130,10 @@ Out of scope (no reward):
 - **Self-inflicted** loss (signing a malicious transaction you constructed,
   sending funds to a wrong address) and known-limitation items already recorded
   in `docs/audit/` or in published audit findings.
-- The **publicly-verifiable-build gap**: the repo being private (so
-  `solana-verify` cannot verify `HJsZ…` against a public source) is a **known,
-  documented** state (`SECURITY.md` §6, PLAN.md P8.3), not a bounty finding.
+- Claims that "the repo is private / publicly verifiable builds are
+  unavailable" — the repository is public and OtterSec-verified
+  (`SECURITY.md` §6, `docs/VERIFIABLE_BUILDS.md`). Report real verification
+  failures against the live badge or a tagged release instead.
 
 ## Safe harbor
 

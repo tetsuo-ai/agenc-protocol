@@ -24,18 +24,22 @@ function statusOf(report: ReturnType<typeof runPromoteChecks>, id: string) {
   return report.checks.find((c) => c.id === id)?.status;
 }
 
+const SDK_LINES = ["0.8", "0.9", "0.10", "0.11"] as const;
+
 describe("versionInMatrix", () => {
   it("accepts patch releases inside any supported line", () => {
-    expect(versionInMatrix("0.8.2", ["0.8", "0.9"])).toBe(true);
-    expect(versionInMatrix("0.8.11", ["0.8", "0.9"])).toBe(true);
-    expect(versionInMatrix("0.9.0", ["0.8", "0.9"])).toBe(true);
-    expect(versionInMatrix("0.9.1", ["0.8", "0.9"])).toBe(true);
+    expect(versionInMatrix("0.8.2", SDK_LINES)).toBe(true);
+    expect(versionInMatrix("0.8.11", SDK_LINES)).toBe(true);
+    expect(versionInMatrix("0.9.0", SDK_LINES)).toBe(true);
+    expect(versionInMatrix("0.9.1", SDK_LINES)).toBe(true);
+    expect(versionInMatrix("0.10.0", SDK_LINES)).toBe(true);
+    expect(versionInMatrix("0.11.0", SDK_LINES)).toBe(true);
   });
   it("rejects older and newer lines", () => {
-    expect(versionInMatrix("0.7.9", ["0.8", "0.9"])).toBe(false);
-    expect(versionInMatrix("0.10.0", ["0.8", "0.9"])).toBe(false);
+    expect(versionInMatrix("0.7.9", SDK_LINES)).toBe(false);
+    expect(versionInMatrix("0.12.0", SDK_LINES)).toBe(false);
     expect(versionInMatrix("0.9.0", ["0.8"])).toBe(false);
-    expect(versionInMatrix("1.8.0", ["0.8", "0.9"])).toBe(false);
+    expect(versionInMatrix("1.8.0", SDK_LINES)).toBe(false);
   });
   it("rejects garbage", () => {
     expect(versionInMatrix("not-a-version", ["0.8"])).toBe(false);
@@ -100,14 +104,13 @@ describe("runPromoteChecks", () => {
     expect(report.ready).toBe(false);
     const pin = report.checks.find((c) => c.id === "pin:@tetsuo-ai/marketplace-sdk");
     expect(pin?.status).toBe("fail");
-    expect(pin?.action).toContain("npm install @tetsuo-ai/marketplace-sdk@^0.9.0");
+    expect(pin?.action).toContain("npm install @tetsuo-ai/marketplace-sdk@^0.11.0");
   });
 
-  it("passes BOTH supported sdk lines — 0.8.x and 0.9.x speak the live wire", () => {
-    // Regression guard for the 0.2.0 fix: promote used to flag sdk 0.9.0
-    // (the current published sdk, which reads mainnet fine) as outside a
-    // 0.8-only matrix — poisoning every fresh install.
-    for (const version of ["0.8.2", "0.9.0", "0.9.1"]) {
+  it("passes all supported sdk lines — 0.8.x through 0.11.x speak the live wire", () => {
+    // Regression guard: promote must not flag current published minors as
+    // outside a stale narrow matrix.
+    for (const version of ["0.8.2", "0.9.0", "0.9.1", "0.10.0", "0.10.1", "0.11.0"]) {
       const input = readyInput();
       input.installedVersions["@tetsuo-ai/marketplace-sdk"] = version;
       const report = runPromoteChecks(input);

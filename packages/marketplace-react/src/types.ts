@@ -138,7 +138,7 @@ export interface ValidatedReferrerConfig {
  * The runtime answer to "can a referral fee actually be charged on this
  * cluster?". Returned by `resolveReferrerCapability()`.
  *
- * Referrer settlement is live on the full 84-instruction surface. `live` is true
+ * Referrer settlement is live on the full protocol surface. `live` is true
  * when a validated provider referrer is configured. Aggregated earnings remain a
  * separate indexer-gated read surface.
  */

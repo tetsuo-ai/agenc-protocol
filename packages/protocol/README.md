@@ -34,10 +34,15 @@ Raw artifact subpaths are also exported:
 - `@tetsuo-ai/protocol/idl/agenc_coordination.json`
 - `@tetsuo-ai/protocol/manifest.json`
 - `@tetsuo-ai/protocol/verifier-router.json`
+- `@tetsuo-ai/protocol/daemon-json-rpc.schema.json`
+
+**Version:** `0.3.0` (batch-4 goods surface in the committed IDL; **99** instructions).
+Requires **Node ≥ 18**.
 
 ## Consumer Guidance
 
-Use this package when you need released protocol artifacts in downstream repos such as `agenc-sdk`, `agenc-prover`, or external integrations.
+Use this package when you need released protocol artifacts in downstream repos
+(marketplace-sdk, prover tooling, or external integrations).
 
 Use the repo-root artifacts when you are maintaining protocol source of truth inside `agenc-protocol`.
 

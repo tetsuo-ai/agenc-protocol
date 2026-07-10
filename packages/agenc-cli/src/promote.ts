@@ -6,7 +6,7 @@
 // source of truth for which published pins speak the live mainnet wire —
 // P1.2 wire + additive batch-2, 2026-07-05). Update BOTH on the next
 // lockstep republish. A package may have MULTIPLE compatible minor lines
-// when a program upgrade was additive (batch-2: sdk 0.8.x and 0.9.x both
+// when a program upgrade was additive (batch-2…4: sdk 0.8.x–0.11.x all
 // speak the live wire).
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -17,7 +17,7 @@ import { loadConfig, type AgencConfig, AgencConfigError, CONFIG_FILENAME } from 
  * oldest first (the LAST entry is the current line install hints point at).
  */
 export const SUPPORT_MATRIX: Record<string, readonly string[]> = {
-  "@tetsuo-ai/marketplace-sdk": ["0.8", "0.9"],
+  "@tetsuo-ai/marketplace-sdk": ["0.8", "0.9", "0.10", "0.11"],
   "@tetsuo-ai/marketplace-react": ["0.4"],
   "@tetsuo-ai/marketplace-tools": ["0.4"],
   "@tetsuo-ai/marketplace-mcp": ["0.4"],
@@ -208,7 +208,7 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       status: "fail",
       detail: "@tetsuo-ai/marketplace-sdk is not installed in this project",
       action:
-        "npm install @tetsuo-ai/marketplace-sdk@^0.9.1 (run it in the project root — `agenc init` scaffolds a package.json when the project has none)",
+        "npm install @tetsuo-ai/marketplace-sdk@^0.11.0 (run it in the project root — `agenc init` scaffolds a package.json when the project has none)",
     });
   }
 

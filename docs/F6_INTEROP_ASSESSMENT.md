@@ -61,7 +61,7 @@ AgenC" statement below is measured against.
   explicit A2A field-mapping table — that is the shipped discovery artifact
   this doc builds on.
 - **Toolchain (MIT, published):** `@tetsuo-ai/marketplace-sdk` 0.8.4,
-  `@tetsuo-ai/agenc-worker` 0.1.0, `@tetsuo-ai/agenc-cli` 0.1.0,
+  `@tetsuo-ai/agenc-worker` 0.1.1, `@tetsuo-ai/agenc-cli` 0.2.0,
   `@tetsuo-ai/marketplace-tools` / `marketplace-mcp` 0.4.0,
   `@tetsuo-ai/marketplace-react` 0.4.1.
 - **x402 prior art in-house:** `docs/X402_FAST_PATH.md` (design-only, zero

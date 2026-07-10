@@ -12,42 +12,45 @@ window or before the deploy is announced publicly.
 
 ## Current Mainnet Deployment
 
-> **As of 2026-07-09 the revision-4 99-instruction surface is live on mainnet.**
-> It includes the P1.2 open roster, batch-2 store/liveness additions, batch-3
-> contests, and batch-4 goods. The P1.2 base was deployed in slot **430491216**
-> from source commit `aad4c0d` through the Squads 2-of-3 upgrade-authority vault.
-> That P1.2 batch was a **flag-day wire cutover**, not a compatible upgrade:
-> `set_task_job_spec` /
-> `hire_from_listing` / `hire_from_listing_humanless` gained a trailing
-> `moderator` arg + a required `moderation_block` account, the `record_*_moderation`
-> records moved to v2 moderator-keyed seeds, and moderation-attestor registration
-> became **permissionless** (`register_moderation_attestor`, 0.25 SOL refundable
-> bond, 7-day exit cooldown). Old-wire clients fail closed. See
-> [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.6 for the
-> cutover choreography and [`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md)
-> for the design. Revisions 2–4 were additive; the current source lineage is
-> recorded in [`VERSIONING.md`](./VERSIONING.md).
+> **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
+> (`surface_revision = 4` / `SURFACE_REVISION_BATCH4`, last deployed slot
+> **431918664**). Growth path: 25-ix canary → 84-ix full surface (2026-06-11) →
+> 90-ix P1.2 open roster (2026-07-03, slot 430491216) → additive batches 2–4
+> (store + moderation heartbeat → contest → goods) culminating in the current
+> binary. Verified live on 2026-07-10: on-chain `ProtocolConfig.surface_revision
+> = 4` and SDK `getDeployedSurface` reports `goods: true`.
 
 - Program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - Program source path: `programs/agenc-coordination/`
 - `declare_id!` location: `programs/agenc-coordination/src/lib.rs`
-- Live surface: **revision-4 99-instruction surface** (default features), `surface_revision = 4`
-- Last breaking-wire deployment: slot **430491216** (2026-07-03, P1.2), commit `aad4c0def4b092311ae228d83a2ffb0f72ccb40e`; revisions 2–4 were additive upgrades
+- Live surface: **full 99-instruction surface** (default features),
+  `surface_revision = 4` (BATCH4)
+- Last deployed in slot: **431918664** (batch-4 / goods-enabled binary; verified
+  2026-07-10 via `solana program show`)
+- Instruction inventory: committed IDL +
+  [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) (**99** instructions)
 - Verified build: **LIVE** — the OtterSec/osec.io registry reports
-  `is_verified: true` for the deployed bytecode against this repo at the deployed
-  commit (check <https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>);
+  `is_verified: true` for the deployed bytecode against this repo (check
+  <https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>);
   keeping the badge across upgrades is a deploy invariant — see
   [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.5 and
   [`VERIFIABLE_BUILDS.md`](./VERIFIABLE_BUILDS.md)
-- Task types: **all enabled** (`disabled_task_type_mask = 0`: Exclusive, Collaborative, Competitive, BidExclusive)
+- Task types: **all enabled** (`disabled_task_type_mask = 0`: Exclusive,
+  Collaborative, Competitive, BidExclusive)
 - Bid marketplace: **LIVE** (`BidMarketplaceConfig` initialized)
-- Private completion: **OFF / deferred** — `ZkConfig` not yet initialized, so `complete_task_private` is unavailable until `initialize_zk_config` runs with the audited agenc-prover image id
+- Store identity: **LIVE** (`register_store` / `update_store` / `close_store`)
+- Contest tasks: **LIVE** (`distribute_ghost_share`, `reclaim_terminal_claim`,
+  contest rails on schema-1 Competitive + CreatorReview)
+- Goods market: **LIVE** and revision-gated (`surface_revision >= 4`;
+  `create_goods_listing` / `purchase_good` / `update_goods_listing`)
+- Private completion: **OFF / deferred** — `ZkConfig` not yet initialized, so
+  `complete_task_private` is unavailable until `initialize_zk_config` runs with
+  the audited agenc-prover image id
 - Upgrade authority: **Squads v4 2-of-3 multisig vault**
   `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf` (since 2026-07-03; distinct from
-  the on-chain `ProtocolConfig` config multisig `Hcecp…`/`BXDan…`/`4QcKB…` that
-  gates fees/launch controls/the BLOCK floor) — see
-  [`UPGRADE_AUTHORITY.md`](./UPGRADE_AUTHORITY.md). Verify live with
-  `solana program show HJsZ…` (`Authority:` = the vault)
+  the on-chain `ProtocolConfig` config multisig that gates fees/launch
+  controls/the BLOCK floor) — see [`UPGRADE_AUTHORITY.md`](./UPGRADE_AUTHORITY.md).
+  Verify live with `solana program show HJsZ…` (`Authority:` = the vault)
 - Moderation: **permissionless attestor roster** — any wallet may self-register
   via `register_moderation_attestor` (0.25 SOL refundable bond) and its CLEAN
   records satisfy the publish/hire gates; the hosted attestor at
@@ -57,12 +60,23 @@ window or before the deploy is announced publicly.
 
 ### Prior deployment history
 
-- **2026-07-09 — Batch 4 goods (revision 4, 99 instructions).** Added finite
-  goods listings, direct purchase, and permanent `SaleReceipt` provenance.
-- **2026-07-05 — Batch 3 contests (revision 3, 96 instructions).** Added
-  contest entry deposits, creator selection/ghost split, and terminal-claim reclaim.
-- **2026-07-05 — Batch 2 (revision 2, 94 instructions).** Added Store identity,
-  moderation heartbeat/liveness, dispute/freeze-exit referrer legs, and `rate_hire`.
+- **2026-07-05…09 — Additive batches 2–4 (94 → 96 → 99 ix, revisions 2 → 3 → 4).**
+  Batch-2: store identity + `moderation_heartbeat` + dispute/freeze-exit referrer
+  legs + `rate_hire` rollup. Batch-3: contest surface (`distribute_ghost_share`,
+  `reclaim_terminal_claim`, submission-rent return). Batch-4: goods market
+  (revision-gated; stamping 4 turns goods on). Client packages:
+  marketplace-sdk 0.9.0 / 0.10.0 / 0.11.0. See
+  [`VERSIONING.md`](./VERSIONING.md) §1.1 and
+  [`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md) /
+  [`design/batch-4-goods.md`](./design/batch-4-goods.md).
+- **2026-07-03 — P1.2 open-roster (90 instructions), slot 430491216, commit
+  `aad4c0d`.** Flag-day wire cutover: `set_task_job_spec` / `hire_from_listing` /
+  `hire_from_listing_humanless` gained a trailing `moderator` arg + required
+  `moderation_block` account; moderation records moved to v2 moderator-keyed
+  seeds; attestor registration became permissionless. Upgrade executed through
+  the Squads vault the same day the upgrade authority moved off the single key.
+  See [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.6 and
+  [`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md).
 - **2026-07-02 — WP-A1 roster-consumption gates.** The three moderation
   consumption gates began honoring registered roster attestors' attestations
   (previously only the single global `moderation_authority` unlocked a
@@ -90,7 +104,8 @@ Before or during any future mainnet upgrade:
 
 1. Confirm the live `programId` and upgrade target.
 2. Confirm `main` contains the exact program source tree being deployed.
-3. Refresh this file if the live scope or rollout rules changed.
+3. Refresh this file if the live scope or rollout rules changed (slot,
+   `surface_revision`, instruction count, upgrade authority).
 4. Keep committed artifacts and downstream protocol consumers aligned.
 5. Publish/upgrade the **on-chain IDL per cluster** (`anchor idl init` first time,
    `anchor idl upgrade` thereafter) so the deployed IDL is fetchable truth. Mainnet
@@ -105,4 +120,6 @@ Before or during any future mainnet upgrade:
 
 Auditors, SDK consumers, operators, and AI agents need one obvious public
 answer to the question "which code is live on mainnet?" This document makes the
-answer explicit: start with `main`.
+answer explicit: start with `main`, and trust the slot / `surface_revision`
+facts recorded above (re-verify with `solana program show` +
+`getDeployedSurface` when in doubt).

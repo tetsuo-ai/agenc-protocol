@@ -5,6 +5,32 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-07-09 — Batch-4 goods mainnet surface (99 instructions, `surface_revision = 4`)
+
+- live mainnet binary is the full **99-instruction** surface; last deployed slot
+  **431918664** (verified 2026-07-10 via `solana program show`)
+- on-chain `ProtocolConfig.surface_revision = 4` (`SURFACE_REVISION_BATCH4`);
+  SDK `getDeployedSurface` reports `goods: true`
+- goods market live and revision-gated: `create_goods_listing` /
+  `purchase_good` / `update_goods_listing` (`GoodsListing` + per-unit
+  `SaleReceipt`)
+- client cutover: `@tetsuo-ai/marketplace-sdk` **0.11.0**,
+  `@tetsuo-ai/protocol` **0.3.0** — see `docs/VERSIONING.md` §1.1 and
+  `docs/design/batch-4-goods.md`
+
+## 2026-07-05 — Batch-2 store + batch-3 contest (additive, 94 → 96 ix)
+
+- **batch-2** (`surface_revision = 2`, 94 ix): store identity
+  (`register_store` / `update_store` / `close_store`),
+  `moderation_heartbeat`, dispute/freeze-exit referrer legs, `rate_hire`
+  rollup — sdk **0.9.0**
+- **batch-3** (`surface_revision = 3`, 96 ix): contest rails —
+  `distribute_ghost_share`, `reclaim_terminal_claim`, submission-rent return
+  — sdk **0.10.0** / **0.10.1**
+- both batches are additive (no flag-day wire cutover); P1.2-wire clients
+  keep working. Design: `docs/design/batch-3-contest-tasks.md`,
+  `docs/P5_2_STORE_IDENTITY_SPEC.md`, `docs/MODERATION_LIVENESS.md`
+
 ## 2026-07-03 — P1.2 open-roster mainnet deploy (90-instruction surface)
 
 - deploy the P1.2 batch to mainnet (slot 430491216, commit `aad4c0d`), executed

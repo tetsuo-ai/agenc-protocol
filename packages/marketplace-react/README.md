@@ -34,7 +34,7 @@ export default function App() {
       config={{
         network: "devnet",
         // Indexer-first reads (the scale path). Omit to use a gPA transport.
-        indexer: { baseUrl: "https://marketplace.agenc.tech" },
+        indexer: { baseUrl: "https://api.agenc.ag" },
         // Write client is built from rpcUrl + signer when both are present,
         // or pass a pre-built `client` (e.g. from startLocalMarketplace()).
         // rpcUrl, signer,
@@ -96,12 +96,14 @@ Hooks are imported from `@tetsuo-ai/marketplace-react/hooks`:
 | `useRateHire` | write | buyer rating for completed hires |
 | `useDispute` | advanced write | dispute read/initiate with a host-supplied dispute reader |
 | `useWalletSigner` | wallet | browser wallet to kit `TransactionSigner` bridge |
-| `useReferrerEarnings` | read | indexer-gated earnings status; no fabricated totals |
+| `useReferrerEarnings` | read | indexer earnings (`GET /api/explorer/referrers/:wallet/hires`); no fabricated totals |
+| `useTaskGuarantee` | read | Guaranteed Hire status for a task (0.4.1) |
+| `useCompletionBond` | write | post/reclaim completion bonds for Guaranteed Hire (0.4.1) |
 
 ## Referrers
 
-Referral settlement is live on the full 84-instruction protocol surface. When
-`referrer: { wallet, feeBps }` is configured:
+Referral settlement is live on the full protocol surface (99 instructions as of
+batch-4). When `referrer: { wallet, feeBps }` is configured:
 
 - the provider validates and stores it (bad base58 throws; out-of-range basis
   points are rejected);
@@ -119,9 +121,10 @@ referrer audit flag. It signs `set_task_job_spec` only when that backend returns
 the completed phase data so the UI can recover or offer refund/activation
 options without pretending the task is claimable.
 
-Aggregated referrer earnings are a separate indexer feature. Until the indexer
-publishes `GET /api/explorer/referrers/:wallet/hires`, `useReferrerEarnings()`
-returns the documented not-live zero state and never fabricates totals.
+Aggregated referrer earnings are an indexer feature. `useReferrerEarnings()`
+fetches `GET /api/explorer/referrers/:wallet/hires` from the configured indexer
+(default mainnet base `https://api.agenc.ag` since 0.3.2) and never fabricates
+totals — missing/empty responses surface as the documented zero state.
 
 ## Components
 
@@ -130,6 +133,7 @@ Prebuilt, themable components are exported from the root (and tree-shakeable via
 
 | Component | What it renders | Wiring |
 |---|---|---|
+| `GuaranteedBadge` | Guaranteed Hire / completion-bond status badge (0.4.1) | presentational |
 | `ListingCard` | one decoded listing (name, price, category, provider, moderation badge) | presentational (`ListingRow`) |
 | `ListingGrid` | a responsive grid of cards + loading/empty/error/load-more | takes `useListings()` fields |
 | `HireButton` | price-aware CTA that opens the checkout and runs the hire | **connected** (`useHire` + `useWalletSigner`) |

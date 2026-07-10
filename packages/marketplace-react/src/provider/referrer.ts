@@ -3,7 +3,7 @@
  *
  * ## REFERRER SETTLEMENT
  *
- * Referrer args + the 4th settlement leg are part of the full 84-instruction
+ * Referrer args + the 4th settlement leg are part of the full
  * surface. The SDK `facade.hireFromListing` and
  * `facade.hireFromListingHumanless` both accept referrer fields. This module:
  * - ACCEPTS + VALIDATES `referrer: { wallet, feeBps }` and stores the normalized

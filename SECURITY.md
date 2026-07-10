@@ -260,13 +260,17 @@ hardening — a Squads config change, no program-authority re-transfer required.
 
 A reproducible / verifiable build (`solana-verify`, on-chain verification PDA
 via osec.io) proves the deployed bytecode matches the source **at a public tag**.
-This repository is currently **private** (a deliberate decision to deter
-copying), and verifiable builds verify against a *public* repo — so the
-end-to-end "anyone can verify `HJsZ…` against the source" property is **not yet
-available**. Internally we can still build deterministically and pin the
-artifact hash; the publicly verifiable property is gated on the repo going
-public (PLAN.md P0.6 / P8.3). We do not claim publicly verifiable builds while
-the repository is private.
+**This repository is public.** The deployed program is OtterSec-verified against
+this repo (`is_verified: true` at
+[verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK)).
+Every `protocol-v*` release also records a reproducible SHA-256 of the program
+built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
+with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
+
+> Historical note: older drafts of this section described a private-repo gate.
+> That gate is closed; do not reintroduce “repo is private / verify-from-repo
+> unavailable” language without checking the current GitHub visibility and the
+> OtterSec badge.
 
 ---
 
