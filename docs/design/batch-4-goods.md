@@ -1,8 +1,10 @@
 # Batch 4 — GOODS: a rivalrous goods market primitive
 
 > Design doc for the batch-4 instruction surface (`surface_revision = 4`).
-> Mirrors `batch-3-contest-tasks.md` discipline: **the program PR stays UNMERGED
-> until an adversarial money-path review round returns zero money findings.**
+> **Status: IMPLEMENTED + LIVE on mainnet** (99-ix surface, goods handlers require
+> `surface_revision >= 4`; see `docs/MAINNET_MAINLINE.md`). Originally held
+> UNMERGED until an adversarial money-path review returned zero money findings —
+> that gate is closed; the surface is in-tree and deployed.
 
 ## 1. What & why
 

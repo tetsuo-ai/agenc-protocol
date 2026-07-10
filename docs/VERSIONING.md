@@ -64,6 +64,9 @@ risk, but the flow is down). See §1.2 for exactly which upgrade broke which ran
 | 2026-06-11 | **Full-surface upgrade** (Phase 9, [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md)) | 25 ix → **84 ix**, `surface_revision` stamped FULL | — | sdk **0.3.0** Borsh-broke; templates in the wild still scaffolded that pin | **ZERO** — no announcement preceded the deploy |
 | 2026-07-02 | **WP-A1 roster gates** | 84 ix (gate hardening) | **8/13/12** accounts | sdk **≤0.6.x**, react **≤0.2.x**, tools+mcp **≤0.2.0** | Same-day lockstep republish (sdk 0.7.0, react/tools/mcp 0.3.0, store 0.3.0); no advance notice |
 | 2026-07-03 | **P1.2 hardened open roster** ([`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md)) | 84 ix → **90 ix** | **9/14/13** accounts + required trailing `moderator` arg | sdk **0.7.x**, react/tools/mcp **0.3.x**, store-core **≤0.4.x** | Same-day lockstep republish (§2.6 runbook pattern): sdk 0.8.0, react/tools/mcp 0.4.0, store-core/create 0.4.0 |
+| 2026-07-05 | **Batch-2 store + heartbeat** | 90 → **94 ix**, `surface_revision = 2` | additive (no flag-day gate change) | none (old pins keep working) | sdk **0.9.0** additive facade |
+| 2026-07-05 | **Batch-3 contest** ([`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md)) | 94 → **96 ix**, `surface_revision = 3` | additive optional accounts | none | sdk **0.10.0** / **0.10.1** additive facade |
+| 2026-07-09 | **Batch-4 goods** ([`design/batch-4-goods.md`](./design/batch-4-goods.md)) | 96 → **99 ix**, `surface_revision = 4` | goods handlers require rev ≥ 4 | none for pre-goods flows; goods needs sdk **≥ 0.11.0** | sdk **0.11.0**, protocol **0.3.0** |
 
 The 2026-06-11 row is the motivating failure: a flag-day wire change shipped with
 no deprecation window while the old sdk pin was still being scaffolded by public

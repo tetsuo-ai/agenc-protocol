@@ -74,6 +74,42 @@ global moderation authority only. See `P1_2_OPEN_ROSTER_SPEC.md`.
 - record / revoke agent verification
 - rate hire
 
+### Store identity (batch-2)
+
+- register / update / close store (`Store` PDA, address-keyed display handle)
+
+### Moderation liveness (batch-2)
+
+- moderation heartbeat (deadman for hosted attestor liveness)
+
+### Contest tasks (batch-3)
+
+- distribute ghost share (permissionless post-selection-window crank)
+- reclaim terminal claim (permissionless janitor for stranded claims on
+  terminal tasks)
+- Contest rails are a **schema-1 Competitive + CreatorReview** conjunction on
+  an existing task (entry deposit, selection window, cancel guard) — see
+  [`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md).
+
+### Goods market (batch-4)
+
+- create / update goods listing
+- purchase good (direct-buy, rivalrous supply; per-unit `SaleReceipt`)
+- Handlers require `surface_revision >= 4` (`require_goods_enabled`). See
+  [`design/batch-4-goods.md`](./design/batch-4-goods.md).
+
+## Surface revision summary
+
+| `surface_revision` | Approx full-module ix | Milestone |
+|--------------------|----------------------:|-----------|
+| 0 | 25 (canary) / unstamped | conservative / unstamped |
+| 1 (`FULL`) | 84 → 90 (P1.2 kept stamp 1) | Phase 9 full surface; P1.2 open roster |
+| 2 (`BATCH2`) | 94 | store + heartbeat + referrer legs |
+| 3 (`BATCH3`) | 96 | contest |
+| 4 (`BATCH4`) | **99** | goods (revision-gated) |
+
+Generated per-instruction reference: [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md).
+
 ## Ledger Clear-Signing Commitments
 
 The live mainnet instruction ABI only lets a hardware wallet display values
@@ -152,6 +188,8 @@ The complete model lives in `src/state.rs`. Important state families include:
 - moderation config, task/listing moderation records (v2 moderator-keyed since P1.2), the moderation-attestor roster (bonded since P1.2), the `ModerationBlock` takedown floor, and the `DefaultTrustList` pointer
 - service listings and hire records
 - agent verification and hire-rating accounts
+- store identity (`Store` PDA)
+- goods listings and per-unit sale receipts
 - governance config and proposals
 - reputation and skill-related accounts
 

@@ -1,11 +1,12 @@
 # P5.2 — Store/Marketplace Identity Primitive
 
-> **Status:** DESIGN — draft for founder review. Nothing here is implemented or
-> deployed. This is the design-doc-first half of TODO P5.2; the program half is
-> an **additive** batch (new account type + three instructions, zero layout
-> changes to live accounts) and the manifest half ships with **no program change
-> at all**. The deploy, as always, is a human-owned Moment (`CLAUDE.md` golden
-> rules + `UPGRADE_AUTHORITY.md`).
+> **Status:** **IMPLEMENTED + LIVE** — on-chain `Store` PDA +
+> `register_store` / `update_store` / `close_store` shipped in batch-2
+> (`surface_revision = 2`, live on mainnet; see `docs/MAINNET_MAINLINE.md`).
+> The signed manifest half (`agenc.storeManifest.v1`) ships in store-core with
+> no program change. This document remains the design reference for the
+> primitive; treat the status banner above as authoritative over any later
+> “design only” phrasing that may remain in body sections.
 >
 > Adjacent-but-separate: P5.3 (verifiable referral attribution) is explicitly
 > **not** solved here, but §7.6 designs the attachment point so the P5.3

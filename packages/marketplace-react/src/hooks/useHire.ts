@@ -7,7 +7,7 @@
  *
  * ## REFERRER SETTLEMENT
  *
- * The full 84-instruction protocol supports a demand-side referrer leg. This hook:
+ * The full protocol surface supports a demand-side referrer leg. This hook:
  * - reads `resolveReferrerCapability()` from context BEFORE building the hire;
  * - when `live === true`, spreads the validated provider referrer into the hire
  *   input for both standard and humanless hires;

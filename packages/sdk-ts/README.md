@@ -245,10 +245,28 @@ The full embeddable core flow (register → create listing → humanless hire �
 pin a moderated job spec → claim → submit → accept/close/rate) is in
 [`examples/embeddable-marketplace.ts`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/examples/embeddable-marketplace.ts), and the
 getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/docs/guides/quickstart.md).
-Advanced program primitives such as completion bonds, disputes, bids,
-governance, reputation staking, and ZK are available through the facade or
-generated client where implemented; treat them as advanced integration surfaces
-unless your product adds matching UX, policy, and tests.
+### Status (as of 0.11.0)
+
+- Generated client covers the full **99-instruction** IDL surface.
+- Mainnet wire-compatible through `surface_revision = 4` (goods capability).
+  Pre-1.0 versioning still applies to the TypeScript API surface.
+- Facade intentionally omits only bare `claim_task` (program fail-closed) and
+  `complete_task_private` (ZK gated until `ZkConfig` is initialized).
+
+**Advanced / additive facade surfaces** (beyond the hire lifecycle):
+
+| Surface | Facade entry points | Notes |
+|---------|---------------------|--------|
+| Completion bonds | `postCompletionBond`, `reclaimCompletionBond` | Exclusive + SOL v1 |
+| Disputes | initiate / resolve / expire helpers | single-resolver model (no `vote_dispute`) |
+| Bids | bid marketplace lifecycle | Marketplace V2 |
+| Store identity (0.9.0) | `registerStore`, `updateStore`, `closeStore`, `moderationHeartbeat` | batch-2 |
+| Contests (0.10.0) | `createContestTask`, `distributeGhostShare`, `reclaimTerminalClaim` | batch-3 |
+| Goods (0.11.0) | `createGoodsListing`, `purchaseGood`, `updateGoodsListing` | requires `surface_revision >= 4` (`assertCapability(surface, 'goods')`) |
+| Governance / reputation / skills / feed | generated client + selected facade wrappers | advanced |
+
+Treat advanced surfaces as integration work: match UX, policy, and tests to the
+on-chain semantics in `docs/PROGRAM_SURFACE.md` and `docs/VERSIONS.md`.
 
 ## Sandbox — `@tetsuo-ai/marketplace-sdk/sandbox`
 

@@ -1,13 +1,14 @@
 # MAINNET ROLLOUT RUNBOOK — full-surface upgrade
 
 > **STATUS: COMPLETED (2026-06-11).** The Phase 9 full-surface upgrade has been
-> executed on mainnet. The live program is now the **full 84-instruction surface**
-> (`surface_revision = FULL (1)`, all task types enabled, bid marketplace live,
-> `ZkConfig` deferred). This document is retained as the **historical choreography
-> and record** of how the rollout was run; it is no longer a pending plan. The §0/§1
-> numbers below have been corrected to the as-executed values (169 tasks migrated,
-> ~1.95 MB binary, ~7.15 SOL permanent extension). See
-> [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md) for the now-live deployment record.
+> executed on mainnet. At that moment the live program became the **full
+> 84-instruction surface** (`surface_revision = FULL (1)`, all task types enabled,
+> bid marketplace live, `ZkConfig` deferred). Later additive deploys grew the
+> surface to 90/94/96/**99** ix — see [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md)
+> for **current** live state. This document is retained as the **historical
+> choreography and record** of the Phase 9 rollout; it is no longer a pending plan.
+> The §0/§1 numbers below have been corrected to the as-executed values (169 tasks
+> migrated, ~1.95 MB binary, ~7.15 SOL permanent extension).
 
 Operational runbook that was used to upgrade the live mainnet `agenc-coordination`
 program from the restricted **25-instruction canary** surface to the full

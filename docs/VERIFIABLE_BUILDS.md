@@ -61,7 +61,7 @@ produce **different bytecode and different hashes**:
 
 | Surface | Cargo build args | What it is |
 |---------|------------------|------------|
-| **full / default** (90 instructions as of P1.2) | *(default features)* | The complete surface — **live** at `HJsZ…` on mainnet since the 2026-06-11 full-surface upgrade (84 ix then; 90 ix since the 2026-07-03 P1.2 deploy, commit `aad4c0d`, on-chain hash `b38a3dc8…`). |
+| **full / default** (**99** instructions as of batch-4) | *(default features)* | The complete surface — **live** at `HJsZ…` on mainnet (`surface_revision = 4`, last slot **431918664** as of 2026-07-09). Growth: 84 (Phase 9) → 90 (P1.2) → 94/96/99 (batches 2–4). Verify the OtterSec registry entry names the commit you build. |
 | **mainnet-canary** (25 instructions) | `--no-default-features --features mainnet-canary` | The conservative restricted BUILD. Still in source, but **no longer live on mainnet** (it was the surface live before 2026-06-11). |
 
 > **Critical:** since 2026-06-11 the mainnet program runs the **full / default**
@@ -69,7 +69,8 @@ produce **different bytecode and different hashes**:
 > (full) surface **at the deployed commit** (the OtterSec registry entry names
 > it). Building the `mainnet-canary` surface produces a different, smaller
 > program and a **non-matching** hash. (Before the 2026-06-11 upgrade the
-> opposite was true — mainnet ran the canary build.)
+> opposite was true — mainnet ran the canary build.) Current HEAD source is the
+> 99-ix batch-4 surface; older deploy commits had intermediate counts.
 
 The `verify.yml` workflow builds and hashes **both** surfaces on every
 `protocol-v*` tag so the live surface can be checked and the full surface has a

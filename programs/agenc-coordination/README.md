@@ -14,14 +14,19 @@ The Anchor program for the public AgenC protocol, built on Solana.
 
 This program owns the on-chain public protocol surface for AgenC.
 
-Major instruction families include:
+Major instruction families include (**99** full-module instructions; canary = 25):
 
 - agent lifecycle
-- task lifecycle, including dependent, reviewed, and private completion flows
-- disputes and slashing
+- task lifecycle, including dependent, reviewed, contest, and private completion flows
+- service listings / hire (including humanless)
+- store identity, goods market, bid marketplace
+- moderation (open roster + heartbeat + BLOCK floor)
+- completion bonds, disputes and slashing (single-resolver model)
 - protocol administration and migrations
-- governance
-- skills, reputation, and feed surfaces
+- governance, skills, reputation, and feed surfaces
+
+Authoritative inventory: [`docs/reference/INSTRUCTIONS.md`](../../docs/reference/INSTRUCTIONS.md)
+and [`docs/PROGRAM_SURFACE.md`](../../docs/PROGRAM_SURFACE.md).
 
 ## Architecture
 
@@ -30,13 +35,15 @@ Major instruction families include:
 │                   Solana Blockchain                              │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │           AgenC Coordination Program (Rust/Anchor)       │   │
-│  │  • RegisterAgent    • CreateTask    • ClaimTask          │   │
-│  │  • SubmitTaskResult • CompleteTask  • ResolveDispute     │   │
+│  │  • RegisterAgent    • CreateTask    • ClaimTaskWithJob   │   │
+│  │  • SubmitTaskResult • AcceptResult  • ResolveDispute     │   │
+│  │  • Hire / Store / Goods / Contests / Bids / Moderation   │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │           Program Derived Addresses (PDAs)               │   │
-│  │  • Agent accounts   • Task accounts   • State accounts   │   │
-│  │  • Validation PDAs  • Escrow accounts • Dispute accounts │   │
+│  │  • Agent / Task / Claim / Escrow / Validation            │   │
+│  │  • Listings / Hire / Store / Goods / SaleReceipt         │   │
+│  │  • Dispute / Moderation / Bond / Bid accounts            │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```

@@ -5,12 +5,14 @@ instruction surfaces**:
 
 - the restricted **25-instruction canary** surface (`--features mainnet-canary`) —
   a conservative BUILD that still exists in the source; and
-- the **full surface** (84 instructions, default features).
+- the **full surface** (**99 instructions** as of batch-4, default features).
 
-> **As of 2026-06-11 the full 84-instruction surface is live on mainnet**
-> (`surface_revision = FULL (1)`, all task types enabled, bid marketplace live,
-> `ZkConfig` deferred). The canary build is no longer what is live on mainnet; it
-> remains the surface for any cluster still running `--features mainnet-canary`.
+> **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
+> (`surface_revision = 4` / `BATCH4`, last deployed slot **431918664**, all task
+> types enabled, bid marketplace / store / contest / goods live, `ZkConfig`
+> deferred). The canary build is no longer what is live on mainnet; it remains
+> the surface for any cluster still running `--features mainnet-canary`. Deploy
+> SoT: [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
 
 Because both surfaces can share one program ID, a client cannot tell which one is live
 just from the address. P6.5 makes that knowable on-chain and answerable from the SDK.
@@ -21,10 +23,15 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 
 | `surface_revision` | Meaning | `getDeployedSurface(rpc)` returns |
 |--------------------|---------|-----------------------------------|
-| `0` | Unstamped / conservative (canary, or a config not yet stamped) | every capability `false` (`listings:false`, …) |
-| `1` (`SURFACE_REVISION_FULL`) | The full 84-instruction surface is live | every capability `true` |
-| `2` (`SURFACE_REVISION_BATCH2`) | Batch-2 surface: 94 ix — store identity, moderation liveness deadman, dispute/freeze-exit referrer legs, `rate_hire` rollup | every capability `true` (monotonic ≥ FULL) |
-| `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest surface: 96 ix — submission-rent return on every settle path, `task_schema`/`live_submissions` carve-out, contests (`distribute_ghost_share`, auto-accept disable, cancel guard, refundable entry deposit, `reclaim_terminal_claim`) | every capability `true` (monotonic ≥ FULL) |
+| `0` | Unstamped / conservative (canary, or a config not yet stamped) | every capability `false` (`listings:false`, … `goods:false`) |
+| `1` (`SURFACE_REVISION_FULL`) | Full surface stamp (historically 84-ix Phase 9; P1.2 90-ix kept stamp 1) | full-surface capabilities `true`; **`goods: false`** |
+| `2` (`SURFACE_REVISION_BATCH2`) | Batch-2: **94 ix** — store identity, moderation heartbeat, dispute/freeze-exit referrer legs, `rate_hire` rollup | full-surface capabilities `true`; **`goods: false`** |
+| `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest: **96 ix** — submission-rent return, contest rails (`distribute_ghost_share`, `reclaim_terminal_claim`, entry deposit, selection window) | full-surface capabilities `true`; **`goods: false`** |
+| `4` (`SURFACE_REVISION_BATCH4`) | Batch-4 goods: **99 ix** — `create_goods_listing` / `purchase_good` / `update_goods_listing` (handlers require `surface_revision >= 4`) | full-surface capabilities `true`; **`goods: true`** |
+
+> **Goods is the first revision-gated capability.** Revisions ≥ 1 still imply the
+> pre-goods full capability set (`listings`, `disputes`, `bonds`, …); only
+> `goods` requires revision ≥ 4.
 
 `getDeployedSurface` **tolerates the pre-migration on-chain layout**: before the
 2026-06-11 migration the live mainnet `ProtocolConfig` was the OLD 349-byte layout with
@@ -57,19 +64,21 @@ A **fresh full-surface deploy** (dev/devnet) stamps `SURFACE_REVISION_FULL` in
 
 ## Compatibility matrix (program build ↔ SDK semver ↔ cluster)
 
-> This matrix is the human-maintained source of truth; the release workflow updates it
-> in the same window as a deploy or an SDK publish.
+> This matrix is the human-maintained source of truth for **on-chain surface
+> detection**. For **published npm pin ranges** (which package versions speak the
+> live wire), see [`VERSIONING.md`](./VERSIONING.md) §1.1 — that file is the
+> consumer support contract.
 
-| Program build | Live surface | Cluster | `surface_revision` | SDK semver | `getDeployedSurface().listings` |
-|---|---|---|---|---|---|
-| full | **84 ix** | **mainnet** (live as of 2026-06-11) | `1` (FULL) | `@tetsuo-ai/marketplace-sdk` ≥ 0.6.0 | `true` |
-| full | 84 ix | devnet / localnet | `1` | ≥ 0.6.0 | `true` |
-| `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` (fallback) |
+| Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
+|---|---|---|---|---|---|---|
+| full | **99 ix** | **mainnet** (live as of 2026-07-09) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
+| full | 99 ix | devnet / localnet (fresh stamp may be 1 until operator stamps 4) | `1`…`4` | ≥ 0.8.0 | `true` if ≥ 1 | `true` only if ≥ 4 |
+| `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 
-Current local release targets at the time of writing: `@tetsuo-ai/protocol` `0.2.2`,
-`@tetsuo-ai/marketplace-sdk` `0.6.0`. The full-surface SDK includes
-`getDeployedSurface`, the 84-instruction generated client, and referrer fields on
-the hire/create facades.
+Current published packages at the time of writing: `@tetsuo-ai/protocol` **0.3.0**,
+`@tetsuo-ai/marketplace-sdk` **0.11.0**. The full-surface SDK includes
+`getDeployedSurface`, the 99-instruction generated client, store/contest/goods
+facades, and referrer fields on the hire/create facades.
 
 ## Release runbook — `anchor idl init` per cluster (fetchable on-chain IDL)
 

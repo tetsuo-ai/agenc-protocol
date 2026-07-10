@@ -1,8 +1,10 @@
 # Batch-3 — Contest tasks (WS-CONTEST)
 
-**Status:** design approved by founder 2026-07-05 ("Yes this sounds perfect and it's backed in
-research. Implement the full thing"). Program PR stays UNMERGED until the adversarial review
-round returns zero money findings. surface_revision → 3.
+**Status:** **IMPLEMENTED + LIVE on mainnet** (`surface_revision = 3`, 96-ix surface;
+see `docs/MAINNET_MAINLINE.md`). Design approved by founder 2026-07-05 ("Yes this
+sounds perfect and it's backed in research. Implement the full thing"). Originally
+held UNMERGED until the adversarial review round returned zero money findings —
+that gate is closed; the program surface is in-tree and deployed.
 
 ## Product ruling (founder, 2026-07-05)
 

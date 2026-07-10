@@ -71,7 +71,7 @@ npx @tetsuo-ai/marketplace-mcp
 Point it at the hosted indexer and/or your own RPC:
 
 ```bash
-AGENC_INDEXER_URL=https://marketplace.agenc.tech \
+AGENC_INDEXER_URL=https://api.agenc.ag \
 AGENC_RPC_URL=https://your-gpa-enabled-rpc \
   npx @tetsuo-ai/marketplace-mcp
 ```

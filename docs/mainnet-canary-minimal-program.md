@@ -2,7 +2,7 @@
 
 This document describes the reduced AgenC protocol **build** (`--features mainnet-canary`). It is not the full production protocol surface.
 
-> **Historical note (2026-06-11):** this canary build was the surface live on mainnet during the controlled private rehearsal. **It is no longer what is live** — mainnet has since been upgraded to the full 84-instruction surface (`surface_revision = FULL`; see `docs/MAINNET_ROLLOUT_RUNBOOK.md`). The canary build still exists in source and is documented here for reference, but the kit no longer loads the canary IDL/profile against this program ID on mainnet.
+> **Historical note (2026-06-11):** this canary build was the surface live on mainnet during the controlled private rehearsal. **It is no longer what is live** — mainnet was upgraded to the full surface on 2026-06-11 (then 84-ix; now **99-ix** / `surface_revision = 4` — see `docs/MAINNET_MAINLINE.md`). The canary build still exists in source and is documented here for reference, but the kit no longer loads the canary IDL/profile against this program ID on mainnet.
 
 ## Build Command
 
@@ -98,4 +98,4 @@ Expected canary IDL instruction count: `24`.
 
 The current marketplace kit lifecycle needs the following on-chain instructions for the private rehearsal: `initialize_protocol`, `register_agent`, `create_task`, `configure_task_moderation`, `record_task_moderation`, `set_task_job_spec`, `configure_task_validation`, `claim_task_with_job_spec`, `submit_task_result`, `accept_task_result`, `reject_task_result`, `cancel_task`, and `expire_claim`. All are present in the canary IDL.
 
-During the private rehearsal (when the canary build was live on mainnet), the kit loaded the canary IDL/profile and kept removed tools such as auto-accept, disputes, bids, token rewards, private ZK, governance, skills, feed, and reputation economy disabled. **As of the 2026-06-11 full-surface upgrade this no longer applies on mainnet** — the full 84-instruction surface is live, so the kit should load the full IDL/profile; only `complete_task_private` remains unavailable (ZK) until `ZkConfig` is initialized.
+During the private rehearsal (when the canary build was live on mainnet), the kit loaded the canary IDL/profile and kept removed tools such as auto-accept, disputes, bids, token rewards, private ZK, governance, skills, feed, and reputation economy disabled. **As of the 2026-06-11 full-surface upgrade this no longer applies on mainnet** — the full surface is live (now 99-ix / rev 4), so the kit should load the full IDL/profile; only `complete_task_private` remains unavailable (ZK) until `ZkConfig` is initialized.

@@ -40,17 +40,20 @@ The protocol covers that lifecycle plus advanced primitives:
   `complete_task` are protocol/package surfaces for agent-buyer or direct-pay
   integrations; the normal agenc.ag browser checkout uses the humanless
   CreatorReview path.
-- **Disputes** — initiate / vote / resolve / expire / cancel, arbiter quorum, stake
-  slashing, plus the `RejectFrozen` review track (multisig resolve / permissionless timeout).
+- **Disputes** — initiate / resolve / expire / cancel via an **assignable single-resolver**
+  model (the old arbiter-vote / `vote_dispute` path was retired in P6.3), plus stake
+  slashing and the `RejectFrozen` review track (multisig resolve / permissionless timeout).
 - **Completion bonds** — symmetric bonds (Exclusive + SOL v1) posted by both sides; loser
   forfeits, winner is made whole; permissionless `reclaim_completion_bond`.
 - **Moderation** — listing- and task-keyed moderation attestations gate hire/publish
-  (fail-closed) — see [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
-- **Bid marketplace, reputation, skills, governance (multisig), and a social feed** round
-  out the surface (84 instructions total).
+  (fail-closed); permissionless bonded attestor roster (P1.2) — see
+  [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
+- **Store identity, contest tasks, goods market, bid marketplace, reputation, skills,
+  governance (multisig), and a social feed** round out the surface (**99 instructions**
+  in the full module / committed IDL; canary build remains 25).
 
 > **Two program surfaces.** `lib.rs` has two `#[program]` modules: the full/dev module
-> (everything, **live on mainnet as of 2026-06-11**) and the conservative
+> (everything, **live on mainnet** at `surface_revision = 4`) and the conservative
 > **mainnet-canary** module (the restricted 25-instruction build, retained in source but
 > no longer what is live). New feature work is gated to the full module; `migrate_task` is
 > in both.
@@ -58,14 +61,15 @@ The protocol covers that lifecycle plus advanced primitives:
 ## Mainnet source of truth
 
 `main` is the canonical public source-of-truth branch for the currently **deployed** AgenC
-mainnet program.
+mainnet program. Authoritative deploy record:
+[docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md).
 
-> **As of 2026-06-11 the full 84-instruction surface is live on mainnet**
-> (`surface_revision = FULL (1)`, all task types enabled, bid marketplace live, `ZkConfig`
-> deferred so `complete_task_private` is off). Mainnet is **no longer the canary**: the
-> Phase 9 upgrade migrated the 169 live Task accounts (382B → 466B, 0 failures) and the
-> `ProtocolConfig` (349B → 351B). Any `Task` / `ProtocolConfig` layout change remains a
-> real, irreversible migration.
+> **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
+> (`surface_revision = 4` / `BATCH4`, last deployed slot **431918664**, all task types
+> enabled, bid marketplace live, store + contest + goods live, `ZkConfig` deferred so
+> `complete_task_private` is off). Growth path: 25-ix canary → 84-ix full surface
+> (2026-06-11) → 90-ix P1.2 open roster (2026-07-03) → 94/96/99 via additive batches 2–4.
+> Any `Task` / `ProtocolConfig` layout change remains a real, irreversible migration.
 
 - The current `main` tree matches the deployed mainnet (full-surface) program source.
 - See [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md),
@@ -84,27 +88,43 @@ agenc-protocol/
 ├── programs/agenc-coordination/   # the Anchor program (Rust)
 │   └── src/{lib.rs, state.rs, errors.rs, events.rs, instructions/*, utils/*}
 ├── packages/
-│   ├── protocol/                  # @tetsuo-ai/protocol — committed IDL/types, npm dist
-│   └── sdk-ts/                    # @tetsuo-ai/marketplace-sdk — kit client + facade (SDK)
+│   ├── protocol/                  # @tetsuo-ai/protocol — IDL/types npm package
+│   ├── sdk-ts/                    # @tetsuo-ai/marketplace-sdk — kit client + facade
+│   ├── marketplace-react/         # @tetsuo-ai/marketplace-react — React embed kit
+│   ├── marketplace-tools/         # @tetsuo-ai/marketplace-tools — agent tool adapters
+│   ├── marketplace-mcp/           # @tetsuo-ai/marketplace-mcp — MCP server
+│   ├── marketplace-moderation/    # @tetsuo-ai/marketplace-moderation — moderation canon
+│   ├── agenc-cli/                 # @tetsuo-ai/agenc-cli — init/dev/promote
+│   ├── agenc-cli-alias/           # thin `agenc` bin alias
+│   └── agenc-worker/              # @tetsuo-ai/agenc-worker — claim/submit loop
 ├── tests-integration/             # litesvm integration tests (Node; runs the real .so)
 ├── migrations/                    # protocol migration scripts
 ├── zkvm/                          # public zkVM guest (zkvm/guest/)
 ├── artifacts/anchor/              # committed canonical IDL + TS types (regenerated)
-├── scripts/                       # artifact sync, canary IDL check, devnet readiness
+├── scripts/                       # artifact sync, canary, localnet, mainnet helpers
 └── docs/                          # design, audit, and surface docs (start: docs/DOCS_INDEX.md)
 ```
 
 This repo **owns** the Anchor program, migrations, the public zkVM guest, the committed
-protocol artifacts, and the router/verifier IDL support files. It does **not** own
-host-side proving infrastructure, runtime orchestration, apps, or operator tooling — those
-live outside the public trust surface.
+protocol artifacts, the router/verifier IDL support files, and the published TypeScript
+packages listed above. It does **not** own host-side proving infrastructure, product apps
+(e.g. agenc.ag), or private operator control planes — those live outside this public trust
+surface.
 
 ## Packages (downstream consumption)
 
-| Package | Path | What |
-|---------|------|------|
-| `@tetsuo-ai/protocol` | `packages/protocol` | The committed canonical IDL + TS types + manifest. The supported way for downstream repos to consume the protocol contract. Derived from `artifacts/anchor/*`. |
-| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | The embeddable marketplace SDK: a **Codama-generated `@solana/kit` client** for all 84 instructions + an ergonomic facade. The facade intentionally omits only `claim_task` (fail-closed) and `complete_task_private` (ZK gated). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| Package | Path | Version | What |
+|---------|------|---------|------|
+| `@tetsuo-ai/protocol` | `packages/protocol` | 0.3.0 | Committed canonical IDL + TS types + manifest. Derived from `artifacts/anchor/*`. |
+| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | 0.11.0 | Codama-generated `@solana/kit` client for all **99** instructions + ergonomic facade. Facade intentionally omits only `claim_task` (fail-closed) and `complete_task_private` (ZK gated). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/marketplace-react` | `packages/marketplace-react` | 0.4.1 | React hooks/components for embeddable marketplace UIs. |
+| `@tetsuo-ai/marketplace-tools` | `packages/marketplace-tools` | 0.4.0 | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
+| `@tetsuo-ai/marketplace-mcp` | `packages/marketplace-mcp` | 0.4.0 | MCP server exposing marketplace tools. |
+| `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | 0.1.0 | Shared moderation canon / test vectors. |
+| `@tetsuo-ai/agenc-cli` | `packages/agenc-cli` | 0.2.0 | `init` / `dev` / `promote` developer CLI. |
+| `@tetsuo-ai/agenc-worker` | `packages/agenc-worker` | 0.1.1 | Worker claim/submit runtime loop. |
+
+Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## Build, test & validate
 
@@ -134,10 +154,11 @@ npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/prot
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
 ```
 
-**Test coverage (last verified):** **232** Rust unit tests · **149** litesvm integration
-tests (real on-chain execution) · **98** SDK tests (89 structural + 9 on-chain e2e). Five
-internal adversarial/docs-grounded audits, **0 open findings** (see
-[docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)).
+**Test coverage (static inventory as of 2026-07-10):** **~403** Rust `#[test]` attrs under
+`programs/agenc-coordination/src` · **~283** litesvm `test(` cases in `tests-integration/` ·
+**~459** SDK `it(`/`test(` cases across `packages/sdk-ts/tests` + `tests-e2e` (runner-reported
+totals may differ for parametrized suites). Five internal adversarial/docs-grounded audits,
+**0 open findings** (see [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)).
 
 > Always run `anchor build` before `npm run artifacts:refresh` when the program or IDL changes.
 
@@ -207,7 +228,9 @@ artifacts (PLAN.md Phase 8):
 
 ## Scope rules
 
-- Do not add runtime, MCP, app, or control-plane code here.
+- This monorepo **does** ship the published TS packages under `packages/*` (SDK, React,
+  tools, MCP, moderation, CLI, worker). Do **not** add product apps (agenc.ag storefront),
+  host-side proving infrastructure, or private operator control planes here.
 - Do not treat `target/` as the public artifact interface.
 - Do not hand-edit `artifacts/anchor/*` — regenerate from `anchor build`.
 - Do not hand-edit `packages/protocol/src/generated/*` — regenerate from canonical artifacts.
@@ -242,3 +265,9 @@ This repository (including the on-chain program and zkVM guest) is licensed unde
 
 - [`@tetsuo-ai/marketplace-sdk`](packages/sdk-ts/LICENSE) — MIT
 - [`@tetsuo-ai/protocol`](packages/protocol/LICENSE) — MIT
+- [`@tetsuo-ai/marketplace-react`](packages/marketplace-react/LICENSE) — MIT
+- [`@tetsuo-ai/marketplace-tools`](packages/marketplace-tools/LICENSE) — MIT
+- [`@tetsuo-ai/marketplace-mcp`](packages/marketplace-mcp/LICENSE) — MIT
+- [`@tetsuo-ai/marketplace-moderation`](packages/marketplace-moderation/LICENSE) — MIT
+- [`@tetsuo-ai/agenc-cli`](packages/agenc-cli/LICENSE) — MIT
+- [`@tetsuo-ai/agenc-worker`](packages/agenc-worker/LICENSE) — MIT
