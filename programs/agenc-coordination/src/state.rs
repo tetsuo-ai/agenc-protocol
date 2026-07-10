@@ -2502,6 +2502,12 @@ impl PurchaseRecord {
 pub struct GoodsListing {
     /// Seller's agent PDA
     pub seller: Pubkey,
+    /// Seller's WALLET authority, SNAPSHOTTED at create. Payouts and updates pin
+    /// to THIS, not to `seller_agent.authority` at sale time — so a seller who
+    /// deregisters this agent_id cannot have an attacker re-register the same
+    /// agent_id (same PDA) and hijack the listing's future payouts / controls
+    /// (batch-4 adversarial review AC-2).
+    pub seller_authority: Pubkey,
     /// Unique good identifier (unique per seller; PDA seed)
     pub good_id: [u8; 32],
     /// Display name

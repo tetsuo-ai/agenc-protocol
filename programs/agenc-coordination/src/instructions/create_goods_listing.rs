@@ -61,11 +61,17 @@ pub struct CreateGoodsListing<'info> {
 /// Validate the operator fee leg pairing (shared with `update_goods_listing`):
 /// operator set ⟺ fee > 0; per-leg cap; the operator may not be the seller's
 /// wallet (self-dealing would let a seller dodge the combined-fee cap math by
-/// routing "fees" back to themselves while looking like a third-party leg).
+/// routing "fees" back to themselves while looking like a third-party leg); and
+/// the operator may not be the listing's own PDA (a program-owned non-signer
+/// address that can never sweep its lamports — the fee would be locked forever
+/// in the uncloseable listing account; batch-4 review GOODS-OP-PDA-02).
+/// NOTE: a program-owned operator (e.g. a multisig vault PDA) is otherwise
+/// allowed — only the listing's own address is rejected.
 pub(crate) fn validate_operator_terms(
     operator: Pubkey,
     operator_fee_bps: u16,
     seller_authority: Pubkey,
+    good_key: Pubkey,
 ) -> Result<()> {
     let has_operator = operator != Pubkey::default();
     require!(
@@ -78,6 +84,10 @@ pub(crate) fn validate_operator_terms(
     );
     require!(
         operator != seller_authority,
+        CoordinationError::GoodsInvalidOperatorTerms
+    );
+    require!(
+        operator != good_key,
         CoordinationError::GoodsInvalidOperatorTerms
     );
     Ok(())
@@ -128,7 +138,7 @@ pub fn handler(
         CoordinationError::GoodsPriceBelowMinimum
     );
     require!(total_supply > 0, CoordinationError::GoodsInvalidSupply);
-    validate_operator_terms(operator, operator_fee_bps, seller.authority)?;
+    validate_operator_terms(operator, operator_fee_bps, seller.authority, ctx.accounts.good.key())?;
 
     // The BLOCK floor: a multisig-blocked content hash cannot be listed.
     require_content_not_blocked(
@@ -140,6 +150,7 @@ pub fn handler(
     let good = &mut ctx.accounts.good;
 
     good.seller = ctx.accounts.seller.key();
+    good.seller_authority = ctx.accounts.seller.authority;
     good.good_id = good_id;
     good.name = name;
     good.metadata_hash = metadata_hash;
@@ -183,20 +194,24 @@ mod tests {
     #[test]
     fn operator_terms_pairing_is_enforced() {
         let seller = Pubkey::new_unique();
+        let good = Pubkey::new_unique();
         let op = Pubkey::new_unique();
         // no operator, no fee: ok
-        assert!(validate_operator_terms(Pubkey::default(), 0, seller).is_ok());
+        assert!(validate_operator_terms(Pubkey::default(), 0, seller, good).is_ok());
         // operator with fee: ok
-        assert!(validate_operator_terms(op, 500, seller).is_ok());
+        assert!(validate_operator_terms(op, 500, seller, good).is_ok());
         // operator without fee: reject (dangling payee)
-        assert!(validate_operator_terms(op, 0, seller).is_err());
+        assert!(validate_operator_terms(op, 0, seller, good).is_err());
         // fee without operator: reject (fee to nowhere)
-        assert!(validate_operator_terms(Pubkey::default(), 500, seller).is_err());
+        assert!(validate_operator_terms(Pubkey::default(), 500, seller, good).is_err());
         // per-leg cap
-        assert!(validate_operator_terms(op, MAX_OPERATOR_FEE_BPS, seller).is_ok());
-        assert!(validate_operator_terms(op, MAX_OPERATOR_FEE_BPS + 1, seller).is_err());
+        assert!(validate_operator_terms(op, MAX_OPERATOR_FEE_BPS, seller, good).is_ok());
+        assert!(validate_operator_terms(op, MAX_OPERATOR_FEE_BPS + 1, seller, good).is_err());
         // operator == seller wallet: reject (self-dealing leg)
-        assert!(validate_operator_terms(seller, 500, seller).is_err());
+        assert!(validate_operator_terms(seller, 500, seller, good).is_err());
+        // operator == the listing's own PDA: reject (GOODS-OP-PDA-02 — the fee
+        // would be locked forever in the uncloseable listing account)
+        assert!(validate_operator_terms(good, 500, seller, good).is_err());
     }
 
     #[test]

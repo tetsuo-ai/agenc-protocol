@@ -197,8 +197,15 @@ export type PurchaseGoodAsyncInput<
    * future serial and corrupt the provenance namespace.
    */
   saleReceipt?: Address<TAccountSaleReceipt>;
-  /** Seller's agent registration (payee identity source) */
+  /**
+   * Seller's agent registration — carried only to enforce the seller's
+   * agent-level STATUS (a suspended seller stops selling). The PAYEE is NOT
+   * sourced from this account (see AC-2): it is pinned to the listing's
+   * snapshotted `seller_authority`, so re-registering a deregistered agent_id
+   * cannot redirect payouts.
+   */
   sellerAgent: Address<TAccountSellerAgent>;
+  /** NOT the current `seller_agent.authority`. */
   sellerWallet: Address<TAccountSellerWallet>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
@@ -428,8 +435,15 @@ export type PurchaseGoodInput<
    * future serial and corrupt the provenance namespace.
    */
   saleReceipt: Address<TAccountSaleReceipt>;
-  /** Seller's agent registration (payee identity source) */
+  /**
+   * Seller's agent registration — carried only to enforce the seller's
+   * agent-level STATUS (a suspended seller stops selling). The PAYEE is NOT
+   * sourced from this account (see AC-2): it is pinned to the listing's
+   * snapshotted `seller_authority`, so re-registering a deregistered agent_id
+   * cannot redirect payouts.
+   */
   sellerAgent: Address<TAccountSellerAgent>;
+  /** NOT the current `seller_agent.authority`. */
   sellerWallet: Address<TAccountSellerWallet>;
   protocolConfig: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
@@ -630,8 +644,15 @@ export type ParsedPurchaseGoodInstruction<
      * future serial and corrupt the provenance namespace.
      */
     saleReceipt: TAccountMetas[1];
-    /** Seller's agent registration (payee identity source) */
+    /**
+     * Seller's agent registration — carried only to enforce the seller's
+     * agent-level STATUS (a suspended seller stops selling). The PAYEE is NOT
+     * sourced from this account (see AC-2): it is pinned to the listing's
+     * snapshotted `seller_authority`, so re-registering a deregistered agent_id
+     * cannot redirect payouts.
+     */
     sellerAgent: TAccountMetas[2];
+    /** NOT the current `seller_agent.authority`. */
     sellerWallet: TAccountMetas[3];
     protocolConfig: TAccountMetas[4];
     treasury: TAccountMetas[5];

@@ -27,7 +27,11 @@ pub struct UpdateGoodsListing<'info> {
         mut,
         seeds = [b"good", seller.key().as_ref(), good.good_id.as_ref()],
         bump = good.bump,
-        constraint = good.seller == seller.key() @ CoordinationError::GoodsUnauthorizedUpdate
+        constraint = good.seller == seller.key() @ CoordinationError::GoodsUnauthorizedUpdate,
+        // AC-2: control is pinned to the SNAPSHOTTED seller_authority, so an
+        // attacker who re-registers a deregistered agent_id (same PDA) cannot
+        // reprice/restock/redirect the listing.
+        constraint = good.seller_authority == authority.key() @ CoordinationError::GoodsUnauthorizedUpdate
     )]
     pub good: Account<'info, GoodsListing>,
 
@@ -110,10 +114,9 @@ pub fn handler(
             .total_supply
             .checked_add(delta)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
-        good.restock_count = good
-            .restock_count
-            .checked_add(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        // Transparency counter only — saturate rather than brick the restock
+        // path at u16::MAX restocks (SUPPLY-L2); total_supply stays checked.
+        good.restock_count = good.restock_count.saturating_add(1);
     }
 
     // Operator terms: apply whichever side(s) were provided, then validate the
@@ -121,7 +124,7 @@ pub fn handler(
     if operator.is_some() || operator_fee_bps.is_some() {
         let next_operator = operator.unwrap_or(good.operator);
         let next_fee_bps = operator_fee_bps.unwrap_or(good.operator_fee_bps);
-        validate_operator_terms(next_operator, next_fee_bps, seller.authority)?;
+        validate_operator_terms(next_operator, next_fee_bps, seller.authority, good.key())?;
         good.operator = next_operator;
         good.operator_fee_bps = next_fee_bps;
     }

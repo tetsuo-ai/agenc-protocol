@@ -85,6 +85,27 @@ stale-serial) and retries; supply can never over-sell.
 9. The moderation BLOCK floor (`require_content_not_blocked` over
    `metadata_hash`) gates create AND purchase — the purchase-time check is the
    binding one (an updated hash is re-checked at every sale).
+10. **Payout identity is SNAPSHOTTED (AC-2 review fix):** `GoodsListing.
+    seller_authority` is captured at create; `purchase_good` pays that wallet
+    and `update_goods_listing` authorizes against it — NOT the live
+    `seller_agent.authority`. So deregistering the seller's agent_id and having
+    an attacker re-register the same id (same agent PDA) cannot redirect payouts
+    or seize control. A **suspended** seller stops selling on all pre-existing
+    listings immediately (`purchase_good` requires `seller_agent.status !=
+    Suspended`; Busy/Inactive are self-managed and still sell). The operator may
+    not be the seller wallet nor the listing's own PDA (GOODS-OP-PDA-02).
+
+### Rent-exempt payees (SOL rail, fail-closed)
+Every SOL fee-leg payee (the snapshotted seller wallet, the treasury, and the
+operator) must be **rent-exempt** (~890,880 lamports) when it receives its leg,
+or Solana's runtime rent-state check reverts the whole purchase atomically
+(`InsufficientFundsForRent` — no funds move or mis-split; the buyer loses only
+the tx fee). This is the known WP-B2 settlement class. It cannot be validated at
+listing time (the payee balance is a purchase-time property), so there is NO
+on-chain skip/redirect logic (that would fork the split math). Mitigation is
+client-side: the SDK exports `MIN_RENT_EXEMPT_PAYEE_LAMPORTS` and the storefront
+must preflight the seller + operator balances and refuse to render a listing as
+purchasable when any nonzero projected leg would leave a payee below the floor.
 
 ## 5. Versioning / gating
 

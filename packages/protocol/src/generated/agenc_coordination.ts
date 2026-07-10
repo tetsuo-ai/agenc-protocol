@@ -8847,7 +8847,11 @@ export type AgencCoordination = {
         {
           "name": "sellerAgent",
           "docs": [
-            "Seller's agent registration (payee identity source)"
+            "Seller's agent registration — carried only to enforce the seller's",
+            "agent-level STATUS (a suspended seller stops selling). The PAYEE is NOT",
+            "sourced from this account (see AC-2): it is pinned to the listing's",
+            "snapshotted `seller_authority`, so re-registering a deregistered agent_id",
+            "cannot redirect payouts."
           ],
           "pda": {
             "seeds": [
@@ -8871,6 +8875,9 @@ export type AgencCoordination = {
         },
         {
           "name": "sellerWallet",
+          "docs": [
+            "NOT the current `seller_agent.authority`."
+          ],
           "writable": true
         },
         {
@@ -22140,6 +22147,17 @@ export type AgencCoordination = {
             "name": "seller",
             "docs": [
               "Seller's agent PDA"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "sellerAuthority",
+            "docs": [
+              "Seller's WALLET authority, SNAPSHOTTED at create. Payouts and updates pin",
+              "to THIS, not to `seller_agent.authority` at sale time — so a seller who",
+              "deregisters this agent_id cannot have an attacker re-register the same",
+              "agent_id (same PDA) and hijack the listing's future payouts / controls",
+              "(batch-4 adversarial review AC-2)."
             ],
             "type": "pubkey"
           },

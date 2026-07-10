@@ -1417,8 +1417,8 @@ cap. `expected_serial` pins this sale's receipt PDA (stale = retry);
 |---|---|---|---|---|---|---|
 | 1 | `good` | yes |  |  | PDA ["good", account:good.seller (GoodsListing), account:good.good_id (GoodsListing)] |  |
 | 2 | `sale_receipt` | yes |  |  | PDA ["goods_sale", account:good, arg:expected_serial] | One receipt per sold UNIT: seeded on the serial passed as an argument. The `expected_serial == good.sold_count` gate in the handler is LOAD-BEARING — without it a buyer could mint a receipt at an arbitrary future serial and corrupt the provenance namespace. |
-| 3 | `seller_agent` |  |  |  | PDA ["agent", account:seller_agent.agent_id (AgentRegistration)] | Seller's agent registration (payee identity source) |
-| 4 | `seller_wallet` | yes |  |  |  |  |
+| 3 | `seller_agent` |  |  |  | PDA ["agent", account:seller_agent.agent_id (AgentRegistration)] | Seller's agent registration — carried only to enforce the seller's agent-level STATUS (a suspended seller stops selling). The PAYEE is NOT sourced from this account (see AC-2): it is pinned to the listing's snapshotted `seller_authority`, so re-registering a deregistered agent_id cannot redirect payouts. |
+| 4 | `seller_wallet` | yes |  |  |  | NOT the current `seller_agent.authority`. |
 | 5 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 6 | `treasury` | yes |  |  |  |  |
 | 7 | `moderation_block` |  |  |  |  | The moderation BLOCK floor over the listing's CURRENT `metadata_hash` — checked at every sale, so a post-listing block (or a blocked hash swapped in via update) stops purchases immediately. |

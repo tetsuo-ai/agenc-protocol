@@ -333,6 +333,77 @@ test("SPL rail: three-way token split", async () => {
   assert.equal(tokenAmount(w.svm, buyerAta), 0n, "buyer spent all");
 });
 
+// Byte-patch a live AgentRegistration in place (full decode/re-encode trips the
+// enum coder). Layout after the 8-byte discriminator: agent_id[32] @8,
+// authority[32] @40, capabilities[8] @72, status(u8) @80.
+function mutateAgent(w, agentPda, { authority, status } = {}) {
+  const acct = w.svm.getAccount(agentPda);
+  const data = Buffer.from(acct.data);
+  if (authority) authority.toBuffer().copy(data, 40);
+  if (status !== undefined) data.writeUInt8(status, 80);
+  w.svm.setAccount(agentPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
+test("AC-2: payout follows the snapshotted seller_authority, not the live agent authority", async () => {
+  const w = await goodsWorld();
+  const price = 1_000_000;
+  const { good, metaHash } = await createGood(w, { price, totalSupply: 3 });
+  // The listing snapshotted the seller wallet.
+  assert.equal(decode(w.svm, "GoodsListing", good).seller_authority.toBase58(), w.seller.publicKey.toBase58());
+
+  // Simulate a deregister + attacker re-register of the SAME agent_id: the agent
+  // PDA is unchanged but its `authority` is now the attacker's.
+  const attacker = Keypair.generate();
+  w.svm.airdrop(attacker.publicKey, BigInt(100e9));
+  mutateAgent(w, w.sellerAgent, { authority: attacker.publicKey });
+
+  // Paying out to the ATTACKER (the current agent authority) is REJECTED — the
+  // seller_wallet constraint pins to good.seller_authority (the snapshot).
+  const buyer = freshBuyer(w);
+  const [receipt] = pda([enc("goods_sale"), good.toBuffer(), new BN(0).toArrayLike(Buffer, "le", 8)]);
+  const attackerRes = send(w.svm, await buyer.prog.methods.purchaseGood(new BN(0), new BN(price))
+    .accounts({ good, saleReceipt: receipt, sellerAgent: w.sellerAgent, sellerWallet: attacker.publicKey,
+      protocolConfig: w.protocolPda, treasury: w.admin.publicKey, moderationBlock: moderationBlockPda(metaHash)[0],
+      authority: buyer.kp.publicKey, systemProgram: SystemProgram.programId, operatorWallet: null,
+      priceMint: null, buyerTokenAccount: null, sellerTokenAccount: null, treasuryTokenAccount: null, operatorTokenAccount: null, tokenProgram: null })
+    .instruction(), [buyer.kp]);
+  expectFail(attackerRes, "InvalidInput", "payout to the re-registered attacker authority rejected");
+
+  // Paying out to the ORIGINAL seller wallet (the snapshot) still succeeds.
+  const buyer2 = freshBuyer(w);
+  const before = bal(w, w.seller.publicKey);
+  expectOk((await buyGood(w, { good, buyer: buyer2, serial: 0, expectedPrice: price, metaHash })).res, "snapshot payee still paid");
+  assert.equal(bal(w, w.seller.publicKey) - before, 950_000, "original seller received the payout");
+});
+
+test("AC-1: a suspended seller cannot sell (revert-sensitive)", async () => {
+  const w = await goodsWorld();
+  const { good, metaHash } = await createGood(w, { price: MIN_GOOD_PRICE });
+  // Suspend the seller agent (status 3).
+  mutateAgent(w, w.sellerAgent, { status: 3 });
+  const buyer = freshBuyer(w);
+  expectFail((await buyGood(w, { good, buyer, serial: 0, expectedPrice: MIN_GOOD_PRICE, metaHash })).res,
+    "AgentSuspended", "suspended seller's good cannot be purchased");
+  // Restore to Active -> the sale goes through (proves the gate is the cause).
+  // A fresh buyer keeps the tx distinct from the failed suspended attempt
+  // (litesvm dedupes byte-identical transactions).
+  mutateAgent(w, w.sellerAgent, { status: 1 });
+  const buyer2 = freshBuyer(w);
+  expectOk((await buyGood(w, { good, buyer: buyer2, serial: 0, expectedPrice: MIN_GOOD_PRICE, metaHash })).res, "reactivated seller can sell");
+});
+
+test("GOODS-OP-PDA-02: operator cannot be the listing's own PDA", async () => {
+  const w = await goodsWorld();
+  const goodId = id32();
+  const [good] = pda([enc("good"), w.sellerAgent.toBuffer(), Buffer.from(goodId)]);
+  const metaHash = Buffer.alloc(32, 9);
+  // operator = the good PDA itself -> the fee would be locked forever.
+  expectFail(send(w.svm, await w.sellerProg.methods
+    .createGoodsListing(arr(goodId), arr(Buffer.alloc(32, 7)), arr(metaHash), "https://x/y.json", new BN(MIN_GOOD_PRICE), null, arr(Buffer.alloc(64, 3)), new BN(3), good, 300)
+    .accounts({ good, seller: w.sellerAgent, protocolConfig: w.protocolPda, moderationBlock: moderationBlockPda(metaHash)[0], authority: w.seller.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.seller]), "GoodsInvalidOperatorTerms", "operator == listing PDA rejected");
+});
+
 test("invalid create args are rejected", async () => {
   const w = await goodsWorld();
   // zero supply

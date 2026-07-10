@@ -69,6 +69,14 @@ export type GoodsListing = {
   discriminator: ReadonlyUint8Array;
   /** Seller's agent PDA */
   seller: Address;
+  /**
+   * Seller's WALLET authority, SNAPSHOTTED at create. Payouts and updates pin
+   * to THIS, not to `seller_agent.authority` at sale time — so a seller who
+   * deregisters this agent_id cannot have an attacker re-register the same
+   * agent_id (same PDA) and hijack the listing's future payouts / controls
+   * (batch-4 adversarial review AC-2).
+   */
+  sellerAuthority: Address;
   /** Unique good identifier (unique per seller; PDA seed) */
   goodId: ReadonlyUint8Array;
   /** Display name */
@@ -133,6 +141,14 @@ export type GoodsListing = {
 export type GoodsListingArgs = {
   /** Seller's agent PDA */
   seller: Address;
+  /**
+   * Seller's WALLET authority, SNAPSHOTTED at create. Payouts and updates pin
+   * to THIS, not to `seller_agent.authority` at sale time — so a seller who
+   * deregisters this agent_id cannot have an attacker re-register the same
+   * agent_id (same PDA) and hijack the listing's future payouts / controls
+   * (batch-4 adversarial review AC-2).
+   */
+  sellerAuthority: Address;
   /** Unique good identifier (unique per seller; PDA seed) */
   goodId: ReadonlyUint8Array;
   /** Display name */
@@ -200,6 +216,7 @@ export function getGoodsListingEncoder(): Encoder<GoodsListingArgs> {
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["seller", getAddressEncoder()],
+      ["sellerAuthority", getAddressEncoder()],
       ["goodId", fixEncoderSize(getBytesEncoder(), 32)],
       ["name", fixEncoderSize(getBytesEncoder(), 32)],
       ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
@@ -228,6 +245,7 @@ export function getGoodsListingDecoder(): Decoder<GoodsListing> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["seller", getAddressDecoder()],
+    ["sellerAuthority", getAddressDecoder()],
     ["goodId", fixDecoderSize(getBytesDecoder(), 32)],
     ["name", fixDecoderSize(getBytesDecoder(), 32)],
     ["metadataHash", fixDecoderSize(getBytesDecoder(), 32)],

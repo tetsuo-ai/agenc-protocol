@@ -22,7 +22,7 @@ use crate::instructions::completion_helpers::calculate_combined_fees;
 use crate::instructions::constants::BASIS_POINTS_DIVISOR;
 use crate::instructions::launch_controls::require_goods_enabled;
 use crate::instructions::moderation_gate_helpers::require_content_not_blocked;
-use crate::state::{AgentRegistration, GoodsListing, ProtocolConfig, SaleReceipt};
+use crate::state::{AgentRegistration, AgentStatus, GoodsListing, ProtocolConfig, SaleReceipt};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
@@ -51,7 +51,11 @@ pub struct PurchaseGood<'info> {
     )]
     pub sale_receipt: Box<Account<'info, SaleReceipt>>,
 
-    /// Seller's agent registration (payee identity source)
+    /// Seller's agent registration — carried only to enforce the seller's
+    /// agent-level STATUS (a suspended seller stops selling). The PAYEE is NOT
+    /// sourced from this account (see AC-2): it is pinned to the listing's
+    /// snapshotted `seller_authority`, so re-registering a deregistered agent_id
+    /// cannot redirect payouts.
     #[account(
         seeds = [b"agent", seller_agent.agent_id.as_ref()],
         bump = seller_agent.bump,
@@ -59,10 +63,11 @@ pub struct PurchaseGood<'info> {
     )]
     pub seller_agent: Box<Account<'info, AgentRegistration>>,
 
-    /// CHECK: Validated as seller_agent.authority
+    /// CHECK: Validated as the listing's SNAPSHOTTED `seller_authority` (AC-2),
+    /// NOT the current `seller_agent.authority`.
     #[account(
         mut,
-        constraint = seller_wallet.key() == seller_agent.authority @ CoordinationError::InvalidInput
+        constraint = seller_wallet.key() == good.seller_authority @ CoordinationError::InvalidInput
     )]
     pub seller_wallet: UncheckedAccount<'info>,
 
@@ -150,6 +155,16 @@ pub fn handler(ctx: Context<PurchaseGood>, expected_serial: u64, expected_price:
     check_version_compatible(config)?;
     require_goods_enabled(config)?;
 
+    // A SUSPENDED seller stops selling on all their pre-existing listings
+    // immediately (batch-4 review AC-1/GOODS-SUB-2). Gate on Suspended
+    // specifically — Busy/Inactive are self-managed operational states, not a
+    // protocol-enforced ban, so requiring Active would break sales for a seller
+    // legitimately marked Busy while working other tasks.
+    require!(
+        ctx.accounts.seller_agent.status != AgentStatus::Suspended,
+        CoordinationError::AgentSuspended
+    );
+
     let good = &ctx.accounts.good;
     require!(good.is_active, CoordinationError::GoodsNotActive);
     require!(
@@ -173,7 +188,7 @@ pub fn handler(ctx: Context<PurchaseGood>, expected_serial: u64, expected_price:
     // sybil remains possible at the cost of the protocol fee — sold_count must
     // therefore never feed reputation; see the module doc.)
     require!(
-        ctx.accounts.authority.key() != ctx.accounts.seller_agent.authority,
+        ctx.accounts.authority.key() != ctx.accounts.good.seller_authority,
         CoordinationError::GoodsSelfPurchase
     );
 
