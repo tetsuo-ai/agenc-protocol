@@ -1,8 +1,8 @@
 # Batch 4 — GOODS: a rivalrous goods market primitive
 
-> Design doc for the batch-4 instruction surface (`surface_revision = 4`).
-> Mirrors `batch-3-contest-tasks.md` discipline: **the program PR stays UNMERGED
-> until an adversarial money-path review round returns zero money findings.**
+> **Status: IMPLEMENTED and live on mainnet since 2026-07-09** at
+> `surface_revision = 4` (99-instruction surface). This document preserves the
+> design and adversarial-review invariants used for the shipped implementation.
 
 ## 1. What & why
 
@@ -109,8 +109,8 @@ purchasable when any nonzero projected leg would leave a payee below the floor.
 
 ## 5. Versioning / gating
 
-- `SURFACE_REVISION_BATCH4 = 4`; `ProtocolConfig::default()` stamps 4 (fresh
-  dev/test configs); mainnet stays 3 until the ceremony stamps 4.
+- `SURFACE_REVISION_BATCH4 = 4`; `ProtocolConfig::default()` stamps 4 for
+  test/config fixtures. Mainnet was stamped to 4 in the 2026-07-09 ceremony.
 - Every goods handler gates `check_version_compatible(config)` +
   `require_goods_enabled(config)` (= `surface_revision >= 4`,
   `GoodsSurfaceNotEnabled`). **This is the first ENFORCING use of

@@ -33,21 +33,26 @@ The protocol covers that lifecycle plus advanced primitives:
     ExternalAttestation) — see [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)
   - **private** zk-backed completion via `complete_task_private` — see
     [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) (deferred until the prover path is ready)
-- **3-way fee split** — worker / protocol (treasury) / operator, sourced via `HireRecord`,
-  with a worker floor and bps caps; enforced on the dispute payout paths too so settlement
-  can't bypass the split.
+- **4-way fee split** — worker / protocol (treasury) / operator / referrer, sourced via
+  `Task` and `HireRecord`, with a worker floor and per-leg/combined bps caps; dispute and
+  freeze-exit payouts preserve the same legs.
 - **Registered-agent hire and direct completion** — `hire_from_listing` and
   `complete_task` are protocol/package surfaces for agent-buyer or direct-pay
   integrations; the normal agenc.ag browser checkout uses the humanless
   CreatorReview path.
-- **Disputes** — initiate / vote / resolve / expire / cancel, arbiter quorum, stake
-  slashing, plus the `RejectFrozen` review track (multisig resolve / permissionless timeout).
+- **Disputes** — initiate / resolve / expire / cancel through an assigned single resolver
+  or protocol authority, with stake slashing and the `RejectFrozen` review track. The old
+  `vote_dispute` quorum model is retired.
 - **Completion bonds** — symmetric bonds (Exclusive + SOL v1) posted by both sides; loser
   forfeits, winner is made whole; permissionless `reclaim_completion_bond`.
-- **Moderation** — listing- and task-keyed moderation attestations gate hire/publish
-  (fail-closed) — see [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
+- **Moderation** — moderator-keyed task/listing attestations accept the configured authority
+  or active bonded roster attestors. A heartbeat deadman can relax the ALLOW requirement;
+  the multisig BLOCK floor never relaxes. See [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
+- **Contest tasks and goods** — competitive tasks support refundable entry deposits,
+  creator selection, ghost-share distribution, and terminal-claim cleanup; the goods rail
+  provides finite direct-buy listings with permanent sale receipts.
 - **Bid marketplace, reputation, skills, governance (multisig), and a social feed** round
-  out the surface (84 instructions total).
+  out the surface (99 instructions total at revision 4).
 
 > **Two program surfaces.** `lib.rs` has two `#[program]` modules: the full/dev module
 > (everything, **live on mainnet as of 2026-06-11**) and the conservative
@@ -60,9 +65,10 @@ The protocol covers that lifecycle plus advanced primitives:
 `main` is the canonical public source-of-truth branch for the currently **deployed** AgenC
 mainnet program.
 
-> **As of 2026-06-11 the full 84-instruction surface is live on mainnet**
-> (`surface_revision = FULL (1)`, all task types enabled, bid marketplace live, `ZkConfig`
-> deferred so `complete_task_private` is off). Mainnet is **no longer the canary**: the
+> **As of 2026-07-09 the revision-4 99-instruction surface is live on mainnet**
+> (`surface_revision = 4`, contests and goods included, all task types enabled, bid
+> marketplace live, `ZkConfig` deferred so `complete_task_private` is off). Mainnet is
+> **no longer the canary**: the
 > Phase 9 upgrade migrated the 169 live Task accounts (382B → 466B, 0 failures) and the
 > `ProtocolConfig` (349B → 351B). Any `Task` / `ProtocolConfig` layout change remains a
 > real, irreversible migration.
@@ -104,7 +110,7 @@ live outside the public trust surface.
 | Package | Path | What |
 |---------|------|------|
 | `@tetsuo-ai/protocol` | `packages/protocol` | The committed canonical IDL + TS types + manifest. The supported way for downstream repos to consume the protocol contract. Derived from `artifacts/anchor/*`. |
-| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | The embeddable marketplace SDK: a **Codama-generated `@solana/kit` client** for all 84 instructions + an ergonomic facade. The facade intentionally omits only `claim_task` (fail-closed) and `complete_task_private` (ZK gated). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | The embeddable marketplace SDK: a **Codama-generated `@solana/kit` client** for all 99 instructions + an ergonomic facade. The facade intentionally omits only `claim_task` (fail-closed) and `complete_task_private` (ZK gated). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
 
 ## Build, test & validate
 

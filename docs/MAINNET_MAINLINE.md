@@ -12,10 +12,12 @@ window or before the deploy is announced publicly.
 
 ## Current Mainnet Deployment
 
-> **As of 2026-07-03 the full 90-instruction P1.2 open-roster surface is live on
-> mainnet** (deployed in slot **430491216**, source commit `aad4c0d`, upgrade
-> executed through the Squads 2-of-3 upgrade-authority vault). The P1.2 batch was
-> a **flag-day wire cutover**, not a compatible upgrade: `set_task_job_spec` /
+> **As of 2026-07-09 the revision-4 99-instruction surface is live on mainnet.**
+> It includes the P1.2 open roster, batch-2 store/liveness additions, batch-3
+> contests, and batch-4 goods. The P1.2 base was deployed in slot **430491216**
+> from source commit `aad4c0d` through the Squads 2-of-3 upgrade-authority vault.
+> That P1.2 batch was a **flag-day wire cutover**, not a compatible upgrade:
+> `set_task_job_spec` /
 > `hire_from_listing` / `hire_from_listing_humanless` gained a trailing
 > `moderator` arg + a required `moderation_block` account, the `record_*_moderation`
 > records moved to v2 moderator-keyed seeds, and moderation-attestor registration
@@ -23,13 +25,14 @@ window or before the deploy is announced publicly.
 > bond, 7-day exit cooldown). Old-wire clients fail closed. See
 > [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md) §2.6 for the
 > cutover choreography and [`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md)
-> for the design.
+> for the design. Revisions 2–4 were additive; the current source lineage is
+> recorded in [`VERSIONING.md`](./VERSIONING.md).
 
 - Program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - Program source path: `programs/agenc-coordination/`
 - `declare_id!` location: `programs/agenc-coordination/src/lib.rs`
-- Live surface: **full 90-instruction surface** (default features), `surface_revision = FULL (1)`
-- Last deployed in slot: **430491216** (2026-07-03, P1.2), commit `aad4c0def4b092311ae228d83a2ffb0f72ccb40e`
+- Live surface: **revision-4 99-instruction surface** (default features), `surface_revision = 4`
+- Last breaking-wire deployment: slot **430491216** (2026-07-03, P1.2), commit `aad4c0def4b092311ae228d83a2ffb0f72ccb40e`; revisions 2–4 were additive upgrades
 - Verified build: **LIVE** — the OtterSec/osec.io registry reports
   `is_verified: true` for the deployed bytecode against this repo at the deployed
   commit (check <https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>);
@@ -54,6 +57,12 @@ window or before the deploy is announced publicly.
 
 ### Prior deployment history
 
+- **2026-07-09 — Batch 4 goods (revision 4, 99 instructions).** Added finite
+  goods listings, direct purchase, and permanent `SaleReceipt` provenance.
+- **2026-07-05 — Batch 3 contests (revision 3, 96 instructions).** Added
+  contest entry deposits, creator selection/ghost split, and terminal-claim reclaim.
+- **2026-07-05 — Batch 2 (revision 2, 94 instructions).** Added Store identity,
+  moderation heartbeat/liveness, dispute/freeze-exit referrer legs, and `rate_hire`.
 - **2026-07-02 — WP-A1 roster-consumption gates.** The three moderation
   consumption gates began honoring registered roster attestors' attestations
   (previously only the single global `moderation_authority` unlocked a

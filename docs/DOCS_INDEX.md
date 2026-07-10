@@ -5,7 +5,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 ## Start Here
 
 - [../README.md](../README.md) - repo overview, ownership, and top-level layout
-- [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - current mainnet deployment source-of-truth and branch policy (full 84-ix surface live as of 2026-06-11)
+- [./MAINNET_MAINLINE.md](./MAINNET_MAINLINE.md) - mainnet deployment history and branch policy; current surface is revision 4 / 99 instructions
 - [./MAINNET_ROLLOUT_RUNBOOK.md](./MAINNET_ROLLOUT_RUNBOOK.md) - the Phase 9 full-surface rollout choreography — **COMPLETED 2026-06-11** (historical record + post-rollout state)
 - [./POLICY_CHANGES.md](./POLICY_CHANGES.md) - dated log of authority-signed mainnet POLICY mutations (fees, rate limits — config changes, not deploys)
 - [./CODEBASE_MAP.md](./CODEBASE_MAP.md) - path-by-path map for programs, artifacts, packages, scripts, migrations, zkVM, and workflows
@@ -24,6 +24,9 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [./VERSIONS.md](./VERSIONS.md) - P6.5 surface-versioning: program build ↔ SDK semver ↔ cluster matrix, `surface_revision` / `getDeployedSurface`, the `anchor idl init` release-runbook note, and the deprecation policy
 - [./VERSIONING.md](./VERSIONING.md) - **WP-D3 versioning & deprecation contract**: the cross-package support matrix (program surface × sdk × react × tools/mcp × store-core), the dated break-event history (2026-06-11 / 2026-07-02 / 2026-07-03), required capability detection, the announce-before-deploy rule, the flag-day lockstep policy, and the template pin check
 - [./P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md) - **P1.2 hardened open roster** (batch-2 upgrade, IMPLEMENTED in source 2026-07-03, deploy-gated): permissionless bonded attestor registration + two-step exit, v2 moderator-keyed moderation records, explicit `moderator` gate argument, the multisig BLOCK-only takedown floor, and the on-chain default trust list; supersedes MODERATION_NEUTRALITY.md
+- [./MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md) - live moderation heartbeat deadman: strict/relaxed ALLOW behavior and the BLOCK floor that never relaxes
+- [./design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md) - live contest-task model: entry deposits, creator selection, ghost-share fallback, and terminal-claim cleanup
+- [./design/batch-4-goods.md](./design/batch-4-goods.md) - live revision-4 finite-goods market: listing inventory, direct purchase, and permanent SaleReceipt provenance
 - [./P5_2_STORE_IDENTITY_SPEC.md](./P5_2_STORE_IDENTITY_SPEC.md) - **P5.2 store/marketplace identity** (DESIGN, RATIFIED 2026-07-03): `agenc.storeManifest.v1` signed manifest first (shipped in store-core 0.5.0), then an additive on-chain `Store` PDA (address-keyed, display-only handles, mutual self-serve domain binding); pre-designs the P5.3 referrer attachment (§7.6)
 - [./P6_4_SPAM_SYBIL_DESIGN.md](./P6_4_SPAM_SYBIL_DESIGN.md) - **P6.4 spam/sybil defense** (DESIGN, RATIFIED 2026-07-03): costed threat model at live parameters (wash ratings ≈0.004 SOL, sybil attestors ≈free), provenance-weighted discovery as the primary defense, tripwire-gated program knobs (rating reward floor), never rank by attestor count or raw reputation
 - [./P5_3_REFERRAL_ATTRIBUTION_SPEC.md](./P5_3_REFERRAL_ATTRIBUTION_SPEC.md) - **P5.3 verifiable referral attribution** (WP-A6 batch-2 DESIGN): today's client-supplied referrer pubkey + strippable `?ref=` model, the costed theft/self-referral/wash economics, the buyer-priced-bps asymmetry, and the recommendation — document limits + weighting now, registered-referrer (`referrer_store` = the P5.2 Store PDA) as a tripwire-gated rider after the Store batch; referrer-signed vouchers deferred
@@ -37,7 +40,7 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 - [../packages/protocol/README.md](../packages/protocol/README.md) - npm package consumer view
 - [../migrations/README.md](../migrations/README.md) - migration authority and current-state guidance
 - [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - security assumptions referenced by the fuzz harness
-- [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - external-auditor entry point: scope (84-ix full surface + the two migrations), invariants, prior internal audits, test inventory, migration choreography
+- [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - historical 84-ix external-audit handoff; use PROGRAM_SURFACE + generated reference docs for the current 99-ix scope
 - [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results
 - [./VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md) - reproducible build + verifying the deployed program matches source (what's provable now vs public-repo-gated)
 - [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 "the operator vanishes and it still works": the executed, reproducible zero-hosted-dependency hire→settle proof (`scripts/credible-exit.mjs`), with the honest gap list (source/verifiable-build deferred)
@@ -50,6 +53,9 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 
 - I need the neutrality / credible-exit proof: [CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md)
 - I need the open-roster moderation model (P1.2): [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md)
+- I need moderation heartbeat/liveness behavior: [MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md)
+- I need contest-task behavior: [design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md)
+- I need the goods market: [design/batch-4-goods.md](./design/batch-4-goods.md)
 - I need the agent-identity metadata standard: [AGENT_METADATA.md](./AGENT_METADATA.md)
 - I need the encrypted-delivery / fair-exchange layer-2 design: [ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md)
 - I need the milestones / partial-settlement design: [MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md)

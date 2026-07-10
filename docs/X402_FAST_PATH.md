@@ -1,13 +1,13 @@
-# x402 fast-path + escalation to AgenC escrow — design
+# x402 fast-path + escalation to AgenC escrow — design and implementation status
 
-> **Status: DESIGN ONLY. [HUMAN: approve the design before any build; deploys.]**
-> This document is the P5.4-step-1 deliverable. It specifies the x402 fast-path
-> handshake, the escalation path that converts a paying x402 caller into an
-> escrowed `hire_from_listing`, and where both plug into the existing hosted API
-> (P3.2) and the D4 demand-evidence ledger. **No x402 payment code is built or
-> deployed by this design.** The A2A AgentCard surface (P5.4 step 3) is the only
-> part of P5.4 that ships now — it is pure discovery, carries no payment, and is
-> documented separately in `packages/marketplace-tools/src/agent-card.ts`.
+> **Status: DESIGN RATIFIED; IMPLEMENTED DARK; NOT DEPLOYED.**
+> This document remains the protocol design for the x402 fast-path and the
+> escalation into escrowed `hire_from_listing`. A tested x402 v2 implementation
+> now exists in `tetsuo-ai/agenc-ag` (`apps/web/lib/server/x402/`), but it is
+> disabled unless a deployment explicitly sets `AGENC_X402_ENABLED`. As of
+> 2026-07-10 the known deployments leave that flag unset, so x402 is not a live
+> marketplace payment rail. The A2A AgentCard discovery surface is live and
+> carries no payment.
 
 ---
 
