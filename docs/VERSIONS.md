@@ -36,7 +36,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 `getDeployedSurface` **tolerates the pre-migration on-chain layout**: before the
 2026-06-11 migration the live mainnet `ProtocolConfig` was the OLD 349-byte layout with
 no `surface_revision` (it is now the migrated 351-byte layout stamped
-`SURFACE_REVISION_FULL`). The SDK reads the raw account bytes and treats any account
+revision `1`). The SDK reads the raw account bytes and treats any account
 shorter than the new 351-byte layout (or a missing account) as `surface_revision = 0` —
 so it returns `listings: false` **without throwing**, never feeding an old account through
 the new fixed-size codec.
@@ -58,9 +58,10 @@ with `target_version == current_version` = `1` for the realloc-only path). An op
 then stamps the real revision via **`update_launch_controls`** (existing multisig
 config-update authority; rejects unknown revisions with `InvalidSurfaceRevision`).
 
-A **fresh full-surface deploy** (dev/devnet) stamps `SURFACE_REVISION_FULL` in
-`initialize_protocol`, so it advertises `listings: true` with no manual step; a fresh
-**canary** deploy stamps `0`.
+A **fresh full-surface deploy** stamps `SURFACE_REVISION_FULL` in
+`initialize_protocol`, so it advertises the base full capabilities with no manual step.
+Goods handlers remain disabled until an operator stamps revision `4`; a fresh **canary**
+deploy stamps `0`.
 
 ## Compatibility matrix (program build ↔ SDK semver ↔ cluster)
 
@@ -125,8 +126,8 @@ program deploy/upgrade:
    therefore safe. The first-call constraint above is about restoring the rest of the live
    surface (every typed-`Account<ProtocolConfig>` instruction), not about the migration pair.
 4. **Stamp the surface**: `update_launch_controls(..., surface_revision)` —
-   `SURFACE_REVISION_FULL` only after the full surface is verified live; otherwise leave
-   `0`.
+   stamp the highest revision actually verified live (`4` for the current mainnet
+   surface); otherwise leave `0` or the last verified lower revision.
 5. Update the matrix above (program build, cluster, `surface_revision`, SDK semver) and
    `docs/MAINNET_MAINLINE.md` in the same release window.
 

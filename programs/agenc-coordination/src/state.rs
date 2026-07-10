@@ -470,7 +470,7 @@ impl ProtocolConfig {
     /// `surface_revision`. Do NOT change — it is the migration precondition.
     pub const OLD_CONFIG_SIZE: usize = 349;
 
-    /// `surface_revision` value meaning "the full 84-instruction surface is live".
+    /// `surface_revision` value meaning the base full-surface capabilities are live.
     /// An operator stamps this via `update_launch_controls` after deploying the full
     /// surface; the SDK maps it to a complete `CapabilitySet`.
     ///

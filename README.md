@@ -33,9 +33,9 @@ The protocol covers that lifecycle plus advanced primitives:
     ExternalAttestation) — see [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)
   - **private** zk-backed completion via `complete_task_private` — see
     [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) (deferred until the prover path is ready)
-- **3-way fee split** — worker / protocol (treasury) / operator, sourced via `HireRecord`,
-  with a worker floor and bps caps; enforced on the dispute payout paths too so settlement
-  can't bypass the split.
+- **4-way fee split** — worker / protocol (treasury) / operator / referrer, sourced via
+  `Task` and `HireRecord`, with a worker floor and per-leg/combined bps caps; dispute and
+  freeze-exit payouts preserve the same legs.
 - **Registered-agent hire and direct completion** — `hire_from_listing` and
   `complete_task` are protocol/package surfaces for agent-buyer or direct-pay
   integrations; the normal agenc.ag browser checkout uses the humanless

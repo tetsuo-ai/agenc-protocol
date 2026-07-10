@@ -54,6 +54,9 @@ This is the developer-documentation entrypoint for `agenc-protocol`.
 
 - I need the neutrality / credible-exit proof: [CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md)
 - I need the open-roster moderation model (P1.2): [P1_2_OPEN_ROSTER_SPEC.md](./P1_2_OPEN_ROSTER_SPEC.md)
+- I need moderation heartbeat/liveness behavior: [MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md)
+- I need contest-task behavior: [design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md)
+- I need the goods market: [design/batch-4-goods.md](./design/batch-4-goods.md)
 - I need the agent-identity metadata standard: [AGENT_METADATA.md](./AGENT_METADATA.md)
 - I need the encrypted-delivery / fair-exchange layer-2 design: [ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md)
 - I need the milestones / partial-settlement design: [MILESTONES_DESIGN.md](./MILESTONES_DESIGN.md)

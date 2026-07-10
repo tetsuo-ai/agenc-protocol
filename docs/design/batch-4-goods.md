@@ -111,8 +111,8 @@ purchasable when any nonzero projected leg would leave a payee below the floor.
 
 ## 5. Versioning / gating
 
-- `SURFACE_REVISION_BATCH4 = 4`; `ProtocolConfig::default()` stamps 4 (fresh
-  dev/test configs); mainnet stays 3 until the ceremony stamps 4.
+- `SURFACE_REVISION_BATCH4 = 4`; `ProtocolConfig::default()` stamps 4 for
+  test/config fixtures. Mainnet was stamped to 4 in the 2026-07-09 ceremony.
 - Every goods handler gates `check_version_compatible(config)` +
   `require_goods_enabled(config)` (= `surface_revision >= 4`,
   `GoodsSurfaceNotEnabled`). **This is the first ENFORCING use of

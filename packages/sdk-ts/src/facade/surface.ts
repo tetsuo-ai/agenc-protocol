@@ -8,13 +8,13 @@
 // transaction that calls an instruction the deployed program does not have.
 //
 // CRITICAL TOLERANCE REQUIREMENT (do not "simplify" away):
-// The single live mainnet `ProtocolConfig` account is the PRE-P6.5 layout (349 bytes,
-// no `surface_revision`). The generated `getProtocolConfigDecoder()` is a FIXED-size
+// A pre-migration `ProtocolConfig` can use the PRE-P6.5 layout (349 bytes, no
+// `surface_revision`). The generated `getProtocolConfigDecoder()` is a FIXED-size
 // decoder for the new 351-byte layout and THROWS on the 349-byte account. So this
 // module never feeds the old account through the generated codec — it reads the raw
 // bytes and decodes `surface_revision` by hand, treating an account shorter than the
 // new layout (or a missing account) as `surface_revision = 0` (= "unstamped /
-// conservative"). On an old-layout mainnet account this returns `listings: false`
+// conservative"). On an old-layout account this returns `listings: false`
 // WITHOUT throwing.
 import {
   fetchEncodedAccount,
