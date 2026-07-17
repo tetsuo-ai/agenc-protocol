@@ -282,9 +282,13 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 (No token tasks exist on mainnet today; these are hard locks the moment the SPL
 surface is used. Cheap guards; do them in the same PR.)
 
-### [ ] F-7 — `reject_and_freeze` must reject SPL tasks (MEDIUM, SPL-only)
+### [x] F-7 — `reject_and_freeze` must reject SPL tasks (MEDIUM, SPL-only)
 
-- **Problem**: freezing an SPL CreatorReview task locks 100% of the token
+- **RESOLVED 2026-07-18 (`56f2451`)**: `require!(task.reward_mint.is_none(),
+  CoordinationError::RejectFrozenSolOnly)` right after the task-type guard (new
+  error 6358, appended). litesvm: the freeze is rejected on a token task with
+  the token escrow untouched; SOL tasks unaffected.
+- **Problem** (original entry): freezing an SPL CreatorReview task locks 100% of the token
   escrow — both frozen exits settle SOL-only (`execute_completion_rewards(...,
   None, ...)`), which can never succeed against a rent-only PDA with
   token-denominated accounting.
@@ -298,9 +302,13 @@ surface is used. Cheap guards; do them in the same PR.)
 - **Tests**: unit revert-sensitive (SPL → err; SOL → ok) + one integration call.
 - **Done when**: [ ] guard added [ ] test red on revert [ ] gates green.
 
-### [ ] F-4 — `expire_claim` cleanup reward must skip (or SOL-fund) on token tasks (MEDIUM, SPL-only)
+### [x] F-4 — `expire_claim` cleanup reward must skip (or SOL-fund) on token tasks (MEDIUM, SPL-only)
 
-- **Problem**: `CLEANUP_REWARD` (1000 lamports) is debited from the escrow PDA,
+- **RESOLVED 2026-07-18 (`56f2451`)**: `cleanup_reward_for_task` returns 0 for
+  token tasks — no lamport debit, no `distributed` pollution; SOL path
+  byte-identical. litesvm: token expire_claim succeeds with zero lamports
+  leaving the rent-only escrow PDA and `distributed == 0`.
+- **Problem** (original entry): `CLEANUP_REWARD` (1000 lamports) is debited from the escrow PDA,
   which on token tasks holds only rent (tokens sit in the ATA) →
   `InsufficientFundsForRent` → `expire_claim` uncallable on token tasks;
   reachable permanent locks (e.g. Collaborative token task, one completer + one
