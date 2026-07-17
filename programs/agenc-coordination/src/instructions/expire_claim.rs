@@ -44,6 +44,18 @@ use anchor_lang::prelude::*;
 /// Incentivizes third-party cleanup services
 const CLEANUP_REWARD: u64 = 1000;
 
+/// Audit F-4: the cleanup reward is paid from the escrow PDA's lamports. On token
+/// tasks that PDA holds only its rent (the reward tokens live in the token escrow
+/// ATA), so any debit breaks rent exemption and bricks expire_claim — skip the
+/// reward there. Pure + revert-sensitive.
+fn cleanup_reward_for_task(is_token_task: bool, remaining_funds: u64) -> u64 {
+    if is_token_task {
+        0
+    } else {
+        CLEANUP_REWARD.min(remaining_funds)
+    }
+}
+
 /// Grace period in seconds after claim expiry during which only the worker
 /// authority can expire the claim. This prevents griefing attacks where
 /// malicious actors race workers to expire their claims. (Issue #421)
@@ -298,7 +310,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         .checked_sub(escrow.distributed)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
-    let reward = CLEANUP_REWARD.min(remaining_funds);
+    // Audit F-4: on token tasks the escrow PDA holds ONLY its rent — the reward
+    // tokens live in the token escrow ATA — so debiting even 1000 lamports would
+    // break rent exemption (runtime InsufficientFundsForRent) and brick
+    // expire_claim for every token task. Skip the reward there (the crank pays for
+    // itself with the tx fee) and never pollute the token-denominated `distributed`
+    // counter with lamports.
+    let reward = cleanup_reward_for_task(task.reward_mint.is_some(), remaining_funds);
     if reward > 0 {
         transfer_lamports(
             &escrow.to_account_info(),
@@ -532,4 +550,21 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Audit F-4 (revert-sensitive): the cleanup reward must be skipped on token
+    // tasks (the escrow PDA holds only rent — debiting it bricks expire_claim via
+    // InsufficientFundsForRent). Reverting to an ungated CLEANUP_REWARD.min turns
+    // the token-case assert red.
+    #[test]
+    fn cleanup_reward_is_zero_for_token_tasks() {
+        assert_eq!(cleanup_reward_for_task(true, 1_000_000), 0);
+        assert_eq!(cleanup_reward_for_task(false, 1_000_000), CLEANUP_REWARD);
+        assert_eq!(cleanup_reward_for_task(false, 500), 500);
+        assert_eq!(cleanup_reward_for_task(false, 0), 0);
+    }
 }

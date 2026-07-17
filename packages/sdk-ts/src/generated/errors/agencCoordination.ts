@@ -730,6 +730,8 @@ export const AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBM
 export const AGENC_COORDINATION_ERROR__BOND_NOT_TIED_TO_NO_SHOW_WORKER = 0x18d4; // 6356
 /** ClaimSlashPending: This claim's dispute was resolved but its slash has not been applied yet */
 export const AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING = 0x18d5; // 6357
+/** RejectFrozenSolOnly: Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow) */
+export const AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY = 0x18d6; // 6358
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -986,6 +988,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REFERRER_FEE_TOO_HIGH
   | typeof AGENC_COORDINATION_ERROR__REFERRER_IS_CREATOR
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY
+  | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF
@@ -1350,6 +1353,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REFERRER_FEE_TOO_HIGH]: `Referrer fee in basis points exceeds the maximum allowed`,
     [AGENC_COORDINATION_ERROR__REFERRER_IS_CREATOR]: `Referrer must not be the task creator (no self-deal)`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY]: `RejectFrozen review is single-worker (Exclusive) only`,
+    [AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY]: `Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow)`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED]: `RejectFrozen review timeout has not elapsed`,
     [AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE]: `Agent must be Active to participate in reputation economy`,
     [AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF]: `Cannot delegate reputation to self`,

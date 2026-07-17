@@ -19553,6 +19553,11 @@ export type AgencCoordination = {
       "code": 6357,
       "name": "claimSlashPending",
       "msg": "This claim's dispute was resolved but its slash has not been applied yet"
+    },
+    {
+      "code": 6358,
+      "name": "rejectFrozenSolOnly",
+      "msg": "Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow)"
     }
   ],
   "types": [

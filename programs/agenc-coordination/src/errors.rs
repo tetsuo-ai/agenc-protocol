@@ -1066,4 +1066,7 @@ pub enum CoordinationError {
     // Appended (audit F-2): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("This claim's dispute was resolved but its slash has not been applied yet")]
     ClaimSlashPending,
+    // Appended (audit F-7): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow)")]
+    RejectFrozenSolOnly,
 }

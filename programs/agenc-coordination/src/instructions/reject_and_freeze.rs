@@ -98,6 +98,15 @@ pub fn handler(ctx: Context<RejectAndFreeze>, rejection_hash: [u8; HASH_SIZE]) -
         ctx.accounts.task.task_type == TaskType::Exclusive,
         CoordinationError::RejectFrozenSingleWorkerOnly
     );
+    // Audit F-7: SOL-only v1. Both frozen exits settle through
+    // execute_completion_rewards' lamport path, which can never succeed against a
+    // rent-only escrow PDA holding token-denominated accounting — one freeze on an
+    // SPL task would lock 100% of the token escrow permanently. The same guard
+    // already exists on contests, bonds, and ghost-split; this path was missed.
+    require!(
+        ctx.accounts.task.reward_mint.is_none(),
+        CoordinationError::RejectFrozenSolOnly
+    );
     require!(
         is_manual_validation_task(&ctx.accounts.task),
         CoordinationError::TaskValidationConfigRequired
