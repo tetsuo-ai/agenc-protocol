@@ -15,6 +15,7 @@ use crate::instructions::completion_helpers::{
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review, sync_task_validation_status,
+    validate_completing_accept_sole_submission,
 };
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 #[cfg(not(feature = "mainnet-canary"))]
@@ -201,6 +202,13 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         clock.unix_timestamp >= ctx.accounts.task_submission.review_deadline_at,
         CoordinationError::ReviewWindowNotElapsed
     );
+
+    // Audit M-2: auto-accept is permissionless, so a co-worker could otherwise re-claim /
+    // re-submit and drive a completing auto-accept that flips a Collaborative task to
+    // Completed while an honest peer's submission is still live, stranding it. Block the
+    // completing accept unless it is the sole live submission. MUST run BEFORE the
+    // live-submission decrement below. (Contest auto-accept is already disabled above.)
+    validate_completing_accept_sole_submission(&ctx.accounts.task)?;
 
     validate_task_dependency(
         ctx.accounts.task.as_ref(),

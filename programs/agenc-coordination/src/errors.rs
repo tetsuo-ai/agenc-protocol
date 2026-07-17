@@ -1054,4 +1054,10 @@ pub enum CoordinationError {
     GoodsInvalidOperatorTerms,
     // NOTE: goods purchase reuses the existing `MissingOperatorAccount` variant
     // (defined in the batch-2 hire path) for a missing/mismatched operator payee.
+    // Appended (audit H-2): keep this LAST so existing Anchor error codes never shift.
+    #[msg("A dispute party (the task creator or the defendant worker) cannot resolve their own dispute")]
+    ResolverConflictOfInterest,
+    // Appended (audit M-2): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned)")]
+    CompletingAcceptRequiresSoleLiveSubmission,
 }

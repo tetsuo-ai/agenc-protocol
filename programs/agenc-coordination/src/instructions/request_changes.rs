@@ -12,6 +12,7 @@ use crate::events::TaskChangesRequested;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_contest_configured_task, is_manual_validation_task, note_submission_left_review,
+    sync_task_validation_status,
 };
 use crate::state::{
     ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,
@@ -162,9 +163,16 @@ pub fn handler(ctx: Context<RequestChanges>, changes_hash: [u8; HASH_SIZE]) -> R
     submission.rejection_hash = changes_hash;
     let round = submission.submission_count;
 
-    // Back to active so the worker resubmits in place (claim retained).
+    // Audit M-1: derive the task status from the remaining pending-submission count
+    // instead of hardcoding InProgress. On a multi-worker CreatorReview task, other
+    // workers may still hold live PendingValidation submissions; stomping the task to
+    // InProgress orphaned their review lifecycle. sync_task_validation_status keeps the
+    // task PendingValidation while any submission is still pending, drops it to InProgress
+    // while a worker (this bounced-back claim) stays engaged, else Open — and leaves
+    // terminal / RejectFrozen states untouched. The pending count was decremented above,
+    // so the value it reads already excludes this bounced submission.
     let task = &mut ctx.accounts.task;
-    task.status = TaskStatus::InProgress;
+    sync_task_validation_status(task, &ctx.accounts.task_validation_config);
     // Push the task deadline out far enough that the worker can resubmit before the
     // task is no-show-cancellable (see #70 note above). A task with no deadline
     // (deadline == 0) is unaffected.

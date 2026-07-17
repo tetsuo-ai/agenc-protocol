@@ -18,6 +18,7 @@
   "scripts": {
     "artifacts:refresh": "node scripts/sync-anchor-artifacts.mjs && npm run sync:artifacts",
     "artifacts:check": "node scripts/sync-anchor-artifacts.mjs --check && npm run sync:artifacts:check && node scripts/check-mainnet-program-artifacts.mjs",
+    "artifacts:check:built": "node scripts/sync-anchor-artifacts.mjs --check --require-build && npm run sync:artifacts:check && node scripts/check-mainnet-program-artifacts.mjs",
     "sync:artifacts": "node scripts/sync-package-protocol-assets.mjs",
     "sync:artifacts:check": "node scripts/sync-package-protocol-assets.mjs --check",
     "build": "npm run build --workspace=@tetsuo-ai/protocol",

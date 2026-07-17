@@ -289,6 +289,30 @@ pub fn validate_contest_accept_window(task: &Task, now: i64) -> Result<()> {
     Ok(())
 }
 
+/// Audit M-2: a manual-review accept that COMPLETES the task must be the sole live
+/// submission. Otherwise the flip to Completed orphans any peer submission still under
+/// review — reject/expire both require a non-terminal task, so a straggler's claim +
+/// submission rent and unpaid work would be stranded forever and the Task PDA could never
+/// close. `required_completions > 1` (Collaborative) means NON-completing accepts
+/// legitimately leave peers live, so the guard fires ONLY on the accept that reaches the
+/// completion threshold. Contest tasks (required_completions == 1) are already covered by
+/// `validate_contest_accept_window`, which enforces sole-live-submission on every accept.
+/// MUST be called BEFORE `note_submission_left_review`, while `live_submissions()` still
+/// counts the submission being accepted. Pure + revert-sensitive.
+pub fn validate_completing_accept_sole_submission(task: &Task) -> Result<()> {
+    if task.is_contest_task() {
+        return Ok(());
+    }
+    let will_complete = task.completions.saturating_add(1) >= task.required_completions;
+    if will_complete {
+        require!(
+            task.live_submissions() == 1,
+            CoordinationError::CompletingAcceptRequiresSoleLiveSubmission
+        );
+    }
+    Ok(())
+}
+
 /// Temporal-partition guard for the creator-side contest REJECT (fix round —
 /// symmetric with the accept window): permitted strictly BEFORE `ghost_at`.
 /// Without it a creator could front-run the ghost cranks after `ghost_at`,
@@ -467,6 +491,42 @@ mod tests {
         task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
         task.set_live_submissions(live);
         task
+    }
+
+    // === Audit M-2: completing-accept sole-submission guard ===
+
+    fn schema1_task(task_type: TaskType, required: u8, completions: u8, live: u8) -> Task {
+        let mut task = Task {
+            task_type,
+            required_completions: required,
+            completions,
+            ..Task::default()
+        };
+        task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
+        task.set_live_submissions(live);
+        task
+    }
+
+    // Revert-sensitive: dropping the guard lets the completing accept flip a Collaborative
+    // task to Completed while a peer submission is still live, orphaning it.
+    #[test]
+    fn completing_accept_requires_sole_submission_for_collaborative() {
+        // required_completions = 2. A non-completing accept (0 -> 1) may leave peers live.
+        let task = schema1_task(TaskType::Collaborative, 2, 0, 2);
+        assert!(validate_completing_accept_sole_submission(&task).is_ok());
+        // The completing accept (1 -> 2) with a straggler still live must be rejected.
+        let task = schema1_task(TaskType::Collaborative, 2, 1, 2);
+        assert!(validate_completing_accept_sole_submission(&task).is_err());
+        // The completing accept as the sole live submission is allowed.
+        let task = schema1_task(TaskType::Collaborative, 2, 1, 1);
+        assert!(validate_completing_accept_sole_submission(&task).is_ok());
+    }
+
+    #[test]
+    fn completing_accept_guard_noops_for_contest() {
+        // Contest is covered by validate_contest_accept_window; this guard defers to it.
+        let task = schema1_task(TaskType::Competitive, 1, 0, 3);
+        assert!(validate_completing_accept_sole_submission(&task).is_ok());
     }
 
     #[test]

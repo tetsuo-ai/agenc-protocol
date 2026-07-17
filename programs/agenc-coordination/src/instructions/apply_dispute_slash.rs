@@ -191,13 +191,20 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     // have zero deferred token reserve while still requiring a stake slash.
     let token_task_requires_settlement =
         token_slash_settlement_required(worker_lost, token_accounts_provided);
+    let is_token_task = ctx.accounts.task.reward_mint.is_some();
 
-    // If the slash window has elapsed, disallow lamport/reputation slashing but
-    // still allow settlement of deferred token slash reserves so escrow cannot
-    // remain permanently locked.
-    if !slash_window_open && !token_task_requires_settlement {
-        return Err(error!(CoordinationError::SlashWindowExpired));
-    }
+    // If the slash window has elapsed, disallow lamport/reputation slashing but still allow
+    // settlement of deferred token slash reserves so escrow cannot remain permanently locked.
+    //
+    // Audit M-3: when the window has lapsed AND there is no token reserve to settle, the
+    // stake slash is forfeited — but this call must STILL finalize the defendant bookkeeping
+    // below (clear disputes_as_defendant, mark the dispute applied). Previously it returned
+    // SlashWindowExpired here, so the finalizer could never run and disputes_as_defendant
+    // stayed > 0 forever, permanently blocking withdraw_reputation_stake AND deregister_agent
+    // (both require disputes_as_defendant == 0) — locking the worker's reputation and
+    // registration stake. Fall through in that case with no slash applied.
+    let finalize_only =
+        finalize_only_after_window(slash_window_open, token_task_requires_settlement, is_token_task);
 
     // Calculate slash from stake snapshot and cap by current stake (fix #836).
     let apply_stake_slash = should_apply_stake_slash(dispute.slash_applied, slash_window_open);
@@ -318,9 +325,12 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         escrow.close(ctx.accounts.treasury.to_account_info())?;
     }
 
-    // If neither lamports nor token reserves can be slashed, fail explicitly.
+    // If neither lamports nor token reserves can be slashed, fail explicitly — UNLESS the
+    // slash window lapsed with nothing to settle (audit M-3 `finalize_only`), where we
+    // intentionally apply no slash and fall through solely to clear the defendant
+    // bookkeeping so the worker's stake cannot lock forever.
     require!(
-        slash_amount > 0 || token_task_requires_settlement,
+        slash_amount > 0 || token_task_requires_settlement || finalize_only,
         CoordinationError::InvalidSlashAmount
     );
 
@@ -374,9 +384,41 @@ fn should_apply_stake_slash(slash_applied: bool, slash_window_open: bool) -> boo
     !slash_applied && slash_window_open
 }
 
+/// Audit M-3: after the slash window lapses with no token reserve to settle, the stake
+/// slash is forfeited but the finalizer must still clear the defendant bookkeeping
+/// (disputes_as_defendant) so the worker's stake cannot lock forever. True in exactly that
+/// "finalize-only, no slash" case; every other case runs a real slash or token settlement.
+fn finalize_only_after_window(
+    slash_window_open: bool,
+    token_task_requires_settlement: bool,
+    is_token_task: bool,
+) -> bool {
+    // The finalize-only path closes the worker_claim account. For token tasks, closing the
+    // claim before the deferred token reserve has been settled would make the reserve
+    // permanently unreachable (no other instruction can sign for the escrow PDA after the
+    // claim is gone). Token tasks must therefore settle the reserve first, even after the
+    // slash window has lapsed; only SOL tasks may use the counter-clearing finalize-only path.
+    !slash_window_open && !token_task_requires_settlement && !is_token_task
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Audit M-3 (revert-sensitive on the predicate): only a lapsed window with nothing to
+    // settle is finalize-only. Widening it would skip real slashes; narrowing it back to
+    // `false` re-locks the worker's stake after the window (the original bug).
+    #[test]
+    fn finalize_only_after_window_matrix() {
+        // SOL task, lapsed window, nothing to settle -> finalize-only counter clear.
+        assert!(finalize_only_after_window(false, false, false));
+        // Window still open -> not finalize-only (real slash should run).
+        assert!(!finalize_only_after_window(true, false, false));
+        // Token settlement pending -> not finalize-only (settle first).
+        assert!(!finalize_only_after_window(false, true, false));
+        // Token task with omitted accounts -> never finalize-only; reserve must be settled.
+        assert!(!finalize_only_after_window(false, false, true));
+    }
 
     #[test]
     fn token_task_without_token_accounts_does_not_force_token_settlement() {

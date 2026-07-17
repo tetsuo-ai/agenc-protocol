@@ -321,6 +321,24 @@ pub fn handler<'info>(
         task.current_workers,
     )?;
 
+    // Audit H-2: a resolver who is a PARTY to the dispute — the task creator or the
+    // defendant worker — must never rule on it, even when seated on the resolver roster.
+    // The initiator guard above only covers whichever party filed; without this, a
+    // roster-seated DEFENDANT could rule `approve:false` to dodge a slash and drive the
+    // permissionless finalizers against the honest initiator, and a roster-seated CREATOR
+    // could refund their own escrow and slash the worker. `worker_wallet` is validated to
+    // equal `worker.authority` (the defendant) by `validate_worker_accounts` above.
+    let worker_wallet_key = ctx
+        .accounts
+        .worker_wallet
+        .as_ref()
+        .ok_or(CoordinationError::IncompleteWorkerAccounts)?
+        .key();
+    require!(
+        !resolver_is_dispute_party(&signer, &task.creator, &worker_wallet_key),
+        CoordinationError::ResolverConflictOfInterest
+    );
+
     let (dispute_remaining_accounts, accepted_bid_accounts) =
         if task.task_type == TaskType::BidExclusive {
             require!(
@@ -1122,6 +1140,16 @@ pub fn handler<'info>(
 }
 
 /// Validates worker account consistency and defendant binding.
+/// Audit H-2 conflict-of-interest predicate: a resolver who is a PARTY to the dispute —
+/// the task creator or the defendant worker's validated authority wallet — must never
+/// rule on it, not only the initiator. Returns true when `signer` is conflicted. Compare
+/// against `worker_wallet` (the on-chain-validated worker authority, see
+/// `validate_worker_accounts`), NOT `dispute.defendant`, which is an agent PDA and would
+/// make the check a no-op.
+fn resolver_is_dispute_party(signer: &Pubkey, creator: &Pubkey, worker_wallet: &Pubkey) -> bool {
+    signer == creator || signer == worker_wallet
+}
+
 fn validate_worker_accounts(
     dispute: &Dispute,
     worker: &Option<Box<Account<AgentRegistration>>>,
@@ -1177,6 +1205,23 @@ fn validate_worker_accounts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Audit H-2 (revert-sensitive on the predicate): a resolver equal to the task creator
+    // or the defendant worker's validated wallet is conflicted; an unrelated resolver is
+    // not. Narrowing `resolver_is_dispute_party` back to a single party turns this red.
+    #[test]
+    fn resolver_dispute_party_conflict_is_detected() {
+        let creator = Pubkey::new_unique();
+        let worker_wallet = Pubkey::new_unique();
+        let outsider = Pubkey::new_unique();
+        assert!(resolver_is_dispute_party(&creator, &creator, &worker_wallet));
+        assert!(resolver_is_dispute_party(
+            &worker_wallet,
+            &creator,
+            &worker_wallet
+        ));
+        assert!(!resolver_is_dispute_party(&outsider, &creator, &worker_wallet));
+    }
 
     // === P6.4 (1): rationale_uri bound (positive + negative) ===
 

@@ -1,0 +1,110 @@
+# IDL drift + canary freeze gate — closes audit finding L-2 (vacuous drift gate).
+#
+# WHY: `npm run artifacts:check` (ci.yml, release.yml) runs WITHOUT an
+# `anchor build`, so `scripts/sync-anchor-artifacts.mjs --check` used to take
+# its "Anchor build artifacts not present" early return and pass without ever
+# comparing the Rust program against the committed IDL/types. Program -> IDL
+# drift was therefore never detected in CI, and the canary IDL freeze gate
+# (`canary:idl` + `canary:check-idl`) was wired into no workflow at all.
+#
+# WHAT THIS DOES:
+#   1. Installs anchor-cli 0.32.1 (crates.io, cached) + Solana platform tools
+#      3.0.13 (same pin as sdk.yml / Anchor.toml [toolchain]).
+#   2. Runs a real `anchor build` so target/idl + target/types are FRESH.
+#   3. Runs `npm run artifacts:check:built` — the drift check with
+#      --require-build, which HARD-FAILS (instead of silently passing) if the
+#      freshly built artifacts are ever absent. The gate can no longer pass
+#      vacuously.
+#   4. Runs `npm run canary:idl` + `npm run canary:check-idl` — the frozen
+#      25-instruction canary surface gate (name allowlist + wire-shape
+#      baseline vs scripts/canary-idl-baseline.json).
+#
+# COST: the anchor-cli install (~10-15 min) and anchor build are heavy on a
+# cold cache; both are cached below, so warm runs are dominated by the
+# incremental build. This is comparable to the cargo build-sbf job sdk.yml
+# already runs.
+#
+# NOTE: sandbox-nightly.yml says "GitHub Actions is currently disabled
+# repo-wide", but the live repo setting reported enabled when this gate was
+# added (actions/permissions: {"enabled":true}, checked 2026-07-16) — that
+# comment is stale, and this workflow runs on the next push/PR to main. The
+# same gate can always be run locally:
+#   anchor build && npm run artifacts:check:built && npm run canary:idl && npm run canary:check-idl
+
+name: IDL Drift
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  idl-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache anchor CLI binary
+        id: cache-anchor
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/anchor
+          key: anchor-cli-0.32.1-${{ runner.os }}
+
+      # Version pinned to Anchor.toml [toolchain].anchor_version. No prebuilt
+      # npm binary exists for 0.32.x (@coral-xyz/anchor-cli stops at 0.31.2),
+      # so build from crates.io once and cache the binary.
+      - name: Install anchor CLI (cache miss only)
+        if: steps.cache-anchor.outputs.cache-hit != 'true'
+        run: cargo install anchor-cli@0.32.1 --locked --force
+
+      # anchor build shells out to cargo build-sbf; pin matches Anchor.toml
+      # [toolchain].solana_version and the sdk.yml e2e job.
+      - name: Install Solana platform tools
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo registry + build target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: idl-drift-${{ runner.os }}-${{ hashFiles('programs/agenc-coordination/Cargo.lock', 'programs/agenc-coordination/Cargo.toml') }}
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      # Fresh full-surface build: regenerates target/idl/agenc_coordination.json
+      # and target/types/agenc_coordination.ts from the Rust source.
+      - name: Anchor build (full surface, default features)
+        run: anchor build
+
+      # HARD drift gate: --require-build makes the check fail (exit 1) if the
+      # built artifacts are missing, so this step can never pass vacuously.
+      - name: Verify committed protocol artifacts against the fresh build
+        run: npm run artifacts:check:built
+
+      # Canary freeze gate: rebuild the restricted-surface IDL (host-side
+      # cargo, no sbf needed) and pin it against the frozen wire-shape baseline.
+      - name: Build mainnet-canary IDL
+        run: npm run canary:idl
+
+      - name: Verify frozen canary IDL surface
+        run: npm run canary:check-idl

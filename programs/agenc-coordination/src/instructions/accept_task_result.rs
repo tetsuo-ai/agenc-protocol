@@ -17,7 +17,7 @@ use crate::instructions::completion_helpers::{
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review, sync_task_validation_status,
-    validate_contest_accept_window,
+    validate_completing_accept_sole_submission, validate_contest_accept_window,
 };
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
@@ -206,6 +206,11 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     // submission has been rejected (losers' claim + submission rent must flow
     // back to them before the task can go terminal). No-op for non-contests.
     validate_contest_accept_window(&ctx.accounts.task, clock.unix_timestamp)?;
+    // Audit M-2: block a completing accept for a Collaborative task while a peer submission
+    // is still live (see validate_completing_accept_sole_submission). MUST run BEFORE the
+    // pending-count / live-submission decrement below, while this submission is still
+    // counted in live_submissions().
+    validate_completing_accept_sole_submission(&ctx.accounts.task)?;
 
     validate_task_dependency(
         ctx.accounts.task.as_ref(),

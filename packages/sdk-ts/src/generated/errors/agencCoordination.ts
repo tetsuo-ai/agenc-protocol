@@ -722,6 +722,10 @@ export const AGENC_COORDINATION_ERROR__GOODS_SELF_PURCHASE = 0x18cf; // 6351
 export const AGENC_COORDINATION_ERROR__GOODS_UNAUTHORIZED_UPDATE = 0x18d0; // 6352
 /** GoodsInvalidOperatorTerms: Operator and operator_fee_bps must be set together, and the operator may not be the seller */
 export const AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS = 0x18d1; // 6353
+/** ResolverConflictOfInterest: A dispute party (the task creator or the defendant worker) cannot resolve their own dispute */
+export const AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST = 0x18d2; // 6354
+/** CompletingAcceptRequiresSoleLiveSubmission: An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned) */
+export const AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION = 0x18d3; // 6355
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -773,6 +777,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK
   | typeof AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP
   | typeof AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON
+  | typeof AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION
   | typeof AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE
   | typeof AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__CONTENT_BLOCKED
@@ -985,6 +990,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_LOCKED
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN
+  | typeof AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST
   | typeof AGENC_COORDINATION_ERROR__REVIEW_URI_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__REVIEW_WINDOW_NOT_ELAPSED
   | typeof AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL
@@ -1133,6 +1139,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK]: `reclaim_terminal_claim requires a terminal (Completed/Cancelled) task`,
     [AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP]: `Combined protocol + operator + referrer fees leave the worker below the floor`,
     [AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON]: `Competitive task already completed by another worker`,
+    [AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION]: `An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned)`,
     [AGENC_COORDINATION_ERROR__CONFIG_NOT_MIGRATABLE]: `ProtocolConfig account is not a migratable size (expected the pre-P6.5 layout)`,
     [AGENC_COORDINATION_ERROR__CONSTRAINT_HASH_MISMATCH]: `Proof constraint hash does not match task's stored constraint hash`,
     [AGENC_COORDINATION_ERROR__CONTENT_BLOCKED]: `Content hash is blocked by the multisig takedown floor`,
@@ -1345,6 +1352,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE]: `Reputation stake has insufficient balance for withdrawal`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_LOCKED]: `Reputation stake is locked: withdrawal before cooldown`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN]: `Reputation stake must be fully withdrawn before the agent can be deregistered`,
+    [AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST]: `A dispute party (the task creator or the defendant worker) cannot resolve their own dispute`,
     [AGENC_COORDINATION_ERROR__REVIEW_URI_TOO_LONG]: `Review URI exceeds the maximum allowed length`,
     [AGENC_COORDINATION_ERROR__REVIEW_WINDOW_NOT_ELAPSED]: `Review window has not elapsed yet`,
     [AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL]: `Reward too small: worker must receive at least 1 lamport`,

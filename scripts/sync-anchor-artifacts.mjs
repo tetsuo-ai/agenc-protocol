@@ -77,14 +77,24 @@ async function refresh() {
   process.stdout.write('Protocol artifacts refreshed.\n');
 }
 
-async function check() {
+async function check({ requireBuild }) {
   if (!(await exists(destIdl)) || !(await exists(destTypes))) {
     throw new Error('Committed protocol artifacts are missing. Run "npm run artifacts:refresh".');
   }
 
   if (!(await exists(sourceIdl)) || !(await exists(sourceTypes))) {
+    if (requireBuild) {
+      throw new Error(
+        'Anchor build artifacts are missing from target/idl + target/types, and ' +
+          '--require-build (or AGENC_REQUIRE_ANCHOR_BUILD=1) is set. Without a fresh ' +
+          '"anchor build" the drift check would pass vacuously (existence-only), so this ' +
+          'gate hard-fails instead. Run "anchor build" first, then re-run the check.',
+      );
+    }
     process.stdout.write(
-      'Anchor build artifacts not present; verified committed protocol artifacts exist.\n',
+      'Anchor build artifacts not present; verified committed protocol artifacts exist. ' +
+        'WARNING: existence-only check — program -> IDL drift was NOT verified. ' +
+        'Run "anchor build" and re-check with --require-build for the real drift gate.\n',
     );
     return;
   }
@@ -107,8 +117,15 @@ async function check() {
 
 async function main() {
   const checkOnly = process.argv.includes('--check');
+  // Hard-fail the --check path when the freshly built Anchor artifacts are absent,
+  // instead of silently degrading to an existence-only check. CI drift gates must
+  // set this (flag or AGENC_REQUIRE_ANCHOR_BUILD=1) so the gate can never pass
+  // vacuously without an `anchor build` having produced target/idl + target/types.
+  const requireBuild =
+    process.argv.includes('--require-build') ||
+    ['1', 'true'].includes((process.env.AGENC_REQUIRE_ANCHOR_BUILD ?? '').toLowerCase());
   if (checkOnly) {
-    await check();
+    await check({ requireBuild });
     return;
   }
 

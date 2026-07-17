@@ -195,11 +195,14 @@ async function main() {
 
   // The operator's OWN moderation_authority key. On a self-hosted deploy this is
   // the key the operator passed to `configure_task_moderation` — they hold it,
-  // not tetsuo. On localnet that key is .localnet/keys/moderator.json. The
-  // fail-closed CONSUMPTION gates (hire_from_listing / set_task_job_spec) honor
-  // ONLY attestations recorded by THIS key (see the P6.8 boundary note below),
-  // so the credible-exit moderation story is: the operator runs their own
-  // moderation_authority and signs CLEAN locally — no hosted attestor service.
+  // not tetsuo. On localnet that key is .localnet/keys/moderator.json. Since
+  // P1.2 the fail-closed CONSUMPTION gates (hire_from_listing /
+  // set_task_job_spec) take an EXPLICIT `moderator` argument — the consumer
+  // names whose attestation it consumes (this global moderation_authority, or
+  // any registered roster attestor; see the P1.2 boundary note below). This
+  // proof consumes THIS key's records, so the credible-exit moderation story
+  // is: the operator runs their own moderation_authority and signs CLEAN
+  // locally — no hosted attestor service.
   if (!env.keypairs?.moderator) {
     fail("env.keypairs.moderator is required (the operator's own moderation_authority key)");
   }
@@ -220,15 +223,18 @@ async function main() {
   // fresh key the operator controls is added to the on-chain roster and can
   // WRITE moderation attestations.
   //
-  // HONEST BOUNDARY (documented in docs/CREDIBLE_EXIT.md): the P6.8 roster widens
-  // who can *record* an attestation, but the fail-closed *consumption* gates
-  // (hire_from_listing / set_task_job_spec) currently require
-  // `moderation.moderator == moderation_config.moderation_authority` — i.e. only
-  // an attestation written by the SINGLE global moderation_authority key unlocks
-  // a hire/claim. A delegated roster attestor's record does NOT yet satisfy the
-  // hire gate. So the credible-exit moderation independence rests on the operator
-  // holding the moderation_authority key (which they do on a self-hosted deploy),
-  // not on the roster. We demonstrate BOTH below and assert the boundary.
+  // HONEST BOUNDARY (documented in docs/CREDIBLE_EXIT.md), updated for P1.2:
+  // the roster widens who can *record* an attestation, and since the P1.2
+  // open-roster change the fail-closed *consumption* gates (hire_from_listing /
+  // set_task_job_spec) take an EXPLICIT `moderator` argument — the consumer
+  // chooses whose record unlocks the hire/pin (§4.4). The record PDAs are now
+  // moderator-keyed (`*_moderation_v2` seeds include the moderator), so every
+  // derivation below must name the attestor. A roster attestor's record DOES
+  // satisfy the gates when the consumer names it and supplies its roster entry
+  // (`moderatorIsAttestor: true` in the SDK). This proof takes the
+  // global-authority path throughout: the operator holds the
+  // moderation_authority key on a self-hosted deploy and consumes its own
+  // records. We demonstrate both write paths below.
   log("STEP 1  register OWN moderation attestor (P6.8 registry) — no hosted attestor");
   const ownAttestor = await kit.generateKeyPairSigner();
   await airdropTo(rpc, kit, ownAttestor.address, AIRDROP); // pays its own tx fees
@@ -331,9 +337,10 @@ async function main() {
 
   // ============================================================= STEP 4
   // (c) Self-attest the listing CLEAN with the operator's OWN
-  // moderation_authority key (NOT a hosted attestor service). The hire-time
-  // consumption gate honors ONLY an attestation written by this key (see STEP 1
-  // boundary note), so this is the attestation that actually unlocks the hire.
+  // moderation_authority key (NOT a hosted attestor service). The hire in
+  // STEP 5 names this key as its `moderator` (P1.2: the consumer picks whose
+  // attestation it consumes — see STEP 1 boundary note), so this is the
+  // attestation that actually unlocks the hire.
   log("STEP 4  attest listing CLEAN with OWN moderation_authority (NO hosted attestor)");
   const cleanArgs = {
     status: 0, // CLEAN
@@ -355,6 +362,7 @@ async function main() {
   const [listingModeration] = await sdk.facade.findListingModerationPda({
     listing,
     jobSpecHash: listingSpecHash,
+    moderator: moderatorSigner.address, // P1.2: the v2 record PDA is moderator-keyed
   });
   const lmod = await sdk.fetchMaybeListingModeration(rpc, listingModeration);
   if (!lmod.exists || lmod.data.status !== 0) {
@@ -365,12 +373,14 @@ async function main() {
   log(`   ListingModeration ${listingModeration} status=CLEAN  sig ${listingAttestSig.signature}`);
   log("");
 
-  // ----- P6.8 boundary demonstration (HONEST): the own ROSTER attestor CAN
-  // WRITE a moderation record (registry mechanism works with no hosted service),
-  // but the hire/claim CONSUMPTION gates do NOT honor it — only the
-  // moderation_authority's record above does. We prove the write succeeds on a
-  // throwaway listing-spec hash (a different PDA, so it never collides with the
-  // consumed attestation), then note that this record could not unlock a hire.
+  // ----- P6.8/P1.2 roster demonstration (HONEST): the own ROSTER attestor CAN
+  // WRITE a moderation record (registry mechanism works with no hosted service).
+  // Post-P1.2 such a record COULD also be consumed — a hirer that names this
+  // attestor as its `moderator` and supplies the roster entry passes the gate.
+  // This proof does not take that path: STEP 5 consumes the
+  // moderation_authority's record above. The write lands on a throwaway
+  // listing-spec hash (and the v2 PDA is moderator-keyed anyway), so it never
+  // collides with the consumed attestation.
   const rosterDemoHash = await descriptionHash("p6.8 roster-attestor write demonstration");
   const rosterDemoSig = await attestorClient.send([
     await sdk.facade.recordListingModeration({
@@ -383,7 +393,7 @@ async function main() {
   ]);
   proof.signatures.rosterAttestorWriteDemo = rosterDemoSig.signature;
   log(`   [P6.8] roster attestor WROTE a record (sig ${rosterDemoSig.signature.slice(0, 12)}…)`);
-  log(`   [P6.8] but consumption gates honor only moderation_authority — boundary noted`);
+  log(`   [P1.2] gates consume whichever moderator the caller names; this proof names the moderation_authority`);
   log("");
 
   // ============================================================= STEP 5
@@ -411,6 +421,10 @@ async function main() {
     expectedPrice: price,
     expectedVersion: 1n,
     listingSpecHash,
+    // P1.2 §4.4: the hirer names WHICH attestor's verdict it consumes. We name
+    // the operator's own moderation_authority (the STEP 4 record). This is the
+    // global-authority path, so no roster entry (`moderatorIsAttestor`) is needed.
+    moderator: moderatorSigner.address,
   });
   const [task] = await sdk.findTaskPda({ creator: buyer.address, taskId });
   proof.signatures.hireFromListing = hireResult.signature;
@@ -424,8 +438,8 @@ async function main() {
   // (c)+(d) Attest the TASK CLEAN with the operator's OWN moderation_authority,
   // and pin the job-spec pointer to a LOCAL result artifact (file:// URI). Claim
   // is gated on both the task attestation and the pinned job spec — and, like
-  // the hire gate, set_task_job_spec honors only the moderation_authority's
-  // attestation.
+  // the hire gate, set_task_job_spec consumes the attestation of the `moderator`
+  // the creator explicitly names (P1.2); here that is the moderation_authority.
   log("STEP 6  attest task CLEAN (OWN moderation_authority) + pin job-spec (LOCAL file)");
   const jobSpecPath = path.join(workDir, "job-spec.txt");
   const jobSpecText = "AgenC credible-exit job spec\nInput: \"escrow\" -> Output: \"worcse\". Plain text.\n";
@@ -442,7 +456,11 @@ async function main() {
     }),
   ]);
   proof.signatures.recordTaskModeration = taskAttestSig.signature;
-  const [taskModeration] = await sdk.findTaskModerationPda({ task, jobSpecHash });
+  const [taskModeration] = await sdk.findTaskModerationPda({
+    task,
+    jobSpecHash,
+    moderator: moderatorSigner.address, // P1.2: the v2 record PDA is moderator-keyed
+  });
   const tmod = await sdk.fetchMaybeTaskModeration(rpc, taskModeration);
   if (!tmod.exists || tmod.data.status !== 0) fail(`TaskModeration ${taskModeration} not CLEAN`);
   proof.accounts.taskModeration = taskModeration;
@@ -453,6 +471,10 @@ async function main() {
       creator: buyer,
       jobSpecHash,
       jobSpecUri,
+      // P1.2 §4.4: name the attestor whose task attestation the publish gate
+      // consumes — the operator's own moderation_authority (global-authority
+      // path; no `moderatorIsAttestor` roster entry needed).
+      moderator: moderatorSigner.address,
     }),
   ]);
   proof.signatures.setTaskJobSpec = pinSig.signature;

@@ -70,9 +70,19 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
     dispute.status = DisputeStatus::Cancelled;
     dispute.resolved_at = clock.unix_timestamp;
 
-    // Restore task status to InProgress (was Disputed)
+    // Audit H-1: restore the ACTUAL pre-dispute state instead of hardcoding InProgress.
+    // A dispute initiated on a PendingValidation task (a delivered submission under review)
+    // was previously stomped to InProgress on cancel, orphaning the live submission —
+    // accept/reject require PendingValidation and resubmit is blocked — so the creator
+    // (initiate + cancel in one tx) could then no-show-cancel the task for a full escrow
+    // refund AND forfeit the worker's completion bond as a fake no-show, stealing the bond
+    // of a worker who actually delivered. Dispute initiation leaves the on-Task submission
+    // and worker counters intact, so derive the restore status from them: a live submission
+    // -> PendingValidation (which also makes the task non-cancellable, closing the theft);
+    // else a live worker -> InProgress; else Open. No Dispute-account field / migration.
     if task.status == TaskStatus::Disputed {
-        task.status = TaskStatus::InProgress;
+        task.status =
+            restore_status_after_dispute_cancel(task.live_submissions(), task.current_workers);
     }
 
     // Decrement defendant dispute counter (fix #544, #842)
@@ -105,4 +115,46 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
     });
 
     Ok(())
+}
+
+/// Audit H-1: derive the task status to restore when a dispute is cancelled, from state
+/// that dispute initiation leaves intact. A live submission means the task was under review
+/// (PendingValidation) and must be restored there so the delivered work is not orphaned;
+/// otherwise a live worker means it was InProgress; otherwise Open. Pure + revert-sensitive.
+fn restore_status_after_dispute_cancel(live_submissions: u8, current_workers: u8) -> TaskStatus {
+    if live_submissions > 0 {
+        TaskStatus::PendingValidation
+    } else if current_workers > 0 {
+        TaskStatus::InProgress
+    } else {
+        TaskStatus::Open
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Audit H-1 (revert-sensitive): cancelling a dispute on a task with a live submission
+    // must restore PendingValidation, NOT InProgress — restoring InProgress orphans the
+    // submission and re-opens the no-show-cancel bond theft. Reverting the helper to a
+    // hardcoded InProgress turns the first assert red.
+    #[test]
+    fn restore_after_dispute_cancel_preserves_review_state() {
+        // Live submission under review -> PendingValidation (blocks the no-show-cancel theft).
+        assert!(matches!(
+            restore_status_after_dispute_cancel(1, 1),
+            TaskStatus::PendingValidation
+        ));
+        // No submission, worker still engaged -> InProgress (the original single-worker case).
+        assert!(matches!(
+            restore_status_after_dispute_cancel(0, 1),
+            TaskStatus::InProgress
+        ));
+        // Nothing live -> Open.
+        assert!(matches!(
+            restore_status_after_dispute_cancel(0, 0),
+            TaskStatus::Open
+        ));
+    }
 }

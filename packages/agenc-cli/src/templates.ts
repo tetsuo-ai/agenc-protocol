@@ -114,7 +114,11 @@ export function appCheckoutRoute(config: AgencConfig): string {
 //   AGENC_MODERATOR     moderation authority whose attestations the hire consumes
 //   AGENC_ATTESTOR_URL  attestation service that records TaskModeration
 //                       (e.g. the localnet auto-attestor, or attest.agenc.ag)
+//   AGENC_CHECKOUT_SECRET  REQUIRED shared secret; callers must send it in the
+//                       x-agenc-checkout-secret header. Without it this route is
+//                       disabled (503) — it funds a REAL on-chain hire per request.
 import { readFile } from "node:fs/promises";
+import { timingSafeEqual } from "node:crypto";
 import { createKeyPairSignerFromBytes, type Address } from "@solana/kit";
 import {
   createMarketplaceClient,
@@ -135,7 +139,31 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+// SECURITY (agenc init hardening): this route makes the server wallet (AGENC_WALLET)
+// fund a REAL on-chain hire — it SPENDS SOL on every accepted request. It ships
+// FAIL-CLOSED: every request is refused unless AGENC_CHECKOUT_SECRET is set AND the
+// caller presents it in the x-agenc-checkout-secret header. Replace this shared-secret
+// gate with your app's real auth/session/entitlement check before going live.
+function checkCheckoutAuth(request: Request): Response | null {
+  const secret = process.env.AGENC_CHECKOUT_SECRET?.trim();
+  if (secret === undefined || secret === "") {
+    return Response.json(
+      { error: "checkout disabled: set AGENC_CHECKOUT_SECRET and send it in x-agenc-checkout-secret" },
+      { status: 503 },
+    );
+  }
+  const presented = Buffer.from(request.headers.get("x-agenc-checkout-secret") ?? "");
+  const expected = Buffer.from(secret);
+  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+  return null;
+}
+
 export async function POST(request: Request): Promise<Response> {
+  const denied = checkCheckoutAuth(request);
+  if (denied !== null) return denied;
+
   const form = await request.formData();
   const instructions = String(form.get("instructions") ?? "").trim();
   if (instructions === "") {
@@ -239,8 +267,12 @@ export function pagesCheckoutApi(config: AgencConfig): string {
 // \`hireAndActivate\` flow as the app-router template; see the env contract
 // in the header comment there (AGENC_RPC_URL, AGENC_WALLET, AGENC_LISTING,
 // AGENC_LISTING_SPEC_HASH, AGENC_MODERATOR, AGENC_ATTESTOR_URL).
+// SECURITY: this route spends the server wallet's SOL on every accepted request.
+// It ships FAIL-CLOSED: set AGENC_CHECKOUT_SECRET and send it in the
+// x-agenc-checkout-secret header, or every request is rejected.
 import type { NextApiRequest, NextApiResponse } from "next";
 import { readFile } from "node:fs/promises";
+import { timingSafeEqual } from "node:crypto";
 import { createKeyPairSignerFromBytes, type Address } from "@solana/kit";
 import {
   createMarketplaceClient,
@@ -257,8 +289,26 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function checkCheckoutAuth(req: NextApiRequest, res: NextApiResponse): boolean {
+  const secret = process.env.AGENC_CHECKOUT_SECRET?.trim();
+  if (secret === undefined || secret === "") {
+    res.status(503).json({
+      error: "checkout disabled: set AGENC_CHECKOUT_SECRET and send it in x-agenc-checkout-secret",
+    });
+    return false;
+  }
+  const presented = Buffer.from(String(req.headers["x-agenc-checkout-secret"] ?? ""));
+  const expected = Buffer.from(secret);
+  if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) {
+    res.status(401).json({ error: "unauthorized" });
+    return false;
+  }
+  return true;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  if (!checkCheckoutAuth(req, res)) return;
   const instructions = String(req.body?.instructions ?? "").trim();
   if (instructions === "") return res.status(400).json({ error: "instructions are required" });
 

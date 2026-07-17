@@ -371,6 +371,25 @@ fn validate_disputable_task_state(
         CoordinationError::InvalidStatusTransition
     );
 
+    // Audit H-3: reject TERMINAL / review-frozen task statuses on BOTH admission paths.
+    // The durable-submission branch lets `submission_is_disputable` substitute for the
+    // InProgress/PendingValidation status check below; without this guard a Completed or
+    // Cancelled task carrying an orphaned Submitted submission (reachable via a stomped
+    // review status, or a dispute -> expire -> re-dispute sequence) would be admitted. A
+    // dispute on a terminal task can never be resolved or expired (both require
+    // task.status == Disputed) and cancel_dispute is initiator-only, so it pins the
+    // defendant's disputes_as_defendant > 0 forever — freezing their reputation +
+    // registration stake (withdraw_reputation_stake / deregister_agent both require
+    // disputes_as_defendant == 0). RejectFrozen already cannot transition to Disputed;
+    // rejecting it here too keeps the invariant local and defense-in-depth.
+    require!(
+        !matches!(
+            status,
+            TaskStatus::Completed | TaskStatus::Cancelled | TaskStatus::RejectFrozen
+        ),
+        CoordinationError::TaskNotInProgress
+    );
+
     require!(
         status == TaskStatus::InProgress
             || status == TaskStatus::PendingValidation
@@ -403,6 +422,32 @@ fn validate_disputable_worker_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Audit H-3 (revert-sensitive): a terminal / review-frozen task carrying a still-
+    // "disputable" (Submitted) submission must be REJECTED on the durable path. Removing
+    // the explicit terminal guard lets `submission_is_disputable = true` slip Completed /
+    // Cancelled / RejectFrozen past the status check, pinning the defendant's
+    // disputes_as_defendant forever.
+    #[test]
+    fn terminal_task_with_disputable_submission_is_rejected() {
+        for status in [
+            TaskStatus::Completed,
+            TaskStatus::Cancelled,
+            TaskStatus::RejectFrozen,
+        ] {
+            assert!(
+                validate_disputable_task_state(status, true).is_err(),
+                "terminal status must not be disputable even with a live submission"
+            );
+        }
+    }
+
+    #[test]
+    fn active_task_with_disputable_submission_is_allowed() {
+        // The legitimate durable path still works for the active review states.
+        assert!(validate_disputable_task_state(TaskStatus::InProgress, true).is_ok());
+        assert!(validate_disputable_task_state(TaskStatus::PendingValidation, true).is_ok());
+    }
 
     #[test]
     fn submitted_submission_can_use_durable_dispute_path() {

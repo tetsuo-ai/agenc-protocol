@@ -188,9 +188,23 @@ fn validate_cancel_prereqs(task: &Task, now: i64) -> Result<()> {
         CoordinationError::InvalidStatusTransition
     );
 
+    // Audit C-1: an underfilled Collaborative task whose every claimant completes before
+    // the deadline lands at InProgress / current_workers == 0 / 0 < completions <
+    // required_completions. With no live claim it can never reach required_completions
+    // (claim_task is deadline-gated, so the roster can never refill) and every other exit
+    // is blocked, so the residual escrow + rent would lock forever. Admit the past-deadline
+    // cancel whenever NO live worker remains, regardless of completions — the claimants who
+    // completed were already paid at completion time; this refunds only the undistributed
+    // remainder to the creator. A live worker (current_workers > 0) still blocks cancel
+    // while completions exist, preserving the "don't cancel out from under an active
+    // claimant" invariant.
     let can_cancel = match task.status {
         TaskStatus::Open => true,
-        TaskStatus::InProgress => task.deadline > 0 && now > task.deadline && task.completions == 0,
+        TaskStatus::InProgress => {
+            task.deadline > 0
+                && now > task.deadline
+                && (task.completions == 0 || task.current_workers == 0)
+        }
         _ => false,
     };
 
@@ -249,8 +263,15 @@ fn process_cancel_task_impl<'info>(
     // was rejected; forfeiting their bond there would let a malicious creator seize an
     // honest worker's bond (the exact theft #70 was filed to stop), so it is refunded.
     // Only used by the completion-bond block, which is full-surface (non-canary) only.
+    // A genuine no-show requires a LIVE claim (current_workers > 0) that lapsed without
+    // delivery. Audit C-1 widened the InProgress cancel branch to admit
+    // current_workers == 0 with completions > 0; in that state nobody is at fault (every
+    // claimant already completed and was paid), so a worker bond present there is
+    // REFUNDED, not forfeited. Requiring current_workers > 0 keeps the forfeit scoped to
+    // real no-shows and future-proofs it if completion bonds ever extend beyond Exclusive.
     #[cfg(not(feature = "mainnet-canary"))]
-    let is_no_show_cancel = matches!(task.status, TaskStatus::InProgress);
+    let is_no_show_cancel =
+        matches!(task.status, TaskStatus::InProgress) && task.current_workers > 0;
 
     let mut escrow = load_task_escrow(&accounts.escrow)?;
     require!(escrow.bump > 0, CoordinationError::CorruptedData);
@@ -641,12 +662,33 @@ mod tests {
     }
 
     #[test]
-    fn in_progress_task_with_completions_returns_task_cannot_be_cancelled() {
-        let task = build_test_task(TaskStatus::InProgress, 100, 1);
+    fn in_progress_task_with_completions_and_live_worker_returns_task_cannot_be_cancelled() {
+        // Past deadline, completions > 0, but a worker is still live: cancel stays blocked
+        // so the creator can never cancel out from under an active claimant.
+        let mut task = build_test_task(TaskStatus::InProgress, 100, 1);
+        task.current_workers = 1;
         assert_anchor_error_code(
             validate_cancel_prereqs(&task, 101),
             CoordinationError::TaskCannotBeCancelled,
         );
+    }
+
+    // Audit C-1 (revert-sensitive): an underfilled Collaborative task whose claimants all
+    // completed sits InProgress with current_workers == 0 and 0 < completions <
+    // required_completions. Past the deadline it MUST be cancellable so the residual escrow
+    // + rent are recoverable. Reverting the `current_workers == 0` arm of
+    // validate_cancel_prereqs turns this red (TaskCannotBeCancelled).
+    #[test]
+    fn expired_underfilled_task_with_zero_live_workers_can_be_cancelled() {
+        let task = Task {
+            status: TaskStatus::InProgress,
+            deadline: 100,
+            completions: 1,
+            current_workers: 0,
+            required_completions: 3,
+            ..Task::default()
+        };
+        validate_cancel_prereqs(&task, 101).unwrap();
     }
 
     #[test]

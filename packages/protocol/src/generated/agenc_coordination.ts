@@ -19421,6 +19421,16 @@ export type AgencCoordination = {
       "code": 6353,
       "name": "goodsInvalidOperatorTerms",
       "msg": "Operator and operator_fee_bps must be set together, and the operator may not be the seller"
+    },
+    {
+      "code": 6354,
+      "name": "resolverConflictOfInterest",
+      "msg": "A dispute party (the task creator or the defendant worker) cannot resolve their own dispute"
+    },
+    {
+      "code": 6355,
+      "name": "completingAcceptRequiresSoleLiveSubmission",
+      "msg": "An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned)"
     }
   ],
   "types": [
@@ -24432,7 +24442,8 @@ export type AgencCoordination = {
               "- `0`  → surface unstamped (treat as the conservative canary surface;",
               "clients should fall back to capability probing).",
               "- `>0` → the operator-declared surface revision; the SDK maps it to a typed",
-              "capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface)."
+              "capability set (`SURFACE_REVISION_FULL` = full-surface stamp;",
+              "historical Phase-9 count was 84 ix; live surface is later batches)."
             ],
             "type": "u16"
           }

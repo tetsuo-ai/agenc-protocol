@@ -238,7 +238,8 @@ async function main() {
       const ix = await program.methods
         .initializeZkConfig([...imageId])
         .accounts({ protocolConfig: protocolPda, zkConfig: zkConfigPda, authority: authority.publicKey, systemProgram: SystemProgram.programId })
-        .instruction(); // single authority signer — no remaining accounts
+        .remainingAccounts(signerMetas)
+        .instruction();
       if (EXECUTE) await sendIx(ix, "initialize_zk_config"); else console.log("   (DRY-RUN: not sent)");
     }
   }

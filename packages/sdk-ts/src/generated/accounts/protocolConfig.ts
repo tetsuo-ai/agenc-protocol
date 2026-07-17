@@ -145,7 +145,8 @@ export type ProtocolConfig = {
    * - `0`  → surface unstamped (treat as the conservative canary surface;
    * clients should fall back to capability probing).
    * - `>0` → the operator-declared surface revision; the SDK maps it to a typed
-   * capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface).
+   * capability set (`SURFACE_REVISION_FULL` = full-surface stamp;
+   * historical Phase-9 count was 84 ix; live surface is later batches).
    */
   surfaceRevision: number;
 };
@@ -237,7 +238,8 @@ export type ProtocolConfigArgs = {
    * - `0`  → surface unstamped (treat as the conservative canary surface;
    * clients should fall back to capability probing).
    * - `>0` → the operator-declared surface revision; the SDK maps it to a typed
-   * capability set (`SURFACE_REVISION_FULL` = the full 80-ix surface).
+   * capability set (`SURFACE_REVISION_FULL` = full-surface stamp;
+   * historical Phase-9 count was 84 ix; live surface is later batches).
    */
   surfaceRevision: number;
 };

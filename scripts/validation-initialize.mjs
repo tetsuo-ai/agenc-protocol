@@ -383,6 +383,8 @@ async function main() {
         authority: authority.publicKey,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts(rateLimitSigners.map((pubkey) => signerMeta(pubkey)))
+      .signers([secondSigner])
       .rpc();
     result.signatures.initializeZkConfig = signature;
     zkConfig = await program.account.zkConfig.fetch(zkConfigPda);

@@ -328,12 +328,14 @@ test("update_state: agent authority writes namespaced state; wrong authority rej
 // initialize_zk_config (has_one = authority on protocol_config)
 // ---------------------------------------------------------------------------
 
-test("initialize_zk_config: protocol authority inits the trusted image; non-authority rejected", async () => {
+test("initialize_zk_config: multisig inits the trusted image; non-authority and single signer rejected", async () => {
   const w = await freshWorld();
+  const { signerMetas, signers } = twoOfTwoMultisig(w);
+  await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
   const [zkPda] = pda([enc("zk_config")]);
   const imageId = id32(); // non-zero
 
-  const initIx = (signerKp) => makeProgram(signerKp).methods
+  const initIx = (signerKp, metas = []) => makeProgram(signerKp).methods
     .initializeZkConfig(arr(imageId))
     .accounts({
       protocolConfig: w.protocolPda,
@@ -341,6 +343,7 @@ test("initialize_zk_config: protocol authority inits the trusted image; non-auth
       authority: signerKp.publicKey,
       systemProgram: SystemProgram.programId,
     })
+    .remainingAccounts(metas)
     .instruction();
 
   // NEGATIVE: a non-authority signer cannot init (has_one = authority on
@@ -351,9 +354,20 @@ test("initialize_zk_config: protocol authority inits the trusted image; non-auth
     "initialize_zk_config non-authority rejected",
   );
 
-  // POSITIVE: the protocol authority (admin) initializes the ZK config.
+  // NEGATIVE (revert-sensitive, audit H-5): the protocol authority ALONE cannot init the
+  // ZK root of trust — the one-shot init is multisig-gated exactly like the rotation
+  // (update_zk_image_id). Drop require_multisig_threshold from initialize_zk_config and
+  // this single-signer init stops failing.
   w.svm.expireBlockhash();
-  expectOk(send(w.svm, await initIx(w.admin), [w.admin]), "initialize_zk_config ok");
+  expectFail(
+    send(w.svm, await initIx(w.admin, [signerMetas[0]]), [w.admin]),
+    "MultisigNotEnoughSigners",
+    "initialize_zk_config single signer rejected",
+  );
+
+  // POSITIVE: the full M-of-N multisig initializes the ZK config.
+  w.svm.expireBlockhash();
+  expectOk(send(w.svm, await initIx(w.admin, signerMetas), signers), "initialize_zk_config ok");
   const zk = decode(w.svm, "ZkConfig", zkPda);
   assert.ok(Buffer.from(zk.active_image_id).equals(imageId), "active_image_id stored");
 });
@@ -372,7 +386,8 @@ test("update_zk_image_id: 2-of-2 multisig rotates the image; single signer rejec
   const firstImage = id32();
   const secondImage = id32();
 
-  // Init the ZK config first (initialize_zk_config is single-authority gated).
+  // Init the ZK config first (audit H-5: initialize_zk_config is now multisig-gated too,
+  // so it takes the same co-signers in remaining_accounts as the rotation below).
   expectOk(
     send(w.svm, await makeProgram(w.admin).methods
       .initializeZkConfig(arr(firstImage))
@@ -380,7 +395,8 @@ test("update_zk_image_id: 2-of-2 multisig rotates the image; single signer rejec
         protocolConfig: w.protocolPda, zkConfig: zkPda,
         authority: w.admin.publicKey, systemProgram: SystemProgram.programId,
       })
-      .instruction(), [w.admin]),
+      .remainingAccounts(signerMetas)
+      .instruction(), signers),
     "init zk config for rotation",
   );
 

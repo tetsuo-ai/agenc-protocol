@@ -1,9 +1,16 @@
 //! Initialize trusted ZK image ID configuration.
+//!
+//! M-of-N multisig gated (audit H-5): the initial active ZK image ID is the root of trust
+//! for the private-completion settlement path, and init is one-shot. Gating it with the
+//! same multisig threshold as the rotation (update_zk_image_id) prevents a single
+//! compromised authority from seeding a malicious guest image at initialization — which
+//! would enable escrow theft across every ZK-private task until the multisig rotated it.
 
 use crate::errors::CoordinationError;
 use crate::events::ZkConfigInitialized;
 use crate::instructions::zk_config_helpers::require_nonzero_image_id;
 use crate::state::{ProtocolConfig, ZkConfig, HASH_SIZE};
+use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -49,6 +56,14 @@ pub fn handler(ctx: Context<InitializeZkConfig>, active_image_id: [u8; HASH_SIZE
         ctx.accounts.authority.key() == ctx.accounts.protocol_config.authority,
         CoordinationError::UnauthorizedProtocolAuthority
     );
+    // Audit H-5: multisig-gate the ONE-SHOT init exactly like the rotation
+    // (update_zk_image_id). The active ZK image ID is the root of trust for
+    // complete_task_private escrow settlement; a single compromised authority key setting a
+    // malicious initial image would enable escrow theft across every ZK-private task until
+    // the multisig rotated it. Require the same M-of-N threshold (co-signers in
+    // remaining_accounts) that gates the rotation and the treasury / protocol-fee controls.
+    let unique_signers = unique_account_infos(ctx.remaining_accounts);
+    require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
     require_keys_neq!(
         ctx.accounts.protocol_config.key(),
         ctx.accounts.zk_config.key(),

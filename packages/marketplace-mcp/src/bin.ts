@@ -15,6 +15,22 @@ import { resolveMcpConfig } from "./config.js";
 import { buildToolContext } from "./context.js";
 import { createMarketplaceMcpServer } from "./server.js";
 
+/**
+ * Strip credentials from a URL before it reaches a diagnostic log. Provider RPC and
+ * indexer URLs routinely embed API keys (Helius `?api-key=`, Alchemy `/v2/<key>`,
+ * QuickNode `/<token>/`); `URL.origin` keeps only `scheme://host:port`, dropping
+ * userinfo, path, query and fragment — where those secrets live. Unparseable input
+ * yields a placeholder rather than being echoed raw.
+ */
+function redactUrl(raw: string | undefined | null): string {
+  if (raw === undefined || raw === null || raw === "") return "none";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "<unparseable-url-redacted>";
+  }
+}
+
 async function main(): Promise<void> {
   const config = resolveMcpConfig(process.env);
   const context = buildToolContext(config);
@@ -25,10 +41,12 @@ async function main(): Promise<void> {
 
   // Diagnostics go to STDERR ONLY — STDOUT is the JSON-RPC channel and must
   // carry nothing but protocol frames.
+  // NOTE: rpc/indexer URLs are redacted to their origin — an AGENC_RPC_URL or
+  // AGENC_INDEXER_URL may embed a provider API key, which must never hit a log file.
   process.stderr.write(
     `[agenc-marketplace-mcp] starting (cluster=${config.cluster}, ` +
-      `rpc=${config.rpcUrl}${config.rpcUrlExplicit ? "" : " [default]"}, ` +
-      `indexer=${config.indexerUrl ?? "none"}, ` +
+      `rpc=${redactUrl(config.rpcUrl)}${config.rpcUrlExplicit ? "" : " [default]"}, ` +
+      `indexer=${redactUrl(config.indexerUrl)}, ` +
       `mutations=${mutationsEnabled ? "ENABLED (keyless unsigned-tx builders)" : "off (readonly)"})\n`,
   );
   process.stderr.write(
