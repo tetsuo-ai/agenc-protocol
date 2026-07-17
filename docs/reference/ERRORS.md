@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**356 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**358 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -367,3 +367,5 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6353 | 0x18d1 | `GoodsInvalidOperatorTerms` | Operator and operator_fee_bps must be set together, and the operator may not be the seller |
 | 6354 | 0x18d2 | `ResolverConflictOfInterest` | A dispute party (the task creator or the defendant worker) cannot resolve their own dispute |
 | 6355 | 0x18d3 | `CompletingAcceptRequiresSoleLiveSubmission` | An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned) |
+| 6356 | 0x18d4 | `BondNotTiedToNoShowWorker` | A forfeited worker completion bond must belong to a live no-show claimant of this task |
+| 6357 | 0x18d5 | `ClaimSlashPending` | This claim's dispute was resolved but its slash has not been applied yet |

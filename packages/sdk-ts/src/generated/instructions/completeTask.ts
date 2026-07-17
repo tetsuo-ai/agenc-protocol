@@ -43,7 +43,7 @@ import {
 } from "@solana/program-client-core";
 import {
   findAcceptTaskResultClaimPda,
-  findCompleteTaskWorkerCompletionBondPda,
+  findCancelTaskCreatorCompletionBondPda,
   findCreatorCompletionBondPda,
   findEscrowPda,
   findHireRecordPda,
@@ -430,7 +430,7 @@ export async function getCompleteTaskInstructionAsync<
   }
   if (!accounts.workerCompletionBond.value) {
     accounts.workerCompletionBond.value =
-      await findCompleteTaskWorkerCompletionBondPda({
+      await findCancelTaskCreatorCompletionBondPda({
         task: getAddressFromResolvedInstructionAccount(
           "task",
           accounts.task.value,

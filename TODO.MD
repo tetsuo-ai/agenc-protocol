@@ -42,7 +42,27 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 
 ## P0 — Blockers for any full-surface (99-ix) deploy
 
-### [ ] F-1 — `cancel_task` no-show bond forfeit must be bound to the live no-show claimant (HIGH, full-surface)
+> **ALL P0 ITEMS DONE (2026-07-18)** — F-1 `4b70630`, F-2 `aa6aae5`, F-3
+> `cc8870e`, F-5 `b3eb824` (F-6 closed by on-chain verification). Gates: 409
+> Rust unit, 290 litesvm, 520 SDK tests, clippy default+canary, artifacts +
+> canary freeze + IDL reference all green. Deploy choreography for this upgrade
+> package: wire changes are `apply_initiator_slash` (task account removed),
+> `cancel_task` / `expire_reject_frozen` (bond accounts optional → required),
+> `reclaim_terminal_claim` / `apply_dispute_slash` (writable flags) — all
+> non-canary. Deploy = multisig binary upgrade → `surface_revision` 5 stamp →
+> coordinated SDK/package minor releases.
+
+### [x] F-1 — `cancel_task` no-show bond forfeit must be bound to the live no-show claimant (HIGH, full-surface)
+
+- **RESOLVED 2026-07-18 (commit `4b70630`)**: the forfeit now requires the bond
+  wallet to be one of the live claim triples' rent-recipient wallets (each
+  constrained `== worker.authority`); new error 6356 `BondNotTiedToNoShowWorker`.
+  litesvm: exploit chain rejected; legit live no-show forfeit still works; the
+  rejected worker reclaims on the terminal task (`bond-forfeit-binding.test.mjs`).
+- **Problem** (original entry): on a no-show cancel, the forfeited worker bond
+  is whichever bond PDA the caller passes — not provably the bond of the worker
+  who actually no-showed. A creator can forfeit an honest, already-rejected
+  worker's bond.
 
 - **Problem**: on a no-show cancel, the forfeited worker bond is whichever bond
   PDA the caller passes — not provably the bond of the worker who actually
@@ -76,7 +96,25 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 - **Done when**: [ ] binding implemented [ ] exploit test red [ ] legit forfeit
   test green [ ] canary IDL unchanged [ ] all gates green.
 
-### [ ] F-2 — `close_task` must not brick slash finalizers (HIGH, full-surface)
+### [x] F-2 — `close_task` must not brick slash finalizers (HIGH, full-surface)
+
+- **RESOLVED 2026-07-18 (commit `aa6aae5`)**: (1) `apply_initiator_slash` no
+  longer loads the Task account (IDL account removal, backward-compatible);
+  (2) `resolve_dispute` keeps `current_workers == 1` while a worker slash is
+  pending, so `close_task`'s guard blocks the brick atomically;
+  (3) `apply_dispute_slash` frees the slot when it closes the claim (task now
+  `mut` — the decrement was silently discarded without it);
+  (4) `reclaim_terminal_claim` refuses a slash-pending deferred claim when the
+  bound dispute is supplied (new error 6357 `ClaimSlashPending`).
+  litesvm: `slash-finalizer-close-race.test.mjs`.
+  **Disclosed residual (unchanged)**: the reclaim guard is not omission-proof —
+  a griefer can omit the dispute account, reclaim an InProgress-originated
+  deferred claim, and close_task → brick. The worker can always front-run with
+  `apply_dispute_slash` (7-day window); the omission-proof alternative (carving
+  a pending-slash flag from `Task._reserved`) stays rejected (schema retirement).
+- **Problem** (original entry): immediately after `resolve_dispute`, the task
+  meets every `close_task` precondition. Destroying the Task PDA permanently
+  bricks `apply_dispute_slash` and `apply_initiator_slash`.
 
 - **Problem**: immediately after `resolve_dispute`, the task meets every
   `close_task` precondition (terminal, `current_workers == 0`, bonds settled).
@@ -120,7 +158,20 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
   `current_workers == 1` while deferred [ ] finalizer decrements it [ ] the two
   integration scenarios pass [ ] SDK callers updated [ ] gates green.
 
-### [ ] F-3 — Close the completing-accept orphan gaps (MEDIUM, full-surface)
+### [x] F-3 — Close the completing-accept orphan gaps (MEDIUM, full-surface)
+
+- **RESOLVED 2026-07-18 (commit `cc8870e`)**: (a) `validate_task_result`'s accept
+  branch now calls `validate_completing_accept_sole_submission` before the
+  counter decrements, mirroring the CreatorReview accept paths; (b)
+  `reclaim_terminal_claim` accepts a REJECTED submission as no-live-submission
+  evidence (counters untouched — already decremented at bounce) and returns the
+  bounced submission's rent to the worker (`task_submission` marked `mut`,
+  non-canary). litesvm: `completing-accept-orphan.test.mjs` covers both
+  scenarios (incl. the litesvm AlreadyProcessed blockhash gotcha on retries).
+- **Problem (a)** (original entry): `validate_task_result`'s accept branch has no
+  `validate_completing_accept_sole_submission` — a quorum/attestation completing
+  accept flips the task to Completed while peer submissions/claims are live,
+  stranding them with no exit.
 
 - **Problem (a)**: `validate_task_result`'s accept branch has no
   `validate_completing_accept_sole_submission` — a quorum/attestation completing
@@ -159,7 +210,17 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 - **Done when**: [ ] quorum guard wired [ ] reclaim accepts Rejected evidence
   [ ] both integration scenarios pass [ ] gates green.
 
-### [ ] F-5 — Required+pinned worker completion bonds on `cancel_task` / `expire_reject_frozen` (MEDIUM, full-surface)
+### [x] F-5 — Required+pinned worker completion bonds on `cancel_task` / `expire_reject_frozen` (MEDIUM, full-surface)
+
+- **RESOLVED 2026-07-18 (commit `b3eb824`)**: both bond accounts (and
+  `worker_bond_authority`) are now REQUIRED + seeds-pinned on `cancel_task`
+  (full-surface only — cfg'd out of canary) and `expire_reject_frozen`; settle
+  no-ops on the empty PDA of an un-bonded task, so no live bond can be omitted
+  into a terminal task. SDK facade `cancelTask` derives the PDAs;
+  marketplace-react/-tools default the worker wallet to the task PDA. The
+  marketplace F12 test was reworked for the settled-at-cancel semantics.
+- **Problem** (original entry): both paths settle the worker bond only when the
+  caller passes it; `close_task` refuses only when a SUPPLIED bond is live.
 
 - **Problem**: both paths settle the worker bond only when the caller passes it;
   `close_task` refuses only when a SUPPLIED bond is live. Atomic chain:
@@ -412,10 +473,10 @@ so it isn't re-filed.
 
 | ID | Priority | Owner | Status |
 |----|----------|-------|--------|
-| F-1 | P0 | | ☐ |
-| F-2 | P0 | | ☐ |
-| F-3 | P0 | | ☐ |
-| F-5 | P0 | | ☐ |
+| F-1 | ~~P0~~ DONE (4b70630) | | ☒ |
+| F-2 | ~~P0~~ DONE (aa6aae5) — omission residual disclosed in-entry | | ☒ |
+| F-3 | ~~P0~~ DONE (cc8870e) | | ☒ |
+| F-5 | ~~P0~~ DONE (b3eb824) | | ☒ |
 | F-6 | ~~P0~~ CLOSED — init already executed with sane params (verified on-chain 2026-07-17) | | ☒ |
 | F-7 | P1 | | ☐ |
 | F-4 | P1 | | ☐ |

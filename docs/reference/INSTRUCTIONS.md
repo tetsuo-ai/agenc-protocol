@@ -177,7 +177,7 @@ Apply slashing to a worker after losing a dispute.
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `dispute` | yes |  |  | PDA ["dispute", account:dispute.dispute_id (Dispute)] |  |
-| 2 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 2 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 3 | `worker_claim` | yes |  |  | PDA ["claim", account:task, account:worker_claim.worker (TaskClaim)] | The losing worker's claim. resolve_dispute deliberately DEFERS closing this when a slash is pending (fix #838) so this finalizer can re-validate it; this instruction is the designated finalizer, so it closes the claim and returns its rent to the worker authority (audit: previously left read-only, permanently stranding the rent the non-slash path returns). |
 | 4 | `worker_agent` | yes |  |  | PDA ["agent", account:worker_agent.agent_id (AgentRegistration)] |  |
 | 5 | `worker_authority` | yes |  |  |  | against worker_agent.authority so the rent cannot be redirected. |
@@ -200,16 +200,15 @@ Apply slashing to a dispute initiator when their dispute is rejected.
 This provides symmetric slashing: workers are slashed for bad work,
 initiators are slashed for frivolous disputes.
 
-### Accounts (6)
+### Accounts (5)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `dispute` | yes |  |  | PDA ["dispute", account:dispute.dispute_id (Dispute)] |  |
-| 2 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] | Task being disputed - validates initiator was a participant |
-| 3 | `initiator_agent` | yes |  |  | PDA ["agent", account:initiator_agent.agent_id (AgentRegistration)] |  |
-| 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 5 | `treasury` | yes |  |  |  |  |
-| 6 | `authority` |  | yes |  |  |  |
+| 2 | `initiator_agent` | yes |  |  | PDA ["agent", account:initiator_agent.agent_id (AgentRegistration)] |  |
+| 3 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 4 | `treasury` | yes |  |  |  |  |
+| 5 | `authority` |  | yes |  |  |  |
 
 ### Args (0)
 
@@ -363,9 +362,9 @@ Cancel an unclaimed or expired task and reclaim funds.
 | 7 | `creator_token_account` | yes |  | yes |  | Creator's token account to receive refund (optional) |
 | 8 | `reward_mint` |  |  | yes |  | SPL token mint (optional, must match task.reward_mint) |
 | 9 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | SPL Token program (optional, required for token tasks) |
-| 10 | `creator_completion_bond` | yes |  | yes |  | cancel. Validated by settle_completion_bond. |
-| 11 | `worker_completion_bond` | yes |  | yes |  | worker bond is present (an InProgress past-deadline cancel). |
-| 12 | `worker_bond_authority` | yes |  | yes |  |  |
+| 10 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:authority] | (== authority); refunded on cancel by settle_completion_bond. |
+| 11 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_bond_authority] | Forfeited to the creator ONLY when that wallet is a live no-show claimant (audit F-1); otherwise refunded to the poster. |
+| 12 | `worker_bond_authority` | yes |  |  |  | == bond.party, and the no-show forfeit additionally binds it to a live claim (audit F-1). |
 | 13 | `creator_agent` |  |  | yes | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the track-record aggregate. Constrained to `authority` so a caller can only attribute the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together with `agent_stats`. Full-surface only — gated so the frozen canary account list for `cancel_task` is unchanged. |
 | 14 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:creator_agent] | OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with `creator_agent`), a cancel bumps `total_cancelled`. Bound to `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only. |
 
@@ -1040,8 +1039,8 @@ window lapses, default to the worker (pay + refund both bonds). Exit path.
 | 8 | `creator` | yes |  |  |  |  |
 | 9 | `worker_authority` | yes |  |  |  |  |
 | 10 | `authority` |  | yes |  |  | Permissionless caller. |
-| 11 | `creator_completion_bond` | yes |  | yes |  |  |
-| 12 | `worker_completion_bond` | yes |  | yes |  |  |
+| 11 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | refunded on this no-fault timeout exit. Making it omittable would let a caller strand a live bond into the terminal task, where reclaim_completion_bond can never reach it once the Task PDA is closed. Pass the derived PDA even for an un-bonded task (empty system account); settle_completion_bond no-ops on it. |
+| 12 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] | worker authority (audit F5/F12); refunded on this no-fault exit. |
 | 13 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (0)
@@ -1560,7 +1559,7 @@ settles even while paused (money never locks).
 | 1 | `authority` |  | yes |  |  | Permissionless caller; pays only the transaction fee. |
 | 2 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 3 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
-| 4 | `task_submission` |  |  |  | PDA ["task_submission", account:claim] | The derived `["task_submission", claim]` PDA — the unfakeable liveness probe. It must be system-owned with zero data (no submission was ever made for this claim, or it was already closed together with the claim by a settlement path — in which case THIS claim would not exist). A live program-owned submission here means the claim is still settleable by the normal paths and must not be short-circuited. |
+| 4 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] | The derived `["task_submission", claim]` PDA — the unfakeable liveness probe. It must be system-owned with zero data (no submission was ever made for this claim, or it was already closed together with the claim by a settlement path — in which case THIS claim would not exist) OR hold a REJECTED submission (audit F-3 — then its rent is returned to the worker and it is tombstoned here, hence `mut`). A live program-owned submission in any other state means the claim is still settleable by the normal paths and must not be short-circuited. |
 | 5 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
 | 6 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 7 | `treasury` | yes |  |  |  | Receives the forfeited contest entry-deposit surplus (never the creator); 0 lamports for non-contest claims. |

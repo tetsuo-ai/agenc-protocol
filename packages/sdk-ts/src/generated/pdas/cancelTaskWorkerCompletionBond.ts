@@ -14,13 +14,13 @@ import {
   type ProgramDerivedAddress,
 } from "@solana/kit";
 
-export type CompleteTaskWorkerCompletionBondSeeds = {
+export type CancelTaskWorkerCompletionBondSeeds = {
   task: Address;
-  authority: Address;
+  workerBondAuthority: Address;
 };
 
-export async function findCompleteTaskWorkerCompletionBondPda(
-  seeds: CompleteTaskWorkerCompletionBondSeeds,
+export async function findCancelTaskWorkerCompletionBondPda(
+  seeds: CancelTaskWorkerCompletionBondSeeds,
   config: { programAddress?: Address | undefined } = {},
 ): Promise<ProgramDerivedAddress> {
   const {
@@ -36,7 +36,7 @@ export async function findCompleteTaskWorkerCompletionBondPda(
         ]),
       ),
       getAddressEncoder().encode(seeds.task),
-      getAddressEncoder().encode(seeds.authority),
+      getAddressEncoder().encode(seeds.workerBondAuthority),
     ],
   });
 }

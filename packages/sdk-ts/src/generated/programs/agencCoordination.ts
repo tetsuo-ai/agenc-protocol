@@ -581,8 +581,9 @@ import {
   findBidderMarketStatePda,
   findBidMarketplacePda,
   findBidPda,
+  findCancelTaskCreatorCompletionBondPda,
+  findCancelTaskWorkerCompletionBondPda,
   findClaimPda,
-  findCompleteTaskWorkerCompletionBondPda,
   findCompletionBondPda,
   findCreateTaskHumanlessAuthorityRateLimitPda,
   findCreatorCompletionBondPda,
@@ -3921,10 +3922,11 @@ export type AgencCoordinationPluginPdas = {
   disputeResolver: typeof findDisputeResolverPda;
   moderationConfig: typeof findModerationConfigPda;
   moderationAttestor: typeof findModerationAttestorPda;
+  cancelTaskCreatorCompletionBond: typeof findCancelTaskCreatorCompletionBondPda;
+  cancelTaskWorkerCompletionBond: typeof findCancelTaskWorkerCompletionBondPda;
   agentStats: typeof findAgentStatsPda;
   store: typeof findStorePda;
   hireRecord: typeof findHireRecordPda;
-  completeTaskWorkerCompletionBond: typeof findCompleteTaskWorkerCompletionBondPda;
   zkConfig: typeof findZkConfigPda;
   taskAttestorConfig: typeof findTaskAttestorConfigPda;
   bidMarketplace: typeof findBidMarketplacePda;
@@ -4624,11 +4626,12 @@ export function agencCoordinationProgram() {
           disputeResolver: findDisputeResolverPda,
           moderationConfig: findModerationConfigPda,
           moderationAttestor: findModerationAttestorPda,
+          cancelTaskCreatorCompletionBond:
+            findCancelTaskCreatorCompletionBondPda,
+          cancelTaskWorkerCompletionBond: findCancelTaskWorkerCompletionBondPda,
           agentStats: findAgentStatsPda,
           store: findStorePda,
           hireRecord: findHireRecordPda,
-          completeTaskWorkerCompletionBond:
-            findCompleteTaskWorkerCompletionBondPda,
           zkConfig: findZkConfigPda,
           taskAttestorConfig: findTaskAttestorConfigPda,
           bidMarketplace: findBidMarketplacePda,

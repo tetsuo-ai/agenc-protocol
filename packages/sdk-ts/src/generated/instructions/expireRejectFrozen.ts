@@ -38,9 +38,11 @@ import {
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
 import {
+  findCreatorCompletionBondPda,
   findEscrowPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
+  findWorkerCompletionBondPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -176,7 +178,14 @@ export type ExpireRejectFrozenAsyncInput<
   workerAuthority: Address<TAccountWorkerAuthority>;
   /** Permissionless caller. */
   authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * refunded on this no-fault timeout exit. Making it omittable would let a caller
+   * strand a live bond into the terminal task, where reclaim_completion_bond can
+   * never reach it once the Task PDA is closed. Pass the derived PDA even for an
+   * un-bonded task (empty system account); settle_completion_bond no-ops on it.
+   */
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
+  /** worker authority (audit F5/F12); refunded on this no-fault exit. */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
@@ -282,6 +291,30 @@ export async function getExpireRejectFrozenInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.creatorCompletionBond.value) {
+    accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
+  if (!accounts.workerCompletionBond.value) {
+    accounts.workerCompletionBond.value = await findWorkerCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      workerAuthority: getAddressFromResolvedInstructionAccount(
+        "workerAuthority",
+        accounts.workerAuthority.value,
+      ),
+    });
+  }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
@@ -350,8 +383,15 @@ export type ExpireRejectFrozenInput<
   workerAuthority: Address<TAccountWorkerAuthority>;
   /** Permissionless caller. */
   authority: TransactionSigner<TAccountAuthority>;
-  creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
-  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
+  /**
+   * refunded on this no-fault timeout exit. Making it omittable would let a caller
+   * strand a live bond into the terminal task, where reclaim_completion_bond can
+   * never reach it once the Task PDA is closed. Pass the derived PDA even for an
+   * un-bonded task (empty system account); settle_completion_bond no-ops on it.
+   */
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  /** worker authority (audit F5/F12); refunded on this no-fault exit. */
+  workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
 
@@ -494,8 +534,15 @@ export type ParsedExpireRejectFrozenInstruction<
     workerAuthority: TAccountMetas[8];
     /** Permissionless caller. */
     authority: TAccountMetas[9];
-    creatorCompletionBond?: TAccountMetas[10] | undefined;
-    workerCompletionBond?: TAccountMetas[11] | undefined;
+    /**
+     * refunded on this no-fault timeout exit. Making it omittable would let a caller
+     * strand a live bond into the terminal task, where reclaim_completion_bond can
+     * never reach it once the Task PDA is closed. Pass the derived PDA even for an
+     * un-bonded task (empty system account); settle_completion_bond no-ops on it.
+     */
+    creatorCompletionBond: TAccountMetas[10];
+    /** worker authority (audit F5/F12); refunded on this no-fault exit. */
+    workerCompletionBond: TAccountMetas[11];
     systemProgram: TAccountMetas[12];
   };
   data: ExpireRejectFrozenInstructionData;
@@ -524,12 +571,6 @@ export function parseExpireRejectFrozenInstruction<
     accountIndex += 1;
     return accountMeta;
   };
-  const getNextOptionalAccount = () => {
-    const accountMeta = getNextAccount();
-    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
-      ? undefined
-      : accountMeta;
-  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
@@ -543,8 +584,8 @@ export function parseExpireRejectFrozenInstruction<
       creator: getNextAccount(),
       workerAuthority: getNextAccount(),
       authority: getNextAccount(),
-      creatorCompletionBond: getNextOptionalAccount(),
-      workerCompletionBond: getNextOptionalAccount(),
+      creatorCompletionBond: getNextAccount(),
+      workerCompletionBond: getNextAccount(),
       systemProgram: getNextAccount(),
     },
     data: getExpireRejectFrozenInstructionDataDecoder().decode(

@@ -37,7 +37,12 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findEscrowPda, findProtocolConfigPda } from "../pdas";
+import {
+  findCancelTaskCreatorCompletionBondPda,
+  findCancelTaskWorkerCompletionBondPda,
+  findEscrowPda,
+  findProtocolConfigPda,
+} from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const CANCEL_TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
@@ -175,11 +180,18 @@ export type CancelTaskAsyncInput<
   rewardMint?: Address<TAccountRewardMint>;
   /** SPL Token program (optional, required for token tasks) */
   tokenProgram?: Address<TAccountTokenProgram>;
-  /** cancel. Validated by settle_completion_bond. */
+  /** (== authority); refunded on cancel by settle_completion_bond. */
   creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
-  /** worker bond is present (an InProgress past-deadline cancel). */
+  /**
+   * Forfeited to the creator ONLY when that wallet is a live no-show claimant
+   * (audit F-1); otherwise refunded to the poster.
+   */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
-  workerBondAuthority?: Address<TAccountWorkerBondAuthority>;
+  /**
+   * == bond.party, and the no-show forfeit additionally binds it to a live claim
+   * (audit F-1).
+   */
+  workerBondAuthority: Address<TAccountWorkerBondAuthority>;
   /**
    * OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
    * track-record aggregate. Constrained to `authority` so a caller can only attribute
@@ -307,6 +319,32 @@ export async function getCancelTaskInstructionAsync<
     accounts.tokenProgram.value =
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address<"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA">;
   }
+  if (!accounts.creatorCompletionBond.value) {
+    accounts.creatorCompletionBond.value =
+      await findCancelTaskCreatorCompletionBondPda({
+        task: getAddressFromResolvedInstructionAccount(
+          "task",
+          accounts.task.value,
+        ),
+        authority: getAddressFromResolvedInstructionAccount(
+          "authority",
+          accounts.authority.value,
+        ),
+      });
+  }
+  if (!accounts.workerCompletionBond.value) {
+    accounts.workerCompletionBond.value =
+      await findCancelTaskWorkerCompletionBondPda({
+        task: getAddressFromResolvedInstructionAccount(
+          "task",
+          accounts.task.value,
+        ),
+        workerBondAuthority: getAddressFromResolvedInstructionAccount(
+          "workerBondAuthority",
+          accounts.workerBondAuthority.value,
+        ),
+      });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -377,11 +415,18 @@ export type CancelTaskInput<
   rewardMint?: Address<TAccountRewardMint>;
   /** SPL Token program (optional, required for token tasks) */
   tokenProgram?: Address<TAccountTokenProgram>;
-  /** cancel. Validated by settle_completion_bond. */
-  creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
-  /** worker bond is present (an InProgress past-deadline cancel). */
-  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
-  workerBondAuthority?: Address<TAccountWorkerBondAuthority>;
+  /** (== authority); refunded on cancel by settle_completion_bond. */
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  /**
+   * Forfeited to the creator ONLY when that wallet is a live no-show claimant
+   * (audit F-1); otherwise refunded to the poster.
+   */
+  workerCompletionBond: Address<TAccountWorkerCompletionBond>;
+  /**
+   * == bond.party, and the no-show forfeit additionally binds it to a live claim
+   * (audit F-1).
+   */
+  workerBondAuthority: Address<TAccountWorkerBondAuthority>;
   /**
    * OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
    * track-record aggregate. Constrained to `authority` so a caller can only attribute
@@ -556,11 +601,18 @@ export type ParsedCancelTaskInstruction<
     rewardMint?: TAccountMetas[7] | undefined;
     /** SPL Token program (optional, required for token tasks) */
     tokenProgram?: TAccountMetas[8] | undefined;
-    /** cancel. Validated by settle_completion_bond. */
-    creatorCompletionBond?: TAccountMetas[9] | undefined;
-    /** worker bond is present (an InProgress past-deadline cancel). */
-    workerCompletionBond?: TAccountMetas[10] | undefined;
-    workerBondAuthority?: TAccountMetas[11] | undefined;
+    /** (== authority); refunded on cancel by settle_completion_bond. */
+    creatorCompletionBond: TAccountMetas[9];
+    /**
+     * Forfeited to the creator ONLY when that wallet is a live no-show claimant
+     * (audit F-1); otherwise refunded to the poster.
+     */
+    workerCompletionBond: TAccountMetas[10];
+    /**
+     * == bond.party, and the no-show forfeit additionally binds it to a live claim
+     * (audit F-1).
+     */
+    workerBondAuthority: TAccountMetas[11];
     /**
      * OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
      * track-record aggregate. Constrained to `authority` so a caller can only attribute
@@ -620,9 +672,9 @@ export function parseCancelTaskInstruction<
       creatorTokenAccount: getNextOptionalAccount(),
       rewardMint: getNextOptionalAccount(),
       tokenProgram: getNextOptionalAccount(),
-      creatorCompletionBond: getNextOptionalAccount(),
-      workerCompletionBond: getNextOptionalAccount(),
-      workerBondAuthority: getNextOptionalAccount(),
+      creatorCompletionBond: getNextAccount(),
+      workerCompletionBond: getNextAccount(),
+      workerBondAuthority: getNextAccount(),
       creatorAgent: getNextOptionalAccount(),
       agentStats: getNextOptionalAccount(),
     },

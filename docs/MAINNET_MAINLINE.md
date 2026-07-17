@@ -28,6 +28,28 @@ window or before the deploy is announced publicly.
 - Last deployed in slot: **431918664** (batch-4 / goods-enabled binary; verified
   2026-07-10 via `solana program show`)
 - Instruction inventory: committed IDL +
+
+## Pending Next Upgrade (2026-07-18 — implemented, not yet deployed)
+
+The 2026-07 audit P0 hardening queue is implemented and gated on
+`fix/audit-findings-2026-07-16` (commits `4b70630` F-1, `aa6aae5` F-2,
+`cc8870e` F-3, `b3eb824` F-5; F-6 closed by on-chain verification). All wire
+changes are confined to **non-canary** instructions:
+
+- `apply_initiator_slash`: `task` account REMOVED (old callers' extra account
+  becomes an ignored remaining account — backward-compatible);
+- `cancel_task`: completion-bond accounts optional → required + seeds-pinned
+  (full-surface only — they are `#[cfg(not(feature = "mainnet-canary"))]`, so
+  the frozen canary IDL is untouched);
+- `expire_reject_frozen`: both bond accounts optional → required + seeds-pinned;
+- `reclaim_terminal_claim` / `apply_dispute_slash`: writable-flag flips only.
+
+Deploy choreography (human-run, Squads multisig): binary upgrade → stamp
+`surface_revision = 5` via `update_launch_controls` → coordinated
+`@tetsuo-ai/marketplace-sdk` minor release (facade `cancelTask` now derives the
+bond PDAs; `applyInitiatorSlash` loses the `task` input) and
+`@tetsuo-ai/protocol` regen. New error codes are tail-appended (6356/6357) —
+no existing code shifts; no account-layout change (`state.rs` diff is empty).
   [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) (**99** instructions)
 - Verified build: **LIVE** — the OtterSec/osec.io registry reports
   `is_verified: true` for the deployed bytecode against this repo (check

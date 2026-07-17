@@ -5,6 +5,35 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-07-18 — audit P0 hardening queue complete (F-1, F-2, F-3, F-5)
+
+- the full P0 queue from the 2026-07 audit's pass-3 report (TODO.MD) is
+  implemented and gated on branch `fix/audit-findings-2026-07-16` — 409 Rust
+  unit tests, 290 litesvm integration tests, 520 SDK tests; clippy
+  default+canary, artifacts, canary freeze, and IDL reference all green
+- **F-1** (`4b70630`): `cancel_task`'s no-show worker-bond forfeit is bound to
+  a live no-show claimant — a creator can no longer sybil-claim, no-show, and
+  forfeit an honest rejected worker's bond (new error 6356)
+- **F-2** (`aa6aae5`): `close_task` can no longer brick the slash finalizers —
+  `apply_initiator_slash` drops the Task account entirely, `resolve_dispute`
+  keeps `current_workers == 1` while a worker slash is pending,
+  `apply_dispute_slash` frees it, and `reclaim_terminal_claim` refuses a
+  slash-pending deferred claim (new error 6357)
+- **F-3** (`cc8870e`): the completing-accept sole-submission guard now covers
+  the quorum/attestation path, and `reclaim_terminal_claim` accepts a
+  REJECTED submission as evidence (un-bricking bounced claims)
+- **F-5** (`b3eb824`): completion-bond accounts on `cancel_task` and
+  `expire_reject_frozen` are required + seeds-pinned — a live bond can never
+  be omitted into a terminal task; SDK facade and downstream callers updated
+- F-6 is closed by on-chain verification: governance was already initialized
+  on mainnet with sane params (2026-07-17)
+- deploy choreography for this package (separate human-run step): multisig
+  binary upgrade, then a `surface_revision` 5 stamp and coordinated
+  SDK/package minor releases — wire changes are confined to non-canary
+  instructions (`apply_initiator_slash`, `cancel_task`,
+  `expire_reject_frozen`, writable flags on `reclaim_terminal_claim` /
+  `apply_dispute_slash`)
+
 ## 2026-07-17 — 2026-07 adversarial-audit fixes land (`fix/audit-findings-2026-07-16`)
 
 - the 2026-07-16/17 adversarial audit (three passes) is closed out on branch
