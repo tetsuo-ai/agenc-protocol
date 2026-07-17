@@ -40,6 +40,18 @@
 //   --json           emit a machine-readable proof record to stdout (the human
 //                    transcript still goes to stderr)
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+
+// Audit F-19: RPC/indexer URLs routinely embed provider API keys (Helius
+// `?api-key=`, Alchemy `/v2/<key>`, QuickNode `/<token>/`). Redact to the bare
+// origin before ANY output (stdout logs and the persisted --json proof record).
+function redactUrl(raw) {
+  if (!raw) return "none";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "<unparseable-url-redacted>";
+  }
+}
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -135,16 +147,16 @@ async function main() {
 
   const rpc = kit.createSolanaRpc(env.rpcUrl);
   if ((await rpc.getHealth().send()) !== "ok") {
-    fail(`RPC ${env.rpcUrl} is not healthy — is the validator up?`);
+    fail(`RPC ${redactUrl(env.rpcUrl)} is not healthy — is the validator up?`);
   }
 
   log("=".repeat(72));
   log("AgenC credible-exit walkthrough (P8.6): hire -> settle, ZERO hosted deps");
   log("=".repeat(72));
-  log(`(a) OWN RPC          : ${env.rpcUrl}  [cluster=${env.cluster}]`);
+  log(`(a) OWN RPC          : ${redactUrl(env.rpcUrl)}  [cluster=${env.cluster}]`);
   log(`    program          : ${env.programId} (real id, upgradeable)`);
   log(`    hosted indexer    : NOT USED (discovery via SDK gPA path)`);
-  log(`    hosted attestor   : NOT USED (own P6.8 attestor; env.attestorUrl=${env.attestorUrl})`);
+  log(`    hosted attestor   : NOT USED (own P6.8 attestor; env.attestorUrl=${redactUrl(env.attestorUrl)})`);
   log(`    hosted storage    : NOT USED (artifacts are local file:// hashes)`);
   log("");
 
@@ -152,7 +164,7 @@ async function main() {
     artifact: "P8.6 credible-exit",
     executedAt: new Date().toISOString(),
     cluster: env.cluster,
-    rpcUrl: env.rpcUrl,
+    rpcUrl: redactUrl(env.rpcUrl),
     programId: env.programId,
     hostedDependenciesUsed: [],
     signatures: {},

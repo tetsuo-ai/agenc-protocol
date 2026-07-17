@@ -28,6 +28,7 @@
 //   COSIGNERS=/path/multisig-second.json,/path/multisig-third.json \  # in-program multisig co-signers (M-1 of them)
 //   ZK_IMAGE_ID_HEX=<64-hex-char audited mainnet RISC-Zero image id> \  # REQUIRED for initialize_zk_config; NO DEFAULT
 //   [MODERATION_AUTHORITY=<pubkey>] \   # only if you intend to (re)set the moderation attestor
+//   [CLUSTER=devnet] \                  # REQUIRED to run against any non-mainnet genesis hash (F-19)
 //   [SKIP_BID_MARKETPLACE=1] [SKIP_ZK_CONFIG=1] [SKIP_MODERATION=1] [SKIP_STAMP=1] \
 //   [DISABLED_TASK_TYPE_MASK=0] \   # stamp override: 0..15, set bit = DISABLED task type
 //                                   # (1=Exclusive 2=Collaborative 4=Competitive 8=BidExclusive).
@@ -168,6 +169,18 @@ async function main() {
   console.log(`Mode: ${EXECUTE ? "EXECUTE (will send transactions)" : "DRY-RUN (plan only, nothing sent)"}`);
   console.log(`Program: ${PROGRAM_ID.toBase58()}`);
   console.log(`Authority: ${authority.publicKey.toBase58()}  | multisig signers passed: ${signerKps.length}\n`);
+
+  // Audit F-19: the program ID is IDENTICAL on devnet — without a genesis check a
+  // misplaced RPC_URL would init/stamp the wrong cluster with real keys. Refuse
+  // any non-mainnet genesis hash unless CLUSTER=devnet is passed explicitly.
+  const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+  const genesisHash = await connection.getGenesisHash();
+  if (genesisHash !== MAINNET_GENESIS && (process.env.CLUSTER ?? "mainnet") !== "devnet") {
+    die(`genesis hash ${genesisHash} is not mainnet-beta (${MAINNET_GENESIS}). ` +
+        `This script initializes mainnet singletons — refusing to run against another cluster. ` +
+        `Pass CLUSTER=devnet explicitly to override for a devnet rehearsal.`);
+  }
+  console.log(`Cluster genesis: ${genesisHash}${genesisHash === MAINNET_GENESIS ? " (mainnet-beta)" : ` (NON-MAINNET, allowed via CLUSTER=${process.env.CLUSTER})`}\n`);
 
   const cfg = await readProtocolConfig();
   console.log(`ProtocolConfig ${protocolPda.toBase58()}: dataLen=${cfg.dataLen} ` +

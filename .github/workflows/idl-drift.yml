@@ -33,6 +33,10 @@
 
 name: IDL Drift
 
+# Least privilege (F-19): this job only reads the repo and writes build caches.
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   pull_request:

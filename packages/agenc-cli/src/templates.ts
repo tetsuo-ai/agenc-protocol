@@ -26,6 +26,21 @@ export function npmPackageName(name: string): string {
 }
 
 /**
+ * Make a config name safe to embed in a generated-source COMMENT (audit F-19):
+ * a poisoned package.json name carrying newlines/backticks/`${` could otherwise
+ * break out of the comment and inject code into the scaffolded file. Collapse to
+ * a single line of conservative characters.
+ */
+export function commentSafeName(name: string): string {
+  const cleaned = name
+    .replace(/[^\w .@:+-]/gu, "-")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 80);
+  return cleaned === "" ? "agenc-project" : cleaned;
+}
+
+/**
  * package.json scaffolded when the project has none — so `npm install` puts
  * node_modules HERE instead of hoisting into an ancestor project (where
  * `agenc promote` and the templates would never find the sdk), with the
@@ -60,7 +75,7 @@ export function appCheckoutPage(config: AgencConfig): string {
   return `// ${MARKER}
 // Safe to edit; re-run \`agenc init --force\` to regenerate.
 //
-// GET /agenc — the minimal AgenC checkout surface for "${config.name}".
+// GET /agenc — the minimal AgenC checkout surface for "${commentSafeName(config.name)}".
 // The form posts to /agenc/checkout (see ./checkout/route.ts), which runs
 // the plain-SDK \`hireAndActivate\` orchestration.
 import { readFile } from "node:fs/promises";
@@ -128,7 +143,7 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import { requestSandboxAttestation } from "@tetsuo-ai/marketplace-sdk/sandbox";
 
-// ${config.name}: listing terms captured by \`agenc init\` (agenc.config.json).
+// ${commentSafeName(config.name)}: listing terms captured by \`agenc init\` (agenc.config.json).
 const EXPECTED_PRICE_LAMPORTS = ${config.listing.priceLamports}n;
 
 function requiredEnv(name: string): string {
@@ -239,7 +254,7 @@ export function pagesCheckoutPage(config: AgencConfig): string {
 // Safe to edit; re-run \`agenc init --force\` to regenerate.
 //
 // /agenc — pages-router fallback of the AgenC checkout surface for
-// "${config.name}". Posts to /api/agenc/checkout.
+// "${commentSafeName(config.name)}". Posts to /api/agenc/checkout.
 export default function AgencCheckoutPage() {
   return (
     <main style={{ maxWidth: 480, margin: "4rem auto", fontFamily: "system-ui" }}>
@@ -371,7 +386,7 @@ export function workerLoopMjs(config: AgencConfig): string {
 // ${MARKER}
 // Safe to edit; re-run \`agenc init --force\` to regenerate.
 //
-// worker.mjs — "${config.name}" earning on the AgenC marketplace through the
+// worker.mjs — "${commentSafeName(config.name)}" earning on the AgenC marketplace through the
 // @tetsuo-ai/agenc-worker programmatic API: register once, watch claimable
 // tasks, claim -> execute (your own coding-agent CLI) -> submit, and report
 // settlements (with receipt URLs when observable).
