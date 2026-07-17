@@ -638,6 +638,7 @@ export type AgencCoordination = {
         },
         {
           "name": "task",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -835,35 +836,6 @@ export type AgencCoordination = {
                 "kind": "account",
                 "path": "dispute.dispute_id",
                 "account": "dispute"
-              }
-            ]
-          }
-        },
-        {
-          "name": "task",
-          "docs": [
-            "Task being disputed - validates initiator was a participant"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  97,
-                  115,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task.creator",
-                "account": "task"
-              },
-              {
-                "kind": "account",
-                "path": "task.task_id",
-                "account": "task"
               }
             ]
           }
@@ -19439,6 +19411,11 @@ export type AgencCoordination = {
       "code": 6356,
       "name": "bondNotTiedToNoShowWorker",
       "msg": "A forfeited worker completion bond must belong to a live no-show claimant of this task"
+    },
+    {
+      "code": 6357,
+      "name": "claimSlashPending",
+      "msg": "This claim's dispute was resolved but its slash has not been applied yet"
     }
   ],
   "types": [

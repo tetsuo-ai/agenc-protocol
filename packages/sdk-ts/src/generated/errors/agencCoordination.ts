@@ -728,6 +728,8 @@ export const AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST = 0x18d2; /
 export const AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION = 0x18d3; // 6355
 /** BondNotTiedToNoShowWorker: A forfeited worker completion bond must belong to a live no-show claimant of this task */
 export const AGENC_COORDINATION_ERROR__BOND_NOT_TIED_TO_NO_SHOW_WORKER = 0x18d4; // 6356
+/** ClaimSlashPending: This claim's dispute was resolved but its slash has not been applied yet */
+export const AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING = 0x18d5; // 6357
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -778,6 +780,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION
   | typeof AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK
+  | typeof AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING
   | typeof AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP
   | typeof AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON
   | typeof AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION
@@ -1141,6 +1144,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED]: `Claim has not expired yet`,
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION]: `reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)`,
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK]: `reclaim_terminal_claim requires a terminal (Completed/Cancelled) task`,
+    [AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING]: `This claim's dispute was resolved but its slash has not been applied yet`,
     [AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP]: `Combined protocol + operator + referrer fees leave the worker below the floor`,
     [AGENC_COORDINATION_ERROR__COMPETITIVE_TASK_ALREADY_WON]: `Competitive task already completed by another worker`,
     [AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION]: `An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned)`,

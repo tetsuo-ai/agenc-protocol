@@ -383,12 +383,14 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
   return { dispute, task: m.task, initiatorAgent: w.providerAgent };
 }
 
-/// Build the apply_initiator_slash instruction.
+/// Build the apply_initiator_slash instruction. NOTE (audit F-2): the instruction no
+/// longer takes the Task account (it was only a binding; the stored dispute.task is
+/// inherent), so a destroyed Task PDA can no longer brick this finalizer.
 async function applyInitiatorSlashIx(w, r, signerKp) {
   return makeProgram(signerKp).methods
     .applyInitiatorSlash()
     .accounts({
-      dispute: r.dispute, task: r.task, initiatorAgent: r.initiatorAgent,
+      dispute: r.dispute, initiatorAgent: r.initiatorAgent,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: signerKp.publicKey,
     })
     .instruction();

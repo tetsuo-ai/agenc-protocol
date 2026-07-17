@@ -14,7 +14,7 @@ use crate::instructions::slash_helpers::{
     apply_reputation_penalty, calculate_approval_percentage, transfer_slash_to_treasury,
     validate_slash_window,
 };
-use crate::state::{AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task};
+use crate::state::{AgentRegistration, Dispute, DisputeStatus, ProtocolConfig};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
@@ -27,14 +27,13 @@ pub struct ApplyInitiatorSlash<'info> {
     )]
     pub dispute: Box<Account<'info, Dispute>>,
 
-    /// Task being disputed - validates initiator was a participant
-    #[account(
-        seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
-        bump = task.bump,
-        constraint = dispute.task == task.key() @ CoordinationError::TaskNotFound
-    )]
-    pub task: Box<Account<'info, Task>>,
-
+    // NOTE (audit F-2): the Task account was REMOVED from this instruction. It was
+    // only ever used for the `dispute.task == task.key()` binding (inherent in the
+    // stored `dispute.task`) and an unused local — but hard-requiring it let a task
+    // creator `close_task` after a lost dispute and permanently brick this finalizer,
+    // evading their own initiator slash. The defendant-side finalizer still needs the
+    // Task (reward_mint), so that side is protected by the `current_workers` deferral
+    // instead; see resolve_dispute.
     #[account(
         mut,
         seeds = [b"agent", initiator_agent.agent_id.as_ref()],
@@ -65,7 +64,6 @@ pub fn handler(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
     );
 
     let dispute = &mut ctx.accounts.dispute;
-    let task = &ctx.accounts.task;
     let initiator_agent = &mut ctx.accounts.initiator_agent;
     let config = &ctx.accounts.protocol_config;
 
@@ -105,16 +103,13 @@ pub fn handler(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
     // - initiator_claim.is_some() (for workers with active claims)
     //
     // Verify the initiator_agent's authority matches the stored initiator_authority
-    // from the dispute to ensure consistency.
+    // from the dispute to ensure consistency. Participation itself is pinned by
+    // initiate_dispute; `dispute.task` is the stored task binding (audit F-2 — the
+    // Task account is no longer loaded here).
     require!(
         initiator_agent.authority == dispute.initiator_authority,
         CoordinationError::NotTaskParticipant
     );
-
-    // The task account constraint (dispute.task == task.key()) ensures this is the
-    // correct task. For creators, initiator_authority == task.creator. For workers,
-    // initiate_dispute validated they had an active claim at dispute creation time.
-    let _initiator_is_creator = dispute.initiator_authority == task.creator;
 
     let initiator_lost = if dispute.status == DisputeStatus::Cancelled {
         // Cancellation = admission of frivolous dispute; always slash

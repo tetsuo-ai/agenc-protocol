@@ -25,8 +25,8 @@
 use crate::errors::CoordinationError;
 use crate::events::TerminalClaimReclaimed;
 use crate::state::{
-    AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
-    TaskSubmission,
+    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
+    TaskStatus, TaskSubmission,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -121,6 +121,39 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         !claim.is_completed,
         CoordinationError::ClaimAlreadyCompleted
     );
+
+    // Audit F-2: never reclaim the defendant's claim while its dispute is Resolved
+    // with the slash unapplied — apply_dispute_slash is the designated finalizer for
+    // exactly this claim (and the current_workers slot resolve_dispute left for it);
+    // reclaiming it would brick the finalizer, the deferred reserve, and the worker's
+    // stake-clearing bookkeeping. The dispute travels as an OPTIONAL remaining
+    // account (no IDL change; omission is disclosed in TODO.MD — it cannot profit
+    // the caller, whose reclaim pays only the worker / treasury).
+    if let Some(dispute_info) = ctx.remaining_accounts.first() {
+        require!(
+            dispute_info.owner == &crate::ID,
+            CoordinationError::InvalidAccountOwner
+        );
+        let dispute = {
+            let data = dispute_info.try_borrow_data()?;
+            Dispute::try_deserialize(&mut &data[..])
+                .map_err(|_| CoordinationError::InvalidInput)?
+        };
+        let (expected_dispute, _) = Pubkey::find_program_address(
+            &[b"dispute", dispute.dispute_id.as_ref()],
+            &crate::ID,
+        );
+        require!(
+            dispute_info.key() == expected_dispute
+                && dispute.task == task.key()
+                && dispute.defendant == worker.key(),
+            CoordinationError::InvalidInput
+        );
+        require!(
+            dispute.status != DisputeStatus::Resolved || dispute.slash_applied,
+            CoordinationError::ClaimSlashPending
+        );
+    }
 
     // Unfakeable no-live-submission proof, two acceptable forms (audit F-3):
     //  1. the seeds-derived submission address is system-owned + zero-data (no

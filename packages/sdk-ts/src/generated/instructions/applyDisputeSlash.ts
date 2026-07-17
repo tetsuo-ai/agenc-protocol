@@ -73,7 +73,7 @@ export type ApplyDisputeSlashInstruction<
         ? WritableAccount<TAccountDispute>
         : TAccountDispute,
       TAccountTask extends string
-        ? ReadonlyAccount<TAccountTask>
+        ? WritableAccount<TAccountTask>
         : TAccountTask,
       TAccountWorkerClaim extends string
         ? WritableAccount<TAccountWorkerClaim>
@@ -242,7 +242,7 @@ export async function getApplyDisputeSlashInstructionAsync<
   // Original accounts.
   const originalAccounts = {
     dispute: { value: input.dispute ?? null, isWritable: true },
-    task: { value: input.task ?? null, isWritable: false },
+    task: { value: input.task ?? null, isWritable: true },
     workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     workerAgent: { value: input.workerAgent ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
@@ -407,7 +407,7 @@ export function getApplyDisputeSlashInstruction<
   // Original accounts.
   const originalAccounts = {
     dispute: { value: input.dispute ?? null, isWritable: true },
-    task: { value: input.task ?? null, isWritable: false },
+    task: { value: input.task ?? null, isWritable: true },
     workerClaim: { value: input.workerClaim ?? null, isWritable: true },
     workerAgent: { value: input.workerAgent ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },

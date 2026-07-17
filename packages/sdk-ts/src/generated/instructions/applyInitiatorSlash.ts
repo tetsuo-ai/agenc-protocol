@@ -51,7 +51,6 @@ export function getApplyInitiatorSlashDiscriminatorBytes(): ReadonlyUint8Array {
 export type ApplyInitiatorSlashInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountDispute extends string | AccountMeta<string> = string,
-  TAccountTask extends string | AccountMeta<string> = string,
   TAccountInitiatorAgent extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountTreasury extends string | AccountMeta<string> = string,
@@ -64,9 +63,6 @@ export type ApplyInitiatorSlashInstruction<
       TAccountDispute extends string
         ? WritableAccount<TAccountDispute>
         : TAccountDispute,
-      TAccountTask extends string
-        ? ReadonlyAccount<TAccountTask>
-        : TAccountTask,
       TAccountInitiatorAgent extends string
         ? WritableAccount<TAccountInitiatorAgent>
         : TAccountInitiatorAgent,
@@ -118,15 +114,12 @@ export function getApplyInitiatorSlashInstructionDataCodec(): FixedSizeCodec<
 
 export type ApplyInitiatorSlashAsyncInput<
   TAccountDispute extends string = string,
-  TAccountTask extends string = string,
   TAccountInitiatorAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
   TAccountAuthority extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
-  /** Task being disputed - validates initiator was a participant */
-  task: Address<TAccountTask>;
   initiatorAgent: Address<TAccountInitiatorAgent>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
@@ -135,7 +128,6 @@ export type ApplyInitiatorSlashAsyncInput<
 
 export async function getApplyInitiatorSlashInstructionAsync<
   TAccountDispute extends string,
-  TAccountTask extends string,
   TAccountInitiatorAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
@@ -144,7 +136,6 @@ export async function getApplyInitiatorSlashInstructionAsync<
 >(
   input: ApplyInitiatorSlashAsyncInput<
     TAccountDispute,
-    TAccountTask,
     TAccountInitiatorAgent,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -155,7 +146,6 @@ export async function getApplyInitiatorSlashInstructionAsync<
   ApplyInitiatorSlashInstruction<
     TProgramAddress,
     TAccountDispute,
-    TAccountTask,
     TAccountInitiatorAgent,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -169,7 +159,6 @@ export async function getApplyInitiatorSlashInstructionAsync<
   // Original accounts.
   const originalAccounts = {
     dispute: { value: input.dispute ?? null, isWritable: true },
-    task: { value: input.task ?? null, isWritable: false },
     initiatorAgent: { value: input.initiatorAgent ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
@@ -189,7 +178,6 @@ export async function getApplyInitiatorSlashInstructionAsync<
   return Object.freeze({
     accounts: [
       getAccountMeta("dispute", accounts.dispute),
-      getAccountMeta("task", accounts.task),
       getAccountMeta("initiatorAgent", accounts.initiatorAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
@@ -200,7 +188,6 @@ export async function getApplyInitiatorSlashInstructionAsync<
   } as ApplyInitiatorSlashInstruction<
     TProgramAddress,
     TAccountDispute,
-    TAccountTask,
     TAccountInitiatorAgent,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -210,15 +197,12 @@ export async function getApplyInitiatorSlashInstructionAsync<
 
 export type ApplyInitiatorSlashInput<
   TAccountDispute extends string = string,
-  TAccountTask extends string = string,
   TAccountInitiatorAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
   TAccountAuthority extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
-  /** Task being disputed - validates initiator was a participant */
-  task: Address<TAccountTask>;
   initiatorAgent: Address<TAccountInitiatorAgent>;
   protocolConfig: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
@@ -227,7 +211,6 @@ export type ApplyInitiatorSlashInput<
 
 export function getApplyInitiatorSlashInstruction<
   TAccountDispute extends string,
-  TAccountTask extends string,
   TAccountInitiatorAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
@@ -236,7 +219,6 @@ export function getApplyInitiatorSlashInstruction<
 >(
   input: ApplyInitiatorSlashInput<
     TAccountDispute,
-    TAccountTask,
     TAccountInitiatorAgent,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -246,7 +228,6 @@ export function getApplyInitiatorSlashInstruction<
 ): ApplyInitiatorSlashInstruction<
   TProgramAddress,
   TAccountDispute,
-  TAccountTask,
   TAccountInitiatorAgent,
   TAccountProtocolConfig,
   TAccountTreasury,
@@ -259,7 +240,6 @@ export function getApplyInitiatorSlashInstruction<
   // Original accounts.
   const originalAccounts = {
     dispute: { value: input.dispute ?? null, isWritable: true },
-    task: { value: input.task ?? null, isWritable: false },
     initiatorAgent: { value: input.initiatorAgent ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
@@ -274,7 +254,6 @@ export function getApplyInitiatorSlashInstruction<
   return Object.freeze({
     accounts: [
       getAccountMeta("dispute", accounts.dispute),
-      getAccountMeta("task", accounts.task),
       getAccountMeta("initiatorAgent", accounts.initiatorAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
@@ -285,7 +264,6 @@ export function getApplyInitiatorSlashInstruction<
   } as ApplyInitiatorSlashInstruction<
     TProgramAddress,
     TAccountDispute,
-    TAccountTask,
     TAccountInitiatorAgent,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -300,12 +278,10 @@ export type ParsedApplyInitiatorSlashInstruction<
   programAddress: Address<TProgram>;
   accounts: {
     dispute: TAccountMetas[0];
-    /** Task being disputed - validates initiator was a participant */
-    task: TAccountMetas[1];
-    initiatorAgent: TAccountMetas[2];
-    protocolConfig: TAccountMetas[3];
-    treasury: TAccountMetas[4];
-    authority: TAccountMetas[5];
+    initiatorAgent: TAccountMetas[1];
+    protocolConfig: TAccountMetas[2];
+    treasury: TAccountMetas[3];
+    authority: TAccountMetas[4];
   };
   data: ApplyInitiatorSlashInstructionData;
 };
@@ -318,12 +294,12 @@ export function parseApplyInitiatorSlashInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedApplyInitiatorSlashInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 6) {
+  if (instruction.accounts.length < 5) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 6,
+        expectedAccountMetas: 5,
       },
     );
   }
@@ -337,7 +313,6 @@ export function parseApplyInitiatorSlashInstruction<
     programAddress: instruction.programAddress,
     accounts: {
       dispute: getNextAccount(),
-      task: getNextAccount(),
       initiatorAgent: getNextAccount(),
       protocolConfig: getNextAccount(),
       treasury: getNextAccount(),

@@ -969,7 +969,15 @@ pub fn handler<'info>(
         .checked_add(distributed_now)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     escrow.is_closed = !defer_token_escrow_close;
-    task.current_workers = 0;
+    // Audit F-2: when the defendant's claim close is DEFERRED (a slash is pending), keep
+    // current_workers honest — the claim IS still open — instead of zeroing it. The
+    // slash finalizer (apply_dispute_slash) decrements it when the claim closes. This
+    // makes close_task's current_workers == 0 guard atomically block destroying the
+    // Task PDA while a worker-slash is pending (that brick previously locked the
+    // defendant's disputes_as_defendant — and their entire stake — forever, and let a
+    // creator race the permissionless finalizer). The initiator side no longer needs
+    // this protection: apply_initiator_slash does not load the Task at all.
+    task.current_workers = if defer_worker_claim_close { 1 } else { 0 };
 
     // Audit M-3 (follow-up): a token task's escrow PDA stays OPEN even when nothing was
     // deferred (drained, is_closed = true). apply_dispute_slash derives "deferred token

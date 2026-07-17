@@ -1063,4 +1063,7 @@ pub enum CoordinationError {
     // Appended (audit F-1): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("A forfeited worker completion bond must belong to a live no-show claimant of this task")]
     BondNotTiedToNoShowWorker,
+    // Appended (audit F-2): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("This claim's dispute was resolved but its slash has not been applied yet")]
+    ClaimSlashPending,
 }

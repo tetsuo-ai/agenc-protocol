@@ -632,6 +632,7 @@
         },
         {
           "name": "task",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -829,35 +830,6 @@
                 "kind": "account",
                 "path": "dispute.dispute_id",
                 "account": "Dispute"
-              }
-            ]
-          }
-        },
-        {
-          "name": "task",
-          "docs": [
-            "Task being disputed - validates initiator was a participant"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  97,
-                  115,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task.creator",
-                "account": "Task"
-              },
-              {
-                "kind": "account",
-                "path": "task.task_id",
-                "account": "Task"
               }
             ]
           }
@@ -19433,6 +19405,11 @@
       "code": 6356,
       "name": "BondNotTiedToNoShowWorker",
       "msg": "A forfeited worker completion bond must belong to a live no-show claimant of this task"
+    },
+    {
+      "code": 6357,
+      "name": "ClaimSlashPending",
+      "msg": "This claim's dispute was resolved but its slash has not been applied yet"
     }
   ],
   "types": [

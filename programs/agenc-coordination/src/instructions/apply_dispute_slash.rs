@@ -34,6 +34,7 @@ pub struct ApplyDisputeSlash<'info> {
     pub dispute: Box<Account<'info, Dispute>>,
 
     #[account(
+        mut, // F-2: this finalizer frees the deferred worker slot in current_workers.
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump,
         constraint = dispute.task == task.key() @ CoordinationError::TaskNotFound
@@ -378,6 +379,12 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         worker_agent.disputes_as_defendant = worker_agent.disputes_as_defendant.saturating_sub(1);
         worker_agent.last_active = clock.unix_timestamp;
         dispute.slash_applied = true;
+        // Audit F-2: this finalizer closes the deferred worker_claim on every successful
+        // path (the `close = worker_authority` constraint), so free the worker slot
+        // resolve_dispute deliberately left in current_workers — close_task's
+        // current_workers == 0 guard then unblocks. saturating_sub for legacy disputes
+        // resolved before this deferral existed (their count was zeroed at resolve).
+        ctx.accounts.task.current_workers = ctx.accounts.task.current_workers.saturating_sub(1);
     }
 
     Ok(())
