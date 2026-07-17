@@ -9760,10 +9760,13 @@
             "The derived `[\"task_submission\", claim]` PDA — the unfakeable liveness",
             "probe. It must be system-owned with zero data (no submission was ever",
             "made for this claim, or it was already closed together with the claim by",
-            "a settlement path — in which case THIS claim would not exist). A live",
-            "program-owned submission here means the claim is still settleable by the",
-            "normal paths and must not be short-circuited."
+            "a settlement path — in which case THIS claim would not exist) OR hold a",
+            "REJECTED submission (audit F-3 — then its rent is returned to the worker",
+            "and it is tombstoned here, hence `mut`). A live program-owned submission",
+            "in any other state means the claim is still settleable by the normal",
+            "paths and must not be short-circuited."
           ],
+          "writable": true,
           "pda": {
             "seeds": [
               {

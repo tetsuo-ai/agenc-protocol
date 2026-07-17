@@ -24,7 +24,10 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TerminalClaimReclaimed;
-use crate::state::{AgentRegistration, ProtocolConfig, Task, TaskClaim, TaskStatus};
+use crate::state::{
+    AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
+    TaskSubmission,
+};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
@@ -52,11 +55,14 @@ pub struct ReclaimTerminalClaim<'info> {
     /// The derived `["task_submission", claim]` PDA — the unfakeable liveness
     /// probe. It must be system-owned with zero data (no submission was ever
     /// made for this claim, or it was already closed together with the claim by
-    /// a settlement path — in which case THIS claim would not exist). A live
-    /// program-owned submission here means the claim is still settleable by the
-    /// normal paths and must not be short-circuited.
+    /// a settlement path — in which case THIS claim would not exist) OR hold a
+    /// REJECTED submission (audit F-3 — then its rent is returned to the worker
+    /// and it is tombstoned here, hence `mut`). A live program-owned submission
+    /// in any other state means the claim is still settleable by the normal
+    /// paths and must not be short-circuited.
     /// CHECK: address pinned by seeds; owner/data inspected in the handler.
     #[account(
+        mut,
         seeds = [b"task_submission", claim.key().as_ref()],
         bump
     )]
@@ -116,16 +122,38 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         CoordinationError::ClaimAlreadyCompleted
     );
 
-    // Unfakeable no-submission proof: the seeds-derived submission address must
-    // be system-owned + zero-data. A live program-owned account here means a
-    // submission still exists (e.g. a quorum-rejected straggler) — that worker
-    // is NOT a no-show and this claim must not forfeit anything.
+    // Unfakeable no-live-submission proof, two acceptable forms (audit F-3):
+    //  1. the seeds-derived submission address is system-owned + zero-data (no
+    //     submission was ever made for this claim, or it was already closed with it);
+    //  2. it holds a REJECTED submission (bounced via request_changes / quorum-reject).
+    //     The review counters were already decremented at bounce time, so this form
+    //     touches NEITHER live_submissions nor pending_submission_count — it only
+    //     recovers the worker's submission rent below. A bounced worker's claim is
+    //     otherwise stranded forever once a peer's completing accept flips the task
+    //     terminal (resubmit needs a non-terminal task; expire_claim too).
+    // A live program-owned submission in any OTHER state means the claim is still
+    // settleable by the normal paths and must not be short-circuited.
     let submission_info = ctx.accounts.task_submission.to_account_info();
-    require!(
-        submission_info.owner == &anchor_lang::system_program::ID
-            && submission_info.data_is_empty(),
-        CoordinationError::ClaimReclaimRequiresNoSubmission
-    );
+    let close_rejected_submission = if submission_info.owner == &anchor_lang::system_program::ID
+        && submission_info.data_is_empty()
+    {
+        false
+    } else if submission_info.owner == &crate::ID {
+        let submission = {
+            let data = submission_info.try_borrow_data()?;
+            TaskSubmission::try_deserialize(&mut &data[..])
+                .map_err(|_| CoordinationError::ClaimReclaimRequiresNoSubmission)?
+        };
+        require!(
+            submission.status == SubmissionStatus::Rejected
+                && submission.task == task.key()
+                && submission.claim == claim.key(),
+            CoordinationError::ClaimReclaimRequiresNoSubmission
+        );
+        true
+    } else {
+        return Err(CoordinationError::ClaimReclaimRequiresNoSubmission.into());
+    };
 
     // Free the slot counters — this is what un-bricks close_task
     // (current_workers -> 0) and the worker's active_tasks budget.
@@ -170,6 +198,25 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     ctx.accounts
         .claim
         .close(ctx.accounts.rent_recipient.to_account_info())?;
+
+    // A bounced (Rejected) submission carries no counter debt (request_changes
+    // decremented both review counters at bounce time) — just return its rent to
+    // the worker (rent_recipient is constrained == worker.authority) and tombstone
+    // it, mirroring the claim-close pattern. Not reachable on the no-submission
+    // evidence form.
+    if close_rejected_submission {
+        let lamports = submission_info.lamports();
+        **submission_info.try_borrow_mut_lamports()? = 0;
+        **ctx.accounts.rent_recipient.try_borrow_mut_lamports()? = ctx
+            .accounts
+            .rent_recipient
+            .lamports()
+            .checked_add(lamports)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        let mut data = submission_info.try_borrow_mut_data()?;
+        data.fill(0);
+        data[..8].copy_from_slice(&[255u8; 8]);
+    }
 
     Ok(())
 }

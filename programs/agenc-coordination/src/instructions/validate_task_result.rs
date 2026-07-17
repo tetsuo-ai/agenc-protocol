@@ -13,6 +13,7 @@ use crate::instructions::completion_helpers::{
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, is_manual_validation_task,
     note_submission_left_review, release_claim_slot, sync_task_validation_status,
+    validate_completing_accept_sole_submission,
 };
 use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
 use crate::state::{
@@ -302,6 +303,15 @@ pub fn handler<'info>(
     }
 
     if reached_acceptance {
+        // Audit F-3: a COMPLETING quorum/attestation accept must be the sole live
+        // submission — identical to the CreatorReview accept paths
+        // (accept_task_result.rs / auto_accept_task_result.rs). Otherwise the flip to
+        // Completed orphans a peer submission still under review with no exit
+        // (validate/reject/expire all require a non-terminal task). Runs BEFORE the
+        // counter decrements, while live_submissions() still counts this submission;
+        // schema-gated no-op for schema-0 tasks, like the sibling guards.
+        validate_completing_accept_sole_submission(&ctx.accounts.task)?;
+
         validate_task_dependency(
             ctx.accounts.task.as_ref(),
             ctx.remaining_accounts,

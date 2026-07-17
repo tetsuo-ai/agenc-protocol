@@ -79,7 +79,7 @@ export type ReclaimTerminalClaimInstruction<
         ? WritableAccount<TAccountClaim>
         : TAccountClaim,
       TAccountTaskSubmission extends string
-        ? ReadonlyAccount<TAccountTaskSubmission>
+        ? WritableAccount<TAccountTaskSubmission>
         : TAccountTaskSubmission,
       TAccountWorker extends string
         ? WritableAccount<TAccountWorker>
@@ -147,9 +147,11 @@ export type ReclaimTerminalClaimAsyncInput<
    * The derived `["task_submission", claim]` PDA — the unfakeable liveness
    * probe. It must be system-owned with zero data (no submission was ever
    * made for this claim, or it was already closed together with the claim by
-   * a settlement path — in which case THIS claim would not exist). A live
-   * program-owned submission here means the claim is still settleable by the
-   * normal paths and must not be short-circuited.
+   * a settlement path — in which case THIS claim would not exist) OR hold a
+   * REJECTED submission (audit F-3 — then its rent is returned to the worker
+   * and it is tombstoned here, hence `mut`). A live program-owned submission
+   * in any other state means the claim is still settleable by the normal
+   * paths and must not be short-circuited.
    */
   taskSubmission?: Address<TAccountTaskSubmission>;
   worker: Address<TAccountWorker>;
@@ -207,7 +209,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
     authority: { value: input.authority ?? null, isWritable: false },
     task: { value: input.task ?? null, isWritable: true },
     claim: { value: input.claim ?? null, isWritable: true },
-    taskSubmission: { value: input.taskSubmission ?? null, isWritable: false },
+    taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
     worker: { value: input.worker ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
@@ -288,9 +290,11 @@ export type ReclaimTerminalClaimInput<
    * The derived `["task_submission", claim]` PDA — the unfakeable liveness
    * probe. It must be system-owned with zero data (no submission was ever
    * made for this claim, or it was already closed together with the claim by
-   * a settlement path — in which case THIS claim would not exist). A live
-   * program-owned submission here means the claim is still settleable by the
-   * normal paths and must not be short-circuited.
+   * a settlement path — in which case THIS claim would not exist) OR hold a
+   * REJECTED submission (audit F-3 — then its rent is returned to the worker
+   * and it is tombstoned here, hence `mut`). A live program-owned submission
+   * in any other state means the claim is still settleable by the normal
+   * paths and must not be short-circuited.
    */
   taskSubmission: Address<TAccountTaskSubmission>;
   worker: Address<TAccountWorker>;
@@ -346,7 +350,7 @@ export function getReclaimTerminalClaimInstruction<
     authority: { value: input.authority ?? null, isWritable: false },
     task: { value: input.task ?? null, isWritable: true },
     claim: { value: input.claim ?? null, isWritable: true },
-    taskSubmission: { value: input.taskSubmission ?? null, isWritable: false },
+    taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
     worker: { value: input.worker ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
@@ -398,9 +402,11 @@ export type ParsedReclaimTerminalClaimInstruction<
      * The derived `["task_submission", claim]` PDA — the unfakeable liveness
      * probe. It must be system-owned with zero data (no submission was ever
      * made for this claim, or it was already closed together with the claim by
-     * a settlement path — in which case THIS claim would not exist). A live
-     * program-owned submission here means the claim is still settleable by the
-     * normal paths and must not be short-circuited.
+     * a settlement path — in which case THIS claim would not exist) OR hold a
+     * REJECTED submission (audit F-3 — then its rent is returned to the worker
+     * and it is tombstoned here, hence `mut`). A live program-owned submission
+     * in any other state means the claim is still settleable by the normal
+     * paths and must not be short-circuited.
      */
     taskSubmission: TAccountMetas[3];
     worker: TAccountMetas[4];
