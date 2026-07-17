@@ -138,3 +138,35 @@ test("REHEARSAL (hazard): a stamp that forgets to re-pass the mask RESETS it", a
   expectOk(await stamp(false, 0, REV_BATCH4), "stamp but drop the mask");
   assert.equal(readConfig(w).disabled_task_type_mask, 0, "the mask was silently reset — re-pass it in the ceremony");
 });
+
+test("F-18: KEEP sentinels preserve the mask + revision instead of silently resetting them", async () => {
+  const w = await freshWorld({ price: 1_000_000 });
+  const [protocolPda] = pda([enc("protocol")]);
+  const owner2 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
+  const signerMetas = [
+    { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner2.publicKey, isSigner: true, isWritable: false },
+  ];
+  const stamp = async (paused, mask, rev) =>
+    send(w.svm, await makeProgram(w.admin).methods.updateLaunchControls(paused, mask, rev)
+      .accounts({ protocolConfig: protocolPda, authority: w.admin.publicKey })
+      .remainingAccounts(signerMetas).instruction(), [w.admin, owner2]);
+
+  const KEEP_MASK = 0xff; // KEEP_DISABLED_TASK_TYPE_MASK (outside the valid 0b1111 range)
+  const KEEP_REV = 65535; // KEEP_SURFACE_REVISION (u16::MAX)
+
+  expectOk(await stamp(false, LIVE_MASK, 1), "set live launch controls (rev 1, mask set)");
+  // Stamp a new revision while keeping the mask — the stale-read hazard is closed.
+  w.svm.expireBlockhash();
+  expectOk(await stamp(false, KEEP_MASK, REV_BATCH4), "stamp rev 4 with KEEP mask");
+  assert.equal(getSurfaceRevision(w.svm), REV_BATCH4, "revision stamped");
+  assert.equal(readConfig(w).disabled_task_type_mask, LIVE_MASK, "mask PRESERVED by the KEEP sentinel (F-18)");
+
+  // And keep the revision while clearing the mask explicitly.
+  w.svm.expireBlockhash();
+  expectOk(await stamp(false, 0, KEEP_REV), "clear mask with KEEP revision");
+  assert.equal(readConfig(w).disabled_task_type_mask, 0, "mask explicitly cleared");
+  assert.equal(getSurfaceRevision(w.svm), REV_BATCH4, "revision PRESERVED by the KEEP sentinel (F-18)");
+});

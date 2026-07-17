@@ -226,6 +226,40 @@ test("update_multisig: 2-of-2 rotates to a 2-of-3 owner set; single signer rejec
   assert.ok(cfg.multisig_owners[2].equals(owner3.publicKey), "owner3 stored in slot 2");
 });
 
+test("update_multisig (F-18): rotating the protocol authority OUT of the owner set is rejected", async () => {
+  const w = await freshWorld();
+  const { owner2, signerMetas, signers } = twoOfTwoMultisig(w);
+  await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
+
+  // New 3-owner set WITHOUT the protocol authority (w.admin): with enough new-set
+  // signers to pass the new-set-approval guard, so the ONLY remaining block is the
+  // F-18 authority-membership require.
+  const owner3 = Keypair.generate();
+  const owner4 = Keypair.generate();
+  for (const kp of [owner3, owner4]) w.svm.airdrop(kp.publicKey, BigInt(10e9));
+  const newOwners = [owner2.publicKey, owner3.publicKey, owner4.publicKey];
+  const allSigners = [
+    { pubkey: w.admin.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner2.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner3.publicKey, isSigner: true, isWritable: false },
+    { pubkey: owner4.publicKey, isSigner: true, isWritable: false },
+  ];
+
+  expectFail(
+    send(w.svm, await makeProgram(w.admin).methods
+      .updateMultisig(2, newOwners)
+      .accounts({ protocolConfig: w.protocolPda, authority: w.admin.publicKey })
+      .remainingAccounts(allSigners)
+      .instruction(), [w.admin, owner2, owner3, owner4]),
+    "MultisigInvalidSigners",
+    "authority excluded from the new owner set is rejected (F-18)",
+  );
+
+  // The live owner set is untouched by the rejected rotation.
+  const cfg = decode(w.svm, "ProtocolConfig", w.protocolPda);
+  assert.equal(cfg.multisig_owners_len, 2, "owner set unchanged");
+});
+
 // ---------------------------------------------------------------------------
 // update_min_version (multisig gated)
 // ---------------------------------------------------------------------------

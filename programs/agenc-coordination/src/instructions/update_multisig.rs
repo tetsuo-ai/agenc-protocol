@@ -56,6 +56,15 @@ pub fn handler(
     );
     validate_multisig_owners(&new_owners)?;
 
+    // Audit F-18: the new owner set MUST retain the protocol authority. Rotating it
+    // out would silently strip it of every authority-bound admin path (an
+    // unrecoverable config footgun — the initialize_governance class showed what a
+    // stranded single-key power is worth to an attacker).
+    require!(
+        new_owners.contains(&config.authority),
+        CoordinationError::MultisigInvalidSigners
+    );
+
     // Additional hardening: require that enough signers from the *new* set are
     // present in this update transaction. This prevents rotating to an
     // unreachable signer set due to typo/misconfiguration.

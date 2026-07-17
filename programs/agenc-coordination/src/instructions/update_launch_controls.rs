@@ -20,6 +20,15 @@ pub struct UpdateLaunchControls<'info> {
     pub authority: Signer<'info>,
 }
 
+/// Audit F-18: `disabled_task_type_mask` sentinel meaning "keep the live value".
+/// The frozen args force every call to pass all three fields, so a ceremony
+/// targeting one field with stale reads of the others silently reset them (the
+/// rehearsal hazard below). `0xFF` is outside the valid mask range (0b1111), so
+/// it can never collide with a real mask.
+pub const KEEP_DISABLED_TASK_TYPE_MASK: u8 = 0xFF;
+/// Audit F-18: `surface_revision` sentinel meaning "keep the live value".
+pub const KEEP_SURFACE_REVISION: u16 = u16::MAX;
+
 /// Update launch controls AND stamp the deployed surface revision (P6.5).
 ///
 /// `surface_revision` is the operator-declared instruction-surface stamp the SDK's
@@ -42,7 +51,10 @@ pub struct UpdateLaunchControls<'info> {
 /// handler); rolling back to `SURFACE_REVISION_BATCH3` is the coarse kill switch.
 /// CEREMONY HAZARD: this instruction rewrites ALL THREE fields — every stamp
 /// call must fetch the live config and re-pass the live `protocol_paused` +
-/// `disabled_task_type_mask` or it will silently reset them.
+/// `disabled_task_type_mask` or it will silently reset them. Since audit F-18
+/// you may instead pass `KEEP_DISABLED_TASK_TYPE_MASK` / `KEEP_SURFACE_REVISION`
+/// to leave those fields untouched; `protocol_paused` is a bool (no in-band
+/// sentinel) and must always be passed explicitly.
 pub fn handler(
     ctx: Context<UpdateLaunchControls>,
     protocol_paused: bool,
@@ -55,21 +67,27 @@ pub fn handler(
     );
     let unique_signers = unique_account_infos(ctx.remaining_accounts);
     require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
-    validate_disabled_task_type_mask(disabled_task_type_mask)?;
-    require!(
-        crate::instructions::migrate::is_valid_surface_revision(surface_revision),
-        CoordinationError::InvalidSurfaceRevision
-    );
 
     let config = &mut ctx.accounts.protocol_config;
     config.protocol_paused = protocol_paused;
-    config.disabled_task_type_mask = disabled_task_type_mask;
-    config.surface_revision = surface_revision;
+    // Audit F-18: KEEP sentinels leave the field untouched (stale-read hazard);
+    // explicit values validate + apply exactly as before.
+    if disabled_task_type_mask != KEEP_DISABLED_TASK_TYPE_MASK {
+        validate_disabled_task_type_mask(disabled_task_type_mask)?;
+        config.disabled_task_type_mask = disabled_task_type_mask;
+    }
+    if surface_revision != KEEP_SURFACE_REVISION {
+        require!(
+            crate::instructions::migrate::is_valid_surface_revision(surface_revision),
+            CoordinationError::InvalidSurfaceRevision
+        );
+        config.surface_revision = surface_revision;
+    }
 
     emit!(LaunchControlsUpdated {
         authority: ctx.accounts.authority.key(),
         protocol_paused,
-        disabled_task_type_mask,
+        disabled_task_type_mask: config.disabled_task_type_mask,
         timestamp: Clock::get()?.unix_timestamp,
     });
 
