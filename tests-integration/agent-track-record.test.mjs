@@ -175,7 +175,7 @@ test("track-record: cancel_task bumps the creator agent's total_cancelled (Agent
     .accounts({
       task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       // P6.6 optional track-record accounts:
       creatorAgent: w.buyerAgent, agentStats: creatorStats,
     })
@@ -317,7 +317,7 @@ test("track-record: cancel_task WITHOUT the optional accounts still works and wr
     .accounts({
       task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       // Optional track-record accounts omitted:
       creatorAgent: null, agentStats: null,
     })

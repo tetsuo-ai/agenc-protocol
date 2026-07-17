@@ -370,7 +370,7 @@ test("close_task: reclaims TaskAttestorConfig rent via the child whitelist (and 
       task: a.task, escrow: a.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), a.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), a.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null,
     })
     .instruction(), [w.buyer]), "b2close:cancel A");

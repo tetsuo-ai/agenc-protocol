@@ -543,7 +543,7 @@ test("FIX 5: straggler submission rent routes to the TREASURY when the worker ag
     .accounts({
       task: m.task, escrow: m.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null, systemProgram: SystemProgram.programId,
     })
     .instruction(), [w.buyer]), "cancel task");

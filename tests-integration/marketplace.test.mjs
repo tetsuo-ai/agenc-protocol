@@ -76,7 +76,7 @@ test("hire -> cancel -> close: frees capacity, closes task + hire record", async
       systemProgram: SystemProgram.programId,
       // optional SPL-token accounts (default build has spl-token-rewards) — None for SOL
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       // P6.6 optional track-record accounts; omitted (no creator-agent attribution).
       creatorAgent: null, agentStats: null,
     })
@@ -964,11 +964,12 @@ test("completion bond (F12): complete_task FORCE-settles the worker bond even wh
   assert.ok(isClosed(w.svm, r.task), "task closed");
 });
 
-test("completion bond (F12): close_task REFUSES to close while a live creator bond exists; reclaim-on-Cancelled recovers it", async () => {
-  // Audit F12: close_task must not destroy the Task PDA while a completion bond is live,
-  // because reclaim_completion_bond needs a live Task. Here the creator bonds an Open task,
-  // then cancels OMITTING the bond (so it stays live on the Cancelled task). close_task is
-  // refused (TaskHasLiveCompletionBond), and reclaim — now valid on Cancelled — recovers it.
+test("completion bond (F12/F5): cancel settles the creator bond (required+pinned); close_task then succeeds", async () => {
+  // Audit F5/F12: the bond accounts on cancel_task are now REQUIRED + seeds-pinned,
+  // so a live bond can never be omitted into a terminal task (the old "cancel
+  // omitting the bond" hole this test used to exercise is gone by construction).
+  // close_task's live-bond refusal (TaskHasLiveCompletionBond) is the backstop;
+  // here the cancel itself settles the bond, so the close proceeds.
   const w = await freshWorld({ price: 2_000_000 });
   const { ix, task, escrow, hireRecord } = await hireIx(w, {});
   expectOk(send(w.svm, ix, [w.buyer]), "hire"); // Open task, creator == buyer
@@ -976,30 +977,26 @@ test("completion bond (F12): close_task REFUSES to close while a live creator bo
   expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
     .accounts({ task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
 
-  // cancel OMITTING the bond -> it stays live on the Cancelled task.
+  // cancel WITH the required bond PDAs -> the creator bond is refunded + closed on cancel.
+  const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
+  const bondLamports = Number(w.svm.getBalance(creatorBond));
   expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
     .accounts({ task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null, creatorAgent: null, agentStats: null })
-    .instruction(), [w.buyer]), "cancel omitting the creator bond");
+      creatorCompletionBond: creatorBond,
+      workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
+      creatorAgent: null, agentStats: null })
+    .instruction(), [w.buyer]), "cancel with the required bond PDAs");
   assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task Cancelled");
-  assert.ok(!isClosed(w.svm, creatorBond), "creator bond still live after omitted-account cancel");
-
-  // close_task is REFUSED while the bond is live (revert-sensitive: drop the guard and this passes).
-  expectFail(send(w.svm, await w.buyerProg.methods.closeTask()
-    .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey })
-    .instruction(), [w.buyer]), "TaskHasLiveCompletionBond", "close_task refused while bond live");
-  assert.ok(!isClosed(w.svm, task), "task NOT closed (still recoverable)");
-
-  // reclaim on the Cancelled task (NEW: was Completed-only) recovers the bond to its poster
-  // while the Task PDA is still alive — the universal safety net for the cancel path.
-  const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
-  const bondLamports = Number(w.svm.getBalance(creatorBond));
-  expectOk(send(w.svm, await makeProgram(w.buyer).methods.reclaimCompletionBond(0)
-    .accounts({ task, completionBond: creatorBond, party: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "reclaim on Cancelled");
-  assert.ok(isClosed(w.svm, creatorBond), "creator bond recovered via reclaim-on-Cancelled");
+  assert.ok(isClosed(w.svm, creatorBond), "creator bond settled on cancel (never left live on a terminal task)");
   const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
-  assert.ok(buyerDelta > bondLamports - 50_000, `creator recovered the bond (delta ${buyerDelta}, bond ${bondLamports})`);
+  assert.ok(buyerDelta > bondLamports, `creator refunded bond principal on top of the escrow refund (delta ${buyerDelta})`);
+
+  // No live bond remains -> close_task proceeds.
+  expectOk(send(w.svm, await w.buyerProg.methods.closeTask()
+    .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey })
+    .instruction(), [w.buyer]), "close_task after the bond settled at cancel");
+  assert.ok(isClosed(w.svm, task), "task PDA closed");
 });
 
 test("completion bond: cancel refunds the creator bond on an Open task", async () => {
@@ -1013,7 +1010,7 @@ test("completion bond: cancel refunds the creator bond on an Open task", async (
   expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
     .accounts({ task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: creatorBond, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: creatorBond, workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null })
     .instruction(), [w.buyer]), "cancel with creator bond refund");
 
@@ -1489,7 +1486,7 @@ test("negative: a RejectFrozen task is refused by cancel / accept / request_chan
   expectFail(send(w.svm, await w.buyerProg.methods.cancelTask()
     .accounts({ task: f.task, escrow: f.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), f.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), f.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null })
     .instruction(), [w.buyer]), "TaskCannotBeCancelled", "cancel refused on a frozen task");
 
@@ -2052,7 +2049,7 @@ test("exit allow-list: a paused protocol blocks new hires but still lets a hired
       task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null,
     })
     .instruction();

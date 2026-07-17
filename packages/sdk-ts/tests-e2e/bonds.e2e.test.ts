@@ -350,12 +350,15 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
     const bondLamports = bal(w.svm, creatorBond);
 
     // creator cancels the Open task, passing the bond so settle_completion_bond
-    // refunds + closes it (cancelTask only includes the bond when supplied).
+    // refunds + closes it (cancelTask requires the bond PDAs since audit F5/F12;
+    // the facade derives the worker-bond PDA from workerBondAuthority — here the
+    // escrow address as a distinct wallet with no bond, so the derived PDA no-ops).
     await send(w.svm, w.creator, [
       await facade.cancelTask({
         authority: w.creator,
         task: w.task,
         escrow: w.escrow,
+        workerBondAuthority: w.escrow,
         creatorCompletionBond: creatorBond,
       }),
     ]);

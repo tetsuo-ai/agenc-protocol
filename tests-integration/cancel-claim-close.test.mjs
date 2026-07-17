@@ -105,7 +105,7 @@ test("cancel_task tombstones a worker claim PDA and resets current_workers on an
       task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: null, workerBondAuthority: null,
+      creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       // P6.6 optional track-record accounts; omitted here (no creator-agent attribution).
       creatorAgent: null, agentStats: null,
     })

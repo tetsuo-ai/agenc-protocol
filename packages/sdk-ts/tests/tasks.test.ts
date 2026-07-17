@@ -405,9 +405,12 @@ describe("completeTask facade instruction", () => {
 
 describe("cancelTask facade instruction", () => {
   it("targets the program, orders accounts, and round-trips data", async () => {
+    // Audit F5/F12: bond PDAs are required on the full surface; the facade derives
+    // them from authority / workerBondAuthority.
     const ix = await cancelTask({
       task: A,
       authority: signerA,
+      workerBondAuthority: signerB.address,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);

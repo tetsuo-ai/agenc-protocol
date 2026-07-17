@@ -790,6 +790,7 @@ const prepareAutoAccept = defineTool<PrepareAutoAcceptArgs, UnsignedInstructionV
 interface PrepareCancelArgs {
   task: string;
   authority: string;
+  workerBondAuthority?: string;
 }
 
 const prepareCancel = defineTool<PrepareCancelArgs, UnsignedInstructionView>({
@@ -803,12 +804,20 @@ const prepareCancel = defineTool<PrepareCancelArgs, UnsignedInstructionView>({
     properties: {
       task: { type: "string", description: "Task PDA to cancel." },
       authority: { type: "string", description: "Task creator wallet that signs." },
+      workerBondAuthority: {
+        type: "string",
+        description:
+          "Wallet whose worker completion bond PDA is settled (refunded, or forfeited on a no-show cancel — must then be a live claim worker, audit F-1). Defaults to the task PDA, which can never be a bond poster (empty no-op PDA).",
+      },
     },
   },
   async handler(args) {
     const ix = await facade.cancelTask({
       task: args.task as Address,
       authority: createNoopSigner(args.authority as Address),
+      // audit F5/F12: required bond PDAs are facade-derived; default to the
+      // guaranteed bond-free task PDA for the worker side.
+      workerBondAuthority: (args.workerBondAuthority ?? args.task) as Address,
     });
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },

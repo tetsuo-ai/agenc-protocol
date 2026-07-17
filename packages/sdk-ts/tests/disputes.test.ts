@@ -234,22 +234,22 @@ describe("disputes facade (structural)", () => {
   });
 
   it("applyInitiatorSlash: program, account order, data round-trip", async () => {
+    // Audit F-2: the instruction no longer takes the Task account (the stored
+    // dispute.task binding is inherent), so a destroyed Task PDA cannot brick it.
     const ix = await facade.applyInitiatorSlash({
       dispute: DISPUTE,
-      task: TASK,
       initiatorAgent: AGENT,
       treasury: TREASURY,
       authority: AUTHORITY,
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // dispute, task, initiatorAgent, protocolConfig, treasury, authority
+    // dispute, initiatorAgent, protocolConfig, treasury, authority (no task — F-2)
     const accs = order(ix);
     expect(accs[0]).toBe(DISPUTE);
-    expect(accs[1]).toBe(TASK);
-    expect(accs[2]).toBe(AGENT);
-    expect(accs[4]).toBe(TREASURY);
-    expect(accs[5]).toBe(AUTHORITY_ADDR);
+    expect(accs[1]).toBe(AGENT);
+    expect(accs[3]).toBe(TREASURY);
+    expect(accs[4]).toBe(AUTHORITY_ADDR);
 
     expect(() =>
       getApplyInitiatorSlashInstructionDataDecoder().decode(ix.data),

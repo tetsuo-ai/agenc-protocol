@@ -50,6 +50,11 @@ export function useTaskLifecycle(
         ...(input ?? {}),
         task: taskPda,
         authority: input?.authority ?? client.signer,
+        // audit F5/F12: cancelTask requires the bond PDAs; the SDK facade derives
+        // them from authority / workerBondAuthority. Default the worker wallet to
+        // the task PDA itself — it can never be a bond poster (PDAs can't sign),
+        // so the derived worker-bond PDA is the empty no-op account.
+        workerBondAuthority: input?.workerBondAuthority ?? taskPda,
       } as Parameters<typeof facadeNs.cancelTask>[0]);
       return signature;
     },

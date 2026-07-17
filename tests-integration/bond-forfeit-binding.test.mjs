@@ -133,7 +133,7 @@ test("F-1: cancel_task CANNOT forfeit an honest rejected worker's bond via a syb
       task: r.task, escrow: r.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: r.workerBond,
+      creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: r.workerBond,
       workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null,
     })
@@ -172,7 +172,7 @@ test("F-1: the legit no-show forfeit still works (bond of the LIVE no-show worke
       task: r.task, escrow: r.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda,
       systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
-      creatorCompletionBond: null, workerCompletionBond: vBond, workerBondAuthority: v.publicKey,
+      creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: vBond, workerBondAuthority: v.publicKey,
       creatorAgent: null, agentStats: null,
     })
     .remainingAccounts([

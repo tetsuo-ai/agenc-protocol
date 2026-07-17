@@ -85,21 +85,36 @@ pub struct CancelTask<'info> {
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
 
-    // === Batch 3 completion bonds (optional) ===
-    /// CHECK: creator completion bond PDA; refunded to the creator (== authority) on
-    /// cancel. Validated by settle_completion_bond.
+    // === Batch 3 completion bonds (REQUIRED + canonical-PDA-pinned, audit F5/F12) ===
+    // Required, not optional: a cancel transitions the task to terminal, and a bond
+    // left behind on a terminal task can never be reclaimed once the Task PDA is
+    // closed (reclaim_completion_bond needs it live). The caller passes the derived
+    // PDA even for an un-bonded task (empty system account); settle no-ops on it.
+    /// CHECK: creator completion bond PDA, seeds-pinned to the cancelling creator
+    /// (== authority); refunded on cancel by settle_completion_bond.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), authority.key().as_ref()],
+        bump
+    )]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA, seeds-pinned to the passed worker wallet.
+    /// Forfeited to the creator ONLY when that wallet is a live no-show claimant
+    /// (audit F-1); otherwise refunded to the poster.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), worker_bond_authority.key().as_ref()],
+        bump
+    )]
+    pub worker_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker bond poster wallet; settle_completion_bond validates
+    /// == bond.party, and the no-show forfeit additionally binds it to a live claim
+    /// (audit F-1).
     #[cfg(not(feature = "mainnet-canary"))]
     #[account(mut)]
-    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: worker completion bond PDA; forfeited to the creator when a (no-show)
-    /// worker bond is present (an InProgress past-deadline cancel).
-    #[cfg(not(feature = "mainnet-canary"))]
-    #[account(mut)]
-    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: worker bond poster wallet (worker authority); validated == bond.party.
-    #[cfg(not(feature = "mainnet-canary"))]
-    #[account(mut)]
-    pub worker_bond_authority: Option<UncheckedAccount<'info>>,
+    pub worker_bond_authority: UncheckedAccount<'info>,
 
     /// OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the
     /// track-record aggregate. Constrained to `authority` so a caller can only attribute
@@ -595,56 +610,52 @@ fn process_cancel_task_impl<'info>(
 
     // Batch 3 §8 bond disposition on cancel (authority == creator): refund the
     // creator's bond; forfeit a worker's bond to the creator ONLY on a genuine no-show
-    // (see `is_no_show_cancel`), otherwise refund it (audit #70). No-op for un-bonded tasks.
+    // (see `is_no_show_cancel`), otherwise refund it (audit #70). The bond accounts are
+    // REQUIRED + seeds-pinned (audit F5/F12), so a live bond can never be left behind
+    // on the terminal task; settle no-ops on an un-bonded task's empty PDA.
     #[cfg(not(feature = "mainnet-canary"))]
     {
         let task_key = accounts.task.key();
         let creator_info = accounts.authority.to_account_info();
-        if let Some(bond) = accounts.creator_completion_bond.as_ref() {
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &creator_info,
-                &task_key,
-                CompletionBond::ROLE_CREATOR,
-                BondDisposition::Refund,
-            )?;
-        }
-        if let (Some(bond), Some(worker_wallet)) = (
-            accounts.worker_completion_bond.as_ref(),
-            accounts.worker_bond_authority.as_ref(),
-        ) {
-            // #70 fix: forfeit to the creator ONLY on a genuine no-show; on an Open cancel
-            // the worker is not at fault, so refund their bond to them (the poster).
-            let disposition = if is_no_show_cancel {
-                // Audit F-1: the forfeited bond must belong to a LIVE no-show claimant —
-                // one of the workers whose claims are being drained above (their
-                // rent-recipient wallets are already constrained == worker.authority).
-                // Without this binding a creator could sybil-claim, no-show, and forfeit
-                // the bond of an honest, already-rejected worker (whose bond stays
-                // hostage while the task is live). settle_completion_bond separately
-                // enforces poster_wallet == bond.party + the canonical PDA, so
-                // membership here fully pins the forfeit to a real no-show.
-                require!(
-                    bond_forfeit_wallet_is_live_noshow(
-                        &worker_wallet.key(),
-                        &live_worker_wallets
-                    ),
-                    CoordinationError::BondNotTiedToNoShowWorker
-                );
-                BondDisposition::Forfeit {
-                    recipient: &creator_info,
-                }
-            } else {
-                BondDisposition::Refund
-            };
-            settle_completion_bond(
-                &bond.to_account_info(),
-                &worker_wallet.to_account_info(),
-                &task_key,
-                CompletionBond::ROLE_WORKER,
-                disposition,
-            )?;
-        }
+        settle_completion_bond(
+            &accounts.creator_completion_bond.to_account_info(),
+            &creator_info,
+            &task_key,
+            CompletionBond::ROLE_CREATOR,
+            BondDisposition::Refund,
+        )?;
+        let worker_wallet = accounts.worker_bond_authority.to_account_info();
+        // #70 fix: forfeit to the creator ONLY on a genuine no-show; on an Open cancel
+        // the worker is not at fault, so refund their bond to them (the poster).
+        let disposition = if is_no_show_cancel {
+            // Audit F-1: the forfeited bond must belong to a LIVE no-show claimant —
+            // one of the workers whose claims are being drained above (their
+            // rent-recipient wallets are already constrained == worker.authority).
+            // Without this binding a creator could sybil-claim, no-show, and forfeit
+            // the bond of an honest, already-rejected worker (whose bond stays
+            // hostage while the task is live). settle_completion_bond separately
+            // enforces poster_wallet == bond.party + the canonical PDA, so
+            // membership here fully pins the forfeit to a real no-show.
+            require!(
+                bond_forfeit_wallet_is_live_noshow(
+                    &worker_wallet.key(),
+                    &live_worker_wallets
+                ),
+                CoordinationError::BondNotTiedToNoShowWorker
+            );
+            BondDisposition::Forfeit {
+                recipient: &creator_info,
+            }
+        } else {
+            BondDisposition::Refund
+        };
+        settle_completion_bond(
+            &accounts.worker_completion_bond.to_account_info(),
+            &worker_wallet,
+            &task_key,
+            CompletionBond::ROLE_WORKER,
+            disposition,
+        )?;
     }
 
     Ok(())

@@ -326,12 +326,25 @@ pub struct ExpireRejectFrozen<'info> {
     /// Permissionless caller.
     pub authority: Signer<'info>,
 
-    /// CHECK: optional creator completion bond PDA; refunded (no-fault).
-    #[account(mut)]
-    pub creator_completion_bond: Option<UncheckedAccount<'info>>,
-    /// CHECK: optional worker completion bond PDA; refunded (no-fault).
-    #[account(mut)]
-    pub worker_completion_bond: Option<UncheckedAccount<'info>>,
+    /// CHECK: creator completion bond PDA — REQUIRED + seeds-pinned (audit F5/F12):
+    /// refunded on this no-fault timeout exit. Making it omittable would let a caller
+    /// strand a live bond into the terminal task, where reclaim_completion_bond can
+    /// never reach it once the Task PDA is closed. Pass the derived PDA even for an
+    /// un-bonded task (empty system account); settle_completion_bond no-ops on it.
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), creator.key().as_ref()],
+        bump
+    )]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA — REQUIRED + seeds-pinned to the validated
+    /// worker authority (audit F5/F12); refunded on this no-fault exit.
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), worker_authority.key().as_ref()],
+        bump
+    )]
+    pub worker_completion_bond: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -395,25 +408,24 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
     // the gross escrow — execute_completion_rewards records it on the claim.
     let worker_payout = ctx.accounts.claim.reward_paid;
 
-    // No fault on a timeout: refund BOTH bonds to their posters.
-    if let Some(bond) = ctx.accounts.worker_completion_bond.as_ref() {
-        settle_completion_bond(
-            &bond.to_account_info(),
-            &worker_auth_info,
-            &task_key,
-            CompletionBond::ROLE_WORKER,
-            BondDisposition::Refund,
-        )?;
-    }
-    if let Some(bond) = ctx.accounts.creator_completion_bond.as_ref() {
-        settle_completion_bond(
-            &bond.to_account_info(),
-            &creator_info,
-            &task_key,
-            CompletionBond::ROLE_CREATOR,
-            BondDisposition::Refund,
-        )?;
-    }
+    // No fault on a timeout: refund BOTH bonds to their posters. Required +
+    // seeds-pinned accounts (audit F5/F12), so this ALWAYS runs and a live bond can
+    // never survive into the terminal task; settle no-ops on an un-bonded task's
+    // empty PDA.
+    settle_completion_bond(
+        &ctx.accounts.worker_completion_bond.to_account_info(),
+        &worker_auth_info,
+        &task_key,
+        CompletionBond::ROLE_WORKER,
+        BondDisposition::Refund,
+    )?;
+    settle_completion_bond(
+        &ctx.accounts.creator_completion_bond.to_account_info(),
+        &creator_info,
+        &task_key,
+        CompletionBond::ROLE_CREATOR,
+        BondDisposition::Refund,
+    )?;
 
     ctx.accounts.claim.close(worker_auth_info)?;
 

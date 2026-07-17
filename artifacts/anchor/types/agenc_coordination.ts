@@ -1877,23 +1877,89 @@ export type AgencCoordination = {
         {
           "name": "creatorCompletionBond",
           "docs": [
-            "cancel. Validated by settle_completion_bond."
+            "(== authority); refunded on cancel by settle_completion_bond."
           ],
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
         },
         {
           "name": "workerCompletionBond",
           "docs": [
-            "worker bond is present (an InProgress past-deadline cancel)."
+            "Forfeited to the creator ONLY when that wallet is a live no-show claimant",
+            "(audit F-1); otherwise refunded to the poster."
           ],
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "workerBondAuthority"
+              }
+            ]
+          }
         },
         {
           "name": "workerBondAuthority",
-          "writable": true,
-          "optional": true
+          "docs": [
+            "== bond.party, and the no-show forfeit additionally binds it to a live claim",
+            "(audit F-1)."
+          ],
+          "writable": true
         },
         {
           "name": "creatorAgent",
@@ -6791,13 +6857,84 @@ export type AgencCoordination = {
         },
         {
           "name": "creatorCompletionBond",
+          "docs": [
+            "refunded on this no-fault timeout exit. Making it omittable would let a caller",
+            "strand a live bond into the terminal task, where reclaim_completion_bond can",
+            "never reach it once the Task PDA is closed. Pass the derived PDA even for an",
+            "un-bonded task (empty system account); settle_completion_bond no-ops on it."
+          ],
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              }
+            ]
+          }
         },
         {
           "name": "workerCompletionBond",
+          "docs": [
+            "worker authority (audit F5/F12); refunded on this no-fault exit."
+          ],
           "writable": true,
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "workerAuthority"
+              }
+            ]
+          }
         },
         {
           "name": "systemProgram",

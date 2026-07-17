@@ -46,6 +46,8 @@ import {
   findTaskJobSpecPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  findCreatorCompletionBondPda,
+  findWorkerCompletionBondPda,
   type CreateTaskAsyncInput,
   type CreateTaskHumanlessAsyncInput,
   type CreateDependentTaskAsyncInput,
@@ -226,12 +228,46 @@ export async function completeTask(input: CompleteTaskAsyncInput) {
   return getCompleteTaskInstructionAsync(input);
 }
 
+export type CancelTaskInput = Omit<
+  CancelTaskAsyncInput,
+  "creatorCompletionBond" | "workerCompletionBond" | "workerBondAuthority"
+> & {
+  /** Any wallet; the no-show forfeit binds it to a live claim worker (audit F-1). */
+  workerBondAuthority: Address;
+  /** Defaults to the derived [completion_bond, task, authority] PDA (audit F5/F12). */
+  creatorCompletionBond?: Address;
+  /** Defaults to the derived [completion_bond, task, workerBondAuthority] PDA. */
+  workerCompletionBond?: Address;
+};
+
 /**
  * Creator cancels a task and refunds the escrow. Auto-derives escrow and protocol
  * config; pass token accounts only for token tasks.
+ *
+ * Since audit F5/F12 the completion-bond accounts are REQUIRED + seeds-pinned on the
+ * full surface: the facade derives them — the creator bond from [task, authority]
+ * and the worker bond from [task, workerBondAuthority] — so callers pass only
+ * `workerBondAuthority` (any wallet; the no-show forfeit binds it to a live claim
+ * worker, audit F-1). settle no-ops when only the empty PDA exists.
  */
-export async function cancelTask(input: CancelTaskAsyncInput) {
-  return getCancelTaskInstructionAsync(input);
+export async function cancelTask(input: CancelTaskInput) {
+  const creatorCompletionBond =
+    input.creatorCompletionBond ??
+    (await findCreatorCompletionBondPda({
+      task: input.task,
+      creator: input.authority.address,
+    }))[0];
+  const workerCompletionBond =
+    input.workerCompletionBond ??
+    (await findWorkerCompletionBondPda({
+      task: input.task,
+      workerAuthority: input.workerBondAuthority,
+    }))[0];
+  return getCancelTaskInstructionAsync({
+    ...input,
+    creatorCompletionBond,
+    workerCompletionBond,
+  });
 }
 
 export type CloseTaskInput = Omit<

@@ -765,6 +765,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     await buyerClient.cancelTask({
       task,
       authority: buyer,
+      workerBondAuthority: provider.address,
     });
 
     expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
