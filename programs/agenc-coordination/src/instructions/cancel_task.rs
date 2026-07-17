@@ -226,6 +226,18 @@ fn validate_cancel_prereqs(task: &Task, now: i64) -> Result<()> {
     Ok(())
 }
 
+/// Audit F-1: the wallet a worker completion bond is forfeited against must be one of
+/// the live no-show claimant wallets drained by this cancel (the claim triples'
+/// rent-recipient keys, each already constrained == the claim worker's authority).
+/// Pure + revert-sensitive.
+#[cfg(not(feature = "mainnet-canary"))]
+fn bond_forfeit_wallet_is_live_noshow(
+    worker_wallet: &Pubkey,
+    live_worker_wallets: &[Pubkey],
+) -> bool {
+    live_worker_wallets.iter().any(|w| w == worker_wallet)
+}
+
 fn process_cancel_task_impl<'info>(
     accounts: &mut CancelTask<'info>,
     remaining_accounts: &[AccountInfo<'info>],
@@ -465,6 +477,13 @@ fn process_cancel_task_impl<'info>(
         CoordinationError::IncompleteWorkerAccounts
     );
 
+    // Audit F-1: collect the live no-show worker wallets (each triple's rent recipient
+    // is already constrained == worker.authority below) so the completion-bond forfeit
+    // can be bound to an actual no-show claimant. Full-surface only (the bond block is
+    // cfg'd out of the canary build).
+    #[cfg(not(feature = "mainnet-canary"))]
+    let mut live_worker_wallets: Vec<Pubkey> = Vec::with_capacity(num_triples);
+
     for i in 0..num_triples {
         let base = i
             .checked_mul(3)
@@ -511,6 +530,8 @@ fn process_cancel_task_impl<'info>(
             rent_recipient_info.is_writable,
             CoordinationError::InvalidInput
         );
+        #[cfg(not(feature = "mainnet-canary"))]
+        live_worker_wallets.push(rent_recipient_info.key());
         // Using saturating_sub intentionally - underflow returns 0 (safe counter decrement)
         worker.active_tasks = worker.active_tasks.saturating_sub(1);
         // Use AnchorSerialize::serialize (Borsh only) — see dispute_helpers.rs comment (fix #960).
@@ -595,6 +616,21 @@ fn process_cancel_task_impl<'info>(
             // #70 fix: forfeit to the creator ONLY on a genuine no-show; on an Open cancel
             // the worker is not at fault, so refund their bond to them (the poster).
             let disposition = if is_no_show_cancel {
+                // Audit F-1: the forfeited bond must belong to a LIVE no-show claimant —
+                // one of the workers whose claims are being drained above (their
+                // rent-recipient wallets are already constrained == worker.authority).
+                // Without this binding a creator could sybil-claim, no-show, and forfeit
+                // the bond of an honest, already-rejected worker (whose bond stays
+                // hostage while the task is live). settle_completion_bond separately
+                // enforces poster_wallet == bond.party + the canonical PDA, so
+                // membership here fully pins the forfeit to a real no-show.
+                require!(
+                    bond_forfeit_wallet_is_live_noshow(
+                        &worker_wallet.key(),
+                        &live_worker_wallets
+                    ),
+                    CoordinationError::BondNotTiedToNoShowWorker
+                );
                 BondDisposition::Forfeit {
                     recipient: &creator_info,
                 }
@@ -754,5 +790,22 @@ mod tests {
         task.task_type = crate::state::TaskType::Competitive;
         task.set_live_submissions(3); // schema stays 0
         validate_cancel_prereqs(&task, 50).unwrap();
+    }
+
+    // Audit F-1 (revert-sensitive): the forfeit wallet must be a live no-show claimant.
+    // Dropping the membership check lets a creator forfeit an out-of-set (honest,
+    // already-rejected) worker's bond — the second assert turns red.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn bond_forfeit_wallet_must_be_live_noshow() {
+        let w_honest = Pubkey::new_unique();
+        let v_sybil = Pubkey::new_unique();
+        // The live no-show set is the claim triples' rent-recipient wallets.
+        let live = vec![v_sybil];
+        assert!(bond_forfeit_wallet_is_live_noshow(&v_sybil, &live));
+        assert!(!bond_forfeit_wallet_is_live_noshow(&w_honest, &live));
+        // An empty set (Open cancel / zero live workers) never validates a forfeit —
+        // the refund path handles those without consulting this predicate.
+        assert!(!bond_forfeit_wallet_is_live_noshow(&w_honest, &[]));
     }
 }

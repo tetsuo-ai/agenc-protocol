@@ -726,6 +726,8 @@ export const AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS = 0x18d1; //
 export const AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST = 0x18d2; // 6354
 /** CompletingAcceptRequiresSoleLiveSubmission: An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned) */
 export const AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION = 0x18d3; // 6355
+/** BondNotTiedToNoShowWorker: A forfeited worker completion bond must belong to a live no-show claimant of this task */
+export const AGENC_COORDINATION_ERROR__BOND_NOT_TIED_TO_NO_SHOW_WORKER = 0x18d4; // 6356
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -766,6 +768,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__BOND_AMOUNT_TOO_LOW
   | typeof AGENC_COORDINATION_ERROR__BOND_NOT_FOUND
   | typeof AGENC_COORDINATION_ERROR__BOND_NOT_MATURED
+  | typeof AGENC_COORDINATION_ERROR__BOND_NOT_TIED_TO_NO_SHOW_WORKER
   | typeof AGENC_COORDINATION_ERROR__BOND_PARTY_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__BOND_ROLE_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__BOND_TASK_MISMATCH
@@ -1128,6 +1131,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__BOND_AMOUNT_TOO_LOW]: `Bond amount too low`,
     [AGENC_COORDINATION_ERROR__BOND_NOT_FOUND]: `Bond not found`,
     [AGENC_COORDINATION_ERROR__BOND_NOT_MATURED]: `Bond not yet matured`,
+    [AGENC_COORDINATION_ERROR__BOND_NOT_TIED_TO_NO_SHOW_WORKER]: `A forfeited worker completion bond must belong to a live no-show claimant of this task`,
     [AGENC_COORDINATION_ERROR__BOND_PARTY_MISMATCH]: `Completion bond party does not match the expected wallet`,
     [AGENC_COORDINATION_ERROR__BOND_ROLE_MISMATCH]: `Completion bond has the wrong role for this disposition`,
     [AGENC_COORDINATION_ERROR__BOND_TASK_MISMATCH]: `Completion bond does not belong to this task`,

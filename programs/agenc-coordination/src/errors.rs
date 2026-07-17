@@ -1060,4 +1060,7 @@ pub enum CoordinationError {
     // Appended (audit M-2): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned)")]
     CompletingAcceptRequiresSoleLiveSubmission,
+    // Appended (audit F-1): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("A forfeited worker completion bond must belong to a live no-show claimant of this task")]
+    BondNotTiedToNoShowWorker,
 }

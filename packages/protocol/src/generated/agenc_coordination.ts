@@ -19431,6 +19431,11 @@ export type AgencCoordination = {
       "code": 6355,
       "name": "completingAcceptRequiresSoleLiveSubmission",
       "msg": "An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned)"
+    },
+    {
+      "code": 6356,
+      "name": "bondNotTiedToNoShowWorker",
+      "msg": "A forfeited worker completion bond must belong to a live no-show claimant of this task"
     }
   ],
   "types": [
