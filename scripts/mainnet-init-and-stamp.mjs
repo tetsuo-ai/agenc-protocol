@@ -3,7 +3,7 @@
 //
 // Runs, IN ORDER, AFTER the binary deploy (step 1) and the migrate sweep (steps 2–3):
 //   4. initialize_bid_marketplace   (creates BidMarketplaceConfig) — MULTISIG-gated
-//   4. initialize_zk_config          (creates ZkConfig with the AUDITED mainnet image id) — single authority
+//   4. initialize_zk_config          (creates ZkConfig with the AUDITED mainnet image id) — MULTISIG-gated (audit H-5)
 //   4. configure_task_moderation     (verify/realign ModerationConfig authority) — single authority
 //   5. update_launch_controls        (stamp surface_revision = FULL) — MULTISIG-gated  [LAST]
 //
@@ -179,12 +179,14 @@ async function main() {
   if (!authority.publicKey.equals(cfg.authority)) {
     die(`AUTHORITY_KEYPAIR (${authority.publicKey.toBase58()}) != ProtocolConfig.authority (${cfg.authority.toBase58()}).`);
   }
-  // The surface_revision stamp (step 5) and the bid-marketplace init (step 4) are MULTISIG-gated:
-  // they need >= multisigThreshold unique owner-signers. Verify the passed signers can satisfy it.
+  // The surface_revision stamp (step 5), the bid-marketplace init (step 4a) and the zk-config
+  // init (step 4b, multisig-gated since audit H-5) are MULTISIG-gated: they need >=
+  // multisigThreshold unique owner-signers. Verify the passed signers can satisfy it.
   const ownerSet = new Set(cfg.owners);
   const eligibleSigners = signerKps.filter((kp) => ownerSet.has(kp.publicKey.toBase58()));
   console.log(`  eligible multisig signers passed: ${eligibleSigners.length} of required ${cfg.multisigThreshold}`);
-  const needMultisig = !process.env.SKIP_BID_MARKETPLACE || !process.env.SKIP_STAMP;
+  const needMultisig =
+    !process.env.SKIP_BID_MARKETPLACE || !process.env.SKIP_ZK_CONFIG || !process.env.SKIP_STAMP;
   if (needMultisig && eligibleSigners.length < cfg.multisigThreshold) {
     die(`multisig-gated steps need >= ${cfg.multisigThreshold} signers that are ProtocolConfig owners; ` +
         `only ${eligibleSigners.length} of the passed signers are owners. Add COSIGNERS=...`);
@@ -223,7 +225,7 @@ async function main() {
     }
   }
 
-  // === Step 4b: initialize_zk_config (single authority; AUDITED image id REQUIRED) =========
+  // === Step 4b: initialize_zk_config (MULTISIG-gated since audit H-5; AUDITED image id REQUIRED) ===
   if (process.env.SKIP_ZK_CONFIG) {
     console.log("\nStep 4b: skipped (SKIP_ZK_CONFIG).");
   } else {
