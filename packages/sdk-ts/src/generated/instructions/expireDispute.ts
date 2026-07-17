@@ -76,6 +76,8 @@ export type ExpireDisputeInstruction<
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
+  TAccountTaskSubmission extends string | AccountMeta<string> = string,
+  TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -139,6 +141,12 @@ export type ExpireDisputeInstruction<
       TAccountWorkerCompletionBond extends string
         ? WritableAccount<TAccountWorkerCompletionBond>
         : TAccountWorkerCompletionBond,
+      TAccountTaskSubmission extends string
+        ? WritableAccount<TAccountTaskSubmission>
+        : TAccountTaskSubmission,
+      TAccountTaskValidationConfig extends string
+        ? WritableAccount<TAccountTaskValidationConfig>
+        : TAccountTaskValidationConfig,
       ...TRemainingAccounts,
     ]
   >;
@@ -192,6 +200,8 @@ export type ExpireDisputeAsyncInput<
   TAccountTokenProgram extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
+  TAccountTaskSubmission extends string = string,
+  TAccountTaskValidationConfig extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -237,6 +247,18 @@ export type ExpireDisputeAsyncInput<
   tokenProgram?: Address<TAccountTokenProgram>;
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
+  /**
+   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+   * decrements the review counters when still live and returns its rent to the
+   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   */
+  taskSubmission?: Address<TAccountTaskSubmission>;
+  /**
+   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+   * swept submission is still live on a manual-validation task (pending-counter
+   * hygiene). Bound to the task in the handler.
+   */
+  taskValidationConfig?: Address<TAccountTaskValidationConfig>;
 };
 
 export async function getExpireDisputeInstructionAsync<
@@ -259,6 +281,8 @@ export async function getExpireDisputeInstructionAsync<
   TAccountTokenProgram extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
+  TAccountTaskSubmission extends string,
+  TAccountTaskValidationConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireDisputeAsyncInput<
@@ -280,7 +304,9 @@ export async function getExpireDisputeInstructionAsync<
     TAccountRewardMint,
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
-    TAccountWorkerCompletionBond
+    TAccountWorkerCompletionBond,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -304,7 +330,9 @@ export async function getExpireDisputeInstructionAsync<
     TAccountRewardMint,
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
-    TAccountWorkerCompletionBond
+    TAccountWorkerCompletionBond,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >
 > {
   // Program address.
@@ -342,6 +370,11 @@ export async function getExpireDisputeInstructionAsync<
     },
     workerCompletionBond: {
       value: input.workerCompletionBond ?? null,
+      isWritable: true,
+    },
+    taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
       isWritable: true,
     },
   };
@@ -397,6 +430,8 @@ export async function getExpireDisputeInstructionAsync<
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
+      getAccountMeta("taskSubmission", accounts.taskSubmission),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
     ],
     data: getExpireDisputeInstructionDataEncoder().encode({}),
     programAddress,
@@ -420,7 +455,9 @@ export async function getExpireDisputeInstructionAsync<
     TAccountRewardMint,
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
-    TAccountWorkerCompletionBond
+    TAccountWorkerCompletionBond,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >);
 }
 
@@ -444,6 +481,8 @@ export type ExpireDisputeInput<
   TAccountTokenProgram extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
+  TAccountTaskSubmission extends string = string,
+  TAccountTaskValidationConfig extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -489,6 +528,18 @@ export type ExpireDisputeInput<
   tokenProgram?: Address<TAccountTokenProgram>;
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
+  /**
+   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+   * decrements the review counters when still live and returns its rent to the
+   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   */
+  taskSubmission?: Address<TAccountTaskSubmission>;
+  /**
+   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+   * swept submission is still live on a manual-validation task (pending-counter
+   * hygiene). Bound to the task in the handler.
+   */
+  taskValidationConfig?: Address<TAccountTaskValidationConfig>;
 };
 
 export function getExpireDisputeInstruction<
@@ -511,6 +562,8 @@ export function getExpireDisputeInstruction<
   TAccountTokenProgram extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
+  TAccountTaskSubmission extends string,
+  TAccountTaskValidationConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ExpireDisputeInput<
@@ -532,7 +585,9 @@ export function getExpireDisputeInstruction<
     TAccountRewardMint,
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
-    TAccountWorkerCompletionBond
+    TAccountWorkerCompletionBond,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): ExpireDisputeInstruction<
@@ -555,7 +610,9 @@ export function getExpireDisputeInstruction<
   TAccountRewardMint,
   TAccountTokenProgram,
   TAccountCreatorCompletionBond,
-  TAccountWorkerCompletionBond
+  TAccountWorkerCompletionBond,
+  TAccountTaskSubmission,
+  TAccountTaskValidationConfig
 > {
   // Program address.
   const programAddress =
@@ -594,6 +651,11 @@ export function getExpireDisputeInstruction<
       value: input.workerCompletionBond ?? null,
       isWritable: true,
     },
+    taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -628,6 +690,8 @@ export function getExpireDisputeInstruction<
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
+      getAccountMeta("taskSubmission", accounts.taskSubmission),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
     ],
     data: getExpireDisputeInstructionDataEncoder().encode({}),
     programAddress,
@@ -651,7 +715,9 @@ export function getExpireDisputeInstruction<
     TAccountRewardMint,
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
-    TAccountWorkerCompletionBond
+    TAccountWorkerCompletionBond,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >);
 }
 
@@ -705,6 +771,18 @@ export type ParsedExpireDisputeInstruction<
     tokenProgram?: TAccountMetas[16] | undefined;
     creatorCompletionBond: TAccountMetas[17];
     workerCompletionBond: TAccountMetas[18];
+    /**
+     * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+     * decrements the review counters when still live and returns its rent to the
+     * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+     */
+    taskSubmission?: TAccountMetas[19] | undefined;
+    /**
+     * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+     * swept submission is still live on a manual-validation task (pending-counter
+     * hygiene). Bound to the task in the handler.
+     */
+    taskValidationConfig?: TAccountMetas[20] | undefined;
   };
   data: ExpireDisputeInstructionData;
 };
@@ -717,12 +795,12 @@ export function parseExpireDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedExpireDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 19) {
+  if (instruction.accounts.length < 21) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 19,
+        expectedAccountMetas: 21,
       },
     );
   }
@@ -760,6 +838,8 @@ export function parseExpireDisputeInstruction<
       tokenProgram: getNextOptionalAccount(),
       creatorCompletionBond: getNextAccount(),
       workerCompletionBond: getNextAccount(),
+      taskSubmission: getNextOptionalAccount(),
+      taskValidationConfig: getNextOptionalAccount(),
     },
     data: getExpireDisputeInstructionDataDecoder().decode(instruction.data),
   };

@@ -119,10 +119,11 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       workerAuthority: WORKER_WALLET,
     });
-    // Last three accounts are creatorCompletionBond, workerCompletionBond, bondTreasury.
-    expect(accs[accs.length - 3]).toBe(creatorBond);
-    expect(accs[accs.length - 2]).toBe(workerBond);
-    expect(accs[accs.length - 1]).toBe(TREASURY);
+    // creatorCompletionBond, workerCompletionBond, bondTreasury precede the two
+    // optional F-9 sweep accounts (taskSubmission, taskValidationConfig).
+    expect(accs[accs.length - 5]).toBe(creatorBond);
+    expect(accs[accs.length - 4]).toBe(workerBond);
+    expect(accs[accs.length - 3]).toBe(TREASURY);
     // And they are genuinely included (the hint: callers cannot omit them).
     expect(accs).toContain(creatorBond);
     expect(accs).toContain(workerBond);
@@ -158,9 +159,10 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       workerAuthority: WORKER_WALLET,
     });
-    // Last two accounts are creatorCompletionBond, workerCompletionBond.
-    expect(accs[accs.length - 2]).toBe(creatorBond);
-    expect(accs[accs.length - 1]).toBe(workerBond);
+    // creatorCompletionBond, workerCompletionBond precede the two optional F-9
+    // sweep accounts (taskSubmission, taskValidationConfig).
+    expect(accs[accs.length - 4]).toBe(creatorBond);
+    expect(accs[accs.length - 3]).toBe(workerBond);
     expect(accs).toContain(creatorBond);
     expect(accs).toContain(workerBond);
 

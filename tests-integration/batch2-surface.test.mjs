@@ -295,6 +295,8 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
     creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0],
     workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
     bondTreasury: w.admin.publicKey,
+    // audit F-9 optional sweep accounts: omitted here (close_task fallback)
+    taskSubmission: null, taskValidationConfig: null,
   });
 
   // Fail-closed: a referred settlement with the referrer payee OMITTED must revert —

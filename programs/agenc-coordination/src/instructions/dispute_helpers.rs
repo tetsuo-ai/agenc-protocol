@@ -10,8 +10,14 @@ use crate::errors::CoordinationError;
 use crate::events::{OperatorFeePaid, ReferrerFeePaid};
 use crate::instructions::completion_helpers::calculate_combined_fees;
 use crate::instructions::lamport_transfer::transfer_lamports;
+use crate::instructions::task_validation_helpers::{
+    decrement_pending_submission_count, is_manual_validation_task, note_submission_left_review,
+};
 use crate::instructions::validation::validate_account_owner;
-use crate::state::{AgentRegistration, HireRecord, TaskClaim};
+use crate::state::{
+    AgentRegistration, HireRecord, SubmissionStatus, Task, TaskClaim, TaskSubmission,
+    TaskValidationConfig,
+};
 use anchor_lang::prelude::*;
 
 /// The marketplace fee terms (operator + referrer snapshots) a dispute exit must
@@ -287,6 +293,78 @@ pub(crate) fn expected_worker_pairs(current_workers: u8) -> usize {
 /// relax the defendant binding by worker count fails a test instead of silently shipping.
 pub(crate) fn defendant_claim_required(_current_workers: u8) -> bool {
     true
+}
+
+/// Audit F-9: sweep the defendant's TaskSubmission on a dispute exit (resolve/expire).
+/// Dispute exits otherwise left the submission account live on a terminal task — the
+/// review counters stuck at 1 and the worker's submission rent recoverable only via
+/// the creator-gated close_task. When the submission is supplied here (an optional
+/// trailing account, so callers and the frozen IDL are unaffected):
+/// - it is bound by owner + canonical seeds + task + claim + worker;
+/// - the review counters are decremented IFF it is still `Submitted` (still carrying
+///   counter debt — a bounced/accepted submission was already accounted at its own
+///   transition); the task-level counter is schema-gated via
+///   `note_submission_left_review`, and the validation-config counter is decremented
+///   for manual tasks (the config account is then REQUIRED);
+/// - the account is closed to the worker authority (never the crank or creator) and
+///   tombstoned against re-init.
+///
+/// Anything else (live submission in another state) is left for close_task.
+pub(crate) fn sweep_dispute_submission<'info>(
+    task: &mut Task,
+    task_key: &Pubkey,
+    claim_key: &Pubkey,
+    worker_agent_key: &Pubkey,
+    worker_wallet: &AccountInfo<'info>,
+    submission_info: &AccountInfo<'info>,
+    validation_config: Option<&mut Account<'_, TaskValidationConfig>>,
+) -> Result<()> {
+    require!(
+        submission_info.owner == &crate::ID,
+        CoordinationError::InvalidAccountOwner
+    );
+    let submission = {
+        let data = submission_info.try_borrow_data()?;
+        TaskSubmission::try_deserialize(&mut &data[..])
+            .map_err(|_| CoordinationError::TaskSubmissionRequired)?
+    };
+    let (expected_submission, _) = Pubkey::find_program_address(
+        &[b"task_submission", claim_key.as_ref()],
+        &crate::ID,
+    );
+    require!(
+        submission_info.key() == expected_submission
+            && submission.task == *task_key
+            && submission.claim == *claim_key
+            && submission.worker == *worker_agent_key,
+        CoordinationError::TaskSubmissionRequired
+    );
+
+    if submission.status == SubmissionStatus::Submitted {
+        note_submission_left_review(task)?;
+        if is_manual_validation_task(task) {
+            let config = validation_config.ok_or(CoordinationError::TaskValidationConfigRequired)?;
+            require!(
+                config.task == *task_key,
+                CoordinationError::TaskValidationConfigRequired
+            );
+            decrement_pending_submission_count(config)?;
+        }
+    }
+
+    // Return the worker-funded submission rent to the worker authority (constrained
+    // by the caller == worker.authority) and tombstone against re-init.
+    let lamports = submission_info.lamports();
+    **submission_info.try_borrow_mut_lamports()? = 0;
+    **worker_wallet.try_borrow_mut_lamports()? = worker_wallet
+        .lamports()
+        .checked_add(lamports)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let mut data = submission_info.try_borrow_mut_data()?;
+    data.fill(0);
+    data[..8].copy_from_slice(&[255u8; 8]);
+
+    Ok(())
 }
 
 #[cfg(test)]

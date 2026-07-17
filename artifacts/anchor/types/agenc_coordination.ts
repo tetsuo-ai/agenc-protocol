@@ -6662,6 +6662,26 @@ export type AgencCoordination = {
         {
           "name": "workerCompletionBond",
           "writable": true
+        },
+        {
+          "name": "taskSubmission",
+          "docs": [
+            "OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —",
+            "decrements the review counters when still live and returns its rent to the",
+            "worker authority. Validated + bound in the handler (`sweep_dispute_submission`)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "taskValidationConfig",
+          "docs": [
+            "OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the",
+            "swept submission is still live on a manual-validation task (pending-counter",
+            "hygiene). Bound to the task in the handler."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -12067,6 +12087,26 @@ export type AgencCoordination = {
         {
           "name": "bondTreasury",
           "writable": true
+        },
+        {
+          "name": "taskSubmission",
+          "docs": [
+            "OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —",
+            "decrements the review counters when still live and returns its rent to the",
+            "worker authority. Validated + bound in the handler (`sweep_dispute_submission`)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "taskValidationConfig",
+          "docs": [
+            "OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the",
+            "swept submission is still live on a manual-validation task (pending-counter",
+            "hygiene). Bound to the task in the handler."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": [

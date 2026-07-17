@@ -97,6 +97,8 @@ async function resolveIx(w, r, { resolver, resolverEntry, approve }) {
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
+      // audit F-9 optional sweep accounts: omitted here (close_task fallback)
+      taskSubmission: null, taskValidationConfig: null,
     })
     .instruction();
 }

@@ -12,7 +12,7 @@ use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::dispute_helpers::{
     check_duplicate_workers, defendant_claim_required, expected_worker_pairs,
     pay_dispute_marketplace_legs, process_worker_claim_pair, resolve_task_marketplace_terms,
-    validate_remaining_accounts_structure,
+    sweep_dispute_submission, validate_remaining_accounts_structure,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::slash_helpers::calculate_slash_amount;
@@ -23,6 +23,7 @@ use crate::instructions::token_helpers::{
 use crate::state::{
     AgentRegistration, AgentStats, CompletionBond, Dispute, DisputeResolver, DisputeStatus,
     ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
+    TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -251,6 +252,19 @@ pub struct ResolveDispute<'info> {
     /// CHECK: treasury, recipient of a forfeited bond; validated == protocol_config.treasury.
     #[account(mut)]
     pub bond_treasury: UncheckedAccount<'info>,
+
+    /// OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+    /// decrements the review counters when still live and returns its rent to the
+    /// worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+    /// CHECK: seeds-pinned to the defendant claim; inspected in the handler.
+    #[account(mut)]
+    pub task_submission: Option<UncheckedAccount<'info>>,
+
+    /// OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+    /// swept submission is still live on a manual-validation task (pending-counter
+    /// hygiene). Bound to the task in the handler.
+    #[account(mut)]
+    pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 }
 
 pub fn handler<'info>(
@@ -1005,6 +1019,32 @@ pub fn handler<'info>(
             .as_ref()
             .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
         claim.close(worker_wallet.to_account_info())?;
+    }
+
+    // Audit F-9: sweep the defendant's TaskSubmission when the caller supplies it —
+    // decrement the review counters if it is still live and return its rent to the
+    // worker authority, so neither the counters nor the rent strand on the terminal
+    // task. Optional: when omitted, close_task remains the fallback sweep.
+    if let Some(submission_info) = ctx.accounts.task_submission.as_ref() {
+        let worker_claim = ctx
+            .accounts
+            .worker_claim
+            .as_ref()
+            .ok_or(CoordinationError::WorkerClaimRequired)?;
+        let worker_wallet = ctx
+            .accounts
+            .worker_wallet
+            .as_ref()
+            .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
+        sweep_dispute_submission(
+            task,
+            &task_key,
+            &worker_claim.key(),
+            &defendant_worker_key,
+            &worker_wallet.to_account_info(),
+            &submission_info.to_account_info(),
+            ctx.accounts.task_validation_config.as_deref_mut(),
+        )?;
     }
 
     // Batch 3 §8: completion bond disposition follows the dispute outcome — the loser

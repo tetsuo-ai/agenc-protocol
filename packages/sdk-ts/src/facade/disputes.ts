@@ -77,6 +77,11 @@ export async function initiateDispute(input: InitiateDisputeAsyncInput) {
  * (`resolvedCount`, `lastResolvedAt`) are recorded; the protocol authority resolving
  * directly passes `resolverAssignment: null`. The deciding resolver + rationale hash
  * are persisted on the dispute and emitted in `DisputeResolved`.
+ *
+ * Audit F-9: to sweep the defendant's TaskSubmission on exit (decrement the review
+ * counters and return its rent to the worker authority), pass `taskSubmission` and —
+ * for manual-validation tasks with a still-live submission — `taskValidationConfig`
+ * as optional trailing accounts. When omitted, `close_task` remains the sweep.
  */
 export async function resolveDispute(
   input: Omit<

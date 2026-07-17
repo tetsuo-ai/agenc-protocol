@@ -21,7 +21,7 @@ use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition}
 use crate::instructions::dispute_helpers::{
     check_duplicate_workers, defendant_claim_required, expected_worker_pairs,
     pay_dispute_marketplace_legs, process_worker_claim_pair, resolve_task_marketplace_terms,
-    validate_remaining_accounts_structure, MarketplaceTerms,
+    sweep_dispute_submission, validate_remaining_accounts_structure, MarketplaceTerms,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
 use crate::instructions::token_helpers::{
@@ -30,7 +30,7 @@ use crate::instructions::token_helpers::{
 };
 use crate::state::{
     AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim,
-    TaskEscrow, TaskStatus, TaskType,
+    TaskEscrow, TaskStatus, TaskType, TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -173,6 +173,19 @@ pub struct ExpireDispute<'info> {
     /// CHECK: worker completion bond PDA; refunded on expiry.
     #[account(mut)]
     pub worker_completion_bond: UncheckedAccount<'info>,
+
+    /// OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+    /// decrements the review counters when still live and returns its rent to the
+    /// worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+    /// CHECK: seeds-pinned to the defendant claim; inspected in the handler.
+    #[account(mut)]
+    pub task_submission: Option<UncheckedAccount<'info>>,
+
+    /// OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+    /// swept submission is still live on a manual-validation task (pending-counter
+    /// hygiene). Bound to the task in the handler.
+    #[account(mut)]
+    pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 }
 
 /// Expires a dispute after voting period ends.
@@ -580,6 +593,22 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
     let worker_wallet_info = worker_wallet.to_account_info();
     claim.close(worker_wallet_info.clone())?;
+
+    // Audit F-9: sweep the defendant's TaskSubmission when the caller supplies it —
+    // decrement the review counters if it is still live and return its rent to the
+    // worker authority, so neither the counters nor the rent strand on the terminal
+    // task. Optional: when omitted, close_task remains the fallback sweep.
+    if let Some(submission_info) = ctx.accounts.task_submission.as_ref() {
+        sweep_dispute_submission(
+            task,
+            &task_key,
+            &claim.key(),
+            &defendant_worker_key,
+            &worker_wallet_info,
+            &submission_info.to_account_info(),
+            ctx.accounts.task_validation_config.as_deref_mut(),
+        )?;
+    }
 
     // Batch 3 §8: a no-fault expiry refunds BOTH completion bonds. The bond accounts are
     // REQUIRED (see struct) so this permissionless exit cannot strand a posted bond on

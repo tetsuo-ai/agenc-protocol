@@ -90,6 +90,8 @@ export type ResolveDisputeInstruction<
   TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TAccountBondTreasury extends string | AccountMeta<string> = string,
+  TAccountTaskSubmission extends string | AccountMeta<string> = string,
+  TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -168,6 +170,12 @@ export type ResolveDisputeInstruction<
       TAccountBondTreasury extends string
         ? WritableAccount<TAccountBondTreasury>
         : TAccountBondTreasury,
+      TAccountTaskSubmission extends string
+        ? WritableAccount<TAccountTaskSubmission>
+        : TAccountTaskSubmission,
+      TAccountTaskValidationConfig extends string
+        ? WritableAccount<TAccountTaskValidationConfig>
+        : TAccountTaskValidationConfig,
       ...TRemainingAccounts,
     ]
   >;
@@ -241,6 +249,8 @@ export type ResolveDisputeAsyncInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountBondTreasury extends string = string,
+  TAccountTaskSubmission extends string = string,
+  TAccountTaskValidationConfig extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -319,6 +329,18 @@ export type ResolveDisputeAsyncInput<
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   bondTreasury: Address<TAccountBondTreasury>;
+  /**
+   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+   * decrements the review counters when still live and returns its rent to the
+   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   */
+  taskSubmission?: Address<TAccountTaskSubmission>;
+  /**
+   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+   * swept submission is still live on a manual-validation task (pending-counter
+   * hygiene). Bound to the task in the handler.
+   */
+  taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   approve: ResolveDisputeInstructionDataArgs["approve"];
   rationaleHash: ResolveDisputeInstructionDataArgs["rationaleHash"];
   rationaleUri: ResolveDisputeInstructionDataArgs["rationaleUri"];
@@ -349,6 +371,8 @@ export async function getResolveDisputeInstructionAsync<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountBondTreasury extends string,
+  TAccountTaskSubmission extends string,
+  TAccountTaskValidationConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ResolveDisputeAsyncInput<
@@ -375,7 +399,9 @@ export async function getResolveDisputeInstructionAsync<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountBondTreasury
+    TAccountBondTreasury,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -404,7 +430,9 @@ export async function getResolveDisputeInstructionAsync<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountBondTreasury
+    TAccountBondTreasury,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >
 > {
   // Program address.
@@ -455,6 +483,11 @@ export async function getResolveDisputeInstructionAsync<
       isWritable: true,
     },
     bondTreasury: { value: input.bondTreasury ?? null, isWritable: true },
+    taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -520,6 +553,8 @@ export async function getResolveDisputeInstructionAsync<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondTreasury", accounts.bondTreasury),
+      getAccountMeta("taskSubmission", accounts.taskSubmission),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
     ],
     data: getResolveDisputeInstructionDataEncoder().encode(
       args as ResolveDisputeInstructionDataArgs,
@@ -550,7 +585,9 @@ export async function getResolveDisputeInstructionAsync<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountBondTreasury
+    TAccountBondTreasury,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >);
 }
 
@@ -579,6 +616,8 @@ export type ResolveDisputeInput<
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
   TAccountBondTreasury extends string = string,
+  TAccountTaskSubmission extends string = string,
+  TAccountTaskValidationConfig extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -657,6 +696,18 @@ export type ResolveDisputeInput<
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   bondTreasury: Address<TAccountBondTreasury>;
+  /**
+   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+   * decrements the review counters when still live and returns its rent to the
+   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   */
+  taskSubmission?: Address<TAccountTaskSubmission>;
+  /**
+   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+   * swept submission is still live on a manual-validation task (pending-counter
+   * hygiene). Bound to the task in the handler.
+   */
+  taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   approve: ResolveDisputeInstructionDataArgs["approve"];
   rationaleHash: ResolveDisputeInstructionDataArgs["rationaleHash"];
   rationaleUri: ResolveDisputeInstructionDataArgs["rationaleUri"];
@@ -687,6 +738,8 @@ export function getResolveDisputeInstruction<
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
   TAccountBondTreasury extends string,
+  TAccountTaskSubmission extends string,
+  TAccountTaskValidationConfig extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ResolveDisputeInput<
@@ -713,7 +766,9 @@ export function getResolveDisputeInstruction<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountBondTreasury
+    TAccountBondTreasury,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >,
   config?: { programAddress?: TProgramAddress },
 ): ResolveDisputeInstruction<
@@ -741,7 +796,9 @@ export function getResolveDisputeInstruction<
   TAccountTokenProgram,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
-  TAccountBondTreasury
+  TAccountBondTreasury,
+  TAccountTaskSubmission,
+  TAccountTaskValidationConfig
 > {
   // Program address.
   const programAddress =
@@ -791,6 +848,11 @@ export function getResolveDisputeInstruction<
       isWritable: true,
     },
     bondTreasury: { value: input.bondTreasury ?? null, isWritable: true },
+    taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -837,6 +899,8 @@ export function getResolveDisputeInstruction<
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
       getAccountMeta("bondTreasury", accounts.bondTreasury),
+      getAccountMeta("taskSubmission", accounts.taskSubmission),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
     ],
     data: getResolveDisputeInstructionDataEncoder().encode(
       args as ResolveDisputeInstructionDataArgs,
@@ -867,7 +931,9 @@ export function getResolveDisputeInstruction<
     TAccountTokenProgram,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
-    TAccountBondTreasury
+    TAccountBondTreasury,
+    TAccountTaskSubmission,
+    TAccountTaskValidationConfig
   >);
 }
 
@@ -954,6 +1020,18 @@ export type ParsedResolveDisputeInstruction<
     creatorCompletionBond: TAccountMetas[21];
     workerCompletionBond: TAccountMetas[22];
     bondTreasury: TAccountMetas[23];
+    /**
+     * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
+     * decrements the review counters when still live and returns its rent to the
+     * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+     */
+    taskSubmission?: TAccountMetas[24] | undefined;
+    /**
+     * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
+     * swept submission is still live on a manual-validation task (pending-counter
+     * hygiene). Bound to the task in the handler.
+     */
+    taskValidationConfig?: TAccountMetas[25] | undefined;
   };
   data: ResolveDisputeInstructionData;
 };
@@ -966,12 +1044,12 @@ export function parseResolveDisputeInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedResolveDisputeInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 24) {
+  if (instruction.accounts.length < 26) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 24,
+        expectedAccountMetas: 26,
       },
     );
   }
@@ -1014,6 +1092,8 @@ export function parseResolveDisputeInstruction<
       creatorCompletionBond: getNextAccount(),
       workerCompletionBond: getNextAccount(),
       bondTreasury: getNextAccount(),
+      taskSubmission: getNextOptionalAccount(),
+      taskValidationConfig: getNextOptionalAccount(),
     },
     data: getResolveDisputeInstructionDataDecoder().decode(instruction.data),
   };
