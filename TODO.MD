@@ -452,9 +452,15 @@ surface is used. Cheap guards; do them in the same PR.)
   stays claimable by future workers; not a lock, by design).
 
 ### [x] F-18 — Multisig hardening cluster (LOW)
-- **RESOLVED 2026-07-18 (`dd519ad`)**:
-  - `update_multisig`: the new owner set must retain the protocol authority
-    (integration: exclusion attempt rejected, owner set untouched).
+- **RESOLVED 2026-07-18 (`dd519ad` + adversarial-review follow-up)**:
+  - `update_multisig`: the "owner set must retain authority" require was
+    **REVERTED** after on-chain verification showed the mainnet authority is a
+    Squads vault PDA — it can never satisfy `require_multisig_threshold`
+    (owner-signers must be system-owned), so the require forced a dead PDA into
+    every future owner set and broke the operators' existing rotation
+    construction. It also protected nothing: the authority field is immutable by
+    design, so its power never depended on owner membership. Integration now
+    pins that exclusion rotations stay ALLOWED.
   - `update_launch_controls`: wire-compatible KEEP sentinels (0xFF mask /
     0xFFFF revision) close the stale-read reset hazard — per-field/compare-and-swap
     was impossible without changing the canary-frozen args; explicit values

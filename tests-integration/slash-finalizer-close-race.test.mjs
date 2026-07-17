@@ -125,6 +125,7 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
   const t = decode(w.svm, "Task", r.task);
   assert.ok(t.status.Cancelled !== undefined, "task terminal (Cancelled) after Refund ruling");
   assert.equal(t.current_workers, 1, "current_workers stays 1 while the slash is pending (F-2)");
+  assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).active_tasks, 1, "active_tasks stays 1 too — counters consistent on the deferred claim");
   assert.ok(!isClosed(w.svm, r.claim), "defendant claim kept open (deferred)");
   assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).disputes_as_defendant, 1, "defendant counter still pending");
 
@@ -165,6 +166,7 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
   assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).disputes_as_defendant, 0, "defendant counter cleared");
   assert.ok(isClosed(w.svm, r.claim), "deferred claim closed by the finalizer");
   assert.equal(decode(w.svm, "Task", r.task).current_workers, 0, "current_workers freed by the finalizer");
+  assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).active_tasks, 0, "active_tasks freed by the finalizer");
 
   // close_task now succeeds (expireBlockhash: the blocked attempt above was the
   // byte-identical tx — without a fresh blockhash its signature would be deduped).

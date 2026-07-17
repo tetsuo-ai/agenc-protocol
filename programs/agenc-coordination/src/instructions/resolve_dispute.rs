@@ -885,10 +885,18 @@ pub fn handler<'info>(
         .worker
         .as_mut()
         .ok_or(CoordinationError::WorkerAgentRequired)?;
-    worker.active_tasks = worker
-        .active_tasks
-        .checked_sub(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    // Audit F-2 (adversarial-review follow-up): when the claim close is DEFERRED
+    // (slash pending), the claim is still open — so active_tasks must stay
+    // incremented, mirroring current_workers (which likewise stays 1). The slash
+    // finalizer (apply_dispute_slash) decrements it when the claim closes.
+    // Decrementing here would leave current_workers == 1 but active_tasks == 0 —
+    // a counter desync on the still-open claim.
+    if !worker_slash_pending {
+        worker.active_tasks = worker
+            .active_tasks
+            .checked_sub(1)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+    }
     // Update activity timestamp so fallback deregistration gating has a deterministic anchor.
     worker.last_active = clock.unix_timestamp;
     if !worker_slash_pending {

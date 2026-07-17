@@ -226,14 +226,18 @@ test("update_multisig: 2-of-2 rotates to a 2-of-3 owner set; single signer rejec
   assert.ok(cfg.multisig_owners[2].equals(owner3.publicKey), "owner3 stored in slot 2");
 });
 
-test("update_multisig (F-18): rotating the protocol authority OUT of the owner set is rejected", async () => {
+test("update_multisig (adversarial review): rotating the protocol authority OUT of the owner set stays ALLOWED", async () => {
+  // The F-18 authority-membership require was REVERTED: on mainnet the authority is
+  // a Squads vault PDA, which can never satisfy require_multisig_threshold
+  // (owner-signers must be system-owned), so the require forced a dead PDA into
+  // every future owner set and broke the operators' rotation construction. It also
+  // protected nothing — the authority field is immutable by design, so its power
+  // never depended on owner membership. This test pins the reverted behavior:
+  // an owner set that excludes the authority (with enough new-set signers) rotates fine.
   const w = await freshWorld();
   const { owner2, signerMetas, signers } = twoOfTwoMultisig(w);
   await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
 
-  // New 3-owner set WITHOUT the protocol authority (w.admin): with enough new-set
-  // signers to pass the new-set-approval guard, so the ONLY remaining block is the
-  // F-18 authority-membership require.
   const owner3 = Keypair.generate();
   const owner4 = Keypair.generate();
   for (const kp of [owner3, owner4]) w.svm.airdrop(kp.publicKey, BigInt(10e9));
@@ -245,19 +249,17 @@ test("update_multisig (F-18): rotating the protocol authority OUT of the owner s
     { pubkey: owner4.publicKey, isSigner: true, isWritable: false },
   ];
 
-  expectFail(
+  expectOk(
     send(w.svm, await makeProgram(w.admin).methods
       .updateMultisig(2, newOwners)
       .accounts({ protocolConfig: w.protocolPda, authority: w.admin.publicKey })
       .remainingAccounts(allSigners)
       .instruction(), [w.admin, owner2, owner3, owner4]),
-    "MultisigInvalidSigners",
-    "authority excluded from the new owner set is rejected (F-18)",
+    "rotation excluding the authority succeeds (post-revert behavior)",
   );
-
-  // The live owner set is untouched by the rejected rotation.
   const cfg = decode(w.svm, "ProtocolConfig", w.protocolPda);
-  assert.equal(cfg.multisig_owners_len, 2, "owner set unchanged");
+  assert.equal(cfg.multisig_owners_len, 3, "owner set rotated");
+  assert.ok(cfg.multisig_owners[0].equals(owner2.publicKey), "new set stored");
 });
 
 // ---------------------------------------------------------------------------

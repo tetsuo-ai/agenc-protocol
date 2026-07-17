@@ -380,11 +380,12 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         worker_agent.last_active = clock.unix_timestamp;
         dispute.slash_applied = true;
         // Audit F-2: this finalizer closes the deferred worker_claim on every successful
-        // path (the `close = worker_authority` constraint), so free the worker slot
-        // resolve_dispute deliberately left in current_workers — close_task's
-        // current_workers == 0 guard then unblocks. saturating_sub for legacy disputes
-        // resolved before this deferral existed (their count was zeroed at resolve).
+        // path (the `close = worker_authority` constraint), so free BOTH slots
+        // resolve_dispute deliberately left — current_workers on the task and
+        // active_tasks on the worker (kept consistent by the resolve-side change).
+        // saturating_sub for legacy disputes (their counts were zeroed at resolve).
         ctx.accounts.task.current_workers = ctx.accounts.task.current_workers.saturating_sub(1);
+        worker_agent.active_tasks = worker_agent.active_tasks.saturating_sub(1);
     }
 
     Ok(())

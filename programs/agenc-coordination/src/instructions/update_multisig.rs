@@ -56,14 +56,14 @@ pub fn handler(
     );
     validate_multisig_owners(&new_owners)?;
 
-    // Audit F-18: the new owner set MUST retain the protocol authority. Rotating it
-    // out would silently strip it of every authority-bound admin path (an
-    // unrecoverable config footgun — the initialize_governance class showed what a
-    // stranded single-key power is worth to an attacker).
-    require!(
-        new_owners.contains(&config.authority),
-        CoordinationError::MultisigInvalidSigners
-    );
+    // NOTE (adversarial-review revert): a proposed "new owner set must retain the
+    // protocol authority" require was REVERTED. On mainnet the authority is a
+    // Squads vault PDA — it can never satisfy require_multisig_threshold (owner
+    // signers must be system-owned), so the require forced a dead PDA into every
+    // future owner set and broke the operators' existing rotation construction.
+    // It also protected nothing: the authority field is immutable by design (set
+    // once at initialize_protocol), so its admin power never depended on
+    // owner-set membership in the first place.
 
     // Additional hardening: require that enough signers from the *new* set are
     // present in this update transaction. This prevents rotating to an
