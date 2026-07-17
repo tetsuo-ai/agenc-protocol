@@ -31,6 +31,24 @@ function redactUrl(raw: string | undefined | null): string {
   }
 }
 
+/**
+ * Scrub configured endpoints/secrets out of arbitrary error text before it reaches
+ * stderr. Provider/client errors (e.g. undici's "Request cannot be constructed from
+ * a URL that includes credentials: <full url>") embed the request URL verbatim —
+ * including userinfo and query-string API keys — so a raw `error.stack` print would
+ * leak them. Exact-match replacement of the configured values is deliberate: a
+ * generic URL regex would also mangle harmless diagnostic links.
+ */
+function sanitizeDiagnostic(text: string): string {
+  let out = text;
+  for (const raw of [process.env.AGENC_RPC_URL, process.env.AGENC_INDEXER_URL]) {
+    if (raw !== undefined && raw !== "") out = out.split(raw).join(redactUrl(raw));
+  }
+  const apiKey = process.env.AGENC_INDEXER_API_KEY;
+  if (apiKey !== undefined && apiKey !== "") out = out.split(apiKey).join("<redacted>");
+  return out;
+}
+
 async function main(): Promise<void> {
   const config = resolveMcpConfig(process.env);
   const context = buildToolContext(config);
@@ -67,8 +85,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
+  // Sanitized: provider/client errors can embed the full request URL (userinfo,
+  // query-string API keys) in their message/stack — never print those raw.
+  const text = error instanceof Error ? (error.stack ?? error.message) : String(error);
   process.stderr.write(
-    `[agenc-marketplace-mcp] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+    `[agenc-marketplace-mcp] fatal: ${sanitizeDiagnostic(text)}\n`,
   );
   process.exitCode = 1;
 });

@@ -161,6 +161,23 @@ function toErrorResult(toolName, error) {
 }
 
 // src/bin.ts
+function redactUrl(raw) {
+  if (raw === void 0 || raw === null || raw === "") return "none";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "<unparseable-url-redacted>";
+  }
+}
+function sanitizeDiagnostic(text) {
+  let out = text;
+  for (const raw of [process.env.AGENC_RPC_URL, process.env.AGENC_INDEXER_URL]) {
+    if (raw !== void 0 && raw !== "") out = out.split(raw).join(redactUrl(raw));
+  }
+  const apiKey = process.env.AGENC_INDEXER_API_KEY;
+  if (apiKey !== void 0 && apiKey !== "") out = out.split(apiKey).join("<redacted>");
+  return out;
+}
 async function main() {
   const config = resolveMcpConfig(process.env);
   const context = buildToolContext(config);
@@ -169,7 +186,7 @@ async function main() {
     enableMutations: config.enableMutations
   });
   process.stderr.write(
-    `[agenc-marketplace-mcp] starting (cluster=${config.cluster}, rpc=${config.rpcUrl}${config.rpcUrlExplicit ? "" : " [default]"}, indexer=${config.indexerUrl ?? "none"}, mutations=${mutationsEnabled ? "ENABLED (keyless unsigned-tx builders)" : "off (readonly)"})
+    `[agenc-marketplace-mcp] starting (cluster=${config.cluster}, rpc=${redactUrl(config.rpcUrl)}${config.rpcUrlExplicit ? "" : " [default]"}, indexer=${redactUrl(config.indexerUrl)}, mutations=${mutationsEnabled ? "ENABLED (keyless unsigned-tx builders)" : "off (readonly)"})
 `
   );
   process.stderr.write(
@@ -186,8 +203,9 @@ async function main() {
   process.stderr.write("[agenc-marketplace-mcp] connected (stdio)\n");
 }
 main().catch((error) => {
+  const text = error instanceof Error ? error.stack ?? error.message : String(error);
   process.stderr.write(
-    `[agenc-marketplace-mcp] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}
+    `[agenc-marketplace-mcp] fatal: ${sanitizeDiagnostic(text)}
 `
   );
   process.exitCode = 1;

@@ -299,8 +299,19 @@ pub fn validate_contest_accept_window(task: &Task, now: i64) -> Result<()> {
 /// `validate_contest_accept_window`, which enforces sole-live-submission on every accept.
 /// MUST be called BEFORE `note_submission_left_review`, while `live_submissions()` still
 /// counts the submission being accepted. Pure + revert-sensitive.
+///
+/// Schema-gated exactly like `note_submission_entered_review` / `note_submission_left_review`:
+/// a schema-0 (pre-batch-3) task NEVER maintains `live_submissions()` — it reads 0 forever —
+/// so requiring `== 1` here would hard-fail EVERY completing accept on a legacy
+/// manual-validation task (`required_completions == 1` makes each exclusive accept
+/// completing) and strand its escrow on the frozen canary surface. Schema-0 keeps
+/// byte-identical pre-guard behavior; the drain this guard stops needs the schema-1
+/// live-submission accounting to exist at all.
 pub fn validate_completing_accept_sole_submission(task: &Task) -> Result<()> {
     if task.is_contest_task() {
+        return Ok(());
+    }
+    if task.task_schema() < Task::TASK_SCHEMA_CONTEST_AWARE {
         return Ok(());
     }
     let will_complete = task.completions.saturating_add(1) >= task.required_completions;
@@ -527,6 +538,32 @@ mod tests {
         // Contest is covered by validate_contest_accept_window; this guard defers to it.
         let task = schema1_task(TaskType::Competitive, 1, 0, 3);
         assert!(validate_completing_accept_sole_submission(&task).is_ok());
+    }
+
+    // Revert-sensitive (canary regression): schema-0 tasks never maintain live_submissions(),
+    // so an ungated guard hard-fails EVERY completing accept on a legacy manual-validation
+    // task (required_completions == 1 makes each exclusive accept completing), stranding the
+    // escrow on the frozen 25-instruction surface. Dropping the schema gate turns this red.
+    #[test]
+    fn completing_accept_guard_noops_for_schema0() {
+        // Legacy exclusive task (required_completions == 1): every accept is completing,
+        // live_submissions() reads 0 — the guard must not fire.
+        let mut exclusive = Task {
+            required_completions: 1,
+            completions: 0,
+            ..Task::default()
+        };
+        exclusive.set_live_submissions(0);
+        assert!(validate_completing_accept_sole_submission(&exclusive).is_ok());
+        // Legacy collaborative task: completing accept with (untrackable) peers is
+        // byte-identical to the pre-guard behavior.
+        let collaborative = Task {
+            task_type: TaskType::Collaborative,
+            required_completions: 2,
+            completions: 1,
+            ..Task::default()
+        };
+        assert!(validate_completing_accept_sole_submission(&collaborative).is_ok());
     }
 
     #[test]

@@ -176,35 +176,64 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
 
     require!(worker_lost, CoordinationError::InvalidInput);
 
-    // Any provided token settlement accounts indicate an explicit token-settlement
-    // attempt (used to unlock deferred token slash reserves).
-    let token_accounts_provided = token_slash_accounts_provided(
-        ctx.accounts.escrow.is_some(),
+    let is_token_task = ctx.accounts.task.reward_mint.is_some();
+
+    // Audit M-3 (follow-up): a token task's deferred slash reserve is provable ONLY from
+    // the escrow PDA's liveness — resolve_dispute leaves it open with is_closed == false
+    // iff a reserve was deferred, and keeps the drained PDA readable otherwise. Require
+    // the escrow account for token tasks and bind it to THIS task BEFORE trusting its
+    // is_closed flag: otherwise a caller could pass a different, already-closed escrow to
+    // fake "no reserve", take the stake-slash-only path, close the worker_claim (a
+    // mandatory account here) and strand a live reserve forever — reachable in-window
+    // AND lapsed, permissionlessly. Fails closed: a token task cannot be finalized at
+    // all without its escrow account.
+    let deferred_token_reserve = if is_token_task {
+        let escrow = ctx
+            .accounts
+            .escrow
+            .as_ref()
+            .ok_or(CoordinationError::MissingTokenAccounts)?;
+        require!(
+            escrow.task == ctx.accounts.task.key() && ctx.accounts.task.escrow == escrow.key(),
+            CoordinationError::TaskNotFound
+        );
+        !escrow.is_closed
+    } else {
+        false
+    };
+
+    // An explicit token-settlement attempt is signalled by the four SETTLEMENT accounts
+    // (the escrow PDA itself is deliberately excluded: it is mandatory for token tasks
+    // now, so counting it would force every token-task call into the settlement branch
+    // and break the no-reserve stake-slash / finalize-only paths).
+    let settlement_accounts_provided = token_slash_accounts_provided(
         ctx.accounts.token_escrow_ata.is_some(),
         ctx.accounts.treasury_token_account.is_some(),
         ctx.accounts.reward_mint.is_some(),
         ctx.accounts.token_program.is_some(),
     );
-    validate_slash_application_window(dispute.slash_applied, token_accounts_provided)?;
+    validate_slash_application_window(dispute.slash_applied, settlement_accounts_provided)?;
 
-    // Only explicit token account sets require token settlement. Token tasks can
-    // have zero deferred token reserve while still requiring a stake slash.
+    // Token settlement is required whenever a deferred reserve is LIVE — not merely when
+    // the caller chose to provide token accounts (the caller-provided signal was the
+    // reserve-stranding hole). A token task whose escrow proves no reserve (is_closed)
+    // may still take the stake-slash-only path.
     let token_task_requires_settlement =
-        token_slash_settlement_required(worker_lost, token_accounts_provided);
-    let is_token_task = ctx.accounts.task.reward_mint.is_some();
+        token_slash_settlement_required(worker_lost, deferred_token_reserve);
 
     // If the slash window has elapsed, disallow lamport/reputation slashing but still allow
     // settlement of deferred token slash reserves so escrow cannot remain permanently locked.
     //
-    // Audit M-3: when the window has lapsed AND there is no token reserve to settle, the
-    // stake slash is forfeited — but this call must STILL finalize the defendant bookkeeping
-    // below (clear disputes_as_defendant, mark the dispute applied). Previously it returned
+    // Audit M-3: when the window has lapsed AND there is no token reserve to settle (a SOL
+    // task, or a token task whose escrow proves is_closed), the stake slash is forfeited —
+    // but this call must STILL finalize the defendant bookkeeping below (clear
+    // disputes_as_defendant, mark the dispute applied). Previously it returned
     // SlashWindowExpired here, so the finalizer could never run and disputes_as_defendant
     // stayed > 0 forever, permanently blocking withdraw_reputation_stake AND deregister_agent
     // (both require disputes_as_defendant == 0) — locking the worker's reputation and
     // registration stake. Fall through in that case with no slash applied.
     let finalize_only =
-        finalize_only_after_window(slash_window_open, token_task_requires_settlement, is_token_task);
+        finalize_only_after_window(slash_window_open, token_task_requires_settlement);
 
     // Calculate slash from stake snapshot and cap by current stake (fix #836).
     let apply_stake_slash = should_apply_stake_slash(dispute.slash_applied, slash_window_open);
@@ -231,7 +260,7 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         msg!("slash window expired; settling token reserve without stake/reputation slash");
     }
 
-    if token_accounts_provided || token_task_requires_settlement {
+    if settlement_accounts_provided || token_task_requires_settlement {
         require!(
             ctx.accounts.escrow.is_some()
                 && ctx.accounts.token_escrow_ata.is_some()
@@ -354,14 +383,16 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     Ok(())
 }
 
+/// True when any of the four settlement-only token accounts is provided. The escrow PDA
+/// is intentionally NOT an input: it is mandatory for token tasks, so it cannot signal an
+/// explicit settlement attempt.
 fn token_slash_accounts_provided(
-    escrow: bool,
     token_escrow: bool,
     treasury_token_account: bool,
     reward_mint: bool,
     token_program: bool,
 ) -> bool {
-    escrow || token_escrow || treasury_token_account || reward_mint || token_program
+    token_escrow || treasury_token_account || reward_mint || token_program
 }
 
 fn validate_slash_application_window(
@@ -376,8 +407,11 @@ fn validate_slash_application_window(
     Ok(())
 }
 
-fn token_slash_settlement_required(worker_lost: bool, token_accounts_provided: bool) -> bool {
-    worker_lost && token_accounts_provided
+/// Token settlement is required exactly when the worker lost AND a deferred token slash
+/// reserve is live (derived in the handler from the bound escrow PDA's liveness — never
+/// from which accounts the caller happened to provide, which was the stranding hole).
+fn token_slash_settlement_required(worker_lost: bool, deferred_token_reserve: bool) -> bool {
+    worker_lost && deferred_token_reserve
 }
 
 fn should_apply_stake_slash(slash_applied: bool, slash_window_open: bool) -> bool {
@@ -388,17 +422,10 @@ fn should_apply_stake_slash(slash_applied: bool, slash_window_open: bool) -> boo
 /// slash is forfeited but the finalizer must still clear the defendant bookkeeping
 /// (disputes_as_defendant) so the worker's stake cannot lock forever. True in exactly that
 /// "finalize-only, no slash" case; every other case runs a real slash or token settlement.
-fn finalize_only_after_window(
-    slash_window_open: bool,
-    token_task_requires_settlement: bool,
-    is_token_task: bool,
-) -> bool {
-    // The finalize-only path closes the worker_claim account. For token tasks, closing the
-    // claim before the deferred token reserve has been settled would make the reserve
-    // permanently unreachable (no other instruction can sign for the escrow PDA after the
-    // claim is gone). Token tasks must therefore settle the reserve first, even after the
-    // slash window has lapsed; only SOL tasks may use the counter-clearing finalize-only path.
-    !slash_window_open && !token_task_requires_settlement && !is_token_task
+/// Safe for token tasks now: `token_task_requires_settlement` is true whenever a reserve
+/// is live, so this path can never close the worker_claim over an unsettled reserve.
+fn finalize_only_after_window(slash_window_open: bool, token_task_requires_settlement: bool) -> bool {
+    !slash_window_open && !token_task_requires_settlement
 }
 
 #[cfg(test)]
@@ -410,24 +437,23 @@ mod tests {
     // `false` re-locks the worker's stake after the window (the original bug).
     #[test]
     fn finalize_only_after_window_matrix() {
-        // SOL task, lapsed window, nothing to settle -> finalize-only counter clear.
-        assert!(finalize_only_after_window(false, false, false));
-        // Window still open -> not finalize-only (real slash should run).
-        assert!(!finalize_only_after_window(true, false, false));
-        // Token settlement pending -> not finalize-only (settle first).
-        assert!(!finalize_only_after_window(false, true, false));
-        // Token task with omitted accounts -> never finalize-only; reserve must be settled.
-        assert!(!finalize_only_after_window(false, false, true));
+        assert!(finalize_only_after_window(false, false));
+        assert!(!finalize_only_after_window(true, false));
+        assert!(!finalize_only_after_window(false, true));
+        assert!(!finalize_only_after_window(true, true));
     }
 
+    // M-3 follow-up (revert-sensitive): settlement is forced by a LIVE deferred reserve,
+    // not by the caller providing token accounts. Keying on the caller's accounts again
+    // turns the first assert red and re-opens the permissionless reserve-stranding.
     #[test]
-    fn token_task_without_token_accounts_does_not_force_token_settlement() {
-        assert!(!token_slash_settlement_required(true, false));
-    }
-
-    #[test]
-    fn explicit_token_accounts_request_token_settlement() {
+    fn token_settlement_required_only_when_reserve_deferred() {
+        // Worker lost + reserve live -> settlement mandatory (full token account set).
         assert!(token_slash_settlement_required(true, true));
+        // Worker lost, no reserve -> stake-slash-only path stays available.
+        assert!(!token_slash_settlement_required(true, false));
+        // Worker not lost -> never settles (unreachable past the worker_lost require).
+        assert!(!token_slash_settlement_required(false, true));
     }
 
     #[test]
@@ -455,11 +481,8 @@ mod tests {
 
     #[test]
     fn any_token_settlement_account_counts_as_explicit_settlement_attempt() {
-        assert!(token_slash_accounts_provided(
-            false, true, false, false, false
-        ));
-        assert!(!token_slash_accounts_provided(
-            false, false, false, false, false
-        ));
+        assert!(token_slash_accounts_provided(true, false, false, false));
+        assert!(token_slash_accounts_provided(false, false, false, true));
+        assert!(!token_slash_accounts_provided(false, false, false, false));
     }
 }

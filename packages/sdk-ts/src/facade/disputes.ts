@@ -174,12 +174,30 @@ export async function expireDispute(
   });
 }
 
-/** Build a cancel_dispute instruction (initiator-only). protocol-config auto-derives. */
+/**
+ * Build a cancel_dispute instruction (initiator-only). protocol-config auto-derives.
+ *
+ * Remaining accounts (append to `instruction.accounts` after building):
+ * - `[0]` the dispute defendant's AgentRegistration (always required).
+ * - `[1]` the task's TaskValidationConfig — REQUIRED when the task is a schema-0
+ *   (pre-batch-3) manual-validation task (audit H-1 follow-up): the program derives
+ *   the restore status from its pending-submission counter for legacy tasks and fails
+ *   closed with TaskValidationConfigRequired when it is missing. Schema-1 and
+ *   non-manual tasks do not need it.
+ */
 export async function cancelDispute(input: CancelDisputeAsyncInput) {
   return getCancelDisputeInstructionAsync(input);
 }
 
-/** Build an apply_dispute_slash instruction. protocol-config + token program auto-derive. */
+/**
+ * Build an apply_dispute_slash instruction. protocol-config + token program auto-derive.
+ *
+ * NOTE (audit M-3 follow-up): for TOKEN-denominated tasks the TaskEscrow account is now
+ * ALWAYS required — the program proves "deferred token reserve" from its liveness and
+ * fails closed with MissingTokenAccounts when it is absent. Pass the full token
+ * settlement account set (escrow, token escrow ATA, treasury token ATA, mint, token
+ * program) whenever a deferred reserve may be live.
+ */
 export async function applyDisputeSlash(input: ApplyDisputeSlashAsyncInput) {
   return getApplyDisputeSlashInstructionAsync(input);
 }

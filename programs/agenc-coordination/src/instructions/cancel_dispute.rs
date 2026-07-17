@@ -12,8 +12,12 @@
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeCancelled;
+use crate::instructions::task_validation_helpers::is_manual_validation_task;
 use crate::instructions::validation::validate_account_owner;
-use crate::state::{AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskStatus};
+use crate::state::{
+    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, Task, TaskStatus,
+    TaskValidationConfig,
+};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
@@ -81,14 +85,49 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
     // -> PendingValidation (which also makes the task non-cancellable, closing the theft);
     // else a live worker -> InProgress; else Open. No Dispute-account field / migration.
     if task.status == TaskStatus::Disputed {
-        task.status =
-            restore_status_after_dispute_cancel(task.live_submissions(), task.current_workers);
+        // Schema-aware derivation (H-1 follow-up): a schema-0 (pre-batch-3) task NEVER
+        // maintains live_submissions() — it reads 0 forever — so for a legacy
+        // manual-validation task the "submission under review" signal comes from the V2
+        // pending-submission counter on the TaskValidationConfig instead. The config is
+        // passed as an OPTIONAL second remaining account (after the defendant), leaving
+        // the instruction's frozen IDL account list unchanged. The counter is written
+        // unconditionally by submit_task_result, so it is intact for legacy tasks, and the
+        // sentinel constraint_hash is only ever stamped together with the config PDA
+        // (configure_task_validation / *_humanless), so it always exists. FAIL CLOSED
+        // when the config is required but absent: restoring InProgress here would orphan
+        // the live submission and re-open the no-show-cancel bond theft.
+        let legacy_pending_submissions = if is_manual_validation_task(task)
+            && task.task_schema() < Task::TASK_SCHEMA_CONTEST_AWARE
+        {
+            let config_info = ctx
+                .remaining_accounts
+                .get(1)
+                .ok_or(CoordinationError::TaskValidationConfigRequired)?;
+            validate_account_owner(config_info)?;
+            let config_data = config_info.try_borrow_data()?;
+            let validation_config =
+                TaskValidationConfig::try_deserialize(&mut &config_data[..])?;
+            require!(
+                validation_config.task == task.key(),
+                CoordinationError::TaskValidationConfigRequired
+            );
+            drop(config_data);
+            Some(validation_config.pending_submission_count())
+        } else {
+            None
+        };
+        task.status = restore_status_after_dispute_cancel(
+            task.live_submissions(),
+            task.current_workers,
+            legacy_pending_submissions,
+        );
     }
 
     // Decrement defendant dispute counter (fix #544, #842)
-    // remaining_accounts must include exactly one account: dispute.defendant
+    // remaining_accounts: [0] = dispute.defendant (required); [1] = TaskValidationConfig
+    // (optional, required only for schema-0 manual-validation tasks — see H-1 above).
     require!(
-        ctx.remaining_accounts.len() == 1,
+        ctx.remaining_accounts.len() == 1 || ctx.remaining_accounts.len() == 2,
         CoordinationError::InvalidInput
     );
     let defendant_info = &ctx.remaining_accounts[0];
@@ -121,8 +160,16 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
 /// that dispute initiation leaves intact. A live submission means the task was under review
 /// (PendingValidation) and must be restored there so the delivered work is not orphaned;
 /// otherwise a live worker means it was InProgress; otherwise Open. Pure + revert-sensitive.
-fn restore_status_after_dispute_cancel(live_submissions: u8, current_workers: u8) -> TaskStatus {
-    if live_submissions > 0 {
+///
+/// `legacy_pending_submissions` carries the schema-0 signal: legacy tasks never maintain
+/// `live_submissions()`, so the handler consults the TaskValidationConfig's pending counter
+/// for them (Some) and passes None for schema-1 / non-manual tasks.
+fn restore_status_after_dispute_cancel(
+    live_submissions: u8,
+    current_workers: u8,
+    legacy_pending_submissions: Option<u16>,
+) -> TaskStatus {
+    if live_submissions > 0 || legacy_pending_submissions.unwrap_or(0) > 0 {
         TaskStatus::PendingValidation
     } else if current_workers > 0 {
         TaskStatus::InProgress
@@ -143,17 +190,45 @@ mod tests {
     fn restore_after_dispute_cancel_preserves_review_state() {
         // Live submission under review -> PendingValidation (blocks the no-show-cancel theft).
         assert!(matches!(
-            restore_status_after_dispute_cancel(1, 1),
+            restore_status_after_dispute_cancel(1, 1, None),
             TaskStatus::PendingValidation
         ));
         // No submission, worker still engaged -> InProgress (the original single-worker case).
         assert!(matches!(
-            restore_status_after_dispute_cancel(0, 1),
+            restore_status_after_dispute_cancel(0, 1, None),
             TaskStatus::InProgress
         ));
         // Nothing live -> Open.
         assert!(matches!(
-            restore_status_after_dispute_cancel(0, 0),
+            restore_status_after_dispute_cancel(0, 0, None),
+            TaskStatus::Open
+        ));
+    }
+
+    // H-1 follow-up (revert-sensitive): schema-0 manual-validation tasks derive the
+    // under-review signal from the TaskValidationConfig pending counter, not
+    // live_submissions() (which legacy tasks never maintain). Dropping the
+    // legacy_pending_submissions disjunct turns the first assert red (InProgress would
+    // orphan the legacy live submission and re-open the bond theft).
+    #[test]
+    fn restore_after_dispute_cancel_uses_legacy_pending_counter() {
+        // Legacy task with a submission under review (pending == 1) -> PendingValidation.
+        assert!(matches!(
+            restore_status_after_dispute_cancel(0, 1, Some(1)),
+            TaskStatus::PendingValidation
+        ));
+        // Pending count on a task with no live workers still wins over Open.
+        assert!(matches!(
+            restore_status_after_dispute_cancel(0, 0, Some(2)),
+            TaskStatus::PendingValidation
+        ));
+        // Legacy task with nothing pending -> the worker count decides, as before.
+        assert!(matches!(
+            restore_status_after_dispute_cancel(0, 1, Some(0)),
+            TaskStatus::InProgress
+        ));
+        assert!(matches!(
+            restore_status_after_dispute_cancel(0, 0, Some(0)),
             TaskStatus::Open
         ));
     }

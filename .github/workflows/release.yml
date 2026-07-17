@@ -165,10 +165,39 @@ jobs:
           npm run build
 
       # --- Gate: protocol ---
+      # The drift check must compare against a FRESH build, not pass vacuously
+      # (audit L-2): mirror idl-drift.yml's toolchain so `artifacts:check:built`
+      # (--require-build) has real target/idl + target/types to compare.
+      - name: Setup Rust (protocol gate)
+        if: startsWith(github.ref_name, 'protocol-v')
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache anchor CLI binary (protocol gate)
+        if: startsWith(github.ref_name, 'protocol-v')
+        id: cache-anchor-protocol
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/anchor
+          key: anchor-cli-0.32.1-${{ runner.os }}
+
+      - name: Install anchor CLI (cache miss only)
+        if: startsWith(github.ref_name, 'protocol-v') && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        run: cargo install anchor-cli@0.32.1 --locked --force
+
+      - name: Install Solana platform tools (protocol gate)
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Anchor build (protocol gate — fresh IDL/types for the drift check)
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: anchor build
+
       - name: Protocol gate (artifacts check, build, typecheck, pack smoke)
         if: startsWith(github.ref_name, 'protocol-v')
         run: |
-          npm run artifacts:check
+          npm run artifacts:check:built
           npm run build
           npm run typecheck
           npm run pack:smoke

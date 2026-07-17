@@ -971,7 +971,15 @@ pub fn handler<'info>(
     escrow.is_closed = !defer_token_escrow_close;
     task.current_workers = 0;
 
-    if !defer_token_escrow_close {
+    // Audit M-3 (follow-up): a token task's escrow PDA stays OPEN even when nothing was
+    // deferred (drained, is_closed = true). apply_dispute_slash derives "deferred token
+    // reserve" from this account's liveness (open + !is_closed), so it must be able to
+    // read it to distinguish "reserve pending" from "settled at resolve" — without that
+    // signal a caller could omit the token accounts, take the stake-slash-only path, close
+    // the worker_claim and strand a live reserve forever. The drained PDA's rent is
+    // reclaimed by close_task (the same pattern expire_dispute already uses). SOL tasks
+    // close here as before.
+    if !defer_token_escrow_close && !is_token_task {
         escrow.close(ctx.accounts.creator.to_account_info())?;
     }
 
