@@ -35,8 +35,9 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 
 `getDeployedSurface` **tolerates the pre-migration on-chain layout**: before the
 2026-06-11 migration the live mainnet `ProtocolConfig` was the OLD 349-byte layout with
-no `surface_revision` (it is now the migrated 351-byte layout stamped
-revision `1`). The SDK reads the raw account bytes and treats any account
+no `surface_revision` (it is now the migrated 351-byte layout — stamped
+revision `1` at migration time, `4` on mainnet today). The SDK reads the raw
+account bytes and treats any account
 shorter than the new 351-byte layout (or a missing account) as `surface_revision = 0` —
 so it returns `listings: false` **without throwing**, never feeding an old account through
 the new fixed-size codec.

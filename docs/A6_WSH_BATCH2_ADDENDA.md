@@ -1,5 +1,7 @@
 # WP-A6 Addenda — Three WS-H Batch-2 Design Stubs
 
+> **Historical design record (banner added 2026-07-17).** These stubs are a dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+
 > **Status:** STUBS ONLY — one page each. These are the three product-driven
 > ("WS-H") additions to the batch-2 design slate. Each stub records what the
 > item is, what it would require, and the open questions that a full spec must

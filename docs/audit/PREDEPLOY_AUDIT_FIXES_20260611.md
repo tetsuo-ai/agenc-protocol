@@ -1,5 +1,12 @@
 # Pre-mainnet audit — fixes applied & remaining human-owned items (2026-06-11)
 
+> **Status: historical record (as of 2026-06-11).** Superseded where it conflicts
+> with current state: the deploys and config inits this audit gated are done, the
+> live surface has since grown to 99 instructions (since 2026-07-09,
+> `surface_revision = 4`), and a later adversarial audit (2026-07-16/17) found
+> additional issues this pass missed — see `TODO.MD` (open hardening queue
+> F-1..F-19), `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
+
 > **Post-deploy status (2026-06-11):** the full-surface upgrade this audit gated has since
 > been executed — the full 84-instruction surface is live on mainnet
 > (`surface_revision = FULL`), the 169 live Task accounts were migrated (382B → 466B, 0

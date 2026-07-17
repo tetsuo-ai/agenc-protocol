@@ -9,6 +9,17 @@
 > choreography and record** of the Phase 9 rollout; it is no longer a pending plan.
 > The §0/§1 numbers below have been corrected to the as-executed values (169 tasks
 > migrated, ~1.95 MB binary, ~7.15 SOL permanent extension).
+>
+> **Status update (2026-07-17):** the live program is now the **99-instruction**
+> surface at `surface_revision = 4` (batch-4 goods; deploy slot 431918664).
+> Singleton configs on-chain today: `BidMarketplaceConfig`, `ModerationConfig`,
+> and `GovernanceConfig` all INITIALIZED (governance params: authority = the
+> protocol authority, min proposal stake 0.01 SOL, voting period 86400s,
+> execution delay 3600s, quorum 300 bps, approval threshold 5000 bps, 1 proposal
+> to date); `ZkConfig` still NOT initialized, so `complete_task_private` remains
+> OFF (its init is now multisig-gated per audit H-5). The open `[ ]` boxes in §6
+> are left exactly as recorded on rollout day — for anything current, see
+> [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
 
 Operational runbook that was used to upgrade the live mainnet `agenc-coordination`
 program from the restricted **25-instruction canary** surface to the full

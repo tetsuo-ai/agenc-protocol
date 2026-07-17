@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**354 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**356 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -365,3 +365,5 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6351 | 0x18cf | `GoodsSelfPurchase` | A seller cannot purchase their own good |
 | 6352 | 0x18d0 | `GoodsUnauthorizedUpdate` | Only the seller can update a goods listing |
 | 6353 | 0x18d1 | `GoodsInvalidOperatorTerms` | Operator and operator_fee_bps must be set together, and the operator may not be the seller |
+| 6354 | 0x18d2 | `ResolverConflictOfInterest` | A dispute party (the task creator or the defendant worker) cannot resolve their own dispute |
+| 6355 | 0x18d3 | `CompletingAcceptRequiresSoleLiveSubmission` | An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned) |

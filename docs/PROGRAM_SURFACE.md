@@ -2,15 +2,28 @@
 
 This file summarizes the live on-chain surface owned by `programs/agenc-coordination/`.
 
+Mainnet status (verified 2026-07-17): the program
+(`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, upgradeable; Squads v4 2-of-3
+multisig custody) has run the full **99-instruction** surface since 2026-07-09
+(slot 431918664). `ProtocolConfig` is 351B with `surface_revision = 4`
+(batch-4 goods). Singleton state: `BidMarketplaceConfig`, `ModerationConfig`,
+and `GovernanceConfig` are INITIALIZED (sane params); `ZkConfig` is NOT
+initialized, so `complete_task_private` is off and `initialize_zk_config` is
+multisig-gated (audit H-5).
+
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes
+- `src/errors.rs` - program error codes (356 variants, codes 6000–6355)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
 ## Instruction Families
+
+The union of the families below is the 99-instruction live surface; the
+batch-N subsections recall which milestone introduced instructions already
+listed under their primary family.
 
 ### Agent lifecycle
 
@@ -177,7 +190,7 @@ they were signed instruction data.
 - update launch controls (pause / task-type disable kill switch)
 - update min version
 - update state
-- migrate protocol / migrate task (Task/ProtocolConfig layout migration; multisig + version gated — the 2026-06-11 mainnet upgrade migrated 169 live tasks)
+- migrate protocol / migrate task (Task/ProtocolConfig layout migration; multisig + version gated — the 2026-06-11 mainnet upgrade migrated 169 live tasks 382B→466B)
 
 ### Governance
 
@@ -195,10 +208,10 @@ they were signed instruction data.
 
 The complete model lives in `src/state.rs`. Important state families include:
 
-- protocol config
-- zk config
+- protocol config (351B; `surface_revision` stamps the enabled surface — goods handlers enforce `surface_revision >= 4`)
+- zk config (absent on mainnet — `ZkConfig` was never initialized, so `complete_task_private` is unavailable)
 - agent accounts
-- task and claim accounts
+- task and claim accounts (Task is 466B since the 2026-06-11 migration of 169 legacy tasks from 382B; batch-3 schema-1 carves `task_schema`/`live_submissions` from `Task._reserved[0..2]`, schema-0 is legacy)
 - task validation config, attestor config, submissions, and validation votes
 - Marketplace V2 bid marketplace config, bidder market state, bid books, and bids
 - escrow accounts and completion bonds

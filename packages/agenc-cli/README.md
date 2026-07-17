@@ -48,7 +48,9 @@ Framework-detects the **current** repo (never greenfield-only):
   (pages-router fallback: `pages/agenc.tsx` + `pages/api/agenc/checkout.ts`)
   — built on the plain-SDK `hireAndActivate` orchestration
   (`@tetsuo-ai/marketplace-sdk`; marketplace-react is NOT required), plus an
-  `agenc.config.json` with the listing terms.
+  `agenc.config.json` with the listing terms. The scaffolded checkout route is
+  **fail-closed** on BOTH the App Router and Pages Router variants: it refuses
+  to run unless `AGENC_CHECKOUT_SECRET` is configured (2026-07 audit M-5).
 - **Anything else**: writes `agenc.config.json` + a `worker.mjs` loop wired to
   `@tetsuo-ai/agenc-worker`'s programmatic API (register → watch → claim →
   execute with your own coding-agent CLI → submit → report earnings).

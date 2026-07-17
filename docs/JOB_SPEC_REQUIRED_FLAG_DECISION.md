@@ -1,5 +1,7 @@
 # Job Spec Required Flag Decision
 
+> **Historical decision record (banner added 2026-07-17).** Not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+
 Issue: `agenc-protocol#32`
 
 ## Decision

@@ -29,11 +29,15 @@ After a successful `anchor build`:
 npm run artifacts:refresh
 ```
 
-To verify that committed artifacts still match the current build and package copies:
+To verify committed artifacts:
 
 ```bash
-npm run artifacts:check
+npm run artifacts:check        # existence/shape check — passes without a local build
+npm run artifacts:check:built  # full check against the current build (--require-build)
 ```
+
+CI (`.github/workflows/idl-drift.yml`) builds the program fresh, runs the built
+check, and enforces the canary-IDL gate, so `main` cannot carry a drifting IDL.
 
 ## Consumer Guidance
 

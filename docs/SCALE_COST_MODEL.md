@@ -1,5 +1,7 @@
 # Scale-to-Millions Cost Model
 
+> **Historical design/reference record (banner added 2026-07-17).** Byte sizes and the live baseline below are dated measurements, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+
 > **Status:** DESIGN / REFERENCE — the numeric grounding for "what happens at
 > 10⁴-10⁶ tasks." Sets the binding scale targets for WP-C3's indexer work
 > (§7 — per the plan, "versioned without scale targets is not done"). All byte

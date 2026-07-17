@@ -3,9 +3,13 @@
 Status: **HISTORICAL / EXECUTED 2026-06-09** (Loops 0–5 built on branch `feat/marketplace-sdk`, local only).
 Decisions locked 2026-06-09.
 
-> Current-state note: this plan is retained as implementation history. The live
-> full surface is now 84 instructions, `@tetsuo-ai/marketplace-sdk` is 0.6.0
-> locally, and the package README is the current SDK status surface.
+> Current-state note (2026-07-17): this plan is retained as implementation
+> history. The loops below are executed and the automation exists: the live full
+> surface is now 99 instructions (since 2026-07-09, `surface_revision = 4`),
+> `@tetsuo-ai/marketplace-sdk` is 0.11.0 with a Codama-generated client covering
+> the 99-instruction IDL, and the `sdk:generate` codegen + `sdk:drift` drift gate
+> described below are wired and run. The package README is the current SDK status
+> surface.
 
 > Historical execution summary: `packages/sdk-ts` = `@tetsuo-ai/marketplace-sdk` v0.1.0 (publish-ready).
 > Codama-generated `@solana/kit` client (77 instructions at that time) + facade wrapping **75/77**

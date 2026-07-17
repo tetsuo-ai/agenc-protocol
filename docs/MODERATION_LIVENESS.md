@@ -1,5 +1,7 @@
 # Moderation Liveness Escape Hatch (P1.3 / batch-2 A2)
 
+> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+
 > **Status:** DESIGN + IMPLEMENTED IN BATCH 2 (this document is written first, the
 > implementation follows its §5 recommendation exactly). Closes the last half of the
 > "key vanishes → network dead forever" failure family (umbrella TODO P1.3): a

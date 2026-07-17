@@ -4,11 +4,14 @@ This file documents the protocol-owned private-completion and zk-config surfaces
 
 ## Launch Scope
 
-- The private zk completion path is part of the protocol surface, but it is not included in the
-  first mainnet release.
-- The first mainnet release uses the public settlement and review flows only.
-- Mainnet rollout of `complete_task_private` is deferred until the H200-backed prover path and the
-  zk image-id rotation procedure are validated end to end.
+- The private zk completion path is part of the protocol surface, but it is not live on
+  mainnet: as of 2026-07-17 `ZkConfig` is **NOT initialized** there, so
+  `complete_task_private` is off (deferred until the H200-backed prover path and the
+  zk image-id rotation procedure are validated end to end).
+- Mainnet settlement uses the public and reviewed (Task Validation V2) flows only.
+- `initialize_zk_config` is now **multisig-gated** (audit H-5), matching the authority
+  model of `update_zk_image_id` — bringing the zk path up is a multisig action, not a
+  single-key one.
 
 ## DV-03E Runner Inputs
 

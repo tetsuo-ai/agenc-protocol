@@ -1,5 +1,12 @@
 # Devnet Full-Surface Deploy Runbook (P2.2)
 
+> **Dated runbook (verified 2026-06-09).** The choreography below is still the
+> supported devnet flow, but the concrete numbers it cites (`.so` bytes, 84-ix
+> IDL, test counts, rent math) are that day's measurements — recompute them per
+> the in-line instructions. As of 2026-07-09 the full surface is **99
+> instructions** (`surface_revision = 4`); current mainnet state lives in
+> `docs/MAINNET_MAINLINE.md` and remaining work in `TODO.MD`.
+
 The human runs every command tagged **[HUMAN, writes on-chain]**. Everything else is
 local/read-only and was verified runnable on 2026-06-09 with the exact pinned toolchain.
 
@@ -84,7 +91,8 @@ npm run artifacts:check                        # committed artifacts/anchor + pa
 ```
 
 Unit + litesvm gates (one line; verified green 2026-06-09 — **232** Rust unit tests,
-**158** litesvm integration tests):
+**158** litesvm integration tests; as of 2026-07-17 the counts are **408** Rust unit
+and **284** litesvm, plus 520 SDK tests):
 
 ```bash
 cargo test --lib --manifest-path programs/agenc-coordination/Cargo.toml && (cd tests-integration && node --test)
@@ -94,7 +102,7 @@ Sanity-check the artifact you are about to ship:
 
 ```bash
 stat -c %s programs/agenc-coordination/target/deploy/agenc_coordination.so   # 2,811,288 bytes as of 2026-06-09
-node -p "JSON.parse(require('fs').readFileSync('target/idl/agenc_coordination.json','utf8')).instructions.length"  # 84 (full module; canary build = 25)
+node -p "JSON.parse(require('fs').readFileSync('target/idl/agenc_coordination.json','utf8')).instructions.length"  # 84 as of 2026-06-09 (99 since batch-4, 2026-07-09; canary build = 25)
 ```
 
 Do **NOT** run `npm run canary:build` between building and deploying — it overwrites the
@@ -302,9 +310,9 @@ moderation — that is the intended sandbox shape.
 # 1. Program: fresh slot, Data Length >= 2,811,288
 solana program show "$PROGRAM_ID" --url devnet
 
-# 2. IDL: fetchable, 84 instructions (full module; canary build = 25)
+# 2. IDL: fetchable, instruction count matches the build (84 at the 2026-06-09 first run; 99 since batch-4, 2026-07-09; canary build = 25)
 anchor idl fetch "$PROGRAM_ID" --provider.cluster devnet -o /tmp/devnet-idl.json
-node -p "JSON.parse(require('fs').readFileSync('/tmp/devnet-idl.json','utf8')).instructions.length"   # expect 84
+node -p "JSON.parse(require('fs').readFileSync('/tmp/devnet-idl.json','utf8')).instructions.length"   # expect the count from step 1 (99 as of 2026-07-09)
 
 # 3. SDK one-liner against devnet — the step-4a snippet; expect ProtocolConfig + ModerationConfig both present
 ```

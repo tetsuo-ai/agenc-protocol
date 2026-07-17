@@ -5,6 +5,23 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-07-17 — 2026-07 adversarial-audit fixes land (`fix/audit-findings-2026-07-16`)
+
+- the 2026-07-16/17 adversarial audit (three passes) is closed out on branch
+  `fix/audit-findings-2026-07-16` (HEAD `d7f9d40`): all blocker fixes landed
+  and every gate is green — 408 Rust unit tests, 284 litesvm integration
+  tests, 520 SDK tests
+- **pass 1 — 12 fixes:** C-1, H-1, H-2, H-3, H-5, M-1, M-2, M-3, M-5, L-2,
+  L-3, L-4
+- **pass 2 — 4 blocker fixes:** the M-2 schema gate, the H-1 legacy-record
+  restore, the M-3 reserve-liveness check, and the L-4
+  sanitize + dist + release wiring
+- SDK regenerated from the refreshed program artifacts (`packages/sdk-ts`
+  generated client committed alongside)
+- remaining full-surface / SPL hardening is tracked in `TODO.MD` (F-1..F-19;
+  F-6 closed by on-chain verification 2026-07-17) — no canary-reachable
+  finding remains open
+
 ## 2026-07-09 — Batch-4 goods mainnet surface (99 instructions, `surface_revision = 4`)
 
 - live mainnet binary is the full **99-instruction** surface; last deployed slot

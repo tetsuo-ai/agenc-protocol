@@ -1,5 +1,7 @@
 # Marketplace V2 Devnet Readiness Matrix
 
+> **Historical readiness record (banner added 2026-07-17).** The matrix status below is dated (2026-03-27); the release-1 gate it tracks has since shipped — mainnet has run the full 99-instruction surface since 2026-07-09. See `./MAINNET_MAINLINE.md` for current state and `../TODO.MD` for remaining work.
+
 Status: In progress for the full matrix (`17` pass, `0` fail, `1` remaining)
 
 Issue: [agenc-protocol#17](https://github.com/tetsuo-ai/agenc-protocol/issues/17)

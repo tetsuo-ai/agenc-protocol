@@ -1,5 +1,15 @@
 # WP-A1 — Roster-honored moderation gates: verification & deploy readiness
 
+> **Status: historical record (as of 2026-07-02). Execution complete — retained
+> as record.** A1 has since been deployed and surpassed: mainnet now runs the
+> full 99-instruction surface (live since 2026-07-09, slot 431918664,
+> `surface_revision = 4`), the upgrade authority moved to a Squads v4 2-of-3
+> multisig on 2026-07-03 (the "single-key / FD4 not set up" precondition below is
+> stale), and the OtterSec verified-build badge is live. Where the body says
+> "NOT DEPLOYED", that is the doc-date state. See `docs/MAINNET_MAINLINE.md`
+> (deploy record), `TODO.MD` (open hardening queue, 2026-07 audit), and
+> `README.md`.
+
 **Status: BUILT · REVIEWED · TESTED · MERGED to `main` · NOT DEPLOYED.**
 This document is the permanent record so the work is never redone. It captures
 exactly what was verified, that everything passed, the artifact hash, and the

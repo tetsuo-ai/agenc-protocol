@@ -20,9 +20,12 @@ matrix below and `getDeployedSurface` do.
 
 ### 1.1 Current compatible set (as of 2026-07-09)
 
-The live program wire is the **P1.2 hardened open roster** build (deployed
-2026-07-03, slot 430491216, via the Squads 2-of-3): moderation-consumption gates
-at **9/14/13 accounts** with a required trailing `moderator: Pubkey` argument.
+The live program wire is the **full 99-instruction surface**
+(`surface_revision = 4`, batch-4 goods; last deployed 2026-07-09, slot
+431918664, via the Squads 2-of-3), with **356 program error variants
+(6000–6355)**. Its gate shapes descend from the **P1.2 hardened open roster**
+build (deployed 2026-07-03, slot 430491216): moderation-consumption gates at
+**9/14/13 accounts** with a required trailing `moderator: Pubkey` argument.
 The **batch-2 upgrade** (2026-07-05, `surface_revision = 2`) was **additive** —
 **90 → 94 instructions** (store identity lifecycle + `moderation_heartbeat`) and
 the dispute referrer legs — with **no flag-day wire change**: every P1.2-wire
@@ -45,11 +48,14 @@ keeps it from drifting.
 
 | Package | Compatible range | Notes |
 |---|---|---|
+| `@tetsuo-ai/protocol` | **0.3.x** (latest 0.3.0) | generated IDL + types for the 99-ix surface (356 error variants); 0.3.0 shipped with batch-4 |
 | `@tetsuo-ai/marketplace-sdk` | **0.8.x – 0.11.x** (latest 0.11.0) | 0.8.0 = the P1.2 wire cutover; 0.9.0 adds the additive batch-2 store surface; 0.10.0 adds the batch-3 contest facade; 0.10.1 decoder hardening; **0.11.0 adds the batch-4 goods facade + the revision-gated `goods` capability** |
 | `@tetsuo-ai/marketplace-react` | **0.4.x** (latest 0.4.1) | |
-| `@tetsuo-ai/marketplace-tools` | **0.4.x** | |
-| `@tetsuo-ai/marketplace-mcp` | **0.4.x** | |
-| `@tetsuo-ai/marketplace-moderation` | **0.1.x** | first published alongside the roster work |
+| `@tetsuo-ai/marketplace-tools` | **0.4.x** (latest 0.4.0) | |
+| `@tetsuo-ai/marketplace-mcp` | **0.4.x** (latest 0.4.0) | |
+| `@tetsuo-ai/marketplace-moderation` | **0.1.x** (latest 0.1.0) | first published alongside the roster work |
+| `@tetsuo-ai/agenc-cli` | **0.2.x** (latest 0.2.0) | CLI against the live 99-ix surface |
+| `@tetsuo-ai/agenc-worker` | **0.1.x** (latest 0.1.1) | worker daemon against the live 99-ix surface |
 | `@tetsuo-ai/store-core` | **0.5.x – 0.6.x** (latest 0.6.0) | 0.5.x speaks the same wire; 0.6.0 is additive |
 | `create-agenc-store` | **0.5.x – 0.6.x** (latest 0.6.0) | scaffolds the template pins below |
 

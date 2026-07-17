@@ -1,5 +1,7 @@
 # PLAN_2.md — The Embeddable Surface Layer: hooks → components → widget → store templates
 
+> **Historical planning record (banner added 2026-07-17).** This is a dated execution spec, not current state: mainnet has run the full 99-instruction surface (`surface_revision = 4`) since 2026-07-09 — see `docs/MAINNET_MAINLINE.md` for live state and `TODO.MD` for remaining work. Dated body claims (including the 2026-06-11 update below) are kept as written.
+
 **Status:** authored 2026-06-09. Detailed execution spec for the embeddable UI surface —
 the layer that turns the SDK + program into things third parties actually deploy.
 **Update (2026-06-11):** the "until Phase 9" mainnet gates below are now SATISFIED — the

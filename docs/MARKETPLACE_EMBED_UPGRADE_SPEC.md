@@ -1,5 +1,14 @@
 # Marketplace Program Plan — v3 (autoplan-patched)
 
+> **Status: historical record (plan v3; execution complete — retained as
+> record).** The batches planned here have shipped and been surpassed: mainnet
+> runs the full 99-instruction surface (live since 2026-07-09, slot 431918664,
+> `surface_revision = 4` / batch-4 goods); the 169-task migration executed
+> 2026-06-11; upgrade authority is a Squads v4 2-of-3 multisig (since
+> 2026-07-03); `ZkConfig` remains NOT initialized (ZK deferred). "84-ix" / "149"
+> in the body are doc-date state. See `docs/MAINNET_MAINLINE.md` (deploy record),
+> `TODO.MD` (open hardening queue, 2026-07 audit), and `README.md`.
+
 **Complete plan to upgrade `agenc-coordination` for the embeddable marketplace.**
 Validated against HEAD `9558c7d`, program `HJsZ53…` (live: 169 Tasks as of the
 2026-06-11 full-surface upgrade — 149 when this was validated; the full 84-ix surface is

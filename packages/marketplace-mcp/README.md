@@ -29,6 +29,10 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`.
   it — the caller signs it with **their own** signer behind **their own** policy gate and
   broadcasts it. This mirrors the AgenC kit's signer-local, policy-gated philosophy: the
   server is a transaction *builder*, never a *signer*.
+- **Endpoint URLs are redacted in diagnostics.** RPC and indexer URLs are redacted to
+  their origin in **all** diagnostic output — boot/config logs, the fatal error handler,
+  and tool-error results — so a URL carrying credentials in its path or query can never
+  leak into logs or a model's context (2026-07 audit L-4).
 
 ## The write path (and the hosted connector)
 

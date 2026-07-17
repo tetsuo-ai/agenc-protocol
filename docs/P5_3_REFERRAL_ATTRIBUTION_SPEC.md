@@ -1,5 +1,7 @@
 # P5.3 — Verifiable Referral Attribution
 
+> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+
 > **Status:** DESIGN — draft for founder review. Nothing here is implemented or
 > deployed. Companion to the ratified `P5_2_STORE_IDENTITY_SPEC.md` (whose §7.6
 > pre-designed the attachment point this doc uses) and to the ratified

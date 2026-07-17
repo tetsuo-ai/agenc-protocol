@@ -1,5 +1,13 @@
 # Batch 1–4 — Audit Prep (embeddable marketplace)
 
+> **Status: historical record (batch 1–4 audit prep; the deploys it prepped are
+> done).** Superseded where it conflicts with current state: the live surface is
+> now 99 instructions (since 2026-07-09, `surface_revision = 4`), the migrations
+> below were executed 2026-06-11, and every "0 open findings" statement is
+> historical (batches 1–3 closed at that time) — the 2026-07-16/17 adversarial
+> audit found new issues these audits missed. See `TODO.MD` (open hardening queue
+> F-1..F-19), `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
+
 > **Filename note.** This file is retained at the historical path
 > `docs/BATCH_1_3_AUDIT_PREP.md` (it is cross-linked from `README.md`, `CLAUDE.md`,
 > and `PLAN.md`) but its scope is now **Batch 1 through Batch 4 (Phase 6)**. The

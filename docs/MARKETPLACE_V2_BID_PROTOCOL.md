@@ -1,5 +1,7 @@
 # RFC: Marketplace V2 Bid Protocol
 
+> **Historical design record (banner added 2026-07-17).** This accepted RFC is a dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+
 Status: Accepted
 
 Issue: [agenc-protocol#5](https://github.com/tetsuo-ai/agenc-protocol/issues/5)

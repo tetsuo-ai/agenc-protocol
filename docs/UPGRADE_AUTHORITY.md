@@ -34,7 +34,7 @@ program and the precise runbook to migrate it from a single key to a **Squads
 
 ---
 
-## 1. State (the table below is the PRE-MIGRATION state — see the 2026-06-11 status note above)
+## 1. State (the table below is the PRE-MIGRATION state — superseded by the 2026-07-03 Squads migration in the banner above)
 
 The program is deployed with the **BPF Upgradeable Loader**, so it has a
 mutable upgrade authority that can push new bytecode.
@@ -43,7 +43,7 @@ mutable upgrade authority that can push new bytecode.
 Program ID:        HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
 ProgramData:       E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw
 Owner (loader):    BPFLoaderUpgradeab1e11111111111111111111111
-Upgrade Authority: HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh   ← was SINGLE KEY pre-2026-06-11; now a 2-of-3 multisig (Hcecp…/BXDan…/4QcKB…)
+Upgrade Authority: HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh   ← was SINGLE KEY until 2026-07-03; now the Squads v4 2-of-3 vault `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf` (see banner)
 ```
 
 Verify at any time:
@@ -51,7 +51,7 @@ Verify at any time:
 ```bash
 solana program show HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK \
   --url https://api.mainnet-beta.solana.com
-# read the "Authority:" line — as of 2026-06-11 it is the 2-of-3 multisig vault,
+# read the "Authority:" line — as of 2026-07-03 it is the Squads v4 2-of-3 vault,
 # not the single HcecpKX…GLqh key it was before the migration in §4.
 ```
 

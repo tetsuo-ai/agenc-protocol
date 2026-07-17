@@ -1,5 +1,14 @@
 # Auditor Handoff Pack — `agenc-coordination`
 
+> **Status: historical handoff record (assembled 2026-06; partially updated
+> through the 2026-07-09 full-surface deploy).** Superseded where it conflicts
+> with current state: test counts, upgrade-authority custody (Squads v4 2-of-3
+> multisig since 2026-07-03), and verified-build status (OtterSec badge now live)
+> have moved on, and the "0 open findings" summary in §4 is historical — the
+> 2026-07-16/17 adversarial audit found additional issues the earlier audits
+> missed. See `TODO.MD` (open hardening queue F-1..F-19, 2026-07 audit),
+> `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
+
 Single entry point for the external security auditor of the AgenC coordination
 program. The program **custodies escrow, completion bonds, and reputation stakes**, so
 this is a money-safety audit first. Read this file top-to-bottom; every section links
@@ -195,8 +204,10 @@ treat §2 here as its money-path elaboration.
 ## 4. Prior internal adversarial-audit results
 
 All findings below are from internal multi-lens adversarial reviews (each ran a
-multi-dimension lens, then an independent verifier). **Every confirmed finding is fixed;
-0 are open.** This is provided so the external auditor can see what was already probed —
+multi-dimension lens, then an independent verifier). **Every confirmed finding from
+those reviews was fixed; 0 were open at that time** — a historical statement: the
+2026-07 audit later found new issues the earlier audits missed (see the banner and
+`TODO.MD`). This is provided so the external auditor can see what was already probed —
 it is NOT a substitute for independent confirmation.
 
 | Review | Surface | Result |

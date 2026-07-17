@@ -43,18 +43,23 @@ window or before the deploy is announced publicly.
   contest rails on schema-1 Competitive + CreatorReview)
 - Goods market: **LIVE** and revision-gated (`surface_revision >= 4`;
   `create_goods_listing` / `purchase_good` / `update_goods_listing`)
-- Private completion: **OFF / deferred** — `ZkConfig` not yet initialized, so
+- Private completion: **OFF / deferred** — `ZkConfig` not initialized, so
   `complete_task_private` is unavailable until `initialize_zk_config` runs with
-  the audited agenc-prover image id
+  the audited agenc-prover image id (its init is multisig-gated per audit H-5)
 - Upgrade authority: **Squads v4 2-of-3 multisig vault**
   `Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf` (since 2026-07-03; distinct from
   the on-chain `ProtocolConfig` config multisig that gates fees/launch
   controls/the BLOCK floor) — see [`UPGRADE_AUTHORITY.md`](./UPGRADE_AUTHORITY.md).
   Verify live with `solana program show HJsZ…` (`Authority:` = the vault)
-- Moderation: **permissionless attestor roster** — any wallet may self-register
+- Moderation: **permissionless attestor roster** (`ModerationConfig`
+  initialized) — any wallet may self-register
   via `register_moderation_attestor` (0.25 SOL refundable bond) and its CLEAN
   records satisfy the publish/hire gates; the hosted attestor at
   `attest.agenc.ag` is one roster member, not a privileged one
+- Governance: **LIVE** (`GovernanceConfig` initialized — authority = the
+  protocol authority, min proposal stake 0.01 SOL, voting period 86400s,
+  execution delay 3600s, quorum 300 bps, approval threshold 5000 bps; 1
+  proposal to date)
 - Launch controls are configured on-chain and may disable task types or flows
   without changing the source branch identity
 
@@ -111,8 +116,9 @@ Before or during any future mainnet upgrade:
    `anchor idl upgrade` thereafter) so the deployed IDL is fetchable truth. Mainnet
    now runs the **full surface**, so publish the full `target/idl/agenc_coordination.json`
    to the mainnet cluster (the 25-instruction `agenc_coordination.canary.json` is no
-   longer the mainnet IDL — it remains the IDL for any cluster still running the
-   `--features mainnet-canary` build). See [./VERSIONS.md](./VERSIONS.md) for the full
+   longer the mainnet IDL — it remains the IDL of the restricted
+   rehearsal/fallback `--features mainnet-canary` build kept frozen in CI via
+   `scripts/canary-idl-baseline.json`). See [./VERSIONS.md](./VERSIONS.md) for the full
    surface-versioning release runbook (config/task migration choreography +
    `surface_revision` stamping).
 

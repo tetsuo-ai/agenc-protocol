@@ -20,7 +20,6 @@ See `Anchor.toml`, `programs/agenc-coordination/Cargo.toml`, and `.github/workfl
 npm ci
 cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
 cargo fmt --manifest-path zkvm/guest/Cargo.toml --all --check
-cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml bid_marketplace
 npm run artifacts:check
 npm run build
 npm run typecheck
@@ -28,7 +27,12 @@ npm run pack:smoke
 npm run check:idl-reference
 ```
 
-Those are the same gates enforced by CI for Marketplace V2 work.
+Those are the same gates enforced by CI for Marketplace V2 work. CI additionally
+builds the program fresh and runs `npm run artifacts:check:built`
+(`--require-build`) plus the canary-IDL gate (`.github/workflows/idl-drift.yml`).
+As of 2026-07-17 the coverage behind these gates is 408 Rust unit tests
+(program crate), 284 litesvm integration tests (`tests-integration/`), and 520
+SDK tests.
 
 `check:idl-reference` regenerates the IDL-derived reference docs
 (`docs/reference/INSTRUCTIONS.md`, `docs/reference/ERRORS.md`) and fails when the
@@ -48,6 +52,12 @@ The matrix defines:
 - release-readiness exit criteria
 
 ## Mainnet Release Scope
+
+> Historical note (2026-07-17): the first mainnet release has shipped — the full
+> 99-instruction surface (`surface_revision = 4`) is live since 2026-07-09.
+> `complete_task_private` remains deferred (`ZkConfig` is not initialized on
+> mainnet; see [./ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md)). The scope bullets
+> below are the original release-1 definition, kept for reference.
 
 - The first mainnet release includes the public settlement paths and Task Validation V2 review
   flows.
@@ -144,7 +154,8 @@ That build profile keeps shared-devnet behavior unchanged while producing a sepa
 ## Artifact Commands
 
 - regenerate committed artifacts: `npm run artifacts:refresh`
-- verify committed artifacts: `npm run artifacts:check`
+- verify committed artifacts (no build required): `npm run artifacts:check`
+- verify committed artifacts against a fresh build: `npm run artifacts:check:built`
 
 ## Optional Local Program Work
 
@@ -156,10 +167,7 @@ Use `anchor build` before refreshing artifacts when the on-chain program or IDL 
 
 ## Fuzz Harness
 
-The program also ships a property/invariant harness under `programs/agenc-coordination/fuzz/`. Treat it as the place for invariant-oriented testing and threat-model assertions when touching state transitions or safety properties.
-
-For Marketplace V2 bid flow changes, run:
-
-```bash
-cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml bid_marketplace
-```
+`programs/agenc-coordination/fuzz/` is a **stale** model-based proptest harness: it
+still models the retired `vote_dispute` path and predates `RejectFrozen`. It is not
+active coverage and not a CI gate — do not cite it as such. The live coverage is the
+Rust unit + litesvm + SDK suites counted above.

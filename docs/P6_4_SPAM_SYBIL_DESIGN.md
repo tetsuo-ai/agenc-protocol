@@ -1,5 +1,7 @@
 # P6.4 — Spam / Sybil Defense for the Open-Roster World
 
+> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+
 > **Status:** DESIGN ONLY. No code. Successor workstream to P1.2 (the
 > Hardened Open Roster), which shipped on mainnet 2026-07-03 and explicitly
 > handed this problem forward (`P1_2_OPEN_ROSTER_SPEC.md` §8: *"The bond is

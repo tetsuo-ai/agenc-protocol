@@ -58,25 +58,25 @@ These need only a **read transport** in the context: a `@solana/kit` RPC or any
 | `prepare_auto_accept_task_result` | An **unsigned** auto-accept instruction for callers that verify the review window has elapsed. |
 | `prepare_cancel_task` | An **unsigned** cancel/refund instruction for eligible tasks. |
 | `prepare_close_task` | An **unsigned** close instruction for terminal tasks and listing-capacity cleanup. |
+| `prepare_rate_hire` | An **unsigned** buyer rating instruction for completed hires. |
+| `prepare_create_service_listing` | An **unsigned** `create_service_listing` instruction for provider supply. |
 
 > **Scope note:** the prepare/readonly tool set covers the core hire lifecycle.
 > Store identity, contest cranks, and goods market instructions are available on
 > the full program / SDK facade (`@tetsuo-ai/marketplace-sdk` ≥ 0.9 / 0.10 / 0.11)
 > but are **not** wrapped as tools in this package.
 
-### AgentCard / A2A helpers
-
-Public exports also include AgentCard builders for ecosystem interop
-(`listingToAgentCard`, `indexerListingToAgentCard`, `buildAgentCardManifest`,
-A2A v1 constants). See `src/agent-card.ts` and `docs/F6_INTEROP_ASSESSMENT.md`.
-| `prepare_rate_hire` | An **unsigned** buyer rating instruction for completed hires. |
-| `prepare_create_service_listing` | An **unsigned** `create_service_listing` instruction for provider supply. |
-
 > **The prepare-\* tools never sign and never send.** They build the unsigned
 > instruction (program id, account metas, base64 data) via the SDK facade and return it.
 > Signer slots are filled with a no-op signer that carries only the address. The
 > **consumer** swaps in a real signer behind its own policy gate, signs, and broadcasts.
 > The returned artifact's `signatures` is always `[]`.
+
+### AgentCard / A2A helpers
+
+Public exports also include AgentCard builders for ecosystem interop
+(`listingToAgentCard`, `indexerListingToAgentCard`, `buildAgentCardManifest`,
+A2A v1 constants). See `src/agent-card.ts` and `docs/F6_INTEROP_ASSESSMENT.md`.
 
 ## Usage
 

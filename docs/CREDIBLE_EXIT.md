@@ -102,29 +102,42 @@ local attestor (`env.attestorUrl` is deliberately ignored). It re-runs cleanly
 1. **Register OWN moderation attestor (P6.8).** The protocol authority adds a
    fresh operator-held key to the on-chain `["moderation_attestor", attestor]`
    roster via `assign_moderation_attestor`. No hosted attestor service exists in
-   this flow.
+   this flow. (Since P1.2 any wallet can alternatively **self-register** via
+   `register_moderation_attestor` with a 0.25 SOL refundable bond; the proof
+   uses the authority-assigned path to exercise the registry mechanism.)
 2. **Provider registers + lists** a service; the listing spec is the SHA-256 of a
    **local file** (`file://` URI), not a hosted URL.
 3. **Discover the listing via gPA** — `listActiveListings(rpc, …)` issues
    `getProgramAccounts` straight against the embedder's RPC and decodes
    client-side. **No hosted indexer.**
 4. **Attest the listing CLEAN** with the operator's **own** `moderation_authority`
-   key (`record_listing_moderation`). Separately, the P6.8 **roster attestor**
-   also writes a record — proving the registry mechanism works locally — and we
-   note the **consumption-gate boundary** (§3).
+   key (`record_listing_moderation`) — since P1.2 the v2 record PDA is
+   **moderator-keyed**, and the hire in step 5 names this key in its explicit
+   `moderator` argument. Separately, the P6.8 **roster attestor** also writes a
+   record — proving the registry mechanism works locally. Since WP-A1/P1.2 a
+   roster record is **consumable too** (a hirer naming the attestor as
+   `moderator` and supplying its roster entry passes the gate); this proof
+   takes the global-authority path (§3).
 5. **Buyer registers + hires** from the listing — escrow + task + hire record
-   minted on-chain in one instruction.
+   minted on-chain in one instruction, naming the operator's
+   `moderation_authority` as the consumed `moderator` (P1.2 explicit
+   `moderator` threading).
 6. **Attest the task CLEAN** (own key) + **pin the job spec** to another local
-   `file://` artifact. Claim is gated on both.
+   `file://` artifact. Claim is gated on both; the pin again names the
+   operator's key as `moderator`.
 7. **Provider claims + completes** — `complete_task` pays the worker and routes
    the exact protocol fee to the on-chain treasury. We measure the **real balance
    deltas** as proof the worker was actually paid.
 
-### 2.3 Captured proof (real localnet run, 2026-06-11)
+### 2.3 Captured proof (illustrative transcript; executed run 2026-06-11)
 
-Executed transcript, trimmed; **throwaway local addresses only, never key
-material**. Re-running produces fresh addresses (the property, not the addresses,
-is the artifact).
+**Illustrative transcript, trimmed** — refreshed 2026-07-17 to the post-P1.2
+script output (explicit `moderator` threading, moderator-keyed v2 record PDAs,
+the P1.2 gate line). The script generates fresh throwaway keys every run, so
+the addresses and signatures below are per-run throwaway values (**never key
+material**), not a verbatim capture of one execution; the real on-chain
+signatures of the executed 2026-06-11 run are preserved in the table at the
+end of this section. The property, not the addresses, is the artifact.
 
 ```console
 $ node scripts/credible-exit.mjs --json
@@ -138,23 +151,30 @@ AgenC credible-exit walkthrough (P8.6): hire -> settle, ZERO hosted deps
     hosted storage    : NOT USED (artifacts are local file:// hashes)
 
 ProtocolConfig: minAgentStake=1000000 treasury=DeM9csUe49fvKLPqx2hGKmfzTXAKXnKHsWMg12jugjb feeBps=250
-ModerationConfig: moderationAuthority=7HiVp4xTm3XxuN1gGWcKQn39vwyS2kUcWAjw4MwpS1v5 enabled=true
+ModerationConfig: authority=5uR1zoC3jKX7sCqz2BifKTQexQvSifBB2CL9LqLPrcMs moderationAuthority=7HiVp4xTm3XxuN1gGWcKQn39vwyS2kUcWAjw4MwpS1v5 enabled=true
 
 STEP 1  register OWN moderation attestor (P6.8 registry) — no hosted attestor
    assigned attestor EgiS6hR9sFhXKiz435opi9aVYQKsq1sksHJuzoDSpPwF
-   roster PDA 8V9WJjfYWtrJgvoKqUW5jau25HASN5DdyR7Ghr58tNjy
+   roster PDA 8V9WJjfYWtrJgvoKqUW5jau25HASN5DdyR7Ghr58tNjy  sig 3RXjDbzD…
+   moderation_authority (consumption-gate key, operator-held): 7HiVp4xTm3XxuN1gGWcKQn39vwyS2kUcWAjw4MwpS1v5
 STEP 3  discover the listing via SDK gPA reads (NO hosted indexer)
-   listActiveListings(rpc) -> 1 Active listing(s); ours present  (price=1000000 state=0)
+   listActiveListings(rpc) -> 1 Active listing(s); ours present
+   decoded price=1000000 state=0 (gPA, not hosted)
 STEP 4  attest listing CLEAN with OWN moderation_authority (NO hosted attestor)
-   ListingModeration Dh6pGtd9QgAfHFCWZpnyvhMbx5Gsz3rmww4nRRkJbMb9 status=CLEAN
-   [P6.8] roster attestor WROTE a record; consumption gates honor only moderation_authority — boundary noted
+   recordListingModeration signed by OWN moderation_authority
+   ListingModeration Dh6pGtd9QgAfHFCWZpnyvhMbx5Gsz3rmww4nRRkJbMb9 status=CLEAN  sig 4paYt4JA…
+   [P6.8] roster attestor WROTE a record (sig 9xKp2mQvR4wZ…)
+   [P1.2] gates consume whichever moderator the caller names; this proof names the moderation_authority
 STEP 5  buyer registers + hires from listing (escrow funded on-chain)
    hired -> task HXm4eW1YUQNgzGkRNPJ1HNVFQBuAg3ZUxbdYXTpRW2hA
+   hire sig 4ud2y2iB…
 STEP 6  attest task CLEAN (OWN moderation_authority) + pin job-spec (LOCAL file)
-   TaskModeration 4Aiyo6ZfEgehw2oSupBwkjv7c2cwjoGMcnEvtci1zVGD status=CLEAN
-   job spec pinned file:///.../job-spec.txt
-STEP 6b verify task is claimable via gPA (listOpenTasks ∩ pinned specs)  ... OK
+   TaskModeration 4Aiyo6ZfEgehw2oSupBwkjv7c2cwjoGMcnEvtci1zVGD status=CLEAN  sig 2j3pcy8A…
+   job spec pinned file:///.../job-spec.txt  sig 3ZJaUPoA…
+STEP 6b verify task is claimable via gPA (listOpenTasks ∩ pinned specs)
+   listOpenTasks(rpc) sees the task AND listPinnedJobSpecTasks(rpc) confirms a pinned spec
 STEP 7  provider claims + completes — worker paid on-chain (escrow settled)
+   provider claimed (task InProgress)
    provider completed  sig 4kp3oM5d7BDtNnrhsLTnky6XuoA5yGZuHPWjiTZ9Q1p1SmfXPBFU1grZbFPGKKYEyKN5PHizKKHZrGcGP8ejAoxp
 ------------------------------------------------------------------------
 RESULT: task HXm4eW1YUQNgzGkRNPJ1HNVFQBuAg3ZUxbdYXTpRW2hA
@@ -164,6 +184,13 @@ RESULT: task HXm4eW1YUQNgzGkRNPJ1HNVFQBuAg3ZUxbdYXTpRW2hA
   provider net delta   = 965000 lamports (payout minus its own tx fees)
   worker paid          = YES
 ------------------------------------------------------------------------
+ZERO tetsuo-hosted dependencies used:
+  RPC      : own (http://127.0.0.1:8899)
+  reads    : SDK gPA (listActiveListings / listOpenTasks / listPinnedJobSpecTasks)
+  moderation: own moderation_authority + own P6.8 roster attestor; NO HTTP attestor service
+  artifacts: local file:// (self-chosen storage)
+  settlement: on-chain escrow -> claim -> complete
+
 credible-exit: PROVEN.
 ```
 
@@ -194,49 +221,56 @@ not these specific bytes.
 
 ## 3. The moderation boundary (read this — it is the subtle part)
 
-> **RESOLVED (2026-07-02/03).** The boundary described in this section no longer
-> exists on mainnet. **WP-A1** (deployed 2026-07-02) made the three consumption
-> gates (`set_task_job_spec`, `hire_from_listing`, `hire_from_listing_humanless`)
-> accept attestations authored by a registered, non-revoked `ModerationAttestor`
-> roster entry — not only the global `moderation_authority`. **P1.2** (deployed
-> 2026-07-03) then made roster membership itself permissionless:
-> `register_moderation_attestor` self-registers any wallet with a 0.25 SOL
-> refundable bond (exit via `request_attestor_exit` → 7-day cooldown →
-> `finalize_attestor_exit`, full refund). An embedder needs **no** tetsuo key
-> and **no** authority approval to moderate its own supply. The text below is
-> kept as the honest record of the boundary at the time of the executed proof.
-
-The proof keeps moderation honest about a real protocol boundary, rather than
-papering over it.
+> **RESOLVED (WP-A1 2026-07-02 + P1.2 2026-07-03).** The boundary this section
+> was written to document no longer exists. **WP-A1** made the three
+> consumption gates (`set_task_job_spec`, `hire_from_listing`,
+> `hire_from_listing_humanless`) accept attestations authored by a registered,
+> non-revoked `ModerationAttestor` roster entry — not only the global
+> `moderation_authority`. **P1.2** then made roster membership itself
+> permissionless: `register_moderation_attestor` self-registers any wallet with
+> a 0.25 SOL refundable bond (exit via `request_attestor_exit` → 7-day
+> cooldown → `finalize_attestor_exit`, full refund). An embedder needs **no**
+> tetsuo key and **no** authority approval to moderate its own supply. The
+> pre-P1.2 boundary is kept at the bottom of this section as the honest record
+> of what the executed proof navigated.
 
 **Two different authorizations are involved:**
 
 - **Writing** an attestation (`record_listing_moderation` /
   `record_task_moderation`) is authorized for **either** the single global
-  `moderation_authority` **or** a **P6.8 roster attestor** (a key the protocol
-  authority added via `assign_moderation_attestor`). The proof exercises both:
-  the roster attestor genuinely writes a record.
-- **Consuming** an attestation at hire/claim time
-  (`hire_from_listing` and `set_task_job_spec`) currently requires
-  `moderation.moderator == moderation_config.moderation_authority`
-  (see `programs/agenc-coordination/src/instructions/hire_from_listing.rs` and
-  `set_task_job_spec.rs`). **Only an attestation written by the single global
-  `moderation_authority` key unlocks a hire/claim.** A delegated roster
-  attestor's record does **not** yet satisfy the consumption gate.
+  `moderation_authority` **or** a **roster attestor** (the P6.8 registry —
+  authority-assigned via `assign_moderation_attestor`, or self-registered via
+  `register_moderation_attestor` since P1.2). The proof exercises both write
+  paths: the roster attestor genuinely writes a record.
+- **Consuming** an attestation at hire/claim time (`hire_from_listing` and
+  `set_task_job_spec`) takes an **explicit `moderator` argument** — the
+  consumer names whose attestation unlocks the action. **A registered roster
+  attestor's record OR the global `moderation_authority`'s record both satisfy
+  the gate** (since P1.2 the v2 record PDAs are moderator-keyed; the roster
+  path additionally supplies the roster entry — `moderatorIsAttestor` in the
+  SDK). Pre-WP-A1 clients that cannot thread a moderator fail closed against
+  these gates.
 
-**Why this is still a credible-exit win:** on a self-hosted deploy the embedder
-**holds the `moderation_authority` key** — they are the wallet that ran
-`configure_task_moderation`. So they can self-sign CLEAN with no hosted attestor
-service, which is exactly what the proof does. Moderation independence rests on
-*holding that key*, not on the hosted attestor and not (yet) on the roster.
+**Why this is still a credible-exit win:** on a self-hosted deploy the
+embedder **holds the `moderation_authority` key** — they are the wallet that
+ran `configure_task_moderation` — and can just as well self-register a roster
+attestor with no approval. Either way they self-sign CLEAN with no hosted
+attestor service, which is exactly what the proof does: it threads the
+operator's own `moderation_authority` as the explicit `moderator` throughout
+and demonstrates the roster write path alongside.
 
-**The honest limitation:** the P6.8 roster currently widens *who can write* but
-**not** *whose write the hire gate honors*. Letting a delegated roster attestor's
-attestation satisfy the consumption gate (so moderation can be delegated without
-handing over the `moderation_authority` key) is a protocol change, not done here.
-This is consistent with [MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md):
-the registry is a *mechanism*, and the deeper neutrality decision is a separate
-**[HUMAN]** call.
+**The boundary at the time of the executed proof (2026-06-11, pre-WP-A1) —
+kept as the honest record:** back then the roster widened only *who can
+write*. The consumption gates required
+`moderation.moderator == moderation_config.moderation_authority`, so **only an
+attestation written by the single global `moderation_authority` key unlocked a
+hire/claim**, and letting a delegated roster attestor's record satisfy the
+gate was "a protocol change, not done here". WP-A1 + P1.2 were exactly that
+protocol change; the pre-P1.2 transcript line (`consumption gates honor only
+moderation_authority — boundary noted`) was retired with the gates. This is
+consistent with [MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md): the
+registry is a *mechanism*, and the neutrality decision it now carries is
+live on mainnet.
 
 ---
 
@@ -261,8 +295,9 @@ If tetsuo's hosted plane vanishes:
 - **Reputation** — `AgentStats` track-record aggregates are on-chain accounts.
 - **Reads** — every listing/task/claim/bid/hire-record is a program account
   fetchable via gPA with the SDK decoders. *Proven (discovery via gPA).*
-- **Moderation** — by the operator's own `moderation_authority` key, with the
-  P6.8 own-attestor roster. *Proven, with the §3 boundary.*
+- **Moderation** — by the operator's own `moderation_authority` key **or** a
+  self-registered roster attestor (P1.2). *Proven — the §3 boundary is closed:
+  roster records are consumable.*
 
 ### Degrades gracefully (a convenience is lost, not the capability)
 
@@ -276,8 +311,9 @@ If tetsuo's hosted plane vanishes:
   subscribes to program logs directly or polls. They lose managed retry/replay,
   not the events.
 - **Hosted moderation auto-attestor.** Lost convenience: the operator must run
-  their own moderation decisioning and sign with the `moderation_authority` key
-  (the proof does this in two lines). Capability preserved; the automation is the
+  their own moderation decisioning and sign with their own moderation key — the
+  `moderation_authority` key or a self-registered roster attestor (the proof
+  does this in two lines). Capability preserved; the automation is the
   convenience.
 - **Artifact hosting.** Without `marketplace.agenc.tech`, artifacts live wherever
   the embedder chooses; only the on-chain **hash commitment** matters for

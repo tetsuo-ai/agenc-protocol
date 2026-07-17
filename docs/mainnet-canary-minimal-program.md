@@ -2,7 +2,7 @@
 
 This document describes the reduced AgenC protocol **build** (`--features mainnet-canary`). It is not the full production protocol surface.
 
-> **Historical note (2026-06-11):** this canary build was the surface live on mainnet during the controlled private rehearsal. **It is no longer what is live** — mainnet was upgraded to the full surface on 2026-06-11 (then 84-ix; now **99-ix** / `surface_revision = 4` — see `docs/MAINNET_MAINLINE.md`). The canary build still exists in source and is documented here for reference, but the kit no longer loads the canary IDL/profile against this program ID on mainnet.
+> **Historical note (2026-06-11, updated 2026-07-17):** this canary build was the surface live on mainnet during the controlled private rehearsal. **It is no longer what is live** — mainnet was upgraded to the full surface on 2026-06-11 (then 84-ix), and the **99-ix** / `surface_revision = 4` goods surface has been live since 2026-07-09 (slot 431918664 — see `docs/MAINNET_MAINLINE.md`). The canary build still exists in source as a restricted rehearsal/fallback build, kept frozen in CI (`scripts/canary-idl-baseline.json`, enforced by `npm run canary:check-idl`), and is documented here for reference, but the kit no longer loads the canary IDL/profile against this program ID on mainnet.
 
 ## Build Command
 
@@ -40,6 +40,7 @@ The `mainnet-canary` feature exposes only these program instructions:
 - `update_rate_limits`
 - `update_launch_controls`
 - `migrate_protocol`
+- `migrate_task`
 - `update_min_version`
 
 The `create_task` handler additionally enforces canary constraints at runtime:
@@ -92,7 +93,7 @@ anchor build --no-idl -- --no-default-features --features mainnet-canary
 npm run canary:check-idl
 ```
 
-Expected canary IDL instruction count: `24`.
+Expected canary IDL instruction count: `25` (frozen in `scripts/canary-idl-baseline.json`).
 
 ## Kit Compatibility Note
 
