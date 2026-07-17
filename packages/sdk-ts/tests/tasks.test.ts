@@ -25,6 +25,7 @@ import {
   getReclaimTerminalClaimInstructionDataDecoder,
   getSetTaskJobSpecInstructionDataDecoder,
   findTaskPda,
+  findHireRecordPda,
 } from "../src/index.js";
 import {
   createTask,
@@ -276,6 +277,9 @@ describe("rejectTaskResult facade instruction", () => {
 
 describe("autoAcceptTaskResult facade instruction", () => {
   it("targets the program, orders accounts, and round-trips data", async () => {
+    // Audit F-10: hire_record is now required + seeds-pinned (was an optional
+    // account that default-null exploited to skip operator/referrer legs).
+    const [hireRecord] = await findHireRecordPda({ task: A });
     const ix = await autoAcceptTaskResult({
       task: A,
       worker: B,
@@ -283,6 +287,7 @@ describe("autoAcceptTaskResult facade instruction", () => {
       creator: D,
       workerAuthority: A,
       authority: signerA,
+      hireRecord,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -294,8 +299,8 @@ describe("autoAcceptTaskResult facade instruction", () => {
     expect(names[7]).toBe(C); // treasury
     expect(names[8]).toBe(D); // creator
     expect(names[9]).toBe(A); // workerAuthority
-    // hireRecord(10), operator(11), referrer(12), creator/workerCompletionBond(13,14)
-    // auto-derived (P6.2 inserted the optional referrer leg between operator and bonds).
+    expect(names[10]).toBe(hireRecord); // hireRecord (required, audit F-10)
+    // operator(11), referrer(12), creator/workerCompletionBond(13,14)
     expect(names[15]).toBe(signerA.address); // authority
 
     const decoded =

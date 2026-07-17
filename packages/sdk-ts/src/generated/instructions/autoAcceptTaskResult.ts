@@ -41,6 +41,7 @@ import {
   findAcceptTaskResultClaimPda,
   findCreatorCompletionBondPda,
   findEscrowPda,
+  findHireRecordPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
@@ -225,7 +226,14 @@ export type AutoAcceptTaskResultAsyncInput<
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
-  /** operator-fee terms (current hires read them from the Task itself). */
+  /**
+   * F-10). auto_accept is PERMISSIONLESS: taking this as an optional account let
+   * anyone (including the worker, self-cranking after the review window) skip the
+   * operator/referrer legs on a pre-stamp hired task by simply omitting it. A
+   * live (program-owned) record forces the legs; for a non-hired task the caller
+   * passes the empty, system-owned PDA. Live-vs-absent is decided by `owner` in
+   * the handler, exactly like resolve_dispute's always-required hire_record.
+   */
   hireRecord?: Address<TAccountHireRecord>;
   /** when the task carries a non-zero operator fee; receives the operator leg (SOL). */
   operator?: Address<TAccountOperator>;
@@ -411,6 +419,14 @@ export async function getAutoAcceptTaskResultInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.hireRecord.value) {
+    accounts.hireRecord.value = await findHireRecordPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
   if (!accounts.creatorCompletionBond.value) {
     accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
       task: getAddressFromResolvedInstructionAccount(
@@ -533,8 +549,15 @@ export type AutoAcceptTaskResultInput<
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
-  /** operator-fee terms (current hires read them from the Task itself). */
-  hireRecord?: Address<TAccountHireRecord>;
+  /**
+   * F-10). auto_accept is PERMISSIONLESS: taking this as an optional account let
+   * anyone (including the worker, self-cranking after the review window) skip the
+   * operator/referrer legs on a pre-stamp hired task by simply omitting it. A
+   * live (program-owned) record forces the legs; for a non-hired task the caller
+   * passes the empty, system-owned PDA. Live-vs-absent is decided by `owner` in
+   * the handler, exactly like resolve_dispute's always-required hire_record.
+   */
+  hireRecord: Address<TAccountHireRecord>;
   /** when the task carries a non-zero operator fee; receives the operator leg (SOL). */
   operator?: Address<TAccountOperator>;
   /**
@@ -758,8 +781,15 @@ export type ParsedAutoAcceptTaskResultInstruction<
     treasury: TAccountMetas[7];
     creator: TAccountMetas[8];
     workerAuthority: TAccountMetas[9];
-    /** operator-fee terms (current hires read them from the Task itself). */
-    hireRecord?: TAccountMetas[10] | undefined;
+    /**
+     * F-10). auto_accept is PERMISSIONLESS: taking this as an optional account let
+     * anyone (including the worker, self-cranking after the review window) skip the
+     * operator/referrer legs on a pre-stamp hired task by simply omitting it. A
+     * live (program-owned) record forces the legs; for a non-hired task the caller
+     * passes the empty, system-owned PDA. Live-vs-absent is decided by `owner` in
+     * the handler, exactly like resolve_dispute's always-required hire_record.
+     */
+    hireRecord: TAccountMetas[10];
     /** when the task carries a non-zero operator fee; receives the operator leg (SOL). */
     operator?: TAccountMetas[11] | undefined;
     /**
@@ -822,7 +852,7 @@ export function parseAutoAcceptTaskResultInstruction<
       treasury: getNextAccount(),
       creator: getNextAccount(),
       workerAuthority: getNextAccount(),
-      hireRecord: getNextOptionalAccount(),
+      hireRecord: getNextAccount(),
       operator: getNextOptionalAccount(),
       referrer: getNextOptionalAccount(),
       creatorCompletionBond: getNextAccount(),

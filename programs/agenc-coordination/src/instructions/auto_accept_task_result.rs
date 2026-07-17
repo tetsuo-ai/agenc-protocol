@@ -106,9 +106,18 @@ pub struct AutoAcceptTaskResult<'info> {
     pub worker_authority: UncheckedAccount<'info>,
 
     // === §4 operator leg (makes timeout auto-accept hire-aware) ===
-    /// CHECK: ["hire", task] record — optional, read-only; pre-Batch-2 fallback for the
-    /// operator-fee terms (current hires read them from the Task itself).
-    pub hire_record: Option<UncheckedAccount<'info>>,
+    /// CHECK: Hire link PDA (["hire", task]) — ALWAYS required + seeds-pinned (audit
+    /// F-10). auto_accept is PERMISSIONLESS: taking this as an optional account let
+    /// anyone (including the worker, self-cranking after the review window) skip the
+    /// operator/referrer legs on a pre-stamp hired task by simply omitting it. A
+    /// live (program-owned) record forces the legs; for a non-hired task the caller
+    /// passes the empty, system-owned PDA. Live-vs-absent is decided by `owner` in
+    /// the handler, exactly like resolve_dispute's always-required hire_record.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
     /// CHECK: operator payee — validated == the task's resolved operator. Required only
     /// when the task carries a non-zero operator fee; receives the operator leg (SOL).
     #[account(mut)]
@@ -315,7 +324,8 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
 
     // §4 3-way split on the timeout auto-accept path (Task-first, HireRecord fallback) — so a
     // hired task whose human buyer ghosts past the review window still pays the operator leg.
-    // Optional accounts: a non-hired task (task.operator == default) settles unchanged with None.
+    // hire_record is always required + seeds-pinned (audit F-10); a non-hired task passes the
+    // empty system-owned PDA and settles with no legs, exactly as before.
     let auto_accept_task_key = ctx.accounts.task.key();
     let (operator_pubkey, operator_fee_bps_resolved, referrer_pubkey, referrer_fee_bps_resolved) =
         if ctx.accounts.task.operator != Pubkey::default()
@@ -327,7 +337,11 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
                 ctx.accounts.task.referrer,
                 ctx.accounts.task.referrer_fee_bps,
             )
-        } else if let Some(hr) = ctx.accounts.hire_record.as_ref() {
+        } else {
+            // Always-required + seeds-pinned (audit F-10): a live program-owned record
+            // supplies the marketplace terms; the empty system-owned PDA of a non-hired
+            // task resolves to no legs.
+            let hr = &ctx.accounts.hire_record;
             if hr.owner == &crate::ID {
                 let hire_info = hr.to_account_info();
                 let hire = {
@@ -347,8 +361,6 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
             } else {
                 (Pubkey::default(), 0, Pubkey::default(), 0)
             }
-        } else {
-            (Pubkey::default(), 0, Pubkey::default(), 0)
         };
     let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
         let op = ctx

@@ -1311,9 +1311,30 @@ export type AgencCoordination = {
         {
           "name": "hireRecord",
           "docs": [
-            "operator-fee terms (current hires read them from the Task itself)."
+            "F-10). auto_accept is PERMISSIONLESS: taking this as an optional account let",
+            "anyone (including the worker, self-cranking after the review window) skip the",
+            "operator/referrer legs on a pre-stamp hired task by simply omitting it. A",
+            "live (program-owned) record forces the legs; for a non-hired task the caller",
+            "passes the empty, system-owned PDA. Live-vs-absent is decided by `owner` in",
+            "the handler, exactly like resolve_dispute's always-required hire_record."
           ],
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
         },
         {
           "name": "operator",

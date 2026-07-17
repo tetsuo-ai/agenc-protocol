@@ -185,12 +185,28 @@ export async function rejectTaskResult(input: RejectTaskResultAsyncInput) {
 /**
  * Permissionlessly auto-accept a result once its review window has elapsed.
  * Settles like accept but the signer is any `authority`, not the creator.
+ *
+ * Since audit F-10 the hire-record account is REQUIRED + seeds-pinned (the
+ * permissionless path can no longer skip operator/referrer legs by omitting it):
+ * the facade derives it from [hire, task] when not supplied — for non-hired
+ * tasks that is the empty system-owned PDA, which settles with no legs, exactly
+ * as before.
  */
 export async function autoAcceptTaskResult(
-  input: AutoAcceptTaskResultAsyncInput,
+  input: AutoAcceptTaskResultInput,
 ) {
-  return getAutoAcceptTaskResultInstructionAsync(input);
+  const hireRecord =
+    input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
+  return getAutoAcceptTaskResultInstructionAsync({ ...input, hireRecord });
 }
+
+export type AutoAcceptTaskResultInput = Omit<
+  AutoAcceptTaskResultAsyncInput,
+  "hireRecord"
+> & {
+  /** Defaults to the derived [hire, task] PDA (audit F-10). */
+  hireRecord?: Address;
+};
 
 /**
  * Validator (or validator-quorum) approve/reject of a submitted result. Pass
