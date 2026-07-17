@@ -275,7 +275,7 @@ Permissionlessly auto-accept a creator-reviewed submission after timeout.
 | 8 | `treasury` | yes |  |  |  |  |
 | 9 | `creator` | yes |  |  |  |  |
 | 10 | `worker_authority` | yes |  |  |  |  |
-| 11 | `hire_record` |  |  | yes |  | operator-fee terms (current hires read them from the Task itself). |
+| 11 | `hire_record` |  |  |  | PDA ["hire", account:task] | F-10). auto_accept is PERMISSIONLESS: taking this as an optional account let anyone (including the worker, self-cranking after the review window) skip the operator/referrer legs on a pre-stamp hired task by simply omitting it. A live (program-owned) record forces the legs; for a non-hired task the caller passes the empty, system-owned PDA. Live-vs-absent is decided by `owner` in the handler, exactly like resolve_dispute's always-required hire_record. |
 | 12 | `operator` | yes |  | yes |  | when the task carries a non-zero operator fee; receives the operator leg (SOL). |
 | 13 | `referrer` | yes |  | yes |  | 4-way split). Required only when the task carries a non-zero referrer fee; receives the referrer leg (SOL). |
 | 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] |  |
@@ -992,7 +992,7 @@ _None._
 
 Expire a dispute after the maximum duration has passed.
 
-### Accounts (19)
+### Accounts (21)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1015,6 +1015,8 @@ Expire a dispute after the maximum duration has passed.
 | 17 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | SPL Token program (optional, required for token tasks) |
 | 18 | `creator_completion_bond` | yes |  |  |  |  |
 | 19 | `worker_completion_bond` | yes |  |  |  |  |
+| 20 | `task_submission` | yes |  | yes |  | OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit — decrements the review counters when still live and returns its rent to the worker authority. Validated + bound in the handler (`sweep_dispute_submission`). |
+| 21 | `task_validation_config` | yes |  | yes |  | OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the swept submission is still live on a manual-validation task (pending-counter hygiene). Bound to the task in the handler. |
 
 ### Args (0)
 
@@ -1854,7 +1856,7 @@ P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a
 Both are persisted on the dispute alongside the deciding resolver, and the hash
 + resolver are emitted in `DisputeResolved`.
 
-### Accounts (24)
+### Accounts (26)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1882,6 +1884,8 @@ Both are persisted on the dispute alongside the deciding resolver, and the hash
 | 22 | `creator_completion_bond` | yes |  |  |  | forfeited to the treasury. Fully validated by settle_completion_bond. |
 | 23 | `worker_completion_bond` | yes |  |  |  |  |
 | 24 | `bond_treasury` | yes |  |  |  |  |
+| 25 | `task_submission` | yes |  | yes |  | OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit — decrements the review counters when still live and returns its rent to the worker authority. Validated + bound in the handler (`sweep_dispute_submission`). |
+| 26 | `task_validation_config` | yes |  | yes |  | OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the swept submission is still live on a manual-validation task (pending-counter hygiene). Bound to the task in the handler. |
 
 ### Args (3)
 

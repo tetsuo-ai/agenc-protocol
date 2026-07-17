@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**358 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**359 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -369,3 +369,4 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6355 | 0x18d3 | `CompletingAcceptRequiresSoleLiveSubmission` | An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned) |
 | 6356 | 0x18d4 | `BondNotTiedToNoShowWorker` | A forfeited worker completion bond must belong to a live no-show claimant of this task |
 | 6357 | 0x18d5 | `ClaimSlashPending` | This claim's dispute was resolved but its slash has not been applied yet |
+| 6358 | 0x18d6 | `RejectFrozenSolOnly` | Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow) |

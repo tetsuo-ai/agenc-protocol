@@ -154,13 +154,15 @@ npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/prot
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
 ```
 
-**Test coverage (runner totals as of 2026-07-17):** **408** Rust unit tests
-(`cargo test --lib`) · **284** litesvm integration tests · **520** SDK tests. Audit status:
+**Test coverage (runner totals as of 2026-07-18):** **414** Rust unit tests
+(`cargo test --lib`) · **296** litesvm integration tests · **520** SDK tests. Audit status:
 the batch 1–3 internal audits closed with 0 open findings
 ([docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)); the 2026-07-16/17 adversarial
-audit (three passes, branch `fix/audit-findings-2026-07-16`) landed all blocker fixes and
-tracks the remaining full-surface / SPL hardening work in [TODO.MD](TODO.MD) (F-1–F-19) —
-no canary-reachable finding remains open.
+audit (three passes, branch `fix/audit-findings-2026-07-16`) landed all blocker fixes,
+and its full hardening queue is now **complete** — all 19 findings (F-1–F-19)
+implemented and gated ([TODO.MD](TODO.MD) tracks each with evidence and acceptance
+criteria); accepted trade-offs are recorded in
+[docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md).
 
 > Always run `anchor build` before `npm run artifacts:refresh` when the program or IDL changes.
 
@@ -247,7 +249,8 @@ Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for develop
 | [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) | Path-by-path repo map |
 | [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md) | Grouped instructions + PDA/account model |
 | [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md) | Batch 1–3 changes, audits, coverage matrix |
-| [TODO.MD](TODO.MD) | Open security-hardening queue (F-1–F-19): per-fix evidence, exploit scenarios, acceptance criteria |
+| [TODO.MD](TODO.MD) | Security-hardening queue (F-1–F-19): all items DONE with per-fix evidence + acceptance criteria |
+| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) | Accepted design decisions (do not re-file) with rationale |
 | [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md) | SDK build/automation plan + status |
 | [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md) | Deployed source-of-truth + branch policy |
 | [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md) | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge live) |

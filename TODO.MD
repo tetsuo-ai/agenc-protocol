@@ -276,6 +276,9 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 
 ## P1 — Required before SPL/token rewards are enabled anywhere
 
+> **ALL P1 ITEMS DONE (2026-07-18, commit `56f2451`)** — F-7 SOL-only freeze guard
+> + F-4 token-task expire_claim reward skip, with litesvm SPL coverage.
+
 (No token tasks exist on mainnet today; these are hard locks the moment the SPL
 surface is used. Cheap guards; do them in the same PR.)
 
@@ -320,9 +323,15 @@ surface is used. Cheap guards; do them in the same PR.)
 
 ## P2 — Recommended now (non-blocking for the canary upgrade)
 
-### [ ] F-8 — Close the MCP tool-error credential channel (MEDIUM, off-chain)
+> **ALL P2 ITEMS DONE (2026-07-18)** — F-8 `b72ff99`, F-9 `53e2c4b`, F-10 `e89e525`.
 
-- **Problem**: `toErrorResult` returns raw `error.message` to the MCP client;
+### [x] F-8 — Close the MCP tool-error credential channel (MEDIUM, off-chain)
+
+- **RESOLVED 2026-07-18 (`b72ff99`)**: shared `src/redact.ts` used by `bin.ts`
+  (fatal handler + new `uncaughtException`/`unhandledRejection` handlers) and
+  `server.ts` `toErrorResult`; scrub covers raw AND `.trim()`ed forms plus
+  `AGENC_INDEXER_API_KEY`; `dist/` rebuilt; 6 new vitest tests.
+- **Problem** (original entry): `toErrorResult` returns raw `error.message` to the MCP client;
   SDK errors embed the configured endpoint verbatim
   (`sdk-ts/src/indexer/client.ts:492,511,525,538,558`). Credential-bearing
   `AGENC_INDEXER_URL`/`AGENC_RPC_URL` (userinfo, `?api-key=`) leaks to the
@@ -346,9 +355,14 @@ surface is used. Cheap guards; do them in the same PR.)
 - **Done when**: [ ] shared redact module used in both files [ ] crash handlers
   added [ ] dist rebuilt [ ] tests pass.
 
-### [ ] F-9 — Sweep submission state on dispute exits (LOW, full-surface)
+### [x] F-9 — Sweep submission state on dispute exits (LOW, full-surface)
 
-- **Problem**: `resolve_dispute`/`expire_dispute` never decrement
+- **RESOLVED 2026-07-18 (`53e2c4b`)**: `resolve_dispute` / `expire_dispute`
+  accept the defendant's `TaskSubmission` (+ `TaskValidationConfig` for manual
+  tasks) as optional trailing accounts; when supplied and bound, the exit
+  decrements both counters IFF still `Submitted` and closes the submission to
+  the worker authority. Omission keeps the `close_task` fallback.
+- **Problem** (original entry): `resolve_dispute`/`expire_dispute` never decrement
   `live_submissions`/`pending_submission_count` and never close the live
   `TaskSubmission` — counters stick at 1 on the terminal task; the worker's
   submission rent is recoverable only via creator-gated `close_task`.
@@ -363,9 +377,13 @@ surface is used. Cheap guards; do them in the same PR.)
 - **Done when**: [ ] sweep wired on both exits [ ] integration passes [ ] gates
   green.
 
-### [ ] F-10 — Leg-skip via omitted `hire_record` on `auto_accept_task_result` (LOW, full-surface; document canary)
+### [x] F-10 — Leg-skip via omitted `hire_record` on `auto_accept_task_result` (LOW, full-surface; document canary)
 
-- **Problem**: `accept_task_result`/`auto_accept_task_result` take
+- **RESOLVED 2026-07-18 (`e89e525`)**: `hire_record` is REQUIRED + seeds-pinned
+  on `auto_accept_task_result` (mirroring `resolve_dispute`); SDK facade derives
+  the PDA when omitted so downstream callers keep working. `accept_task_result`
+  deliberately unchanged (canary-frozen, moot — recorded as decision D4).
+- **Problem** (original entry): `accept_task_result`/`auto_accept_task_result` take
   `hire_record` as `Option`; omission silently skips operator/referrer legs on
   pre-stamp hired tasks. Permissionless `auto_accept` lets the worker
   self-crank the legs away. (`accept_task_result` is on the frozen canary 25,
@@ -385,87 +403,87 @@ surface is used. Cheap guards; do them in the same PR.)
 
 ## P3 — Low / hardening
 
-### [ ] F-11 — `expire_claim` InProgress+live-Submitted evidence guard (LOW, defense-in-depth)
-Add the live-submission evidence check to the InProgress branch too (currently
-PendingValidation-only, `expire_claim.rs:268-279`). Unreachable post-H-1; add
-the guard + a unit test so a future status-machine change can't open it.
+> **ALL P3 ITEMS DONE (2026-07-18)** — F-11/F-15 `631a10f`, F-14/F-16 `0c8f1a0`,
+> F-18 `dd519ad`, F-19 `3285675`; F-12 preflight script + on-chain result and
+> F-17 decision recorded in `docs/DESIGN_DECISIONS.md` (D5/D6).
 
-### [ ] F-12 — Pre-P6.3 disputes with `total_voters > 0` are unexitable (LOW, deploy preflight)
-Zero exist on mainnet (canary never shipped disputes). Before ANY full-surface
-deploy, run a preflight scan for `Dispute` accounts with `total_voters > 0`
-(`dispute_helpers.rs:168` rejects them everywhere; `cancel_dispute.rs:71`
-blocks cancel). If any exist, they need an admin resolution path first.
+### [x] F-11 — `expire_claim` InProgress+live-Submitted evidence guard (LOW, defense-in-depth)
+- **RESOLVED 2026-07-18 (`631a10f`)**: the guard now rejects any expirable-status
+  task whose claim carries a live (Submitted) submission, via the pure
+  `claim_is_expirable` helper + a revert-sensitive unit matrix (InProgress and
+  PendingValidation × live/not-live).
 
-### [ ] F-14 — Bid-settlement remaining-accounts offset on reject/expire paths (LOW)
-Accept paths honor the Proof-dependency offset; reject/expire paths hardcode
-indexes — BidExclusive+Proof tasks fail closed for uniform-offset clients.
-Compute the offset the same way on all paths. Availability only, no misrouting.
+### [x] F-12 — Pre-P6.3 disputes with `total_voters > 0` are unexitable (LOW, deploy preflight)
+- **RESOLVED 2026-07-18**: `scripts/preflight-dispute-scan.mjs` scans the on-chain
+  Dispute set for `total_voters > 0` (offset 202) and hard-fails on any hit. Run
+  against mainnet today: **3 Dispute accounts, all `total_voters == 0`** — no
+  legacy-dispute action needed. Re-run before any deploy that touches the dispute
+  lifecycle; result recorded in `docs/DESIGN_DECISIONS.md` (D6).
 
-### [ ] F-15 — `checked_sub` → `saturating_sub` on counter decrements in `reclaim_terminal_claim` / `expire_claim` (LOW)
-`expire_claim.rs:315-318` (and the reclaim equivalent) use `checked_sub` on
-`current_workers`/`active_tasks`; the codebase deliberately uses
-`saturating_sub` elsewhere for legacy counter drift. The designated
-un-brickers must not themselves brick. Add a drifted-counter unit test.
+### [x] F-14 — Bid-settlement remaining-accounts offset on reject/expire paths (LOW)
+- **RESOLVED 2026-07-18 (`0c8f1a0`)**: `reject_task_result`, `validate_task_result`'s
+  reject branch, and `expire_claim` now compute the bid-settlement offset via the
+  shared `bid_settlement_offset(task)` (Proof-dependency ⇒ 1) exactly like the
+  accept paths; revert-sensitive unit test on the offset.
 
-### [ ] F-16 — Fee math overflow in `completion_helpers` (LOW)
-`reward.checked_mul(bps)` (`completion_helpers.rs:40-44`) overflows u64 for
-rewards > ~1.8e15 lamports → settlement DoS. Use u128 intermediates (pattern
-already in `post_completion_bond.rs:103-107`). Audit ALL fee mul sites in the
-file, not just this one. DoS-only; no lock.
+### [x] F-15 — `checked_sub` → `saturating_sub` on counter decrements in `reclaim_terminal_claim` / `expire_claim` (LOW)
+- **RESOLVED 2026-07-18 (`631a10f`)**: both recovery paths now decrement
+  `current_workers`/`active_tasks` via the shared `saturating_dec_counter`
+  (u8/u16) — the un-brickers can no longer brick on drifted legacy counters;
+  drift unit test covers 0/1/N/MAX for both widths.
 
-### [ ] F-17 — Document: no-deadline underfilled Collaborative has no creator refund (INFO→doc)
-C-1's widened cancel requires past-deadline; `deadline == 0` tasks with
-`completions > 0 && current_workers == 0` keep escrow claimable by future
-workers (no lock, by design). Write the decision into the task-lifecycle docs
-so it isn't re-filed.
+### [x] F-16 — Fee math overflow in `completion_helpers` (LOW)
+- **RESOLVED 2026-07-18 (`0c8f1a0`)**: all three fee-multiply sites
+  (`calculate_reward_split_for_amount`, `calculate_combined_fees` operator +
+  referrer legs) use u128 intermediates; a u64-scale unit test (~4.6e18
+  lamports) proves no overflow.
 
-### [ ] F-18 — Multisig hardening cluster (LOW)
-- `update_multisig`: prevent orphaning `config.authority` from the owner set.
-  (The F-6 follow-on this fed into — a rotated-out key keeping sole
-  `initialize_governance` power — is MOOT: governance is already initialized on
-  mainnet, verified 2026-07-17. The owner-set invariant is still worth enforcing
-  for the other admin paths.)
-- `update_launch_controls`: rewrites all three fields per call — a stale-read
-  ceremony can silently unpause. Make it per-field or compare-and-swap on
-  expected current values.
-- Dead `require_multisig` helper (`multisig.rs:27-77`, zero callers): wire it
-  or delete it.
-- Authority binding is inconsistent across admin instructions
-  (`update_zk_image_id` etc. take any signer + multisig): pick one model and
-  document it.
+### [x] F-17 — Document: no-deadline underfilled Collaborative has no creator refund (INFO→doc)
+- **RESOLVED 2026-07-18**: recorded as accepted design decision D5 in
+  `docs/DESIGN_DECISIONS.md` — a deadline-free task is a standing offer (escrow
+  stays claimable by future workers; not a lock, by design).
 
-### [ ] F-19 — Off-chain lows
-- `packages/agenc-cli/src/templates.ts`: `config.name` is interpolated
-  unsanitized into generated source (comment-breakout/JSX injection from a
-  poisoned package.json). Sanitize/escape at every interpolation site (both
-  router templates + worker template).
-- `scripts/credible-exit.mjs`: redact `env.rpcUrl` (and any indexer URL) in
-  stdout AND in the persisted proof JSON (same origin-redaction rule as L-4).
-- `scripts/mainnet-init-and-stamp.mjs`: add a genesis-hash/cluster check —
-  the program ID is identical on devnet; refuse to run against a non-mainnet
-  genesis hash unless an explicit `--cluster devnet` override is passed.
-- `.github/workflows/release.yml`: add `npm run canary:check-idl` to the
-  protocol gate (tag pushes bypass PR checks).
-- `.github/workflows/idl-drift.yml`: add an explicit `permissions:` block
-  (least privilege).
+### [x] F-18 — Multisig hardening cluster (LOW)
+- **RESOLVED 2026-07-18 (`dd519ad`)**:
+  - `update_multisig`: the new owner set must retain the protocol authority
+    (integration: exclusion attempt rejected, owner set untouched).
+  - `update_launch_controls`: wire-compatible KEEP sentinels (0xFF mask /
+    0xFFFF revision) close the stale-read reset hazard — per-field/compare-and-swap
+    was impossible without changing the canary-frozen args; explicit values
+    validate + apply exactly as before (integration: KEEP preserves, explicit resets).
+  - Dead `require_multisig` helper deleted (`require_multisig_threshold` is the
+    only enforcer).
+  - The single authority model is documented in `utils/multisig.rs` (multisig-gated
+    vs authority-bound admin paths).
+
+### [x] F-19 — Off-chain lows
+- **RESOLVED 2026-07-18 (`3285675`)**:
+  - `templates.ts`: `commentSafeName` sanitizes `config.name` at every comment
+    interpolation site (both router templates + worker template).
+  - `credible-exit.mjs`: RPC/indexer/attestor URLs redacted to origin in stdout
+    AND the persisted proof JSON (+ the fail-path message).
+  - `mainnet-init-and-stamp.mjs`: genesis-hash check — refuses any non-mainnet
+    hash unless `CLUSTER=devnet` is passed explicitly.
+  - `release.yml`: protocol gate now runs `canary:idl` + `canary:check-idl`.
+  - `idl-drift.yml`: least-privilege `permissions: contents: read`.
 
 ---
 
 ## Informational — accepted design decisions to DOCUMENT (no code change)
 
-- Canary surface has no timeout exit from `PendingValidation` (auto_accept +
-  disputes compiled out; `PendingValidation → Cancelled` illegal): a ghosting
-  creator locks escrow + worker claim until they return. Mutual lock,
-  frozen-surface design.
-- M-2 trade-off: with ≥2 live submissions every completing accept is blocked;
-  the creator must reject stragglers first (fail-closed on purpose). An absent
-  creator then locks everyone (previously: one orphan).
-- Schema-0 completing-accept orphan remains possible by design (M-2 guard
-  no-ops for legacy tasks; `live_submissions` unmaintained there) — conservative
-  choice given counter-drift risk on the live legacy (schema-0) accounts (169 at the
-  2026-06-11 migration, plus tasks created before the batch-3 deploy).
-- `accept_task_result` `hire_record` optionality cannot change on the frozen
-  canary surface (see F-10); moot on canary since no hires exist there.
+All four are now recorded as D1–D4 in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)
+(with D5–D7 added for F-17, the F-12 preflight result, and the F-2 reclaim
+omission residual). Kept here as the short index:
+
+- **D1** — Canary surface has no timeout exit from `PendingValidation` (mutual
+  lock, frozen-surface design).
+- **D2** — M-2 trade-off: creator must reject stragglers before the completing
+  accept; an absent creator then locks everyone (previously: one orphan).
+- **D3** — Schema-0 completing-accept orphan accepted for legacy tasks
+  (`live_submissions` unmaintained there; counter-drift risk on the 169+
+  legacy accounts outweighs).
+- **D4** — `accept_task_result` `hire_record` optionality stays on the frozen
+  canary surface; moot there (no hires exist on canary).
 
 ---
 
@@ -478,9 +496,9 @@ so it isn't re-filed.
 | F-3 | ~~P0~~ DONE (cc8870e) | | ☒ |
 | F-5 | ~~P0~~ DONE (b3eb824) | | ☒ |
 | F-6 | ~~P0~~ CLOSED — init already executed with sane params (verified on-chain 2026-07-17) | | ☒ |
-| F-7 | P1 | | ☐ |
-| F-4 | P1 | | ☐ |
-| F-8 | P2 | | ☐ |
-| F-9 | P2 | | ☐ |
-| F-10 | P2 | | ☐ |
-| F-11–F-19 | P3 | | ☐ |
+| F-7 | ~~P1~~ DONE (56f2451) | | ☒ |
+| F-4 | ~~P1~~ DONE (56f2451) | | ☒ |
+| F-8 | ~~P2~~ DONE (b72ff99) | | ☒ |
+| F-9 | ~~P2~~ DONE (53e2c4b) | | ☒ |
+| F-10 | ~~P2~~ DONE (e89e525) | | ☒ |
+| F-11–F-19 | ~~P3~~ DONE (631a10f F-11/15, 0c8f1a0 F-14/16, dd519ad F-18, 3285675 F-19; F-12/17 docs) | | ☒ |

@@ -5,6 +5,35 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-07-18 — full audit hardening queue complete (F-1–F-19, all items)
+
+- the ENTIRE 2026-07 audit hardening queue is implemented and gated on branch
+  `fix/audit-findings-2026-07-16` — 414 Rust unit tests, 296 litesvm
+  integration tests, 520 SDK tests; clippy default+canary, artifacts, canary
+  freeze, and IDL reference all green
+- **P1** (`56f2451`): F-7 `reject_and_freeze` SOL-only guard (new error 6358)
+  and F-4 `expire_claim` cleanup-reward skip on token tasks (was
+  InsufficientFundsForRent on every token task)
+- **P2**: F-8 (`b72ff99`) MCP tool-error + crash-handler sanitization with a
+  shared redact module and rebuilt dist; F-9 (`53e2c4b`) dispute exits sweep
+  the defendant's live submission (counters + worker rent) via optional
+  trailing accounts; F-10 (`e89e525`) `auto_accept_task_result`'s hire_record
+  is required + seeds-pinned (permissionless leg-skip closed)
+- **P3**: F-11 expire_claim live-submission evidence guard + F-15 saturating
+  recovery counters (`631a10f`); F-14 uniform bid-settlement offset on
+  reject/expire paths + F-16 u128 fee math (`0c8f1a0`); F-18 multisig
+  hardening — authority-membership rotation guard, KEEP sentinels for
+  launch-control stale reads, dead helper removed, model documented
+  (`dd519ad`); F-19 off-chain lows — template-name sanitization, URL
+  redaction in credible-exit, genesis-hash cluster check, release-gate canary
+  check, workflow permissions (`3285675`)
+- **F-12**: `scripts/preflight-dispute-scan.mjs` — mainnet scan found 3
+  Dispute accounts, all `total_voters == 0` (no legacy-dispute action needed)
+- **F-17 + informational**: accepted trade-offs recorded in
+  `docs/DESIGN_DECISIONS.md` (D1–D7 — do not re-file)
+- remaining: deploy choreography for the whole upgrade package (human-run
+  Squads ceremony, `surface_revision` 5 stamp, SDK/protocol minor releases)
+
 ## 2026-07-18 — audit P0 hardening queue complete (F-1, F-2, F-3, F-5)
 
 - the full P0 queue from the 2026-07 audit's pass-3 report (TODO.MD) is
