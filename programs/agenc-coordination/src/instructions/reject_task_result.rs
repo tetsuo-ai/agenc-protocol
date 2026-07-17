@@ -6,7 +6,8 @@ use crate::events::TaskResultRejected;
 use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
-    settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
+    bid_settlement_offset, settle_accepted_bid, AcceptedBidBondDisposition,
+    AcceptedBidBookDisposition,
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
@@ -174,14 +175,22 @@ pub fn handler<'info>(
 
     #[cfg(not(feature = "mainnet-canary"))]
     if task.task_type == crate::state::TaskType::BidExclusive {
+        // Audit F-14: honor the Proof-dependency offset exactly like the accept paths.
+        let offset = bid_settlement_offset(task);
         require!(
-            ctx.remaining_accounts.len() >= 3,
+            ctx.remaining_accounts.len() >= offset.checked_add(3).ok_or(CoordinationError::ArithmeticOverflow)?,
             CoordinationError::BidSettlementAccountsRequired
         );
 
-        let bid_book_info = remaining_account_info(ctx.remaining_accounts, 0);
-        let accepted_bid_info = remaining_account_info(ctx.remaining_accounts, 1);
-        let bidder_market_state_info = remaining_account_info(ctx.remaining_accounts, 2);
+        let bid_book_info = remaining_account_info(ctx.remaining_accounts, offset);
+        let accepted_bid_info = remaining_account_info(
+            ctx.remaining_accounts,
+            offset.checked_add(1).ok_or(CoordinationError::ArithmeticOverflow)?,
+        );
+        let bidder_market_state_info = remaining_account_info(
+            ctx.remaining_accounts,
+            offset.checked_add(2).ok_or(CoordinationError::ArithmeticOverflow)?,
+        );
 
         settle_accepted_bid(
             &task.key(),

@@ -19,7 +19,8 @@ use crate::errors::CoordinationError;
 use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
-    settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
+    bid_settlement_offset, settle_accepted_bid, AcceptedBidBondDisposition,
+    AcceptedBidBookDisposition,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
@@ -416,16 +417,31 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
 
     #[cfg(not(feature = "mainnet-canary"))]
     if task.task_type == TaskType::BidExclusive {
+        // Audit F-14: honor the Proof-dependency offset exactly like the accept
+        // paths — a uniform-layout client passes [parent, bid…] for those tasks.
+        let offset = bid_settlement_offset(task);
         require!(
-            ctx.remaining_accounts.len() >= 5,
+            ctx.remaining_accounts.len() >= offset.checked_add(5).ok_or(CoordinationError::ArithmeticOverflow)?,
             CoordinationError::BidSettlementAccountsRequired
         );
 
-        let bid_marketplace_info = remaining_account_info(ctx.remaining_accounts, 0);
-        let bid_book_info = remaining_account_info(ctx.remaining_accounts, 1);
-        let accepted_bid_info = remaining_account_info(ctx.remaining_accounts, 2);
-        let bidder_market_state_info = remaining_account_info(ctx.remaining_accounts, 3);
-        let creator_info = remaining_account_info(ctx.remaining_accounts, 4);
+        let bid_marketplace_info = remaining_account_info(ctx.remaining_accounts, offset);
+        let bid_book_info = remaining_account_info(
+            ctx.remaining_accounts,
+            offset.checked_add(1).ok_or(CoordinationError::ArithmeticOverflow)?,
+        );
+        let accepted_bid_info = remaining_account_info(
+            ctx.remaining_accounts,
+            offset.checked_add(2).ok_or(CoordinationError::ArithmeticOverflow)?,
+        );
+        let bidder_market_state_info = remaining_account_info(
+            ctx.remaining_accounts,
+            offset.checked_add(3).ok_or(CoordinationError::ArithmeticOverflow)?,
+        );
+        let creator_info = remaining_account_info(
+            ctx.remaining_accounts,
+            offset.checked_add(4).ok_or(CoordinationError::ArithmeticOverflow)?,
+        );
 
         require!(
             bid_marketplace_info.owner == &crate::ID,

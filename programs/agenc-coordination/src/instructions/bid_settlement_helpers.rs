@@ -24,7 +24,14 @@ pub(crate) enum AcceptedBidBondDisposition {
     SlashByBpsToCreator(u16),
 }
 
-fn bid_settlement_offset(task: &Task) -> usize {
+/// The number of non-bid leading entries in `remaining_accounts` for a
+/// bid-settlement path: a Proof-dependency parent occupies slot 0 (see
+/// `validate_task_dependency`), so bid accounts start at 1 for those tasks.
+/// Audit F-14: EVERY bid-settlement path must use this offset — the accept
+/// paths always did, but the reject/expire paths hardcoded indexes 0..2, so a
+/// uniform-layout client ([parent, bid…]) was misread there (fail-closed at
+/// best). Pure + revert-sensitive.
+pub(crate) fn bid_settlement_offset(task: &Task) -> usize {
     match task.dependency_type {
         DependencyType::Proof => 1,
         _ => 0,
@@ -341,6 +348,23 @@ pub(crate) fn settle_accepted_bid<'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Audit F-14 (revert-sensitive): every bid-settlement path must honor the
+    // Proof-dependency offset. Reverting to hardcoded 0 breaks the Proof case.
+    #[test]
+    fn bid_settlement_offset_matches_dependency_type() {
+        let mut task = Task {
+            dependency_type: DependencyType::None,
+            ..Task::default()
+        };
+        assert_eq!(bid_settlement_offset(&task), 0);
+        task.dependency_type = DependencyType::Data;
+        assert_eq!(bid_settlement_offset(&task), 0);
+        task.dependency_type = DependencyType::Ordering;
+        assert_eq!(bid_settlement_offset(&task), 0);
+        task.dependency_type = DependencyType::Proof;
+        assert_eq!(bid_settlement_offset(&task), 1);
+    }
 
     #[test]
     fn test_calculate_bid_bond_slash_amount() {

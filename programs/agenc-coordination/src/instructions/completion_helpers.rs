@@ -37,11 +37,14 @@ pub(crate) fn calculate_reward_split_for_amount(
     reward_per_worker: u64,
     protocol_fee_bps: u16,
 ) -> Result<(u64, u64)> {
-    let protocol_fee = reward_per_worker
-        .checked_mul(protocol_fee_bps as u64)
+    // u128 intermediates (audit F-16): reward.checked_mul(bps) overflows u64 for
+    // rewards above ~1.8e15 lamports, DoS-ing settlement. The post-division result
+    // always fits (fee <= base).
+    let protocol_fee = (reward_per_worker as u128)
+        .checked_mul(protocol_fee_bps as u128)
         .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(BASIS_POINTS_DIVISOR)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+        .checked_div(BASIS_POINTS_DIVISOR as u128)
+        .ok_or(CoordinationError::ArithmeticOverflow)? as u64;
 
     let worker_reward = reward_per_worker
         .checked_sub(protocol_fee)
@@ -519,16 +522,18 @@ pub fn calculate_combined_fees(
         worker_bps >= WORKER_FLOOR_BPS as u64,
         CoordinationError::CombinedFeeAboveCap
     );
-    let operator_fee = base
-        .checked_mul(operator_fee_bps as u64)
+    // u128 intermediates (audit F-16): base.checked_mul(bps) overflows u64 for
+    // large rewards; the post-division fee always fits.
+    let operator_fee = (base as u128)
+        .checked_mul(operator_fee_bps as u128)
         .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(BASIS_POINTS_DIVISOR)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let referrer_fee = base
-        .checked_mul(referrer_fee_bps as u64)
+        .checked_div(BASIS_POINTS_DIVISOR as u128)
+        .ok_or(CoordinationError::ArithmeticOverflow)? as u64;
+    let referrer_fee = (base as u128)
+        .checked_mul(referrer_fee_bps as u128)
         .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(BASIS_POINTS_DIVISOR)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+        .checked_div(BASIS_POINTS_DIVISOR as u128)
+        .ok_or(CoordinationError::ArithmeticOverflow)? as u64;
     Ok((operator_fee, referrer_fee))
 }
 
@@ -917,6 +922,21 @@ mod tests {
         let (op, rf) = calculate_combined_fees(1_000_000, 100, 0, 0).unwrap();
         assert_eq!(op, 0);
         assert_eq!(rf, 0);
+    }
+
+    // Audit F-16 (revert-sensitive): u64 checked_mul fee math overflows for rewards
+    // above u64::MAX / 10000 (~1.8e15 lamports); the u128 intermediates handle the
+    // full u64 reward range. Reverting to u64 mul turns these red (ArithmeticOverflow).
+    #[test]
+    fn test_fee_math_handles_u64_scale_rewards() {
+        let huge = u64::MAX / 4; // ~4.6e18 lamports
+        let (worker_reward, protocol_fee) = calculate_reward_split_for_amount(huge, 100).unwrap();
+        assert_eq!(protocol_fee, huge / 100);
+        assert_eq!(worker_reward, huge - huge / 100);
+
+        let (op, rf) = calculate_combined_fees(huge, 100, 1000, 500).unwrap();
+        assert_eq!(op, huge / 10);
+        assert_eq!(rf, huge / 20);
     }
 
     #[test]
