@@ -10,7 +10,7 @@ import {
   readonlyTools,
   resolveMcpConfig,
   selectTools
-} from "./chunk-GUITTOSW.js";
+} from "./chunk-FS2BWSGR.js";
 export {
   DEFAULT_RPC_URL,
   SERVER_NAME,

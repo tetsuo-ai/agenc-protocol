@@ -44,6 +44,7 @@ import {
   type MarketplaceToolContext,
   type MarketplaceToolRegistry,
 } from "@tetsuo-ai/marketplace-tools";
+import { sanitizeDiagnostic } from "./redact.js";
 
 /** This package's name + version, surfaced in the MCP `serverInfo`. */
 export const SERVER_NAME = "@tetsuo-ai/marketplace-mcp";
@@ -201,11 +202,17 @@ function toStructured(result: unknown): Record<string, unknown> {
  * Turn a handler error into a tool-call error result (isError: true) rather
  * than a protocol error — the model sees the message and can recover. A
  * {@link MarketplaceToolError} carries a stable machine code.
+ *
+ * The message is sanitized (audit F-8): SDK/client errors can embed the
+ * configured RPC/indexer URL verbatim (userinfo, `?api-key=`), which would
+ * otherwise reach the MCP client and its logs over the protocol channel.
+ * Exported for tests.
  */
-function toErrorResult(toolName: string, error: unknown): CallToolResult {
+export function toErrorResult(toolName: string, error: unknown): CallToolResult {
   const code = error instanceof MarketplaceToolError ? error.code : "TOOL_ERROR";
-  const message =
-    error instanceof Error ? error.message : String(error);
+  const message = sanitizeDiagnostic(
+    error instanceof Error ? error.message : String(error),
+  );
   return {
     isError: true,
     content: [

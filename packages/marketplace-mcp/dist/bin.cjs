@@ -77,6 +77,43 @@ function buildToolContext(config) {
 var import_server = require("@modelcontextprotocol/sdk/server/index.js");
 var import_types = require("@modelcontextprotocol/sdk/types.js");
 var import_marketplace_tools = require("@tetsuo-ai/marketplace-tools");
+
+// src/redact.ts
+function redactUrl(raw) {
+  if (raw === void 0 || raw === null || raw === "") return "none";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "<unparseable-url-redacted>";
+  }
+}
+function* secretCandidates() {
+  for (const raw of [process.env.AGENC_RPC_URL, process.env.AGENC_INDEXER_URL]) {
+    if (raw === void 0 || raw === "") continue;
+    yield { needle: raw, replacement: redactUrl(raw) };
+    const trimmed = raw.trim();
+    if (trimmed !== raw && trimmed !== "") {
+      yield { needle: trimmed, replacement: redactUrl(trimmed) };
+    }
+  }
+  const apiKey = process.env.AGENC_INDEXER_API_KEY;
+  if (apiKey !== void 0 && apiKey !== "") {
+    yield { needle: apiKey, replacement: "<redacted>" };
+    const trimmed = apiKey.trim();
+    if (trimmed !== apiKey && trimmed !== "") {
+      yield { needle: trimmed, replacement: "<redacted>" };
+    }
+  }
+}
+function sanitizeDiagnostic(text) {
+  let out = text;
+  for (const { needle, replacement } of secretCandidates()) {
+    out = out.split(needle).join(replacement);
+  }
+  return out;
+}
+
+// src/server.ts
 var SERVER_NAME = "@tetsuo-ai/marketplace-mcp";
 var SERVER_VERSION = "0.4.0";
 function selectTools(enableMutations) {
@@ -148,7 +185,9 @@ function toStructured(result) {
 }
 function toErrorResult(toolName, error) {
   const code = error instanceof import_marketplace_tools.MarketplaceToolError ? error.code : "TOOL_ERROR";
-  const message = error instanceof Error ? error.message : String(error);
+  const message = sanitizeDiagnostic(
+    error instanceof Error ? error.message : String(error)
+  );
   return {
     isError: true,
     content: [
@@ -161,23 +200,6 @@ function toErrorResult(toolName, error) {
 }
 
 // src/bin.ts
-function redactUrl(raw) {
-  if (raw === void 0 || raw === null || raw === "") return "none";
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return "<unparseable-url-redacted>";
-  }
-}
-function sanitizeDiagnostic(text) {
-  let out = text;
-  for (const raw of [process.env.AGENC_RPC_URL, process.env.AGENC_INDEXER_URL]) {
-    if (raw !== void 0 && raw !== "") out = out.split(raw).join(redactUrl(raw));
-  }
-  const apiKey = process.env.AGENC_INDEXER_API_KEY;
-  if (apiKey !== void 0 && apiKey !== "") out = out.split(apiKey).join("<redacted>");
-  return out;
-}
 async function main() {
   const config = resolveMcpConfig(process.env);
   const context = buildToolContext(config);
@@ -202,10 +224,22 @@ async function main() {
   await server.connect(transport);
   process.stderr.write("[agenc-marketplace-mcp] connected (stdio)\n");
 }
+function fatalText(error) {
+  return sanitizeDiagnostic(error instanceof Error ? error.stack ?? error.message : String(error));
+}
+process.on("uncaughtException", (error) => {
+  process.stderr.write(`[agenc-marketplace-mcp] fatal(uncaught): ${fatalText(error)}
+`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(`[agenc-marketplace-mcp] fatal(unhandled): ${fatalText(reason)}
+`);
+  process.exit(1);
+});
 main().catch((error) => {
-  const text = error instanceof Error ? error.stack ?? error.message : String(error);
   process.stderr.write(
-    `[agenc-marketplace-mcp] fatal: ${sanitizeDiagnostic(text)}
+    `[agenc-marketplace-mcp] fatal: ${fatalText(error)}
 `
   );
   process.exitCode = 1;

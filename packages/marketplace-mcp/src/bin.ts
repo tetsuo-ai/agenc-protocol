@@ -14,40 +14,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { resolveMcpConfig } from "./config.js";
 import { buildToolContext } from "./context.js";
 import { createMarketplaceMcpServer } from "./server.js";
-
-/**
- * Strip credentials from a URL before it reaches a diagnostic log. Provider RPC and
- * indexer URLs routinely embed API keys (Helius `?api-key=`, Alchemy `/v2/<key>`,
- * QuickNode `/<token>/`); `URL.origin` keeps only `scheme://host:port`, dropping
- * userinfo, path, query and fragment — where those secrets live. Unparseable input
- * yields a placeholder rather than being echoed raw.
- */
-function redactUrl(raw: string | undefined | null): string {
-  if (raw === undefined || raw === null || raw === "") return "none";
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return "<unparseable-url-redacted>";
-  }
-}
-
-/**
- * Scrub configured endpoints/secrets out of arbitrary error text before it reaches
- * stderr. Provider/client errors (e.g. undici's "Request cannot be constructed from
- * a URL that includes credentials: <full url>") embed the request URL verbatim —
- * including userinfo and query-string API keys — so a raw `error.stack` print would
- * leak them. Exact-match replacement of the configured values is deliberate: a
- * generic URL regex would also mangle harmless diagnostic links.
- */
-function sanitizeDiagnostic(text: string): string {
-  let out = text;
-  for (const raw of [process.env.AGENC_RPC_URL, process.env.AGENC_INDEXER_URL]) {
-    if (raw !== undefined && raw !== "") out = out.split(raw).join(redactUrl(raw));
-  }
-  const apiKey = process.env.AGENC_INDEXER_API_KEY;
-  if (apiKey !== undefined && apiKey !== "") out = out.split(apiKey).join("<redacted>");
-  return out;
-}
+import { redactUrl, sanitizeDiagnostic } from "./redact.js";
 
 async function main(): Promise<void> {
   const config = resolveMcpConfig(process.env);
@@ -84,12 +51,26 @@ async function main(): Promise<void> {
   process.stderr.write("[agenc-marketplace-mcp] connected (stdio)\n");
 }
 
+// Process-level crash paths MUST go through the same sanitizer as the fatal
+// handler — Node's default crash print would bypass it entirely (audit F-8).
+function fatalText(error: unknown): string {
+  return sanitizeDiagnostic(error instanceof Error ? (error.stack ?? error.message) : String(error));
+}
+
+process.on("uncaughtException", (error: unknown) => {
+  process.stderr.write(`[agenc-marketplace-mcp] fatal(uncaught): ${fatalText(error)}\n`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason: unknown) => {
+  process.stderr.write(`[agenc-marketplace-mcp] fatal(unhandled): ${fatalText(reason)}\n`);
+  process.exit(1);
+});
+
 main().catch((error: unknown) => {
   // Sanitized: provider/client errors can embed the full request URL (userinfo,
   // query-string API keys) in their message/stack — never print those raw.
-  const text = error instanceof Error ? (error.stack ?? error.message) : String(error);
   process.stderr.write(
-    `[agenc-marketplace-mcp] fatal: ${sanitizeDiagnostic(text)}\n`,
+    `[agenc-marketplace-mcp] fatal: ${fatalText(error)}\n`,
   );
   process.exitCode = 1;
 });

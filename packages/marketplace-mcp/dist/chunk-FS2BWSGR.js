@@ -69,6 +69,41 @@ function buildToolContext(config) {
   return ctx;
 }
 
+// src/redact.ts
+function redactUrl(raw) {
+  if (raw === void 0 || raw === null || raw === "") return "none";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "<unparseable-url-redacted>";
+  }
+}
+function* secretCandidates() {
+  for (const raw of [process.env.AGENC_RPC_URL, process.env.AGENC_INDEXER_URL]) {
+    if (raw === void 0 || raw === "") continue;
+    yield { needle: raw, replacement: redactUrl(raw) };
+    const trimmed = raw.trim();
+    if (trimmed !== raw && trimmed !== "") {
+      yield { needle: trimmed, replacement: redactUrl(trimmed) };
+    }
+  }
+  const apiKey = process.env.AGENC_INDEXER_API_KEY;
+  if (apiKey !== void 0 && apiKey !== "") {
+    yield { needle: apiKey, replacement: "<redacted>" };
+    const trimmed = apiKey.trim();
+    if (trimmed !== apiKey && trimmed !== "") {
+      yield { needle: trimmed, replacement: "<redacted>" };
+    }
+  }
+}
+function sanitizeDiagnostic(text) {
+  let out = text;
+  for (const { needle, replacement } of secretCandidates()) {
+    out = out.split(needle).join(replacement);
+  }
+  return out;
+}
+
 // src/server.ts
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -155,7 +190,9 @@ function toStructured(result) {
 }
 function toErrorResult(toolName, error) {
   const code = error instanceof MarketplaceToolError ? error.code : "TOOL_ERROR";
-  const message = error instanceof Error ? error.message : String(error);
+  const message = sanitizeDiagnostic(
+    error instanceof Error ? error.message : String(error)
+  );
   return {
     isError: true,
     content: [
@@ -172,6 +209,8 @@ export {
   envFlag,
   resolveMcpConfig,
   buildToolContext,
+  redactUrl,
+  sanitizeDiagnostic,
   marketplaceTools,
   readonlyTools,
   prepareTools,
