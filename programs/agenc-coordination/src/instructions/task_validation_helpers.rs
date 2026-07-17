@@ -358,6 +358,31 @@ pub fn release_claim_slot(
     Ok(())
 }
 
+/// Audit F-15: counter decrement that never bricks on legacy counter drift.
+/// `reclaim_terminal_claim` and `expire_claim` are the designated un-brickers for
+/// stranded claims — a `checked_sub` underflow there would itself permanently
+/// brick the recovery path (the codebase deliberately uses saturating_sub for
+/// counters that may carry pre-migration drift). Pure + revert-sensitive.
+pub trait SaturatingDec {
+    fn saturating_dec(self) -> Self;
+}
+
+impl SaturatingDec for u8 {
+    fn saturating_dec(self) -> Self {
+        self.saturating_sub(1)
+    }
+}
+
+impl SaturatingDec for u16 {
+    fn saturating_dec(self) -> Self {
+        self.saturating_sub(1)
+    }
+}
+
+pub fn saturating_dec_counter<T: SaturatingDec>(v: T) -> T {
+    v.saturating_dec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,6 +487,21 @@ mod tests {
         let mut worker = AgentRegistration::default();
 
         assert!(release_claim_slot(&mut task, &mut worker, 42).is_err());
+    }
+
+    // Audit F-15 (revert-sensitive): the recovery-path decrement saturates at 0
+    // instead of underflow-erroring on drifted counters. checked_sub turns the
+    // first assert red (0 would error instead of returning 0).
+    #[test]
+    fn saturating_dec_counter_never_bricks_on_drift() {
+        assert_eq!(saturating_dec_counter(0u8), 0);
+        assert_eq!(saturating_dec_counter(1u8), 0);
+        assert_eq!(saturating_dec_counter(5u8), 4);
+        assert_eq!(saturating_dec_counter(u8::MAX), u8::MAX - 1);
+        assert_eq!(saturating_dec_counter(0u16), 0);
+        assert_eq!(saturating_dec_counter(1u16), 0);
+        assert_eq!(saturating_dec_counter(500u16), 499);
+        assert_eq!(saturating_dec_counter(u16::MAX), u16::MAX - 1);
     }
 
     #[test]

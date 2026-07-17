@@ -24,6 +24,7 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TerminalClaimReclaimed;
+use crate::instructions::task_validation_helpers::saturating_dec_counter;
 use crate::state::{
     AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
     TaskStatus, TaskSubmission,
@@ -189,15 +190,11 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     };
 
     // Free the slot counters — this is what un-bricks close_task
-    // (current_workers -> 0) and the worker's active_tasks budget.
-    task.current_workers = task
-        .current_workers
-        .checked_sub(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    worker.active_tasks = worker
-        .active_tasks
-        .checked_sub(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    // (current_workers -> 0) and the worker's active_tasks budget. saturating
+    // (audit F-15): the designated un-bricker must not itself brick on drifted
+    // legacy counters.
+    task.current_workers = saturating_dec_counter(task.current_workers);
+    worker.active_tasks = saturating_dec_counter(worker.active_tasks);
 
     // Split the claim lamports (FIX 4 forfeit rule): rent-exempt minimum back to
     // the worker, any surplus (the contest entry deposit) to the treasury — a

@@ -25,7 +25,8 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::task_validation_helpers::{
-    ensure_validation_config, is_manual_validation_task, sync_task_validation_status,
+    ensure_validation_config, is_manual_validation_task, saturating_dec_counter,
+    sync_task_validation_status,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::AgentStats;
@@ -54,6 +55,17 @@ fn cleanup_reward_for_task(is_token_task: bool, remaining_funds: u64) -> u64 {
     } else {
         CLEANUP_REWARD.min(remaining_funds)
     }
+}
+
+/// Audit F-11: expire_claim must never fire while THIS claim has a live (Submitted)
+/// submission. The evidence gate previously covered only the PendingValidation
+/// branch, so an InProgress task whose claim somehow carried a live submission
+/// could be expired out from under the worker's in-flight review. Unreachable
+/// post-H-1; defense-in-depth against future status-machine edits. Pure +
+/// revert-sensitive.
+fn claim_is_expirable(status: TaskStatus, claim_has_pending_submission: bool) -> bool {
+    matches!(status, TaskStatus::InProgress | TaskStatus::PendingValidation)
+        && !claim_has_pending_submission
 }
 
 /// Grace period in seconds after claim expiry during which only the worker
@@ -285,8 +297,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         (_, _) => false,
     };
     require!(
-        task.status == TaskStatus::InProgress
-            || (task.status == TaskStatus::PendingValidation && !claim_has_pending_submission),
+        claim_is_expirable(task.status, claim_has_pending_submission),
         CoordinationError::TaskNotInProgress
     );
     #[cfg(not(feature = "mainnet-canary"))]
@@ -329,11 +340,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
             .ok_or(CoordinationError::ArithmeticOverflow)?;
     }
 
-    // Decrement task worker count
-    task.current_workers = task
-        .current_workers
-        .checked_sub(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    // Decrement task worker count. saturating (audit F-15): this is a recovery path —
+    // a checked_sub underflow on a drifted legacy counter would itself brick it.
+    task.current_workers = saturating_dec_counter(task.current_workers);
 
     // A pure no-show is a claim that expired without THIS worker ever submitting:
     // either an InProgress expiry (a live submission would have moved the task to
@@ -525,11 +534,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         )?;
     }
 
-    // Decrement worker active tasks
-    worker.active_tasks = worker
-        .active_tasks
-        .checked_sub(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    // Decrement worker active tasks. saturating (audit F-15): legacy counter drift
+    // must not brick the designated un-bricking path.
+    worker.active_tasks = saturating_dec_counter(worker.active_tasks);
     #[cfg(not(feature = "mainnet-canary"))]
     let worker_agent_key = worker.key();
 
@@ -566,5 +573,18 @@ mod tests {
         assert_eq!(cleanup_reward_for_task(false, 1_000_000), CLEANUP_REWARD);
         assert_eq!(cleanup_reward_for_task(false, 500), 500);
         assert_eq!(cleanup_reward_for_task(false, 0), 0);
+    }
+
+    // Audit F-11 (revert-sensitive): InProgress + live-Submitted must NOT be
+    // expirable. Restoring the status-only gate turns the second assert red.
+    #[test]
+    fn in_progress_with_live_submission_is_not_expirable() {
+        assert!(claim_is_expirable(TaskStatus::InProgress, false));
+        assert!(!claim_is_expirable(TaskStatus::InProgress, true));
+        assert!(claim_is_expirable(TaskStatus::PendingValidation, false));
+        assert!(!claim_is_expirable(TaskStatus::PendingValidation, true));
+        assert!(!claim_is_expirable(TaskStatus::Open, false));
+        assert!(!claim_is_expirable(TaskStatus::Completed, false));
+        assert!(!claim_is_expirable(TaskStatus::Cancelled, false));
     }
 }
