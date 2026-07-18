@@ -11,6 +11,8 @@ use crate::instructions::bid_settlement_helpers::{
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::task_validation_helpers::is_contest_configured_task;
 use crate::instructions::lamport_transfer::transfer_lamports;
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{
@@ -30,13 +32,18 @@ use anchor_spl::token::{Mint, Token, TokenAccount};
 
 #[derive(Accounts)]
 pub struct CancelTask<'info> {
+    // Boxed: an unboxed `Account<Task>` puts the full deserialized Task (~450B) on
+    // the stack, and the cancel_task trampoline (try_accounts + __global) overflows
+    // the 4KB SBF frame with it (caught by scripts/check-stack-frames.mjs after the
+    // audit-C8 treasury account pushed it over). Box moves it to the heap; all
+    // constraints and wire shape are unchanged. Same fix as `token_escrow_ata` below.
     #[account(
         mut,
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump,
         constraint = task.creator == authority.key() @ CoordinationError::UnauthorizedTaskAction
     )]
-    pub task: Account<'info, Task>,
+    pub task: Box<Account<'info, Task>>,
 
     #[account(
         mut,
@@ -148,6 +155,20 @@ pub struct CancelTask<'info> {
         bump
     )]
     pub agent_stats: Option<Box<Account<'info, AgentStats>>>,
+
+    /// CHECK: the protocol treasury, validated against `protocol_config.treasury`.
+    /// Receives the FORFEITED contest entry-deposit surplus of every no-show
+    /// claim drained by this cancel (never refunded to the squatter) — the same
+    /// rule as expire_claim / reclaim_terminal_claim, so the deposit prices
+    /// squatting on EVERY no-show exit. Required whenever a drained claim carries
+    /// a deposit; enforced in the handler. Full-surface only — canary builds are
+    /// contest-incapable, so the frozen canary account list is unchanged.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        mut,
+        constraint = treasury.key() == protocol_config.treasury @ CoordinationError::ContestForfeitTreasuryRequired
+    )]
+    pub treasury: Option<UncheckedAccount<'info>>,
 }
 
 pub fn process_cancel_task<'info>(
@@ -552,6 +573,42 @@ fn process_cancel_task_impl<'info>(
         // Use AnchorSerialize::serialize (Borsh only) — see dispute_helpers.rs comment (fix #960).
         AnchorSerialize::serialize(&worker, &mut &mut worker_data[8..])
             .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotSerialize)?;
+
+        // Forfeit the contest entry deposit of a no-show claim BEFORE its rent is
+        // returned. A cancel reaches this loop with zero live submissions (the
+        // contest guard in validate_cancel_prereqs), so every drained contest
+        // claim is a no-show squatter: the deposit surplus goes to the protocol
+        // treasury (matching expire_claim / reclaim_terminal_claim), never back
+        // to the squatter. The claim's rent still returns to the worker below.
+        // Full-surface only: canary builds are contest-incapable, so no canary
+        // claim can ever carry a deposit.
+        #[cfg(not(feature = "mainnet-canary"))]
+        if is_contest_configured_task(task) {
+            let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
+            let surplus = claim_info.lamports().saturating_sub(rent_min);
+            if surplus > 0 {
+                let treasury = accounts
+                    .treasury
+                    .as_ref()
+                    .ok_or(CoordinationError::ContestForfeitTreasuryRequired)?;
+                let treasury_info = treasury.to_account_info();
+                **claim_info.try_borrow_mut_lamports()? = claim_info
+                    .lamports()
+                    .checked_sub(surplus)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?;
+                **treasury_info.try_borrow_mut_lamports()? = treasury_info
+                    .lamports()
+                    .checked_add(surplus)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?;
+                emit!(crate::events::ContestDepositForfeited {
+                    task: task.key(),
+                    claim: claim_info.key(),
+                    worker_agent: worker_info.key(),
+                    amount: surplus,
+                    timestamp: clock.unix_timestamp,
+                });
+            }
+        }
 
         // Close claim account and return rent to worker authority.
         let claim_lamports = claim_info.lamports();

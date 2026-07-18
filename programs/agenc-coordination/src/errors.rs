@@ -1075,4 +1075,7 @@ pub enum CoordinationError {
     // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("The delegator agent is not the same registration that created this delegation")]
     ReputationDelegationIdentityMismatch,
+    // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("An agent with live bids cannot deregister (their withdrawal paths load this registration)")]
+    AgentHasActiveBids,
 }

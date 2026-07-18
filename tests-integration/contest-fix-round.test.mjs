@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32, coder,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, injectAgentStake, taskModV2Pda, moderationBlockPda,
+  freshWorld, injectAgentStake, taskModV2Pda, moderationBlockPda, deregisterRemaining,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 
@@ -540,6 +540,7 @@ test("FIX 5: straggler submission rent routes to the TREASURY when the worker ag
   expectOk(send(w.svm, await workerA.prog.methods
     .deregisterAgent()
     .accounts({ agent: workerA.agentPda, protocolConfig: w.protocolPda, reputationStake: pda([enc("reputation_stake"), workerA.agentPda.toBuffer()])[0], authority: workerA.kp.publicKey })
+    .remainingAccounts(deregisterRemaining(workerA.agentPda))
     .instruction(), [workerA.kp]), "deregister the straggler's agent");
   assert.ok(isClosed(w.svm, workerA.agentPda), "agent PDA provably closed");
 
@@ -550,6 +551,7 @@ test("FIX 5: straggler submission rent routes to the TREASURY when the worker ag
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null, systemProgram: SystemProgram.programId,
+      treasury: null,
     })
     .instruction(), [w.buyer]), "cancel task");
 

@@ -102,6 +102,7 @@ test("create_dependent_task: a Cancelled legacy parent is still rejected (Parent
       workerCompletionBond: pda([enc("completion_bond"), parent.task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
       workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null,
+      treasury: null,
     })
     .instruction(), [w.buyer]), "cancel parent");
   assert.ok(decode(w.svm, "Task", parent.task).status.Cancelled !== undefined, "parent is Cancelled");

@@ -20,6 +20,7 @@ import {
   enc,
   arr,
   id32,
+  deregisterRemaining,
   coder,
   PID,
   BN,
@@ -174,6 +175,7 @@ test("deregister_agent: blocked while reputation stake is live; allowed after fu
 
   const deregIx = async () => prog.methods.deregisterAgent()
     .accounts({ agent: agentPda, protocolConfig: w.protocolPda, reputationStake: stakePda, authority: kp.publicKey })
+    .remainingAccounts(deregisterRemaining(agentPda))
     .instruction();
 
   // Revert-sensitive: with a live stake, deregistration is refused. Drop the

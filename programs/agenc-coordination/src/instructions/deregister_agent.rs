@@ -3,7 +3,7 @@
 use crate::errors::CoordinationError;
 use crate::events::AgentDeregistered;
 use crate::instructions::slash_helpers::SLASH_WINDOW;
-use crate::state::{AgentRegistration, ProtocolConfig, ReputationStake};
+use crate::state::{AgentRegistration, AgentVerification, BidderMarketState, ProtocolConfig, ReputationStake};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -129,6 +129,83 @@ pub fn handler(ctx: Context<DeregisterAgent>) -> Result<()> {
             time_since_vote > VOTE_COOLDOWN,
             CoordinationError::RecentVoteActivity
         );
+    }
+
+    // Audit (2026-07 swarm): a bidder with LIVE bids must not deregister — every
+    // bid-withdrawal path loads this AgentRegistration by seeds, so closing it
+    // would brick the bidder's own bonds. The canonical ["bidder_market", agent]
+    // PDA is REQUIRED in remaining_accounts[0] so the guard cannot be dodged by
+    // omission; an agent that never bid has an empty system-owned PDA there,
+    // which reads as zero live bids.
+    let bidder_market_info = ctx
+        .remaining_accounts
+        .first()
+        .ok_or(CoordinationError::InvalidInput)?;
+    let (expected_bidder_market, _) = Pubkey::find_program_address(
+        &[b"bidder_market", agent.key().as_ref()],
+        &crate::ID,
+    );
+    require!(
+        bidder_market_info.key() == expected_bidder_market,
+        CoordinationError::InvalidInput
+    );
+    if bidder_market_info.owner == &crate::ID {
+        let data = bidder_market_info.try_borrow_data()?;
+        if let Ok(market) = BidderMarketState::try_deserialize(&mut &data[..]) {
+            require!(market.bidder == agent.key(), CoordinationError::InvalidInput);
+            require!(
+                market.active_bid_count == 0,
+                CoordinationError::AgentHasActiveBids
+            );
+        }
+    }
+
+    // Audit (2026-07 swarm): sweep the AgentVerification badge. It is keyed
+    // ["agent_verification", agent] and this PDA is agent_id-seeded — so a
+    // deregister -> re-register cycle (by anyone: the agent_id is up for grabs)
+    // would attach the OLD registration's verified-domain badge to the NEW
+    // registrant. REQUIRED in remaining_accounts[1]; a live badge is closed
+    // (rent to the deregistering authority) so no badge outlives its
+    // registration. An agent never verified has an empty system PDA there.
+    let verification_info = ctx
+        .remaining_accounts
+        .get(1)
+        .ok_or(CoordinationError::InvalidInput)?;
+    let (expected_verification, _) = Pubkey::find_program_address(
+        &[b"agent_verification", agent.key().as_ref()],
+        &crate::ID,
+    );
+    require!(
+        verification_info.key() == expected_verification,
+        CoordinationError::InvalidInput
+    );
+    if verification_info.owner == &crate::ID {
+        let badge_live = {
+            let data = verification_info.try_borrow_data()?;
+            match AgentVerification::try_deserialize(&mut &data[..]) {
+                Ok(verification) => {
+                    require!(
+                        verification.agent == agent.key(),
+                        CoordinationError::InvalidInput
+                    );
+                    true
+                }
+                // A tombstoned badge ([255; 8] discriminator) does not deserialize.
+                Err(_) => false,
+            }
+        };
+        if badge_live {
+            let authority_info = ctx.accounts.authority.to_account_info();
+            let lamports = verification_info.lamports();
+            **verification_info.try_borrow_mut_lamports()? = 0;
+            **authority_info.try_borrow_mut_lamports()? = authority_info
+                .lamports()
+                .checked_add(lamports)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
+            let mut data = verification_info.try_borrow_mut_data()?;
+            data.fill(0);
+            data[..8].copy_from_slice(&[255u8; 8]);
+        }
     }
 
     // Update protocol stats

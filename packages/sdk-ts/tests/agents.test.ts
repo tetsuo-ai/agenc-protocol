@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { address, createNoopSigner, some, none } from "@solana/kit";
+import { AccountRole, address, createNoopSigner, some, none } from "@solana/kit";
 import {
   getRegisterAgentInstruction,
   getRegisterAgentInstructionDataDecoder,
@@ -106,9 +106,12 @@ describe("deregisterAgent (facade)", () => {
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     // Accounts: agent, protocolConfig (auto-derived PDA), reputationStake (auto-derived
-    // PDA — audit: stake must be withdrawn before deregister), authority.
+    // PDA — audit: stake must be withdrawn before deregister), authority, then the two
+    // seeds-pinned remaining_accounts the handler requires (audit, 2026-07 swarm):
+    // [4] the ["bidder_market", agent] PDA (read-only; live bids block deregistration),
+    // [5] the ["agent_verification", agent] PDA (writable; a live badge is swept).
     const addrs = ix.accounts.map((a) => a.address);
-    expect(addrs).toHaveLength(4);
+    expect(addrs).toHaveLength(6);
     expect(addrs[0]).toBe(agent);
     expect(addrs[3]).toBe(authority.address);
     // protocolConfig and reputationStake are derived PDAs distinct from the supplied accounts.
@@ -117,6 +120,12 @@ describe("deregisterAgent (facade)", () => {
     expect(addrs[2]).not.toBe(agent);
     expect(addrs[2]).not.toBe(authority.address);
     expect(addrs[2]).not.toBe(addrs[1]);
+    // The remaining accounts are derived PDAs, distinct from the named accounts,
+    // with [4] read-only and [5] writable.
+    expect(addrs[4]).not.toBe(agent);
+    expect(addrs[5]).not.toBe(agent);
+    expect(ix.accounts[4]!.role).toBe(AccountRole.READONLY);
+    expect(ix.accounts[5]!.role).toBe(AccountRole.WRITABLE);
 
     // Data is just the discriminator; it must round-trip through the decoder.
     const decoded = getDeregisterAgentInstructionDataDecoder().decode(ix.data);

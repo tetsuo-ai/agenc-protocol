@@ -69,7 +69,9 @@ function closeTaskIx(w, r, withBook) {
   const ix = w.buyerProg.methods
     .closeTask()
     .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: pda([enc("hire"), r.task.toBuffer()])[0], listing: null, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey });
-  if (withBook) ix.remainingAccounts([{ pubkey: r.bidBook, isSigner: false, isWritable: false }]);
+  // Writable: once active_bids == 0 the close SWEEPS the creator-funded book's
+  // rent back to the creator (audit C8) instead of stranding it on the terminal task.
+  if (withBook) ix.remainingAccounts([{ pubkey: r.bidBook, isSigner: false, isWritable: true }]);
   return ix.instruction();
 }
 
@@ -89,6 +91,7 @@ test("close_task refuses to brick live bids on a BidExclusive task", async () =>
       workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
       workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null,
+      treasury: null,
     })
     .remainingAccounts([{ pubkey: r.bidBook, isSigner: false, isWritable: true }])
     .instruction(), [w.buyer]), "cancel the open bid task");
@@ -124,6 +127,16 @@ test("close_task refuses to brick live bids on a BidExclusive task", async () =>
 
   // Now the close proceeds.
   w.svm.expireBlockhash();
+  const bookRent = Number(w.svm.getBalance(r.bidBook));
+  const creatorBefore = Number(w.svm.getBalance(w.buyer.publicKey));
   expectOk(send(w.svm, await closeTaskIx(w, r, true), [w.buyer]), "close_task after all bids withdrawn");
   assert.ok(isClosed(w.svm, r.task), "task PDA closed cleanly");
+
+  // Audit C8: the book is swept in the same transaction — its creator-funded
+  // rent returns to the creator instead of stranding on the terminal task.
+  assert.ok(isClosed(w.svm, r.bidBook), "bid book swept (pre-C8: its rent stranded forever)");
+  assert.ok(
+    Number(w.svm.getBalance(w.buyer.publicKey)) - creatorBefore >= bookRent - 10_000,
+    "book rent returned to the creator",
+  );
 });

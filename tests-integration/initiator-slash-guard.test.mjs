@@ -17,7 +17,7 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, hireIx, injectAgentStake,
+  freshWorld, hireIx, injectAgentStake, deregisterRemaining,
   listingModV2Pda, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
@@ -78,6 +78,7 @@ async function deregisterIx(w, kp, agentPda) {
       reputationStake: pda([enc("reputation_stake"), agentPda.toBuffer()])[0],
       authority: kp.publicKey,
     })
+    .remainingAccounts(deregisterRemaining(agentPda))
     .instruction();
 }
 

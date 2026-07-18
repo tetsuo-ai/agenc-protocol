@@ -71,6 +71,7 @@ export type CancelTaskInstruction<
   TAccountWorkerBondAuthority extends string | AccountMeta<string> = string,
   TAccountCreatorAgent extends string | AccountMeta<string> = string,
   TAccountAgentStats extends string | AccountMeta<string> = string,
+  TAccountTreasury extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -119,6 +120,9 @@ export type CancelTaskInstruction<
       TAccountAgentStats extends string
         ? WritableAccount<TAccountAgentStats>
         : TAccountAgentStats,
+      TAccountTreasury extends string
+        ? WritableAccount<TAccountTreasury>
+        : TAccountTreasury,
       ...TRemainingAccounts,
     ]
   >;
@@ -165,6 +169,7 @@ export type CancelTaskAsyncInput<
   TAccountWorkerBondAuthority extends string = string,
   TAccountCreatorAgent extends string = string,
   TAccountAgentStats extends string = string,
+  TAccountTreasury extends string = string,
 > = {
   task: Address<TAccountTask>;
   /** cancellation can surface protocol-specific errors before Anchor account loading. */
@@ -206,6 +211,15 @@ export type CancelTaskAsyncInput<
    * `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only.
    */
   agentStats?: Address<TAccountAgentStats>;
+  /**
+   * Receives the FORFEITED contest entry-deposit surplus of every no-show
+   * claim drained by this cancel (never refunded to the squatter) — the same
+   * rule as expire_claim / reclaim_terminal_claim, so the deposit prices
+   * squatting on EVERY no-show exit. Required whenever a drained claim carries
+   * a deposit; enforced in the handler. Full-surface only — canary builds are
+   * contest-incapable, so the frozen canary account list is unchanged.
+   */
+  treasury?: Address<TAccountTreasury>;
 };
 
 export async function getCancelTaskInstructionAsync<
@@ -223,6 +237,7 @@ export async function getCancelTaskInstructionAsync<
   TAccountWorkerBondAuthority extends string,
   TAccountCreatorAgent extends string,
   TAccountAgentStats extends string,
+  TAccountTreasury extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelTaskAsyncInput<
@@ -239,7 +254,8 @@ export async function getCancelTaskInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
-    TAccountAgentStats
+    TAccountAgentStats,
+    TAccountTreasury
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -258,7 +274,8 @@ export async function getCancelTaskInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
-    TAccountAgentStats
+    TAccountAgentStats,
+    TAccountTreasury
   >
 > {
   // Program address.
@@ -293,6 +310,7 @@ export async function getCancelTaskInstructionAsync<
     },
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
+    treasury: { value: input.treasury ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -363,6 +381,7 @@ export async function getCancelTaskInstructionAsync<
       getAccountMeta("workerBondAuthority", accounts.workerBondAuthority),
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("agentStats", accounts.agentStats),
+      getAccountMeta("treasury", accounts.treasury),
     ],
     data: getCancelTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -381,7 +400,8 @@ export async function getCancelTaskInstructionAsync<
     TAccountWorkerCompletionBond,
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
-    TAccountAgentStats
+    TAccountAgentStats,
+    TAccountTreasury
   >);
 }
 
@@ -400,6 +420,7 @@ export type CancelTaskInput<
   TAccountWorkerBondAuthority extends string = string,
   TAccountCreatorAgent extends string = string,
   TAccountAgentStats extends string = string,
+  TAccountTreasury extends string = string,
 > = {
   task: Address<TAccountTask>;
   /** cancellation can surface protocol-specific errors before Anchor account loading. */
@@ -441,6 +462,15 @@ export type CancelTaskInput<
    * `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only.
    */
   agentStats?: Address<TAccountAgentStats>;
+  /**
+   * Receives the FORFEITED contest entry-deposit surplus of every no-show
+   * claim drained by this cancel (never refunded to the squatter) — the same
+   * rule as expire_claim / reclaim_terminal_claim, so the deposit prices
+   * squatting on EVERY no-show exit. Required whenever a drained claim carries
+   * a deposit; enforced in the handler. Full-surface only — canary builds are
+   * contest-incapable, so the frozen canary account list is unchanged.
+   */
+  treasury?: Address<TAccountTreasury>;
 };
 
 export function getCancelTaskInstruction<
@@ -458,6 +488,7 @@ export function getCancelTaskInstruction<
   TAccountWorkerBondAuthority extends string,
   TAccountCreatorAgent extends string,
   TAccountAgentStats extends string,
+  TAccountTreasury extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: CancelTaskInput<
@@ -474,7 +505,8 @@ export function getCancelTaskInstruction<
     TAccountWorkerCompletionBond,
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
-    TAccountAgentStats
+    TAccountAgentStats,
+    TAccountTreasury
   >,
   config?: { programAddress?: TProgramAddress },
 ): CancelTaskInstruction<
@@ -492,7 +524,8 @@ export function getCancelTaskInstruction<
   TAccountWorkerCompletionBond,
   TAccountWorkerBondAuthority,
   TAccountCreatorAgent,
-  TAccountAgentStats
+  TAccountAgentStats,
+  TAccountTreasury
 > {
   // Program address.
   const programAddress =
@@ -526,6 +559,7 @@ export function getCancelTaskInstruction<
     },
     creatorAgent: { value: input.creatorAgent ?? null, isWritable: false },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
+    treasury: { value: input.treasury ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -559,6 +593,7 @@ export function getCancelTaskInstruction<
       getAccountMeta("workerBondAuthority", accounts.workerBondAuthority),
       getAccountMeta("creatorAgent", accounts.creatorAgent),
       getAccountMeta("agentStats", accounts.agentStats),
+      getAccountMeta("treasury", accounts.treasury),
     ],
     data: getCancelTaskInstructionDataEncoder().encode({}),
     programAddress,
@@ -577,7 +612,8 @@ export function getCancelTaskInstruction<
     TAccountWorkerCompletionBond,
     TAccountWorkerBondAuthority,
     TAccountCreatorAgent,
-    TAccountAgentStats
+    TAccountAgentStats,
+    TAccountTreasury
   >);
 }
 
@@ -627,6 +663,15 @@ export type ParsedCancelTaskInstruction<
      * `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only.
      */
     agentStats?: TAccountMetas[13] | undefined;
+    /**
+     * Receives the FORFEITED contest entry-deposit surplus of every no-show
+     * claim drained by this cancel (never refunded to the squatter) — the same
+     * rule as expire_claim / reclaim_terminal_claim, so the deposit prices
+     * squatting on EVERY no-show exit. Required whenever a drained claim carries
+     * a deposit; enforced in the handler. Full-surface only — canary builds are
+     * contest-incapable, so the frozen canary account list is unchanged.
+     */
+    treasury?: TAccountMetas[14] | undefined;
   };
   data: CancelTaskInstructionData;
 };
@@ -639,12 +684,12 @@ export function parseCancelTaskInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCancelTaskInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 14) {
+  if (instruction.accounts.length < 15) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 14,
+        expectedAccountMetas: 15,
       },
     );
   }
@@ -677,6 +722,7 @@ export function parseCancelTaskInstruction<
       workerBondAuthority: getNextAccount(),
       creatorAgent: getNextOptionalAccount(),
       agentStats: getNextOptionalAccount(),
+      treasury: getNextOptionalAccount(),
     },
     data: getCancelTaskInstructionDataDecoder().decode(instruction.data),
   };

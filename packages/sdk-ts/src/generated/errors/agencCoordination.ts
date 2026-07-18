@@ -736,6 +736,8 @@ export const AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY = 0x18d6; // 6358
 export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT = 0x18d7; // 6359
 /** ReputationDelegationIdentityMismatch: The delegator agent is not the same registration that created this delegation */
 export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH = 0x18d8; // 6360
+/** AgentHasActiveBids: An agent with live bids cannot deregister (their withdrawal paths load this registration) */
+export const AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_BIDS = 0x18d9; // 6361
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -744,6 +746,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACTIVE_DISPUTE_VOTES
   | typeof AGENC_COORDINATION_ERROR__AGENT_ALREADY_REGISTERED
   | typeof AGENC_COORDINATION_ERROR__AGENT_BUSY_WITH_TASKS
+  | typeof AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_BIDS
   | typeof AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_TASKS
   | typeof AGENC_COORDINATION_ERROR__AGENT_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__AGENT_NOT_FOUND
@@ -1111,6 +1114,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__ACTIVE_DISPUTE_VOTES]: `Agent has active dispute votes pending resolution`,
     [AGENC_COORDINATION_ERROR__AGENT_ALREADY_REGISTERED]: `Agent is already registered`,
     [AGENC_COORDINATION_ERROR__AGENT_BUSY_WITH_TASKS]: `Agent cannot set status to Active while having active tasks`,
+    [AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_BIDS]: `An agent with live bids cannot deregister (their withdrawal paths load this registration)`,
     [AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_TASKS]: `Agent has active tasks and cannot be deregistered`,
     [AGENC_COORDINATION_ERROR__AGENT_NOT_ACTIVE]: `Agent is not active`,
     [AGENC_COORDINATION_ERROR__AGENT_NOT_FOUND]: `Agent not found`,

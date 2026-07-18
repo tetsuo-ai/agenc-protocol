@@ -350,7 +350,7 @@ _None._
 
 Cancel an unclaimed or expired task and reclaim funds.
 
-### Accounts (14)
+### Accounts (15)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -368,6 +368,7 @@ Cancel an unclaimed or expired task and reclaim funds.
 | 12 | `worker_bond_authority` | yes |  |  |  | == bond.party, and the no-show forfeit additionally binds it to a live claim (audit F-1). |
 | 13 | `creator_agent` |  |  | yes | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | OPTIONAL (P6.6): the cancelling creator's own agent registration, used to key the track-record aggregate. Constrained to `authority` so a caller can only attribute the cancel to THEIR OWN agent (no record-poisoning of a third party). Pass together with `agent_stats`. Full-surface only — gated so the frozen canary account list for `cancel_task` is unchanged. |
 | 14 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:creator_agent] | OPTIONAL (P6.6): the creator agent's track-record aggregate. When supplied (with `creator_agent`), a cancel bumps `total_cancelled`. Bound to `["agent_stats", creator_agent]`, created lazily on first write. Telemetry only. |
+| 15 | `treasury` | yes |  | yes |  | Receives the FORFEITED contest entry-deposit surplus of every no-show claim drained by this cancel (never refunded to the squatter) — the same rule as expire_claim / reclaim_terminal_claim, so the deposit prices squatting on EVERY no-show exit. Required whenever a drained claim carries a deposit; enforced in the handler. Full-surface only — canary builds are contest-incapable, so the frozen canary account list is unchanged. |
 
 ### Args (0)
 

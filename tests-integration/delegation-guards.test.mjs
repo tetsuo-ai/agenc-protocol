@@ -31,6 +31,7 @@ import {
   enc,
   arr,
   id32,
+  deregisterRemaining,
   hireIx,
   injectAgentStake,
   listingModV2Pda,
@@ -220,6 +221,7 @@ test("revoke_delegation: deregister -> re-register cannot revoke (reputation inf
           reputationStake: pda([enc("reputation_stake"), delegator.agentPda.toBuffer()])[0],
           authority: delegator.kp.publicKey,
         })
+        .remainingAccounts(deregisterRemaining(delegator.agentPda))
         .instruction(),
       [delegator.kp],
     ),

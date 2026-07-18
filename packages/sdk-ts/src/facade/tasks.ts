@@ -265,6 +265,11 @@ export type CancelTaskInput = Omit<
  * and the worker bond from [task, workerBondAuthority] — so callers pass only
  * `workerBondAuthority` (any wallet; the no-show forfeit binds it to a live claim
  * worker, audit F-1). settle no-ops when only the empty PDA exists.
+ *
+ * Audit C8: cancelling a CONTEST task whose drained claims carry entry deposits
+ * forfeits those deposits to the protocol treasury — pass `treasury` (the
+ * `ProtocolConfig.treasury` pubkey) on that path or the call fails closed with
+ * ContestForfeitTreasuryRequired. Every other task can omit it.
  */
 export async function cancelTask(input: CancelTaskInput) {
   const creatorCompletionBond =

@@ -2057,6 +2057,19 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Receives the FORFEITED contest entry-deposit surplus of every no-show",
+            "claim drained by this cancel (never refunded to the squatter) — the same",
+            "rule as expire_claim / reclaim_terminal_claim, so the deposit prices",
+            "squatting on EVERY no-show exit. Required whenever a drained claim carries",
+            "a deposit; enforced in the handler. Full-surface only — canary builds are",
+            "contest-incapable, so the frozen canary account list is unchanged."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -19714,6 +19727,11 @@ export type AgencCoordination = {
       "code": 6360,
       "name": "reputationDelegationIdentityMismatch",
       "msg": "The delegator agent is not the same registration that created this delegation"
+    },
+    {
+      "code": 6361,
+      "name": "agentHasActiveBids",
+      "msg": "An agent with live bids cannot deregister (their withdrawal paths load this registration)"
     }
   ],
   "types": [

@@ -79,6 +79,7 @@ test("hire -> cancel -> close: frees capacity, closes task + hire record", async
       creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       // P6.6 optional track-record accounts; omitted (no creator-agent attribution).
       creatorAgent: null, agentStats: null,
+      treasury: null,
     })
     .instruction();
   expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel");
@@ -702,7 +703,7 @@ test("completion bond (#70): cancelling a task REOPENED after a reject refunds t
     .accounts({ task: m.task, escrow: m.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: m.creatorBond, workerCompletionBond: m.workerBond, workerBondAuthority: w.provider.publicKey,
-      creatorAgent: null, agentStats: null })
+      creatorAgent: null, agentStats: null, treasury: null })
     .instruction(), [w.buyer]), "cancel reopened task with worker bond present");
 
   assert.ok(isClosed(w.svm, m.workerBond), "worker bond settled on cancel");
@@ -985,7 +986,7 @@ test("completion bond (F12/F5): cancel settles the creator bond (required+pinned
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond,
       workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
-      creatorAgent: null, agentStats: null })
+      creatorAgent: null, agentStats: null, treasury: null })
     .instruction(), [w.buyer]), "cancel with the required bond PDAs");
   assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task Cancelled");
   assert.ok(isClosed(w.svm, creatorBond), "creator bond settled on cancel (never left live on a terminal task)");
@@ -1011,7 +1012,7 @@ test("completion bond: cancel refunds the creator bond on an Open task", async (
     .accounts({ task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
-      creatorAgent: null, agentStats: null })
+      creatorAgent: null, agentStats: null, treasury: null })
     .instruction(), [w.buyer]), "cancel with creator bond refund");
 
   assert.ok(decode(w.svm, "Task", task).status.Cancelled !== undefined, "task Cancelled");
@@ -1487,7 +1488,7 @@ test("negative: a RejectFrozen task is refused by cancel / accept / request_chan
     .accounts({ task: f.task, escrow: f.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: pda([enc("completion_bond"), f.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), f.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
-      creatorAgent: null, agentStats: null })
+      creatorAgent: null, agentStats: null, treasury: null })
     .instruction(), [w.buyer]), "TaskCannotBeCancelled", "cancel refused on a frozen task");
 
   // accept_task_result: requires PendingValidation; a frozen task is not.
@@ -2051,6 +2052,7 @@ test("exit allow-list: a paused protocol blocks new hires but still lets a hired
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null,
+      treasury: null,
     })
     .instruction();
   expectOk(send(w.svm, cancelIx, [w.buyer]), "cancel under paused protocol");

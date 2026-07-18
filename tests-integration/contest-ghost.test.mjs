@@ -378,6 +378,7 @@ test("contest: cancel is blocked while live submissions exist; reject-all then c
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null, systemProgram: SystemProgram.programId,
+      treasury: null,
     })
     .instruction(), [w.buyer]), "cancel after reject-all");
   assert.ok(balance(w, w.buyer.publicKey) > creatorBefore, "creator refunded (documented reject-all escape)");
@@ -425,6 +426,7 @@ test("close_task: straggler submission rent returns to the worker, and is FAIL-C
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null, systemProgram: SystemProgram.programId,
+      treasury: null,
     })
     .instruction(), [w.buyer]), "cancel task");
 

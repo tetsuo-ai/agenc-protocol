@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld,
+  freshWorld, deregisterRemaining,
   BN, Keypair, PublicKey, SystemProgram, FailedTransactionMetadata,
 } from "./harness.mjs";
 
@@ -164,6 +164,7 @@ test("deregister_agent: closes the agent PDA and decrements total_agents", async
       await a.prog.methods
         .deregisterAgent()
         .accounts({ agent: a.agentPda, protocolConfig: w.protocolPda, reputationStake: pda([enc("reputation_stake"), a.agentPda.toBuffer()])[0], authority: a.kp.publicKey })
+        .remainingAccounts(deregisterRemaining(a.agentPda))
         .instruction(),
       [a.kp],
     ),

@@ -195,8 +195,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     // admin sweep. Require the canonical book (fail-closed when a BidExclusive task
     // omits it) and refuse while it reports active bids — bidders must withdraw
     // first, exactly like the completion-bond liveness guard above. The book rides
-    // in remaining_accounts[0] for BidExclusive tasks; the child sweep below skips it.
-    let child_start = if task.task_type == crate::state::TaskType::BidExclusive {
+    // in remaining_accounts[0] for BidExclusive tasks; the child sweep below skips it
+    // (it is closed to the creator explicitly, right after the escrow close).
+    let (child_start, bid_book_info) = if task.task_type == crate::state::TaskType::BidExclusive {
         let book_info = ctx
             .remaining_accounts
             .first()
@@ -221,9 +222,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
             book.active_bids == 0,
             CoordinationError::TaskNotClosable
         );
-        1
+        (1, Some(book_info.clone()))
     } else {
-        0
+        (0, None)
     };
 
     let job_spec_closed = ctx.accounts.task_job_spec.is_some();
@@ -254,6 +255,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         // one that still holds undistributed funds (would strand/misdirect them).
         require!(escrow.is_closed, CoordinationError::InvalidInput);
         escrow.close(authority_info.clone())?;
+    }
+    // Sweep the bid book too: the guard above proved active_bids == 0, and the
+    // book is creator-funded (initialize_bid_book, payer = creator), so its rent
+    // returns to the creator rather than stranding on the terminal task. Same
+    // blast radius as closing the Task itself, which the guard already gates.
+    if let Some(book_info) = bid_book_info {
+        close_child_to(&book_info, &authority_info)?;
     }
     // If a live hire link is present, free the listing's capacity slot and close the
     // link. Because hire_record is a required, seeds-fixed account, the caller cannot

@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**361 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**362 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -372,3 +372,4 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6358 | 0x18d6 | `RejectFrozenSolOnly` | Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow) |
 | 6359 | 0x18d7 | `ReputationDelegationWhileDefendant` | An agent with active disputes as defendant cannot delegate reputation |
 | 6360 | 0x18d8 | `ReputationDelegationIdentityMismatch` | The delegator agent is not the same registration that created this delegation |
+| 6361 | 0x18d9 | `AgentHasActiveBids` | An agent with live bids cannot deregister (their withdrawal paths load this registration) |

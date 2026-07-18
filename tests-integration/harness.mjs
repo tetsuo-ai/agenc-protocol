@@ -36,6 +36,19 @@ export const arr = (buf) => Array.from(buf);
 export const pda = (seeds) => PublicKey.findProgramAddressSync(seeds, PID);
 export const id32 = () => crypto.randomBytes(32);
 
+// The two remaining_accounts deregister_agent requires (audit, 2026-07 swarm):
+// [0] the canonical ["bidder_market", agent] PDA (read-only — deregistration is
+// refused while it reports live bids) and [1] the canonical
+// ["agent_verification", agent] PDA (writable — a live badge is closed with the
+// registration). For an agent that never bid / was never verified both are
+// empty system-owned PDAs, which the handler treats as zero / absent.
+export function deregisterRemaining(agentPda) {
+  return [
+    { pubkey: pda([enc("bidder_market"), agentPda.toBuffer()])[0], isSigner: false, isWritable: false },
+    { pubkey: pda([enc("agent_verification"), agentPda.toBuffer()])[0], isSigner: false, isWritable: true },
+  ];
+}
+
 export function makeProgram(payer) {
   const provider = new AnchorProvider(
     new Connection("http://127.0.0.1:9999"), // never hit — offline .instruction() only

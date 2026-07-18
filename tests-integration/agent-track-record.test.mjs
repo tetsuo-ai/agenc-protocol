@@ -178,6 +178,7 @@ test("track-record: cancel_task bumps the creator agent's total_cancelled (Agent
       creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       // P6.6 optional track-record accounts:
       creatorAgent: w.buyerAgent, agentStats: creatorStats,
+      treasury: null, // audit C8: not a contest task — no deposit drain
     })
     .instruction(), [w.buyer]), "cancel_task with agent_stats");
 
@@ -322,6 +323,7 @@ test("track-record: cancel_task WITHOUT the optional accounts still works and wr
       creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0], workerBondAuthority: w.provider.publicKey,
       // Optional track-record accounts omitted:
       creatorAgent: null, agentStats: null,
+      treasury: null, // audit C8: not a contest task — no deposit drain
     })
     .instruction(), [w.buyer]), "cancel_task without agent_stats");
 

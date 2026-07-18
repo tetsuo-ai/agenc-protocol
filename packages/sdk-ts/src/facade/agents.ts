@@ -2,7 +2,13 @@
 // the generated client already resolves PDAs and encodes data; the facade adds friendly
 // signatures, defaults, and (for multi-PDA flows) bundling. Never import from generated/
 // internals other than its public exports.
-import { some, none, type Address, type TransactionSigner } from "@solana/kit";
+import {
+  AccountRole,
+  some,
+  none,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   getRegisterAgentInstructionAsync,
   getUpdateAgentInstruction,
@@ -26,6 +32,7 @@ import {
   // operatorDomain). The PDA is seeded `["agent_verification", agent]`.
   findAgentVerificationPda,
   fetchMaybeAgentVerification,
+  findBidderMarketStatePda,
   type AgentStats,
   type RegisterAgentAsyncInput,
   type DeregisterAgentAsyncInput,
@@ -89,9 +96,32 @@ export function updateAgent(input: UpdateAgentInput) {
   });
 }
 
-/** Build a deregister_agent instruction; the protocol config PDA is auto-derived. */
+/**
+ * Build a deregister_agent instruction; the protocol config PDA is auto-derived.
+ *
+ * The handler also requires two seeds-pinned remaining_accounts (audit,
+ * 2026-07 swarm), derived and appended here automatically:
+ *   [0] the canonical `["bidder_market", agent]` PDA (read-only) — deregistration
+ *       is refused while it reports live bids, because every bid-withdrawal path
+ *       loads this registration (AgentHasActiveBids);
+ *   [1] the canonical `["agent_verification", agent]` PDA (writable) — a live
+ *       badge is closed with the registration so it can never attach to a later
+ *       re-registration of the same agent_id.
+ */
 export async function deregisterAgent(input: DeregisterAgentAsyncInput) {
-  return getDeregisterAgentInstructionAsync(input);
+  const ix = await getDeregisterAgentInstructionAsync(input);
+  const [bidderMarket] = await findBidderMarketStatePda({
+    bidder: input.agent,
+  });
+  const [verification] = await findAgentVerificationPda({ agent: input.agent });
+  return {
+    ...ix,
+    accounts: [
+      ...ix.accounts,
+      { address: bidderMarket, role: AccountRole.READONLY },
+      { address: verification, role: AccountRole.WRITABLE },
+    ],
+  };
 }
 
 /** Build a suspend_agent instruction; the protocol config PDA is auto-derived. */
