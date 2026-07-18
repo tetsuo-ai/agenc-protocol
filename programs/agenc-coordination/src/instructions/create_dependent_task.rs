@@ -41,13 +41,11 @@ pub struct CreateDependentTask<'info> {
     )]
     pub escrow: Box<Account<'info, TaskEscrow>>,
 
-    /// The parent task this new task depends on
-    /// Note: Uses Box to reduce stack usage for this large account
-    #[account(
-        constraint = parent_task.status != TaskStatus::Cancelled @ CoordinationError::ParentTaskCancelled,
-        constraint = parent_task.status != TaskStatus::Disputed @ CoordinationError::ParentTaskDisputed,
-    )]
-    pub parent_task: Box<Account<'info, Task>>,
+    /// The parent task this new task depends on.
+    /// CHECK: validated in the handler — owner-checked, then zero-pad deserialized
+    /// so legacy (pre-migration, shorter) parent accounts still load; the status
+    /// and creator checks run there against the deserialized value.
+    pub parent_task: UncheckedAccount<'info>,
 
     /// Note: Uses Box to reduce stack usage for this large account
     #[account(
@@ -135,9 +133,44 @@ pub fn handler(
     // with a zero tail — no readable un-moderated prose smuggled on-chain.
     validate_description_is_content_hash(&description)?;
     validate_bid_task_mode(task_type, max_workers, reward_mint)?;
+    // Legacy-safe parent load (audit): pre-migration parent tasks can be shorter
+    // than Task::SIZE (the live pre-batch-3 accounts are OLD_TASK_SIZE = 382B), and
+    // a typed Account<Task> load hard-fails on them — Borsh tolerates trailing
+    // bytes but not missing ones — bricking create_dependent_task against every
+    // un-migrated parent. Owner-check, then zero-pad a short legacy account up to
+    // SIZE before deserializing (new fields are append-only; everything read here
+    // — status, creator — lives within the unchanged prefix). Mirrors the
+    // parent-load pattern in completion_helpers::validate_task_dependency.
+    let parent_task_info = ctx.accounts.parent_task.to_account_info();
+    require!(
+        parent_task_info.owner == &crate::ID,
+        CoordinationError::InvalidAccountOwner
+    );
+    let parent_task = {
+        let parent_data = parent_task_info.try_borrow_data()?;
+        if parent_data.len() >= Task::SIZE {
+            Task::try_deserialize(&mut &parent_data[..]).map_err(|_| CoordinationError::InvalidInput)?
+        } else {
+            require!(
+                parent_data.len() >= Task::OLD_TASK_SIZE,
+                CoordinationError::InvalidInput
+            );
+            let mut buf = parent_data.to_vec();
+            buf.resize(Task::SIZE, 0);
+            Task::try_deserialize(&mut &buf[..]).map_err(|_| CoordinationError::InvalidInput)?
+        }
+    };
+    require!(
+        parent_task.status != TaskStatus::Cancelled,
+        CoordinationError::ParentTaskCancelled
+    );
+    require!(
+        parent_task.status != TaskStatus::Disputed,
+        CoordinationError::ParentTaskDisputed
+    );
     // Validate parent task belongs to same creator (#520)
     require!(
-        ctx.accounts.parent_task.creator == ctx.accounts.creator.key(),
+        parent_task.creator == ctx.accounts.creator.key(),
         CoordinationError::UnauthorizedCreator
     );
     require!(

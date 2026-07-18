@@ -793,6 +793,18 @@ export type AgencCoordination = {
           ],
           "optional": true,
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "creator",
+          "docs": [
+            "settlement path (the creator funded both at create_task; EVERY other close",
+            "path in the program returns this rent to the creator — resolve_dispute,",
+            "cancel_task, expire_dispute, close_task, reject_frozen_exits). Required",
+            "whenever the settlement branch runs; validated against task.creator.",
+            "Optional in the IDL so SOL-task callers can omit it."
+          ],
+          "writable": true,
+          "optional": true
         }
       ],
       "args": []
@@ -4099,8 +4111,9 @@ export type AgencCoordination = {
         {
           "name": "parentTask",
           "docs": [
-            "The parent task this new task depends on",
-            "Note: Uses Box to reduce stack usage for this large account"
+            "The parent task this new task depends on.",
+            "so legacy (pre-migration, shorter) parent accounts still load; the status",
+            "and creator checks run there against the deserialized value."
           ]
         },
         {

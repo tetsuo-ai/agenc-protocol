@@ -1913,7 +1913,7 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
   await setProtocolPaused(w.svm, true);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .applyDisputeSlash()
-    .accounts({ dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent, workerAuthority: w.provider.publicKey, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey, escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null })
+    .accounts({ dispute, task: r.task, workerClaim: r.claim, workerAgent: w.providerAgent, workerAuthority: w.provider.publicKey, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey, escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creator: null })
     .instruction(), [w.admin]), "slash:apply_dispute_slash while paused");
 
   const stakeAfter = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);

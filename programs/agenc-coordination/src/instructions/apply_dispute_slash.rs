@@ -103,6 +103,18 @@ pub struct ApplyDisputeSlash<'info> {
 
     /// SPL Token program
     pub token_program: Option<Program<'info, Token>>,
+
+    /// CHECK: the task creator — receives the escrow PDA + ATA rent on the token
+    /// settlement path (the creator funded both at create_task; EVERY other close
+    /// path in the program returns this rent to the creator — resolve_dispute,
+    /// cancel_task, expire_dispute, close_task, reject_frozen_exits). Required
+    /// whenever the settlement branch runs; validated against task.creator.
+    /// Optional in the IDL so SOL-task callers can omit it.
+    #[account(
+        mut,
+        constraint = creator.key() == task.creator @ CoordinationError::UnauthorizedTaskAction
+    )]
+    pub creator: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
@@ -267,7 +279,8 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
                 && ctx.accounts.token_escrow_ata.is_some()
                 && ctx.accounts.treasury_token_account.is_some()
                 && ctx.accounts.reward_mint.is_some()
-                && ctx.accounts.token_program.is_some(),
+                && ctx.accounts.token_program.is_some()
+                && ctx.accounts.creator.is_some(),
             CoordinationError::MissingTokenAccounts
         );
 
@@ -341,18 +354,27 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
             .checked_sub(token_slash_amount)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
 
+        // The creator funded the escrow PDA + ATA rent at create_task, so the rent
+        // returns to THEM (matching every other close path); only the slashed
+        // tokens and any griefed dust go to the treasury.
+        let rent_recipient = ctx
+            .accounts
+            .creator
+            .as_ref()
+            .ok_or(CoordinationError::MissingTokenAccounts)?
+            .to_account_info();
         close_token_escrow(
             token_escrow,
             residual_amount,
             &treasury_ta.to_account_info(),
-            &ctx.accounts.treasury.to_account_info(),
+            &rent_recipient,
             &escrow.to_account_info(),
             escrow_seeds,
             token_program,
         )?;
 
         escrow.is_closed = true;
-        escrow.close(ctx.accounts.treasury.to_account_info())?;
+        escrow.close(rent_recipient)?;
     }
 
     // If neither lamports nor token reserves can be slashed, fail explicitly — UNLESS the

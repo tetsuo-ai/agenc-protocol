@@ -161,6 +161,7 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
       workerAuthority: w.provider.publicKey, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
       authority: w.admin.publicKey,
       escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creator: null, // SOL task — the token-settlement rent recipient is unused
     })
     .instruction(), [w.admin]), "apply_dispute_slash finalizes");
   assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).disputes_as_defendant, 0, "defendant counter cleared");

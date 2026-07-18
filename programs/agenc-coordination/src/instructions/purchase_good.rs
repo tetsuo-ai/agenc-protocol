@@ -131,11 +131,13 @@ pub(crate) fn split_good_price(
     protocol_fee_bps: u16,
     operator_fee_bps: u16,
 ) -> Result<(u64, u64, u64)> {
-    let protocol_fee = price
-        .checked_mul(protocol_fee_bps as u64)
+    // u128 intermediates (audit F-16): price.checked_mul(bps) overflows u64 for
+    // prices above ~9.2e15, DoS-ing the purchase; the post-division fee always fits.
+    let protocol_fee = (price as u128)
+        .checked_mul(protocol_fee_bps as u128)
         .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(BASIS_POINTS_DIVISOR)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+        .checked_div(BASIS_POINTS_DIVISOR as u128)
+        .ok_or(CoordinationError::ArithmeticOverflow)? as u64;
     // calculate_combined_fees enforces: operator leg cap, combined cap
     // (protocol + operator ≤ MAX_COMBINED_FEE_BPS) and the payout floor —
     // binding at PURCHASE time so a post-create protocol-fee change can never
@@ -477,5 +479,24 @@ mod tests {
         assert_eq!(protocol, 200_000);
         assert_eq!(operator, 200_000);
         assert_eq!(seller, 600_000);
+    }
+
+    #[test]
+    fn split_handles_prices_above_the_u64_mul_overflow_threshold() {
+        // Audit F-16 parity (revert-sensitive): price.checked_mul(bps) overflows u64
+        // for prices above u64::MAX / 10_000, which used to DoS the purchase with
+        // ArithmeticOverflow. The u128-intermediate math must return Ok AND still
+        // conserve exactly at those prices.
+        for price in [u64::MAX / 1000, u64::MAX - 7] {
+            for (p_bps, o_bps) in [(500u16, 100u16), (MAX_PROTOCOL_FEE_BPS, MAX_OPERATOR_FEE_BPS)] {
+                let (seller, protocol, operator) = split_good_price(price, p_bps, o_bps)
+                    .expect("huge prices must not overflow the fee multiply");
+                assert_eq!(
+                    (seller as u128) + (protocol as u128) + (operator as u128),
+                    price as u128,
+                    "legs must sum exactly (price={price} p={p_bps} o={o_bps})"
+                );
+            }
+        }
     }
 }

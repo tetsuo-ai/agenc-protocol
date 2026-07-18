@@ -526,10 +526,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         .worker
         .as_mut()
         .ok_or(CoordinationError::WorkerAgentRequired)?;
-    worker.active_tasks = worker
-        .active_tasks
-        .checked_sub(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    // Saturating (F-15 consistency): a legacy drifted counter must not brick the
+    // designated un-bricking exit — every other decrement of this counter
+    // (dispute_helpers::process_worker_claim_pair, the multi-worker loop below)
+    // already saturates.
+    worker.active_tasks = worker.active_tasks.saturating_sub(1);
     worker.disputes_as_defendant = worker.disputes_as_defendant.saturating_sub(1);
     let defendant_worker_key = worker.key();
 

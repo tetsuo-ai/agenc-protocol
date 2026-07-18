@@ -145,6 +145,7 @@ async function applyDisputeSlashIx(w, r) {
       workerAuthority: w.provider.publicKey,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey,
       escrow: null, tokenEscrowAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
+      creator: null, // SOL task — the token-settlement rent recipient is unused
     })
     .instruction();
 }

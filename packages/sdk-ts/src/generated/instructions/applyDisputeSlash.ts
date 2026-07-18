@@ -64,6 +64,7 @@ export type ApplyDisputeSlashInstruction<
   TAccountRewardMint extends string | AccountMeta<string> = string,
   TAccountTokenProgram extends string | AccountMeta<string> =
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  TAccountCreator extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -109,6 +110,9 @@ export type ApplyDisputeSlashInstruction<
       TAccountTokenProgram extends string
         ? ReadonlyAccount<TAccountTokenProgram>
         : TAccountTokenProgram,
+      TAccountCreator extends string
+        ? WritableAccount<TAccountCreator>
+        : TAccountCreator,
       ...TRemainingAccounts,
     ]
   >;
@@ -156,6 +160,7 @@ export type ApplyDisputeSlashAsyncInput<
   TAccountTreasuryTokenAccount extends string = string,
   TAccountRewardMint extends string = string,
   TAccountTokenProgram extends string = string,
+  TAccountCreator extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -183,6 +188,14 @@ export type ApplyDisputeSlashAsyncInput<
   rewardMint?: Address<TAccountRewardMint>;
   /** SPL Token program */
   tokenProgram?: Address<TAccountTokenProgram>;
+  /**
+   * settlement path (the creator funded both at create_task; EVERY other close
+   * path in the program returns this rent to the creator — resolve_dispute,
+   * cancel_task, expire_dispute, close_task, reject_frozen_exits). Required
+   * whenever the settlement branch runs; validated against task.creator.
+   * Optional in the IDL so SOL-task callers can omit it.
+   */
+  creator?: Address<TAccountCreator>;
 };
 
 export async function getApplyDisputeSlashInstructionAsync<
@@ -199,6 +212,7 @@ export async function getApplyDisputeSlashInstructionAsync<
   TAccountTreasuryTokenAccount extends string,
   TAccountRewardMint extends string,
   TAccountTokenProgram extends string,
+  TAccountCreator extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ApplyDisputeSlashAsyncInput<
@@ -214,7 +228,8 @@ export async function getApplyDisputeSlashInstructionAsync<
     TAccountTokenEscrowAta,
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
-    TAccountTokenProgram
+    TAccountTokenProgram,
+    TAccountCreator
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -232,7 +247,8 @@ export async function getApplyDisputeSlashInstructionAsync<
     TAccountTokenEscrowAta,
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
-    TAccountTokenProgram
+    TAccountTokenProgram,
+    TAccountCreator
   >
 > {
   // Program address.
@@ -257,6 +273,7 @@ export async function getApplyDisputeSlashInstructionAsync<
     },
     rewardMint: { value: input.rewardMint ?? null, isWritable: false },
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
+    creator: { value: input.creator ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -288,6 +305,7 @@ export async function getApplyDisputeSlashInstructionAsync<
       getAccountMeta("treasuryTokenAccount", accounts.treasuryTokenAccount),
       getAccountMeta("rewardMint", accounts.rewardMint),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
+      getAccountMeta("creator", accounts.creator),
     ],
     data: getApplyDisputeSlashInstructionDataEncoder().encode({}),
     programAddress,
@@ -305,7 +323,8 @@ export async function getApplyDisputeSlashInstructionAsync<
     TAccountTokenEscrowAta,
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
-    TAccountTokenProgram
+    TAccountTokenProgram,
+    TAccountCreator
   >);
 }
 
@@ -323,6 +342,7 @@ export type ApplyDisputeSlashInput<
   TAccountTreasuryTokenAccount extends string = string,
   TAccountRewardMint extends string = string,
   TAccountTokenProgram extends string = string,
+  TAccountCreator extends string = string,
 > = {
   dispute: Address<TAccountDispute>;
   task: Address<TAccountTask>;
@@ -350,6 +370,14 @@ export type ApplyDisputeSlashInput<
   rewardMint?: Address<TAccountRewardMint>;
   /** SPL Token program */
   tokenProgram?: Address<TAccountTokenProgram>;
+  /**
+   * settlement path (the creator funded both at create_task; EVERY other close
+   * path in the program returns this rent to the creator — resolve_dispute,
+   * cancel_task, expire_dispute, close_task, reject_frozen_exits). Required
+   * whenever the settlement branch runs; validated against task.creator.
+   * Optional in the IDL so SOL-task callers can omit it.
+   */
+  creator?: Address<TAccountCreator>;
 };
 
 export function getApplyDisputeSlashInstruction<
@@ -366,6 +394,7 @@ export function getApplyDisputeSlashInstruction<
   TAccountTreasuryTokenAccount extends string,
   TAccountRewardMint extends string,
   TAccountTokenProgram extends string,
+  TAccountCreator extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ApplyDisputeSlashInput<
@@ -381,7 +410,8 @@ export function getApplyDisputeSlashInstruction<
     TAccountTokenEscrowAta,
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
-    TAccountTokenProgram
+    TAccountTokenProgram,
+    TAccountCreator
   >,
   config?: { programAddress?: TProgramAddress },
 ): ApplyDisputeSlashInstruction<
@@ -398,7 +428,8 @@ export function getApplyDisputeSlashInstruction<
   TAccountTokenEscrowAta,
   TAccountTreasuryTokenAccount,
   TAccountRewardMint,
-  TAccountTokenProgram
+  TAccountTokenProgram,
+  TAccountCreator
 > {
   // Program address.
   const programAddress =
@@ -422,6 +453,7 @@ export function getApplyDisputeSlashInstruction<
     },
     rewardMint: { value: input.rewardMint ?? null, isWritable: false },
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
+    creator: { value: input.creator ?? null, isWritable: true },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -450,6 +482,7 @@ export function getApplyDisputeSlashInstruction<
       getAccountMeta("treasuryTokenAccount", accounts.treasuryTokenAccount),
       getAccountMeta("rewardMint", accounts.rewardMint),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
+      getAccountMeta("creator", accounts.creator),
     ],
     data: getApplyDisputeSlashInstructionDataEncoder().encode({}),
     programAddress,
@@ -467,7 +500,8 @@ export function getApplyDisputeSlashInstruction<
     TAccountTokenEscrowAta,
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
-    TAccountTokenProgram
+    TAccountTokenProgram,
+    TAccountCreator
   >);
 }
 
@@ -503,6 +537,14 @@ export type ParsedApplyDisputeSlashInstruction<
     rewardMint?: TAccountMetas[11] | undefined;
     /** SPL Token program */
     tokenProgram?: TAccountMetas[12] | undefined;
+    /**
+     * settlement path (the creator funded both at create_task; EVERY other close
+     * path in the program returns this rent to the creator — resolve_dispute,
+     * cancel_task, expire_dispute, close_task, reject_frozen_exits). Required
+     * whenever the settlement branch runs; validated against task.creator.
+     * Optional in the IDL so SOL-task callers can omit it.
+     */
+    creator?: TAccountMetas[13] | undefined;
   };
   data: ApplyDisputeSlashInstructionData;
 };
@@ -515,12 +557,12 @@ export function parseApplyDisputeSlashInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedApplyDisputeSlashInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 13) {
+  if (instruction.accounts.length < 14) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 13,
+        expectedAccountMetas: 14,
       },
     );
   }
@@ -552,6 +594,7 @@ export function parseApplyDisputeSlashInstruction<
       treasuryTokenAccount: getNextOptionalAccount(),
       rewardMint: getNextOptionalAccount(),
       tokenProgram: getNextOptionalAccount(),
+      creator: getNextOptionalAccount(),
     },
     data: getApplyDisputeSlashInstructionDataDecoder().decode(instruction.data),
   };

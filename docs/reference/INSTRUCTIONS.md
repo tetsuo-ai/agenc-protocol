@@ -172,7 +172,7 @@ _None._
 
 Apply slashing to a worker after losing a dispute.
 
-### Accounts (13)
+### Accounts (14)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -189,6 +189,7 @@ Apply slashing to a worker after losing a dispute.
 | 11 | `treasury_token_account` | yes |  | yes |  | Treasury token ATA receiving slashed tokens |
 | 12 | `reward_mint` |  |  | yes |  | SPL mint for task rewards (must match task.reward_mint) |
 | 13 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | SPL Token program |
+| 14 | `creator` | yes |  | yes |  | settlement path (the creator funded both at create_task; EVERY other close path in the program returns this rent to the creator — resolve_dispute, cancel_task, expire_dispute, close_task, reject_frozen_exits). Required whenever the settlement branch runs; validated against task.creator. Optional in the IDL so SOL-task callers can omit it. |
 
 ### Args (0)
 
@@ -643,7 +644,7 @@ The parent task must not be cancelled or disputed.
 |---|---|---|---|---|---|---|
 | 1 | `task` | yes |  |  | PDA ["task", account:creator, arg:task_id] |  |
 | 2 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
-| 3 | `parent_task` |  |  |  |  | The parent task this new task depends on Note: Uses Box to reduce stack usage for this large account |
+| 3 | `parent_task` |  |  |  |  | The parent task this new task depends on. so legacy (pre-migration, shorter) parent accounts still load; the status and creator checks run there against the deserialized value. |
 | 4 | `protocol_config` | yes |  |  | PDA ["protocol"] | Note: Uses Box to reduce stack usage for this large account |
 | 5 | `creator_agent` |  |  |  | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | Creator's agent registration for identity/authorization checks |
 | 6 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:authority] | Wallet-scoped task/dispute rate limit state shared across all agents |

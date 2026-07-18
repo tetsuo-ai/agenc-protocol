@@ -188,9 +188,15 @@ pub fn handler(
         .checked_mul(quorum_factor)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
-    // Voting period: use governance config value (capped at MAX), or provided value
+    // Voting period: the governance config value is BOTH the default and the floor.
+    // A caller-provided period is capped at MAX and floored at the governance
+    // default (audit: previously a proposer could pass voting_period = 1 and close
+    // voting before the electorate could react — a captured-governance vector;
+    // a mainnet proposal already ran at 600s).
     let effective_voting_period = if voting_period > 0 {
-        voting_period.min(GovernanceConfig::MAX_VOTING_PERIOD)
+        voting_period
+            .min(GovernanceConfig::MAX_VOTING_PERIOD)
+            .max(governance.voting_period)
     } else {
         governance.voting_period
     };

@@ -278,6 +278,36 @@ test("create_proposal: invalid proposal_type is rejected (InvalidProposalType)",
   expectFail(res, "InvalidProposalType", "bad proposal_type rejected");
 });
 
+test("create_proposal: a custom voting period is floored at the governance default (audit: no snap votes)", async () => {
+  const w = await freshWorld({});
+  // Governance default = 86_400 (1 day); the program's MAX_VOTING_PERIOD = 604_800.
+  const { governance } = await initGovernance(w, { votingPeriod: 86_400, minProposalStake: 1_000 });
+  const proposer = await registerAgent(w);
+  await injectAgentStake(w.svm, proposer.agent, 10_000);
+
+  // votingPeriod = 1s — a snap vote that closes before the electorate can react
+  // (a mainnet proposal already ran at 600s). Revert-sensitive: pre-fix the
+  // deadline lands created_at + 1; post-fix it is floored UP to the default.
+  const { proposal, res } = await createProposal(w, governance, proposer, { nonce: 17, votingPeriod: 1 });
+  expectOk(res, "create proposal with a tiny custom voting period");
+  const p = decode(w.svm, "Proposal", proposal);
+  assert.equal(
+    BigInt(p.voting_deadline.toString()) - BigInt(p.created_at.toString()),
+    86_400n,
+    "custom period floored at the governance default (pre-fix: 1s snap vote)",
+  );
+
+  // The MAX_VOTING_PERIOD cap still binds above it (floor must not defeat the cap).
+  const { proposal: capped, res: cappedRes } = await createProposal(w, governance, proposer, { nonce: 19, votingPeriod: 999_999_999 });
+  expectOk(cappedRes, "create proposal with an oversized custom voting period");
+  const cp = decode(w.svm, "Proposal", capped);
+  assert.equal(
+    BigInt(cp.voting_deadline.toString()) - BigInt(cp.created_at.toString()),
+    604_800n,
+    "custom period still capped at MAX_VOTING_PERIOD",
+  );
+});
+
 // ===========================================================================
 // vote_proposal
 // ===========================================================================

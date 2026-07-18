@@ -892,10 +892,9 @@ pub fn handler<'info>(
     // Decrementing here would leave current_workers == 1 but active_tasks == 0 —
     // a counter desync on the still-open claim.
     if !worker_slash_pending {
-        worker.active_tasks = worker
-            .active_tasks
-            .checked_sub(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
+        // Saturating (F-15 consistency): this path is a designated un-bricking
+        // exit; a legacy drifted counter must not be able to wedge it.
+        worker.active_tasks = worker.active_tasks.saturating_sub(1);
     }
     // Update activity timestamp so fallback deregistration gating has a deterministic anchor.
     worker.last_active = clock.unix_timestamp;

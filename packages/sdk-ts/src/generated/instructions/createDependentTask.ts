@@ -243,8 +243,9 @@ export type CreateDependentTaskAsyncInput<
   task?: Address<TAccountTask>;
   escrow?: Address<TAccountEscrow>;
   /**
-   * The parent task this new task depends on
-   * Note: Uses Box to reduce stack usage for this large account
+   * The parent task this new task depends on.
+   * so legacy (pre-migration, shorter) parent accounts still load; the status
+   * and creator checks run there against the deserialized value.
    */
   parentTask: Address<TAccountParentTask>;
   /** Note: Uses Box to reduce stack usage for this large account */
@@ -477,8 +478,9 @@ export type CreateDependentTaskInput<
   task: Address<TAccountTask>;
   escrow: Address<TAccountEscrow>;
   /**
-   * The parent task this new task depends on
-   * Note: Uses Box to reduce stack usage for this large account
+   * The parent task this new task depends on.
+   * so legacy (pre-migration, shorter) parent accounts still load; the status
+   * and creator checks run there against the deserialized value.
    */
   parentTask: Address<TAccountParentTask>;
   /** Note: Uses Box to reduce stack usage for this large account */
@@ -671,8 +673,9 @@ export type ParsedCreateDependentTaskInstruction<
     task: TAccountMetas[0];
     escrow: TAccountMetas[1];
     /**
-     * The parent task this new task depends on
-     * Note: Uses Box to reduce stack usage for this large account
+     * The parent task this new task depends on.
+     * so legacy (pre-migration, shorter) parent accounts still load; the status
+     * and creator checks run there against the deserialized value.
      */
     parentTask: TAccountMetas[2];
     /** Note: Uses Box to reduce stack usage for this large account */

@@ -141,11 +141,13 @@ pub fn handler(ctx: Context<PurchaseSkill>, expected_price: u64) -> Result<()> {
             );
 
             // Calculate fee
-            protocol_fee = price
-                .checked_mul(config.protocol_fee_bps as u64)
+            // u128 intermediates (audit F-16): price.checked_mul(bps) overflows
+            // u64 for prices above ~9.2e15; the post-division fee always fits.
+            protocol_fee = (price as u128)
+                .checked_mul(config.protocol_fee_bps as u128)
                 .ok_or(CoordinationError::ArithmeticOverflow)?
-                .checked_div(BASIS_POINTS_DIVISOR)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
+                .checked_div(BASIS_POINTS_DIVISOR as u128)
+                .ok_or(CoordinationError::ArithmeticOverflow)? as u64;
             let author_share = price
                 .checked_sub(protocol_fee)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -231,11 +233,13 @@ pub fn handler(ctx: Context<PurchaseSkill>, expected_price: u64) -> Result<()> {
             }
         } else {
             // SOL payment path
-            protocol_fee = price
-                .checked_mul(config.protocol_fee_bps as u64)
+            // u128 intermediates (audit F-16): price.checked_mul(bps) overflows
+            // u64 for prices above ~9.2e15; the post-division fee always fits.
+            protocol_fee = (price as u128)
+                .checked_mul(config.protocol_fee_bps as u128)
                 .ok_or(CoordinationError::ArithmeticOverflow)?
-                .checked_div(BASIS_POINTS_DIVISOR)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
+                .checked_div(BASIS_POINTS_DIVISOR as u128)
+                .ok_or(CoordinationError::ArithmeticOverflow)? as u64;
             let author_share = price
                 .checked_sub(protocol_fee)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
