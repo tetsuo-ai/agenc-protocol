@@ -232,6 +232,15 @@ pub fn handler<'info>(
 
     let agent = ctx.accounts.agent.as_mut();
 
+    // Audit (2026-07 swarm): stamp the dispute-lifecycle guard field that
+    // deregister_agent's initiator-slash gate reads (deregister_agent.rs:98).
+    // It was never written before, so the guard was dead code and an initiator
+    // could initiate a frivolous dispute, immediately deregister (recovering
+    // their registration stake), and permanently brick apply_initiator_slash —
+    // evading the only initiator-side deterrent. The guard now holds for
+    // max(max_dispute_duration, voting_period) + SLASH_WINDOW after initiation.
+    agent.last_dispute_initiated = clock.unix_timestamp;
+
     // === Determine Worker Stake to Snapshot (fix #550) ===
     // Snapshot the worker's stake at dispute initiation time to prevent
     // attackers from withdrawing stake before being slashed.
