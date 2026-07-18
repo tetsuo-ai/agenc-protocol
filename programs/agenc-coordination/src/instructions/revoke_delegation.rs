@@ -50,8 +50,21 @@ pub fn handler(ctx: Context<RevokeDelegation>) -> Result<()> {
     // turn revoke into an unbounded inflation loop: delegate 3000 → wait 7d →
     // deregister → re-register (rep 3000 fresh) → revoke (3000 restored) = 6000,
     // repeat to MAX_REPUTATION with zero completions.
+    //
+    // STRICTLY less-than (re-opened finding): the ONLY discriminator available
+    // without a layout change is the timestamp ordering, so equality must fail.
+    // Equality means either (a) the attacker's single-slot bundle
+    // [delegate, deregister, register] — the clone's registered_at equals the
+    // delegation's created_at — or (b) an honest user who registered and delegated
+    // in the same second. Case (b) can no longer be created: delegate_reputation
+    // now requires the registration to be strictly older than the delegation
+    // (ReputationDelegationTooSoon), so every new delegation has
+    // registered_at < created_at by construction. Legacy same-second delegations
+    // (predating that gate) remain revocable only if never deregistered — and
+    // cannot be exploited, because any deregister→re-register stamps
+    // registered_at strictly AFTER their created_at.
     require!(
-        ctx.accounts.delegator_agent.registered_at <= delegation_created_at,
+        ctx.accounts.delegator_agent.registered_at < delegation_created_at,
         CoordinationError::ReputationDelegationIdentityMismatch
     );
 

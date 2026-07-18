@@ -6,11 +6,17 @@
 //! - Allows third-party cleanup services
 //! - No economic risk since only valid expirations succeed
 //!
-//! # Fair Refund Distribution (fix #418)
-//! When a dispute expires, funds are distributed based on context:
-//! - Worker completed + no votes: Worker gets 100% (did work, dispute not properly engaged)
-//! - No completion + no votes: 50/50 split (neither party engaged arbiters)
-//! - Some votes but insufficient quorum: Creator gets refund (dispute was contested)
+//! # Refund-on-expiry distribution (audit 2026-07 swarm, supersedes fix #418)
+//! Post-P6.3 the arbiter vote model is retired, so an expired dispute is an
+//! UNRESOLVED dispute (no votes ever exist). The arbiter-era splits below were
+//! therefore all payout arms to a possibly zero-work worker and have been
+//! removed from the reachable state space:
+//! - Worker completed + no votes: UNREACHABLE (an open claim on a Disputed task
+//!   is never a completed claim — every completing path requires a non-Disputed
+//!   status and closes the claim; kept below only as dead, defensive code)
+//! - No completion + no votes: was a 50/50 split — now the funder is refunded
+//!   100% (a no-show could self-dispute and steal half the escrow)
+//! - "Some votes but insufficient quorum": impossible (no votes ever exist)
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeExpired;
@@ -718,13 +724,19 @@ fn validate_worker_accounts(
     Ok(())
 }
 
-/// Distributes remaining escrow funds on dispute expiration based on context (fix #418).
+/// Distributes remaining escrow funds on dispute expiration (audit 2026-07 swarm,
+/// supersedes the fix #418 context split).
 ///
-/// - Worker completed + no votes: Worker gets 100% (did work, dispute not properly engaged)
-/// - No completion + no votes: 50/50 split (neither party engaged arbiters)
-/// - Some votes but insufficient quorum: Creator gets refund (dispute was contested)
+/// Post-P6.3 an expired dispute is ALWAYS an unresolved one (the arbiter vote
+/// model is retired, so `no_votes` is always true and the "insufficient quorum"
+/// case cannot exist), so the only reachable outcome is a FULL refund to the
+/// funder. The `worker_completed` arm is unreachable by construction (an open
+/// claim on a Disputed task is never a completed claim — every completing path
+/// requires a non-Disputed status and closes the claim); it is kept only as
+/// dead, defensive code with its marketplace legs intact.
 ///
-/// Returns (creator_amount, worker_amount) for event emission.
+/// Returns (creator_amount, worker_amount) for event emission; worker_amount is
+/// always 0 on reachable paths.
 #[allow(clippy::too_many_arguments)]
 fn distribute_expired_funds<'a>(
     escrow_info: &AccountInfo<'a>,
@@ -743,6 +755,11 @@ fn distribute_expired_funds<'a>(
     let mut worker_amount: u64 = 0;
 
     if no_votes && worker_completed {
+        // UNREACHABLE (kept as dead, defensive code): `no_votes` is always true
+        // post-P6.3, but an OPEN claim on a Disputed task is never a completed
+        // claim — every completing path requires a non-Disputed status and
+        // closes the claim first. If a future change ever made this reachable,
+        // it still pays the worker only through the marketplace legs.
         // Worker gets 100% minus the marketplace legs (operator + referrer) so an
         // expired dispute cannot bypass the §4 split. No-op for non-hired,
         // unreferred tasks.
@@ -767,9 +784,10 @@ fn distribute_expired_funds<'a>(
         // worker: a no-show could self-dispute, wait out the resolver window, and
         // steal 50% of any claimable escrow (and a ghost resolver flipped a
         // legitimate no-show slash into a payout). The only safe default for an
-        // unproven dispute is a full refund to the funder — a worker who actually
-        // delivered has the resolver/review window as their recourse, and a worker
-        // who self-disputed gets nothing (their claim rent still returns below).
+        // unproven dispute is a full refund to the funder. The submitted worker's
+        // SOLE recourse is the resolver (the review-window crank cannot run on a
+        // Disputed task); expiry is precisely that recourse having failed, so the
+        // 0% they take here is the deliberate price of never paying unproven work.
         creator_amount = remaining_funds;
         transfer_lamports(escrow_info, creator_info, remaining_funds)?;
     }

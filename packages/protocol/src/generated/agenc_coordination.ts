@@ -19732,6 +19732,11 @@ export type AgencCoordination = {
       "code": 6361,
       "name": "agentHasActiveBids",
       "msg": "An agent with live bids cannot deregister (their withdrawal paths load this registration)"
+    },
+    {
+      "code": 6362,
+      "name": "reputationDelegationTooSoon",
+      "msg": "A freshly registered agent must wait at least one slot before delegating reputation"
     }
   ],
   "types": [

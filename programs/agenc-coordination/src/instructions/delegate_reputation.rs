@@ -68,6 +68,24 @@ pub fn handler(ctx: Context<DelegateReputation>, amount: u16, expires_at: i64) -
         CoordinationError::ReputationDelegationWhileDefendant
     );
 
+    // Audit (2026-07 swarm, re-opened): the delegation must be created STRICTLY
+    // after the delegator's registration. This pairs with the strict
+    // `registered_at < delegation.created_at` check in revoke_delegation: without
+    // it, an attacker could bundle [delegate, deregister, register] in ONE slot —
+    // the re-registration's registered_at then EQUALS the delegation's created_at,
+    // and no timestamp comparison can distinguish that clone from an honest
+    // "register then delegate in the same second" user. Making equality impossible
+    // HERE means the revoke-side strictness can never cost an honest user their
+    // delegation. Fails fast with a clear error; the honest user retries a slot
+    // later. Legacy delegations created in the same second as their registration
+    // predate this gate and stay revocable (they cannot be exploited: any
+    // deregister→re-register stamps registered_at LATER than their created_at).
+    let clock = Clock::get()?;
+    require!(
+        clock.unix_timestamp > delegator.registered_at,
+        CoordinationError::ReputationDelegationTooSoon
+    );
+
     // Validate amount
     require!(
         amount > 0 && (MIN_DELEGATION_AMOUNT..=MAX_REPUTATION).contains(&amount),
@@ -84,8 +102,6 @@ pub fn handler(ctx: Context<DelegateReputation>, amount: u16, expires_at: i64) -
         .reputation
         .checked_sub(amount)
         .ok_or(CoordinationError::ReputationDelegationAmountInvalid)?;
-
-    let clock = Clock::get()?;
 
     // Validate expires_at: 0 = no expiry, otherwise must be in the future
     require!(

@@ -63,8 +63,29 @@ Deploy choreography (human-run, Squads multisig): binary upgrade → stamp
 `@tetsuo-ai/marketplace-sdk` minor release (facade `cancelTask` now derives the
 bond PDAs; `applyInitiatorSlash` loses the `task` input; `deregisterAgent`
 appends the two required remaining accounts) and `@tetsuo-ai/protocol` regen.
-New error codes are tail-appended (6356–6361) — no existing code shifts; no
+New error codes are tail-appended (6356–6362) — no existing code shifts; no
 account-layout change (`state.rs` diff is empty).
+
+Pre-deploy checklist additions (from the 2026-07 adversarial re-review):
+
+- **Ship SDK/keeper clients WITH the program.** `apply_dispute_slash` gained a
+  trailing optional `creator` account: callers built on the OLD IDL pass no
+  account there and get `AccountNotEnoughKeys` on every call (fail-closed, no
+  funds at risk) until upgraded. The permissionless slash finalizer is
+  keeper-cranked, so the keeper must ship the new IDL first.
+- **Run both preflight scans.** `scripts/preflight-dispute-scan.mjs` (legacy
+  `total_voters > 0` disputes and closed-claim active disputes — both
+  unexitable) and `scripts/preflight-delegation-scan.mjs` (same-second
+  delegations, which become unrevocable under the strict identity check).
+  Both were clean against mainnet on 2026-07-18.
+- **Sweep for stuck bid books.** A BidExclusive task whose book reports
+  `active_bids > 0` while its bidders' agents are already deregistered can
+  never drain those bids (every withdrawal loads the registration), so
+  `close_task` will refuse forever by design — confirm none exist before the
+  close-task guard ships.
+- **Legacy dispute guard gap (accepted).** Disputes initiated before this
+  upgrade carry `last_dispute_initiated == 0` and skip the initiator-slash
+  deregistration guard (no migration; documented as D15).
   [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) (**99** instructions)
 - Verified build: **LIVE** — the OtterSec/osec.io registry reports
   `is_verified: true` for the deployed bytecode against this repo (check

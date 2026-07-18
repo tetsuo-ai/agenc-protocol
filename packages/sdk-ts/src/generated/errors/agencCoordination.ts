@@ -738,6 +738,8 @@ export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT = 0
 export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH = 0x18d8; // 6360
 /** AgentHasActiveBids: An agent with live bids cannot deregister (their withdrawal paths load this registration) */
 export const AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_BIDS = 0x18d9; // 6361
+/** ReputationDelegationTooSoon: A freshly registered agent must wait at least one slot before delegating reputation */
+export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_TOO_SOON = 0x18da; // 6362
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -1002,6 +1004,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_TOO_SOON
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW
@@ -1370,6 +1373,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID]: `Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED]: `Reputation delegation has expired`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH]: `The delegator agent is not the same registration that created this delegation`,
+    [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_TOO_SOON]: `A freshly registered agent must wait at least one slot before delegating reputation`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT]: `An agent with active disputes as defendant cannot delegate reputation`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING]: `Agent has pending disputes as defendant: cannot withdraw stake`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW]: `Reputation stake amount must be greater than zero`,

@@ -21,6 +21,7 @@ import {
   arr,
   id32,
   deregisterRemaining,
+  warpSeconds,
   coder,
   PID,
   BN,
@@ -394,6 +395,8 @@ test("delegate_reputation: creates delegation account + debits delegator reputat
   const delegator = await registerAgent(w);
   const delegatee = await registerAgent(w);
   const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
+  // The registration must be strictly older than the delegation (audit gate).
+  warpSeconds(w.svm, 2);
 
   const repBefore = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation; // 3000 (P6.7)
   const amount = 1000;
@@ -454,6 +457,7 @@ test("delegate_reputation: amount below minimum rejected (ReputationDelegationAm
   const delegator = await registerAgent(w);
   const delegatee = await registerAgent(w);
   const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
+  warpSeconds(w.svm, 2); // registration-age gate (audit)
 
   const res = send(
     w.svm,
@@ -477,6 +481,7 @@ test("delegate_reputation: past expiry rejected (ReputationDelegationExpired)", 
   const delegator = await registerAgent(w);
   const delegatee = await registerAgent(w);
   const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
+  warpSeconds(w.svm, 2); // registration-age gate (audit)
 
   const past = w.svm.getClock().unixTimestamp - 100n; // in the past, non-zero
 
@@ -506,6 +511,7 @@ async function setupDelegation(w, amount = 1000) {
   const delegator = await registerAgent(w);
   const delegatee = await registerAgent(w);
   const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
+  warpSeconds(w.svm, 2); // registration-age gate (audit)
   expectOk(
     send(
       w.svm,

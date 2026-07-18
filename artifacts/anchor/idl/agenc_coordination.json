@@ -19726,6 +19726,11 @@
       "code": 6361,
       "name": "AgentHasActiveBids",
       "msg": "An agent with live bids cannot deregister (their withdrawal paths load this registration)"
+    },
+    {
+      "code": 6362,
+      "name": "ReputationDelegationTooSoon",
+      "msg": "A freshly registered agent must wait at least one slot before delegating reputation"
     }
   ],
   "types": [

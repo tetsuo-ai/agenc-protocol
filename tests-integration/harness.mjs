@@ -49,6 +49,17 @@ export function deregisterRemaining(agentPda) {
   ];
 }
 
+// Warp the litesvm clock forward `secs` and expire the blockhash (so a
+// byte-identical retry is not rejected as AlreadyProcessed). Needed to satisfy
+// delegate_reputation's registration-age gate (audit, 2026-07 swarm: the
+// delegation must be created strictly after the delegator's registration).
+export function warpSeconds(svm, secs) {
+  const c = svm.getClock();
+  c.unixTimestamp = c.unixTimestamp + BigInt(secs);
+  svm.setClock(c);
+  svm.expireBlockhash();
+}
+
 export function makeProgram(payer) {
   const provider = new AnchorProvider(
     new Connection("http://127.0.0.1:9999"), // never hit — offline .instruction() only

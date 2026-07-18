@@ -1078,4 +1078,7 @@ pub enum CoordinationError {
     // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("An agent with live bids cannot deregister (their withdrawal paths load this registration)")]
     AgentHasActiveBids,
+    // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("A freshly registered agent must wait at least one slot before delegating reputation")]
+    ReputationDelegationTooSoon,
 }

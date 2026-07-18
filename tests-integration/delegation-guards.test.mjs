@@ -23,6 +23,7 @@ import {
   freshWorld,
   makeProgram,
   send,
+  sendMany,
   expectOk,
   expectFail,
   decode,
@@ -32,6 +33,7 @@ import {
   arr,
   id32,
   deregisterRemaining,
+  warpSeconds,
   hireIx,
   injectAgentStake,
   listingModV2Pda,
@@ -143,6 +145,7 @@ const delegateIx = (prog, authority, delegatorAgent, delegateeAgent) =>
 test("delegate_reputation: an active dispute defendant cannot delegate (slash-evasion vault closed)", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
   await setupCreatorDispute(w);
+  warpSeconds(w.svm, 2); // registration-age gate (the world was built in one slot)
 
   // Precondition: the provider really is seated as defendant.
   assert.equal(
@@ -190,6 +193,7 @@ test("revoke_delegation: deregister -> re-register cannot revoke (reputation inf
   const delegator = await registerAgent(w, { agentId });
   const delegatee = await registerAgent(w);
   const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
+  warpSeconds(w.svm, 2); // registration-age gate (the world was built in one slot)
 
   // Delegate 1000 of the fresh 3000.
   expectOk(
@@ -278,4 +282,150 @@ test("revoke_delegation: deregister -> re-register cannot revoke (reputation inf
     "no reputation was restored onto the new registration",
   );
   assert.ok(!isClosed(w.svm, delPda), "delegation account survives (was not closed by the blocked revoke)");
+});
+
+// ---------------------------------------------------------------------------
+// Guard 2b (re-opened): the single-slot bundle — delegate, deregister, and
+// re-register in ONE transaction. The clone's registered_at then EQUALS the
+// delegation's created_at, which is why the identity check is a STRICT `<`.
+// With `<=` this test's revoke succeeds and mints +1000 per 7-day cycle.
+// ---------------------------------------------------------------------------
+
+test("revoke_delegation: the single-slot [delegate, deregister, register] clone cannot revoke", async () => {
+  const w = await freshWorld();
+  const agentId = id32();
+  const delegator = await registerAgent(w, { agentId });
+  const delegatee = await registerAgent(w);
+  const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
+  warpSeconds(w.svm, 2); // registration-age gate
+
+  // ONE transaction — every instruction observes the SAME clock timestamp.
+  const delegateIx = await delegator.prog.methods
+    .delegateReputation(1000, new BN(0))
+    .accounts({
+      authority: delegator.kp.publicKey,
+      delegatorAgent: delegator.agentPda,
+      delegateeAgent: delegatee.agentPda,
+      delegation: delPda,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  const deregisterIx = await delegator.prog.methods
+    .deregisterAgent()
+    .accounts({
+      agent: delegator.agentPda,
+      protocolConfig: w.protocolPda,
+      reputationStake: pda([enc("reputation_stake"), delegator.agentPda.toBuffer()])[0],
+      authority: delegator.kp.publicKey,
+    })
+    .remainingAccounts(deregisterRemaining(delegator.agentPda))
+    .instruction();
+  const reregisterIx = await delegator.prog.methods
+    .registerAgent(arr(agentId), new BN(1), "http://agent.test", null, new BN(0))
+    .accounts({
+      agent: delegator.agentPda,
+      protocolConfig: w.protocolPda,
+      authority: delegator.kp.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  expectOk(
+    sendMany(w.svm, [delegateIx, deregisterIx, reregisterIx], [delegator.kp]),
+    "the single-slot bundle (delegate -> deregister -> re-register)",
+  );
+
+  // The clone is indistinguishable by address/binding, and the timestamps are EQUAL.
+  const clone = decode(w.svm, "AgentRegistration", delegator.agentPda);
+  assert.equal(clone.reputation, PROBATIONARY_REPUTATION, "fresh probationary reputation");
+  assert.equal(
+    Number(clone.registered_at),
+    Number(decode(w.svm, "ReputationDelegation", delPda).created_at),
+    "the equality case the strict check must reject (would PASS with <=)",
+  );
+
+  // Warp past the minimum delegation duration so ONLY the identity guard can fire.
+  warpSeconds(w.svm, Number(MIN_DELEGATION_DURATION) + 2);
+
+  // Revert-sensitive: with `<=` this revoke succeeds (3000 + 1000 = 4000).
+  expectFail(
+    send(
+      w.svm,
+      await delegator.prog.methods
+        .revokeDelegation()
+        .accounts({
+          authority: delegator.kp.publicKey,
+          delegatorAgent: delegator.agentPda,
+          delegation: delPda,
+        })
+        .instruction(),
+      [delegator.kp],
+    ),
+    "ReputationDelegationIdentityMismatch",
+    "the same-slot clone cannot revoke",
+  );
+  assert.equal(
+    decode(w.svm, "AgentRegistration", delegator.agentPda).reputation,
+    PROBATIONARY_REPUTATION,
+    "no inflation from the cloned registration",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Guard 3: a delegation must be created strictly AFTER the delegator's
+// registration (the gate that makes the revoke-side strictness free).
+// ---------------------------------------------------------------------------
+
+test("delegate_reputation: same-second-as-registration rejected (ReputationDelegationTooSoon), allowed one slot later", async () => {
+  const w = await freshWorld();
+  const delegator = await registerAgent(w);
+  const delegatee = await registerAgent(w);
+  const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
+
+  // No warp: the registration's registered_at == now. Revert-sensitive: remove
+  // the gate and this succeeds, re-admitting the equality case on new delegations.
+  expectFail(
+    send(
+      w.svm,
+      await delegator.prog.methods
+        .delegateReputation(1000, new BN(0))
+        .accounts({
+          authority: delegator.kp.publicKey,
+          delegatorAgent: delegator.agentPda,
+          delegateeAgent: delegatee.agentPda,
+          delegation: delPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction(),
+      [delegator.kp],
+    ),
+    "ReputationDelegationTooSoon",
+    "delegation in the same second as the registration",
+  );
+
+  // One slot later the honest flow works (and the delegation it creates has
+  // registered_at < created_at by construction — the revoke-side invariant).
+  warpSeconds(w.svm, 2);
+  expectOk(
+    send(
+      w.svm,
+      await delegator.prog.methods
+        .delegateReputation(1000, new BN(0))
+        .accounts({
+          authority: delegator.kp.publicKey,
+          delegatorAgent: delegator.agentPda,
+          delegateeAgent: delegatee.agentPda,
+          delegation: delPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction(),
+      [delegator.kp],
+    ),
+    "delegate one slot after registration",
+  );
+  const agent = decode(w.svm, "AgentRegistration", delegator.agentPda);
+  const del = decode(w.svm, "ReputationDelegation", delPda);
+  assert.ok(
+    Number(agent.registered_at) < Number(del.created_at),
+    "strict ordering holds by construction",
+  );
 });

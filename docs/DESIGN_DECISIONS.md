@@ -141,3 +141,53 @@ violating money-never-locks (spec §7). The premature-payout risk is adjudicated
 instead: the multisig resolver (frozen) can weigh the parent off-chain, and the
 ghost crank only fires after the creator has already failed to act.
 
+## D14 — The reputation side of a slash is partially dodgeable
+
+Three accepted residuals from the 2026-07 re-review, all bounded and none newly
+introduced:
+
+- **Standing delegations survive a slash.** The C6 defendant gate stops
+  *reactive* delegation during a dispute, but a delegation created BEFORE the
+  dispute already moved the amount out of `agent.reputation` — and the
+  delegation itself survives the slash and can be revoked back afterwards.
+  Closing this requires revoking delegations at dispute initiation (an
+  enumeration the program cannot do), so the deterrent is necessarily
+  best-effort for pre-positioned adversaries.
+- **Zero-stake defendants take no stake slash.** `calculate_slash_amount` caps
+  at the current stake, so a defendant with 0 stake and no token reserve takes
+  no lamport penalty — only the (fixed, saturating) reputation penalty and the
+  defendant bookkeeping. The stake requirement at task/dispute entry is the
+  real gate; the slash cannot retroactively create one.
+- **The delegated reputation itself is unaffected by the slash.** A sybil
+  delegatee keeps the bonus. Reputation is a friction signal (fee discounts,
+  task gates), not custody — the bounded value at risk does not justify a
+  global delegation-registry redesign in v1.
+
+## D15 — resolve_dispute has no expiry bound (C2 deterrent is lifecycle-anchored)
+
+The C2 initiator-slash guard holds deregistration for
+`max(dispute_duration, voting_period) + SLASH_WINDOW` after initiation, but
+`resolve_dispute` itself accepts a resolution for any still-`Active` dispute
+with no deadline. A stale `Active` dispute resolved long after the guard window
+lapses re-opens the initiator-slash brick (the initiator has already
+deregistered). Accepted: it needs BOTH an unexpired-but-stale dispute (nobody
+cranked the permissionless expiry) AND a late resolver, expiry by design never
+slashes the initiator (full refund — an unadjudicated dispute cannot establish
+fault), and the correct fix is a resolver-liveness policy, not another
+timestamp patch. Related: disputes initiated before the C2 deploy have
+`last_dispute_initiated == 0` and skip the guard entirely (no migration).
+
+## D16 — Dispute expiry refunds a no-show's bonds (C1 trade)
+
+`expire_dispute` refunds the creator's escrow in full AND refunds the no-show
+worker's accepted-bid/completion bonds, because expiry cannot adjudicate
+fault. A no-show can therefore self-dispute and, if the resolver never acts,
+launder a certain forfeit (expire_claim would have slashed) into a refund.
+Accepted: the alternative — slashing on expiry — victimized every
+provably-submitted worker whenever the resolver ghosted, and resolver
+inaction is the *expected* failure mode expiry exists for. The resolver is the
+adjudicator; expiry is the escape hatch, and escape hatches must not
+confiscate. A future refinement (forfeit the bond iff no live `Submitted`
+submission exists at expiry) is possible but was deliberately not taken in v1.
+
+
