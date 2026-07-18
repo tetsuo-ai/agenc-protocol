@@ -17,7 +17,7 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, taskModV2Pda, moderationBlockPda,
+  freshWorld, injectAgentStake, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 
@@ -397,6 +397,8 @@ test("close_task: straggler submission rent returns to the worker, and is FAIL-C
   const entry = await enterContest(w, m, workerA);
 
   const validator = await registerAgent(w, CAP_VALIDATOR);
+  // 2026-07 swarm: quorum votes require the anti-griefing stake floor.
+  await injectAgentStake(w.svm, validator.agentPda, 100_000_000);
   const [vote] = pda([enc("task_validation_vote"), entry.submission.toBuffer(), validator.kp.publicKey.toBuffer()]);
   expectOk(send(w.svm, await validator.prog.methods
     .validateTaskResult(false)

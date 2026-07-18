@@ -20,7 +20,7 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, taskModV2Pda, moderationBlockPda,
+  freshWorld, injectAgentStake, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
@@ -143,6 +143,8 @@ test("F-3a: a completing quorum accept is blocked while a peer submission is liv
   assert.equal(decode(w.svm, "Task", m.task).live_submissions ?? 2, 2, "two live submissions");
 
   const v = await registerAgent(w, CAP_VALIDATOR);
+  // 2026-07 swarm: quorum votes require the anti-griefing stake floor.
+  await injectAgentStake(w.svm, v.agentPda, 100_000_000);
 
   // Completing accept on A while B is still live -> blocked (F-3a).
   expectFail(

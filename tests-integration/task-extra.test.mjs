@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
 import {
-  coder, enc, arr, pda, id32,
+  PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   injectAgentStake, freshWorld,
   taskModV2Pda, moderationBlockPda,
@@ -297,6 +297,9 @@ test("validate_task_result: validator quorum approvals pay the worker", async ()
   // Two distinct validator agents that hold the VALIDATOR capability bit.
   const v1 = await registerAgent(w, CAP_VALIDATOR);
   const v2 = await registerAgent(w, CAP_VALIDATOR);
+  // 2026-07 swarm: quorum votes require the anti-griefing stake floor.
+  await injectAgentStake(w.svm, v1.agentPda, 100_000_000);
+  await injectAgentStake(w.svm, v2.agentPda, 100_000_000);
 
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
 
@@ -325,6 +328,38 @@ test("validate_task_result: an agent without the VALIDATOR capability is rejecte
   expectFail(
     send(w.svm, await validateIx(w, r, { validatorKp: notValidator.kp, validatorAgent: notValidator.agentPda, approved: true }), [notValidator.kp]),
     "UnauthorizedTaskValidator", "non-validator agent cannot validate",
+  );
+});
+
+test("validate_task_result (2026-07 swarm): a quorum vote with NO stake is rejected; staked validator works", async () => {
+  // The VALIDATOR bit is self-asserted — without the stake floor a worker could
+  // sybil-validate their own submission for rent-level cost. Every quorum vote
+  // now requires min_stake_for_dispute on the validator agent.
+  const w = await freshWorld({ moderationEnabled: true });
+  // Harness config defaults min_stake_for_dispute to 0 — set the real floor.
+  {
+    const acct = w.svm.getAccount(w.protocolPda);
+    const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+    cfg.min_stake_for_dispute = new BN(100_000_000);
+    const data = await coder.accounts.encode("ProtocolConfig", cfg);
+    w.svm.setAccount(w.protocolPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+  }
+  const m = await setupManualTask(w, { mode: 2, validatorQuorum: 1 });
+  const { claim, submission } = await publishClaimSubmit(w, m);
+  const r = { ...m, claim, submission };
+
+  const v = await registerAgent(w, CAP_VALIDATOR); // no stake yet
+  expectFail(
+    send(w.svm, await validateIx(w, r, { validatorKp: v.kp, validatorAgent: v.agentPda, approved: true }), [v.kp]),
+    "UnauthorizedTaskValidator", "unstaked quorum vote rejected (sybil friction)",
+  );
+
+  // After staking the anti-griefing floor, the same validator's vote settles.
+  await injectAgentStake(w.svm, v.agentPda, 100_000_000);
+  w.svm.expireBlockhash();
+  expectOk(
+    send(w.svm, await validateIx(w, r, { validatorKp: v.kp, validatorAgent: v.agentPda, approved: true }), [v.kp]),
+    "staked validator settles",
   );
 });
 

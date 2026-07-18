@@ -227,6 +227,17 @@ pub fn handler<'info>(
                 (validator_capabilities & capability::VALIDATOR) == capability::VALIDATOR,
                 CoordinationError::UnauthorizedTaskValidator
             );
+            // Audit (2026-07 swarm): the VALIDATOR capability bit is self-asserted —
+            // a worker could register sybil agents with the bit set and approve
+            // their own submission for rent-level cost, draining the escrow with
+            // zero capital at risk. Every quorum vote now requires the
+            // anti-griefing stake floor (config.min_stake_for_dispute), so each
+            // vote has real capital staked during review. This is friction, NOT
+            // byzantine resistance (docs/DESIGN_DECISIONS.md D8).
+            require!(
+                validator_agent.stake >= ctx.accounts.protocol_config.min_stake_for_dispute,
+                CoordinationError::UnauthorizedTaskValidator
+            );
             require!(
                 ctx.accounts.reviewer.key() != ctx.accounts.task.creator
                     && ctx.accounts.reviewer.key() != ctx.accounts.worker.authority
