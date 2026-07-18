@@ -19691,6 +19691,16 @@ export type AgencCoordination = {
       "code": 6358,
       "name": "rejectFrozenSolOnly",
       "msg": "Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow)"
+    },
+    {
+      "code": 6359,
+      "name": "reputationDelegationWhileDefendant",
+      "msg": "An agent with active disputes as defendant cannot delegate reputation"
+    },
+    {
+      "code": 6360,
+      "name": "reputationDelegationIdentityMismatch",
+      "msg": "The delegator agent is not the same registration that created this delegation"
     }
   ],
   "types": [

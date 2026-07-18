@@ -58,6 +58,15 @@ pub fn handler(ctx: Context<DelegateReputation>, amount: u16, expires_at: i64) -
         delegatee.status == AgentStatus::Active,
         CoordinationError::ReputationAgentNotActive
     );
+    // Audit (2026-07 swarm): a defendant may NOT delegate. Delegating mid-dispute
+    // empties the reputation pot that apply_dispute_slash penalizes
+    // (apply_reputation_penalty subtracts from agent.reputation), making the
+    // reputation half of every slash optional — the delegation survives the slash
+    // and can be revoked back after settlement.
+    require!(
+        delegator.disputes_as_defendant == 0,
+        CoordinationError::ReputationDelegationWhileDefendant
+    );
 
     // Validate amount
     require!(

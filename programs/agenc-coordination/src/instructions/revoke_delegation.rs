@@ -42,6 +42,18 @@ pub fn handler(ctx: Context<RevokeDelegation>) -> Result<()> {
     let delegation_amount = ctx.accounts.delegation.amount;
     let delegation_delegator = ctx.accounts.delegation.delegator;
     let delegation_delegatee = ctx.accounts.delegation.delegatee;
+    let delegation_created_at = ctx.accounts.delegation.created_at;
+
+    // Audit (2026-07 swarm): identity continuity — the revoking delegator must be
+    // the SAME registration that created the delegation. A deregister→re-register
+    // cycle re-stamps registered_at LATER than delegation.created_at, which used to
+    // turn revoke into an unbounded inflation loop: delegate 3000 → wait 7d →
+    // deregister → re-register (rep 3000 fresh) → revoke (3000 restored) = 6000,
+    // repeat to MAX_REPUTATION with zero completions.
+    require!(
+        ctx.accounts.delegator_agent.registered_at <= delegation_created_at,
+        CoordinationError::ReputationDelegationIdentityMismatch
+    );
 
     // Restore delegated reputation back to the delegator.
     // Use saturating_add capped at MAX_REPUTATION to prevent overflow.

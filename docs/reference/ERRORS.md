@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**359 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**361 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -370,3 +370,5 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6356 | 0x18d4 | `BondNotTiedToNoShowWorker` | A forfeited worker completion bond must belong to a live no-show claimant of this task |
 | 6357 | 0x18d5 | `ClaimSlashPending` | This claim's dispute was resolved but its slash has not been applied yet |
 | 6358 | 0x18d6 | `RejectFrozenSolOnly` | Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow) |
+| 6359 | 0x18d7 | `ReputationDelegationWhileDefendant` | An agent with active disputes as defendant cannot delegate reputation |
+| 6360 | 0x18d8 | `ReputationDelegationIdentityMismatch` | The delegator agent is not the same registration that created this delegation |

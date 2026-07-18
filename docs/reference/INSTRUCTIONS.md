@@ -2540,7 +2540,7 @@ _None._
 
 Record a validator quorum vote or external attestation for a submission.
 
-### Accounts (20)
+### Accounts (22)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -2564,6 +2564,8 @@ Record a validator quorum vote or external attestation for a submission.
 | 18 | `reward_mint` |  |  | yes |  |  |
 | 19 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |  |
 | 20 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 21 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] |  |
+| 22 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] |  |
 
 ### Args (1)
 

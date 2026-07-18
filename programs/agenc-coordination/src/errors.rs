@@ -1069,4 +1069,10 @@ pub enum CoordinationError {
     // Appended (audit F-7): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow)")]
     RejectFrozenSolOnly,
+    // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("An agent with active disputes as defendant cannot delegate reputation")]
+    ReputationDelegationWhileDefendant,
+    // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("The delegator agent is not the same registration that created this delegation")]
+    ReputationDelegationIdentityMismatch,
 }

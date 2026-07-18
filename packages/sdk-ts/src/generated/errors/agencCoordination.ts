@@ -732,6 +732,10 @@ export const AGENC_COORDINATION_ERROR__BOND_NOT_TIED_TO_NO_SHOW_WORKER = 0x18d4;
 export const AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING = 0x18d5; // 6357
 /** RejectFrozenSolOnly: Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow) */
 export const AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY = 0x18d6; // 6358
+/** ReputationDelegationWhileDefendant: An agent with active disputes as defendant cannot delegate reputation */
+export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT = 0x18d7; // 6359
+/** ReputationDelegationIdentityMismatch: The delegator agent is not the same registration that created this delegation */
+export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH = 0x18d8; // 6360
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -994,6 +998,8 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED
+  | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE
@@ -1359,6 +1365,8 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF]: `Cannot delegate reputation to self`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID]: `Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED]: `Reputation delegation has expired`,
+    [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH]: `The delegator agent is not the same registration that created this delegation`,
+    [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT]: `An agent with active disputes as defendant cannot delegate reputation`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING]: `Agent has pending disputes as defendant: cannot withdraw stake`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_AMOUNT_TOO_LOW]: `Reputation stake amount must be greater than zero`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE]: `Reputation stake has insufficient balance for withdrawal`,
