@@ -188,6 +188,44 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         );
     }
 
+    // Audit (2026-07 swarm): a BidExclusive task's book may still hold live bids —
+    // each bid locks its bond + rent on a per-bid PDA, and EVERY withdrawal path
+    // (expire_bid / cancel_bid) loads the Task by seeds. Closing the Task PDA while
+    // any bid is active permanently locks those bidders out of their bonds, with no
+    // admin sweep. Require the canonical book (fail-closed when a BidExclusive task
+    // omits it) and refuse while it reports active bids — bidders must withdraw
+    // first, exactly like the completion-bond liveness guard above. The book rides
+    // in remaining_accounts[0] for BidExclusive tasks; the child sweep below skips it.
+    let child_start = if task.task_type == crate::state::TaskType::BidExclusive {
+        let book_info = ctx
+            .remaining_accounts
+            .first()
+            .ok_or(CoordinationError::BidSettlementAccountsRequired)?;
+        require!(
+            book_info.owner == &crate::ID,
+            CoordinationError::InvalidAccountOwner
+        );
+        let (expected_book, _) = Pubkey::find_program_address(
+            &[b"bid_book", task_key.as_ref()],
+            &crate::ID,
+        );
+        require!(
+            book_info.key() == expected_book,
+            CoordinationError::InvalidInput
+        );
+        let book = {
+            let data = book_info.try_borrow_data()?;
+            crate::state::TaskBidBook::try_deserialize(&mut &data[..])?
+        };
+        require!(
+            book.active_bids == 0,
+            CoordinationError::TaskNotClosable
+        );
+        1
+    } else {
+        0
+    };
+
     let job_spec_closed = ctx.accounts.task_job_spec.is_some();
     let escrow_closed = ctx.accounts.escrow.is_some();
     // A live hire link is one owned by this program; an empty/absent PDA (non-hired
@@ -268,7 +306,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     // if the matching accounts are not supplied the instruction errors — the
     // creator is NEVER paid a worker's submission rent (kills the rent-farming
     // sink where junk tasks harvested ~0.00286 SOL from every submitter).
-    let mut idx = 0;
+    let mut idx = child_start;
     while idx < ctx.remaining_accounts.len() {
         let child = &ctx.remaining_accounts[idx];
         idx = idx
