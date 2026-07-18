@@ -527,6 +527,9 @@ test("FIX 5: straggler submission rent routes to the TREASURY when the worker ag
       treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: workerA.kp.publicKey,
       reviewer: validator.kp.publicKey, tokenEscrowAta: null, workerTokenAccount: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId,
+      // 2026-07 swarm: bonds are required + seeds-pinned on validate_task_result
+      creatorCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0],
+      workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), workerA.kp.publicKey.toBuffer()])[0],
     })
     .instruction(), [validator.kp]), "quorum reject");
   assert.ok(!isClosed(w.svm, entry.submission), "rejected submission survives as a straggler");

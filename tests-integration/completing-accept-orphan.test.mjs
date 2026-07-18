@@ -118,6 +118,9 @@ async function validateIx(w, m, s, { validatorKp, validatorAgent, workerAgent, w
       treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: workerKp.publicKey,
       reviewer: validatorKp.publicKey, tokenEscrowAta: null, workerTokenAccount: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId,
+      // 2026-07 swarm: bonds are required + seeds-pinned on validate_task_result
+      creatorCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0],
+      workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), workerKp.publicKey.toBuffer()])[0],
     })
     .instruction();
 }

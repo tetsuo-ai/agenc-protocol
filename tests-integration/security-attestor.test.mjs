@@ -129,6 +129,9 @@ function validate(w, { task, escrow, validation, attestorCfg, claim, submission 
       rewardMint: null,
       tokenProgram: null,
       systemProgram: SystemProgram.programId,
+      // 2026-07 swarm: bonds are required + seeds-pinned on validate_task_result
+      creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0],
+      workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
     })
     .instruction()
     .then((ix) => send(w.svm, ix, [reviewer]));

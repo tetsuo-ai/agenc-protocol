@@ -41,12 +41,14 @@ import {
 } from "@solana/program-client-core";
 import {
   findAcceptTaskResultClaimPda,
+  findCreatorCompletionBondPda,
   findEscrowPda,
   findProtocolConfigPda,
   findTaskAttestorConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
   findTaskValidationVotePda,
+  findWorkerCompletionBondPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -83,6 +85,8 @@ export type ValidateTaskResultInstruction<
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
+  TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -149,6 +153,12 @@ export type ValidateTaskResultInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountCreatorCompletionBond extends string
+        ? WritableAccount<TAccountCreatorCompletionBond>
+        : TAccountCreatorCompletionBond,
+      TAccountWorkerCompletionBond extends string
+        ? WritableAccount<TAccountWorkerCompletionBond>
+        : TAccountWorkerCompletionBond,
       ...TRemainingAccounts,
     ]
   >;
@@ -211,6 +221,8 @@ export type ValidateTaskResultAsyncInput<
   TAccountRewardMint extends string = string,
   TAccountTokenProgram extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountCreatorCompletionBond extends string = string,
+  TAccountWorkerCompletionBond extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim?: Address<TAccountClaim>;
@@ -233,6 +245,8 @@ export type ValidateTaskResultAsyncInput<
   rewardMint?: Address<TAccountRewardMint>;
   tokenProgram?: Address<TAccountTokenProgram>;
   systemProgram?: Address<TAccountSystemProgram>;
+  creatorCompletionBond?: Address<TAccountCreatorCompletionBond>;
+  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   approved: ValidateTaskResultInstructionDataArgs["approved"];
 };
 
@@ -257,6 +271,8 @@ export async function getValidateTaskResultInstructionAsync<
   TAccountRewardMint extends string,
   TAccountTokenProgram extends string,
   TAccountSystemProgram extends string,
+  TAccountCreatorCompletionBond extends string,
+  TAccountWorkerCompletionBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ValidateTaskResultAsyncInput<
@@ -279,7 +295,9 @@ export async function getValidateTaskResultInstructionAsync<
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
     TAccountTokenProgram,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -304,7 +322,9 @@ export async function getValidateTaskResultInstructionAsync<
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
     TAccountTokenProgram,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond
   >
 > {
   // Program address.
@@ -348,6 +368,14 @@ export async function getValidateTaskResultInstructionAsync<
     rewardMint: { value: input.rewardMint ?? null, isWritable: false },
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    creatorCompletionBond: {
+      value: input.creatorCompletionBond ?? null,
+      isWritable: true,
+    },
+    workerCompletionBond: {
+      value: input.workerCompletionBond ?? null,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -425,6 +453,30 @@ export async function getValidateTaskResultInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.creatorCompletionBond.value) {
+    accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      creator: getAddressFromResolvedInstructionAccount(
+        "creator",
+        accounts.creator.value,
+      ),
+    });
+  }
+  if (!accounts.workerCompletionBond.value) {
+    accounts.workerCompletionBond.value = await findWorkerCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      workerAuthority: getAddressFromResolvedInstructionAccount(
+        "workerAuthority",
+        accounts.workerAuthority.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -449,6 +501,8 @@ export async function getValidateTaskResultInstructionAsync<
       getAccountMeta("rewardMint", accounts.rewardMint),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
+      getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
     ],
     data: getValidateTaskResultInstructionDataEncoder().encode(
       args as ValidateTaskResultInstructionDataArgs,
@@ -475,7 +529,9 @@ export async function getValidateTaskResultInstructionAsync<
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
     TAccountTokenProgram,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond
   >);
 }
 
@@ -500,6 +556,8 @@ export type ValidateTaskResultInput<
   TAccountRewardMint extends string = string,
   TAccountTokenProgram extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountCreatorCompletionBond extends string = string,
+  TAccountWorkerCompletionBond extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -522,6 +580,8 @@ export type ValidateTaskResultInput<
   rewardMint?: Address<TAccountRewardMint>;
   tokenProgram?: Address<TAccountTokenProgram>;
   systemProgram?: Address<TAccountSystemProgram>;
+  creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
+  workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   approved: ValidateTaskResultInstructionDataArgs["approved"];
 };
 
@@ -546,6 +606,8 @@ export function getValidateTaskResultInstruction<
   TAccountRewardMint extends string,
   TAccountTokenProgram extends string,
   TAccountSystemProgram extends string,
+  TAccountCreatorCompletionBond extends string,
+  TAccountWorkerCompletionBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: ValidateTaskResultInput<
@@ -568,7 +630,9 @@ export function getValidateTaskResultInstruction<
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
     TAccountTokenProgram,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond
   >,
   config?: { programAddress?: TProgramAddress },
 ): ValidateTaskResultInstruction<
@@ -592,7 +656,9 @@ export function getValidateTaskResultInstruction<
   TAccountTreasuryTokenAccount,
   TAccountRewardMint,
   TAccountTokenProgram,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountCreatorCompletionBond,
+  TAccountWorkerCompletionBond
 > {
   // Program address.
   const programAddress =
@@ -635,6 +701,14 @@ export function getValidateTaskResultInstruction<
     rewardMint: { value: input.rewardMint ?? null, isWritable: false },
     tokenProgram: { value: input.tokenProgram ?? null, isWritable: false },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    creatorCompletionBond: {
+      value: input.creatorCompletionBond ?? null,
+      isWritable: true,
+    },
+    workerCompletionBond: {
+      value: input.workerCompletionBond ?? null,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -677,6 +751,8 @@ export function getValidateTaskResultInstruction<
       getAccountMeta("rewardMint", accounts.rewardMint),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
+      getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
     ],
     data: getValidateTaskResultInstructionDataEncoder().encode(
       args as ValidateTaskResultInstructionDataArgs,
@@ -703,7 +779,9 @@ export function getValidateTaskResultInstruction<
     TAccountTreasuryTokenAccount,
     TAccountRewardMint,
     TAccountTokenProgram,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountCreatorCompletionBond,
+    TAccountWorkerCompletionBond
   >);
 }
 
@@ -734,6 +812,8 @@ export type ParsedValidateTaskResultInstruction<
     rewardMint?: TAccountMetas[17] | undefined;
     tokenProgram?: TAccountMetas[18] | undefined;
     systemProgram: TAccountMetas[19];
+    creatorCompletionBond: TAccountMetas[20];
+    workerCompletionBond: TAccountMetas[21];
   };
   data: ValidateTaskResultInstructionData;
 };
@@ -746,12 +826,12 @@ export function parseValidateTaskResultInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedValidateTaskResultInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 20) {
+  if (instruction.accounts.length < 22) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 20,
+        expectedAccountMetas: 22,
       },
     );
   }
@@ -790,6 +870,8 @@ export function parseValidateTaskResultInstruction<
       rewardMint: getNextOptionalAccount(),
       tokenProgram: getNextOptionalAccount(),
       systemProgram: getNextAccount(),
+      creatorCompletionBond: getNextAccount(),
+      workerCompletionBond: getNextAccount(),
     },
     data: getValidateTaskResultInstructionDataDecoder().decode(
       instruction.data,

@@ -6,6 +6,8 @@ use crate::instructions::bid_settlement_helpers::{
     bid_settlement_offset, finalize_bid_task_completion, load_bid_task_completion_meta,
     settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
@@ -21,6 +23,8 @@ use crate::state::{
     TaskAttestorConfig, TaskClaim, TaskEscrow, TaskStatus, TaskSubmission, TaskValidationConfig,
     TaskValidationVote, ValidationMode,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
@@ -145,6 +149,30 @@ pub struct ValidateTaskResult<'info> {
     pub token_program: Option<Program<'info, Token>>,
 
     pub system_program: Program<'info, System>,
+
+    // === Batch 3 completion bonds — REQUIRED + canonical-PDA-pinned (2026-07 swarm) ===
+    // A quorum/attestation completing accept is a SUCCESS — refund both bonds.
+    // Required, not optional: this completing path previously settled NO bonds at
+    // all, so a live worker/creator bond could be omitted into the terminal task
+    // and stranded past close_task (the one gap in the F12/F5 hardening). The
+    // caller passes the seeds-derived PDA even for an un-bonded task (an empty
+    // system account); settle_completion_bond no-ops on it.
+    /// CHECK: creator completion bond PDA, seeds-pinned; refunded by helper.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), creator.key().as_ref()],
+        bump
+    )]
+    pub creator_completion_bond: UncheckedAccount<'info>,
+    /// CHECK: worker completion bond PDA, seeds-pinned to the validated worker authority.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), worker_authority.key().as_ref()],
+        bump
+    )]
+    pub worker_completion_bond: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(
@@ -476,6 +504,29 @@ pub fn handler<'info>(
         ctx.accounts
             .task_submission
             .close(ctx.accounts.worker_authority.to_account_info())?;
+
+        // Batch 3 §8 + 2026-07 swarm (F12/F5 parity): an accepted result means
+        // nobody lost — refund BOTH completion bonds. Required + seeds-pinned
+        // accounts, so a live bond can never be omitted into the Completed task
+        // (this completing path previously settled NO bonds at all).
+        #[cfg(not(feature = "mainnet-canary"))]
+        {
+            let task_key = ctx.accounts.task.key();
+            settle_completion_bond(
+                &ctx.accounts.creator_completion_bond.to_account_info(),
+                &ctx.accounts.creator.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_CREATOR,
+                BondDisposition::Refund,
+            )?;
+            settle_completion_bond(
+                &ctx.accounts.worker_completion_bond.to_account_info(),
+                &ctx.accounts.worker_authority.to_account_info(),
+                &task_key,
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
+        }
         return Ok(());
     }
 
