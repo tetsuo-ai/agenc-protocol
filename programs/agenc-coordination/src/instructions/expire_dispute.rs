@@ -23,7 +23,7 @@ use crate::instructions::dispute_helpers::{
     pay_dispute_marketplace_legs, process_worker_claim_pair, resolve_task_marketplace_terms,
     sweep_dispute_submission, validate_remaining_accounts_structure, MarketplaceTerms,
 };
-use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
+use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
     validate_unchecked_token_mint,
@@ -486,11 +486,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     if let Some((bid_book_info, accepted_bid_info, bidder_market_state_info)) =
         accepted_bid_accounts
     {
-        let bond_disposition = if no_votes && worker_completed {
-            AcceptedBidBondDisposition::Refund
-        } else {
-            AcceptedBidBondDisposition::FullSlashToCreator
-        };
+        // Audit (2026-07 swarm): an expired dispute is UNRESOLVED — no fault was
+        // established, so the accepted bid's bond is refunded, never slashed.
+        // Previously the `no_votes` arm full-slashed it to the creator: a ghost
+        // resolver turned a SUBMITTED worker's bond into the ghosting creator's
+        // prize (the `worker_completed` Refund arm is unreachable — every
+        // completing path closes the claim, so an open claim is never "completed").
+        let bond_disposition = AcceptedBidBondDisposition::Refund;
         let worker_claim = ctx
             .accounts
             .worker_claim
@@ -756,40 +758,17 @@ fn distribute_expired_funds<'a>(
             .checked_sub(legs_fee)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
         transfer_lamports(escrow_info, worker_wallet_info, worker_amount)?;
-    } else if no_votes {
-        let worker_share = remaining_funds
-            .checked_div(2)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        let creator_share = remaining_funds
-            .checked_sub(worker_share)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        // Carve the marketplace legs from the worker's half (no-op for non-hired,
-        // unreferred tasks).
-        let legs_fee = pay_dispute_marketplace_legs(
-            terms,
-            operator,
-            referrer,
-            escrow_info,
-            worker_share,
-            task_id,
-            now,
-        )?;
-        let worker_net = worker_share
-            .checked_sub(legs_fee)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        creator_amount = creator_share;
-        worker_amount = worker_net;
-
-        // The marketplace legs were already debited from escrow by the helper.
-        debit_lamports(
-            escrow_info,
-            remaining_funds
-                .checked_sub(legs_fee)
-                .ok_or(CoordinationError::ArithmeticOverflow)?,
-        )?;
-        credit_lamports(creator_info, creator_share)?;
-        credit_lamports(worker_wallet_info, worker_net)?;
     } else {
+        // Audit (2026-07 swarm): post-P6.3 the arbiter vote model is retired, so
+        // `no_votes` is ALWAYS true and an expired dispute is an UNRESOLVED one —
+        // the initiator's case was never adjudicated. The old "no votes -> 50/50"
+        // arbiter-era fairness split paid HALF the escrow to a possibly zero-work
+        // worker: a no-show could self-dispute, wait out the resolver window, and
+        // steal 50% of any claimable escrow (and a ghost resolver flipped a
+        // legitimate no-show slash into a payout). The only safe default for an
+        // unproven dispute is a full refund to the funder — a worker who actually
+        // delivered has the resolver/review window as their recourse, and a worker
+        // who self-disputed gets nothing (their claim rent still returns below).
         creator_amount = remaining_funds;
         transfer_lamports(escrow_info, creator_info, remaining_funds)?;
     }
@@ -826,35 +805,10 @@ fn distribute_expired_tokens<'a>(
             escrow_seeds,
             token_program,
         )?;
-    } else if no_votes {
-        let creator_ta = creator_token_account.ok_or(CoordinationError::MissingTokenAccounts)?;
-        let worker_ta = worker_token_account.ok_or(CoordinationError::MissingTokenAccounts)?;
-        let worker_share = remaining_funds
-            .checked_div(2)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        let creator_share = remaining_funds
-            .checked_sub(worker_share)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        creator_amount = creator_share;
-        worker_amount = worker_share;
-
-        transfer_tokens_from_escrow(
-            token_escrow,
-            creator_ta,
-            escrow_authority,
-            creator_share,
-            escrow_seeds,
-            token_program,
-        )?;
-        transfer_tokens_from_escrow(
-            token_escrow,
-            worker_ta,
-            escrow_authority,
-            worker_share,
-            escrow_seeds,
-            token_program,
-        )?;
     } else {
+        // Audit (2026-07 swarm): post-P6.3 an expired dispute is always UNRESOLVED
+        // (no_votes is structurally true) — refund the funder in full, mirroring
+        // the SOL path. Never split escrow to a possibly zero-work worker.
         let creator_ta = creator_token_account.ok_or(CoordinationError::MissingTokenAccounts)?;
         creator_amount = remaining_funds;
         transfer_tokens_from_escrow(
