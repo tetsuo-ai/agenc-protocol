@@ -31,25 +31,40 @@ window or before the deploy is announced publicly.
 
 ## Pending Next Upgrade (2026-07-18 — implemented, not yet deployed)
 
-The 2026-07 audit P0 hardening queue is implemented and gated on
-`fix/audit-findings-2026-07-16` (commits `4b70630` F-1, `aa6aae5` F-2,
-`cc8870e` F-3, `b3eb824` F-5; F-6 closed by on-chain verification). All wire
-changes are confined to **non-canary** instructions:
+The 2026-07 audit hardening queues are implemented and gated on
+`fix/audit-findings-2026-07-16`: the P0 wave (commits `4b70630` F-1, `aa6aae5`
+F-2, `cc8870e` F-3, `b3eb824` F-5; F-6 closed by on-chain verification), the
+P1–P3 waves (see CHANGELOG 2026-07-18 entries), and the adversarial-swarm wave
+(`1b562b4` S-1 expire-refund, `96fa6bd` S-2 initiator-slash guard, `ab5b297`
+S-3 validate bonds, `3e7a364` S-4 close-task bid guard, `81d3be2` S-5 quorum
+stake floor, `ed0752a` S-6 delegation guards, `0b34a81` + `89779cf` S-7/S-8
+low batches). All wire changes are confined to **non-canary** instructions:
 
 - `apply_initiator_slash`: `task` account REMOVED (old callers' extra account
   becomes an ignored remaining account — backward-compatible);
 - `cancel_task`: completion-bond accounts optional → required + seeds-pinned
   (full-surface only — they are `#[cfg(not(feature = "mainnet-canary"))]`, so
-  the frozen canary IDL is untouched);
+  the frozen canary IDL is untouched), plus a cfg-gated optional `treasury`
+  account for the contest-deposit forfeit, and `task` now boxed (SBF stack);
 - `expire_reject_frozen`: both bond accounts optional → required + seeds-pinned;
-- `reclaim_terminal_claim` / `apply_dispute_slash`: writable-flag flips only.
+- `reclaim_terminal_claim` / `apply_dispute_slash`: writable-flag flips only;
+  `apply_dispute_slash` also gains a trailing OPTIONAL `creator` account
+  (token-settlement rent recipient; old callers pass nothing and keep the
+  treasury default);
+- `validate_task_result`: both completion-bond accounts required + seeds-pinned;
+- `deregister_agent` / `close_task`: new REQUIRED `remaining_accounts`
+  conventions (bidder-market PDA + verification badge PDA on deregister; the
+  canonical bid book on close of a BidExclusive task) — remaining accounts are
+  not in the IDL, so the wire shape is unchanged, but callers must pass them
+  (the SDK facade derives and appends them automatically).
 
 Deploy choreography (human-run, Squads multisig): binary upgrade → stamp
 `surface_revision = 5` via `update_launch_controls` → coordinated
 `@tetsuo-ai/marketplace-sdk` minor release (facade `cancelTask` now derives the
-bond PDAs; `applyInitiatorSlash` loses the `task` input) and
-`@tetsuo-ai/protocol` regen. New error codes are tail-appended (6356/6357) —
-no existing code shifts; no account-layout change (`state.rs` diff is empty).
+bond PDAs; `applyInitiatorSlash` loses the `task` input; `deregisterAgent`
+appends the two required remaining accounts) and `@tetsuo-ai/protocol` regen.
+New error codes are tail-appended (6356–6361) — no existing code shifts; no
+account-layout change (`state.rs` diff is empty).
   [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) (**99** instructions)
 - Verified build: **LIVE** — the OtterSec/osec.io registry reports
   `is_verified: true` for the deployed bytecode against this repo (check

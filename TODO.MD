@@ -483,11 +483,87 @@ surface is used. Cheap guards; do them in the same PR.)
 
 ---
 
+## 2026-07 adversarial swarm (second wave) — ALL RESOLVED
+
+A 13-agent adversarial swarm re-audited the full program after the F-1–F-19
+queue landed. Every confirmed finding was fixed in a staged commit with
+revert-sensitive tests; each commit is independently gate-green.
+
+### [x] S-1 — CRITICAL: `expire_dispute` paid a self-disputing no-show 50% of escrow
+- **RESOLVED (`1b562b4`)**: post-P6.3 every expired dispute is UNRESOLVED (arbiter
+  voting is retired), so expiry now refunds the funder in full and the accepted
+  bid bond is always Refunded (was FullSlashToCreator). Test:
+  `expire-refund-default.test.mjs`.
+
+### [x] S-2 — HIGH: initiator-slash guard was dead code
+- **RESOLVED (`96fa6bd`)**: `initiate_dispute` now stamps
+  `agent.last_dispute_initiated`, so the `deregister_agent` cooldown (which read
+  the never-written field) actually binds — a frivolous-dispute creator can no
+  longer deregister instantly to brick `apply_initiator_slash`. Test:
+  `initiator-slash-guard.test.mjs`.
+
+### [x] S-3 — MED: `validate_task_result` settled no completion bonds
+- **RESOLVED (`ab5b297`)**: both bonds are now REQUIRED + seeds-pinned and
+  refunded on accept (the only Completed path that skipped settlement).
+
+### [x] S-4 — MED: `close_task` bricked live bids
+- **RESOLVED (`3e7a364`)**: requires the canonical bid book for BidExclusive
+  tasks (fail-closed on omission) and refuses while `active_bids > 0`. Test:
+  `close-task-bid-guard.test.mjs`.
+
+### [x] S-5 — MED: ValidatorQuorum sybil voting was free
+- **RESOLVED (`81d3be2`)**: votes now require
+  `validator_agent.stake >= protocol_config.min_stake_for_dispute`. Design
+  context recorded as D8.
+
+### [x] S-6 — MED: delegation slash-vault + re-registration inflation loop
+- **RESOLVED (`ed0752a`)**: `delegate_reputation` rejects active dispute
+  defendants (the delegated pot was slash-exempt); `revoke_delegation` requires
+  `registered_at <= delegation.created_at` so a deregister→re-register cycle
+  (same agent PDA) cannot replay a delegation into unbounded reputation.
+  Errors 6359/6360 (appended). Test: `delegation-guards.test.mjs`.
+
+### [x] S-7 — LOW batch (`0b34a81`)
+- `create_dependent_task` hard-failed on legacy 382B parents (typed
+  `Account<Task>` load) → owner-check + zero-pad deserialize in-handler.
+- `purchase_good` / `purchase_skill` fee math → u128 intermediates (F-16 class).
+- `resolve_dispute` / `expire_dispute` defendant `active_tasks` → saturating
+  (the un-brickers could themselves brick on legacy counter drift).
+- `apply_dispute_slash` token-settlement rent (escrow PDA + ATA) → the CREATOR
+  who funded it, not the treasury (every other close path already did this).
+- `create_proposal` custom `voting_period` floored at the governance default
+  (a mainnet proposal already ran a 600s snap vote).
+
+### [x] S-8 — LOW batch (`89779cf`)
+- `cancel_task` claim drain refunded a no-show squatter's contest entry
+  deposit → now forfeited to the treasury like every other no-show exit
+  (cfg-gated optional treasury account, required when a deposit is drained).
+- `deregister_agent` was bid-blind → required remaining account pins the
+  `["bidder_market", agent]` PDA and refuses while `active_bid_count > 0`
+  (new error 6361); it also sweeps the `["agent_verification", agent]` badge
+  so a re-registered agent_id cannot inherit it.
+- `close_task` now sweeps the creator-funded `TaskBidBook` (proved
+  `active_bids == 0` by the C4 guard) instead of stranding its rent.
+- `cancel_task` trampoline: `task` boxed — the treasury field tipped the 4KB
+  SBF frame (caught by e2e + `check-stack-frames.mjs`).
+- Dependency gate on ghost/frozen exits: considered and REJECTED — recorded
+  as D13 (gating the sole exits could lock escrow when a parent stalls).
+
+### [x] S-9 — Documentation-only residuals
+Recorded in `docs/DESIGN_DECISIONS.md`: D8 (quorum is friction, not Byzantine
+resistance), D9 (governance vote-weight recyclability — needs redesign, not a
+patch), D10 (resolver leg conflict bounded by fee caps), D11 (V-2 same-round
+revote tombstone wedge), D12 (durable-submission dispute with closed claim —
+preflight scan flags it), D13 above.
+
+---
+
 ## Informational — accepted design decisions to DOCUMENT (no code change)
 
 All four are now recorded as D1–D4 in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)
 (with D5–D7 added for F-17, the F-12 preflight result, and the F-2 reclaim
-omission residual). Kept here as the short index:
+omission residual; D8–D13 added by the 2026-07 swarm wave). Kept here as the
+short index:
 
 - **D1** — Canary surface has no timeout exit from `PendingValidation` (mutual
   lock, frozen-surface design).
@@ -516,3 +592,4 @@ omission residual). Kept here as the short index:
 | F-9 | ~~P2~~ DONE (53e2c4b) | | ☒ |
 | F-10 | ~~P2~~ DONE (e89e525) | | ☒ |
 | F-11–F-19 | ~~P3~~ DONE (631a10f F-11/15, 0c8f1a0 F-14/16, dd519ad F-18, 3285675 F-19; F-12/17 docs) | | ☒ |
+| S-1–S-9 (swarm wave) | ~~CRITICAL–LOW~~ DONE (1b562b4 S-1, 96fa6bd S-2, ab5b297 S-3, 3e7a364 S-4, 81d3be2 S-5, ed0752a S-6, 0b34a81 S-7, 89779cf S-8; S-9 docs D8–D13) | | ☒ |

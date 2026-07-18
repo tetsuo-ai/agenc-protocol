@@ -5,6 +5,36 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-07-18 — adversarial-swarm wave complete (S-1–S-9, all items)
+
+- a 13-agent adversarial swarm re-audited the full program after the F-1–F-19
+  queue; every confirmed finding landed in a staged, gate-green commit on
+  `fix/audit-findings-2026-07-16` — 415 Rust unit tests, 310 litesvm
+  integration tests, 520 SDK tests (+e2e); clippy default+canary, artifacts,
+  canary freeze, IDL reference, and SBF stack-frame check all green
+- **CRITICAL** (`1b562b4`): `expire_dispute` no longer pays a self-disputing
+  no-show 50% of escrow — expiry refunds the funder in full (post-P6.3 every
+  expired dispute is unresolved); accepted-bid bond on expiry always refunds
+- **HIGH** (`96fa6bd`): `initiate_dispute` stamps `last_dispute_initiated`, so
+  the deregistration cooldown that guards `apply_initiator_slash` actually
+  binds (it read a never-written field — dead code)
+- **MED**: `validate_task_result` settles completion bonds on accept
+  (`ab5b297`); `close_task` requires the canonical bid book and refuses while
+  bids are live (`3e7a364`); ValidatorQuorum votes require the
+  min-stake-for-dispute floor (`81d3be2`); delegation closed as a slash-vault
+  for dispute defendants and the deregister→re-register reputation inflation
+  loop killed via identity continuity (`ed0752a`, errors 6359/6360)
+- **LOW batches** (`0b34a81`, `89779cf`): legacy-parent zero-pad load for
+  `create_dependent_task`; u128 fee math in purchases; saturating dispute
+  counters; slash-settlement rent to the creator; governance snap-vote floor;
+  contest cancel deposit forfeit; deregister bid gate (error 6361) +
+  verification-badge sweep; `TaskBidBook` rent sweep; `cancel_task` SBF stack
+  fix (`task` boxed)
+- **Docs**: D8–D13 added to `docs/DESIGN_DECISIONS.md` — quorum-is-friction,
+  governance vote-weight redesign note, resolver leg conflict bound, V-2
+  revote wedge, durable-dispute preflight, and the deliberate rejection of the
+  dependency gate on ghost/frozen exits (money-never-locks)
+
 ## 2026-07-18 — full audit hardening queue complete (F-1–F-19, all items)
 
 - the ENTIRE 2026-07 audit hardening queue is implemented and gated on branch
