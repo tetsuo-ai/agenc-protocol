@@ -223,6 +223,7 @@ const prepareCreateServiceListing = defineTool<
 
 interface PrepareHireArgs {
   listing: string;
+  providerAgent: string;
   buyer: string;
   creatorAgent: string;
   taskId: string;
@@ -250,6 +251,7 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
     additionalProperties: false,
     required: [
       "listing",
+      "providerAgent",
       "buyer",
       "creatorAgent",
       "taskId",
@@ -260,6 +262,10 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
     ],
     properties: {
       listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
+      providerAgent: {
+        type: "string",
+        description: "Provider AgentRegistration PDA pinned by the listing (base58).",
+      },
       buyer: {
         type: "string",
         description:
@@ -326,6 +332,7 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
     const buyer = createNoopSigner(args.buyer as Address);
     const input: Parameters<typeof facade.hireFromListing>[0] = {
       listing: args.listing as Address,
+      providerAgent: args.providerAgent as Address,
       creatorAgent: args.creatorAgent as Address,
       authority: buyer,
       creator: buyer,
@@ -354,6 +361,7 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
 
 interface PrepareHireHumanlessArgs {
   listing: string;
+  providerAgent: string;
   buyer: string;
   taskId: string;
   expectedPrice: string;
@@ -380,6 +388,7 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
     additionalProperties: false,
     required: [
       "listing",
+      "providerAgent",
       "buyer",
       "taskId",
       "expectedPrice",
@@ -389,6 +398,10 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
     ],
     properties: {
       listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
+      providerAgent: {
+        type: "string",
+        description: "Provider AgentRegistration PDA pinned by the listing (base58).",
+      },
       buyer: { type: "string", description: "Plain buyer wallet that signs and funds escrow." },
       taskId: { type: "string", description: "32-byte task id as 64 hex chars." },
       expectedPrice: { type: "string", description: "Expected listing price in lamports." },
@@ -441,6 +454,7 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
     const buyer = createNoopSigner(args.buyer as Address);
     const input: Parameters<typeof facade.hireFromListingHumanless>[0] = {
       listing: args.listing as Address,
+      providerAgent: args.providerAgent as Address,
       creator: buyer,
       taskId: hex32(args.taskId, "taskId", "prepare_hire_humanless"),
       expectedPrice: BigInt(args.expectedPrice),
@@ -548,6 +562,7 @@ interface PrepareClaimArgs {
   task: string;
   worker: string;
   workerAuthority: string;
+  jobSpecHash: string;
 }
 
 const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
@@ -561,7 +576,7 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["task", "worker", "workerAuthority"],
+    required: ["task", "worker", "workerAuthority", "jobSpecHash"],
     properties: {
       task: { type: "string", description: "The Task PDA to claim (base58)." },
       worker: {
@@ -572,6 +587,10 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
         type: "string",
         description: "The wallet authority that owns the worker agent (signs the claim).",
       },
+      jobSpecHash: {
+        type: "string",
+        description: "The task's pinned job-spec hash as 64 hex chars (BLOCK-gate binding).",
+      },
     },
   },
   async handler(args) {
@@ -580,6 +599,7 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
       task: args.task as Address,
       worker: args.worker as Address,
       authority,
+      jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_claim"),
     });
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },

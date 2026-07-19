@@ -7,7 +7,7 @@
 // `hire_from_listing` is the registered-buyer path. `hire_from_listing_humanless`
 // is the human-wallet storefront checkout path used by the reference marketplace.
 // Both mint the task + escrow in one instruction.
-import type { Address } from "@solana/kit";
+import { AccountRole, type Address } from "@solana/kit";
 import {
   getCreateServiceListingInstructionAsync,
   getUpdateServiceListingInstructionAsync,
@@ -132,10 +132,30 @@ export async function createServiceListing(input: CreateServiceListingInput) {
 
 /**
  * Build an update_service_listing instruction. Every data field is an Option —
- * pass `null` to leave a field unchanged and a value to overwrite it. The
- * protocolConfig is auto-derived.
+ * pass `null` to leave a field unchanged and a value to overwrite it. The spec
+ * hash and URI are one atomic pair: update both or neither. The protocolConfig
+ * is auto-derived.
  */
-export async function updateServiceListing(input: UpdateServiceListingAsyncInput) {
+export type UpdateServiceListingInput = Omit<
+  UpdateServiceListingAsyncInput,
+  "specHash" | "specUri"
+> &
+  (
+    | {
+        specHash: NonNullable<UpdateServiceListingAsyncInput["specHash"]>;
+        specUri: string;
+      }
+    | { specHash: null; specUri: null }
+  );
+
+export async function updateServiceListing(input: UpdateServiceListingInput) {
+  const hasHash = input.specHash !== null;
+  const hasUri = input.specUri !== null;
+  if (hasHash !== hasUri) {
+    throw new Error(
+      "updateServiceListing: specHash and specUri must be updated together",
+    );
+  }
   return getUpdateServiceListingInstructionAsync(input);
 }
 
@@ -143,26 +163,51 @@ export async function updateServiceListing(input: UpdateServiceListingAsyncInput
 export const ListingState = {
   Active: 0,
   Paused: 1,
+  Retired: 2,
+  /** @deprecated The on-chain/public state name is `Retired`. */
   Closed: 2,
 } as const;
 export type ListingStateName = keyof typeof ListingState;
 
 /**
- * Build a set_service_listing_state instruction (activate / pause / close).
+ * Build a set_service_listing_state instruction (activate / pause / retire).
  * Accepts either the raw u8 `newState` or a friendly `state` name; protocolConfig
  * is auto-derived.
  */
 export async function setServiceListingState(
-  input: Omit<SetServiceListingStateAsyncInput, "newState"> &
+  input: Omit<SetServiceListingStateAsyncInput, "newState"> & {
+    /**
+     * Required only for reactivation. Pause/retire deliberately retain the
+     * three-account revision-4 wire and ignore this compatibility field.
+     */
+    providerAgent?: Address;
+  } &
     ({ newState: number } | { state: ListingStateName }),
 ) {
   const newState =
     "state" in input ? ListingState[input.state] : input.newState;
-  const { state: _state, ...rest } = input as { state?: ListingStateName } & Omit<
-    SetServiceListingStateAsyncInput,
-    "newState"
-  >;
-  return getSetServiceListingStateInstructionAsync({ ...rest, newState });
+  const { state: _state, providerAgent, ...rest } = input as {
+    state?: ListingStateName;
+    providerAgent?: Address;
+  } & Omit<SetServiceListingStateAsyncInput, "newState">;
+  const instruction = await getSetServiceListingStateInstructionAsync({
+    ...rest,
+    newState,
+  });
+
+  if (newState !== ListingState.Active) return instruction;
+  if (providerAgent === undefined) {
+    throw new Error(
+      "setServiceListingState: providerAgent is required to reactivate a listing",
+    );
+  }
+  return Object.freeze({
+    ...instruction,
+    accounts: [
+      ...instruction.accounts,
+      { address: providerAgent, role: AccountRole.READONLY },
+    ],
+  });
 }
 
 /**

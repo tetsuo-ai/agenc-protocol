@@ -8,6 +8,7 @@ import {
   findTaskSubmissionPda,
   findTaskJobSpecPda,
   findHireRecordPda,
+  findModerationBlockPda,
   getTaskDecoder,
   getTaskSubmissionDecoder,
   getTaskEscrowDecoder,
@@ -22,6 +23,10 @@ import {
   send,
   accountData,
 } from "./harness.js";
+
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
 
 // REAL on-chain execution of the CreatorReview (manual validation) settlement path,
 // driven entirely by SDK-built @solana/kit instructions running against the compiled
@@ -163,6 +168,8 @@ describe("e2e: CreatorReview manual validation settles on the real program", () 
         task,
         worker: workerAgent,
         authority: worker,
+        moderationBlock: await moderationBlockFor(jobSpecHash),
+        jobSpecHash,
       }),
     ]);
     // The claim PDA's second seed field is named `bidder` in the generated helper,

@@ -103,7 +103,11 @@ pub fn handler_finalize(ctx: Context<FinalizeAttestorExit>) -> Result<()> {
         CoordinationError::AttestorExitCooldownActive
     );
 
-    let refunded = ctx.accounts.moderation_attestor.to_account_info().lamports();
+    let refunded = ctx
+        .accounts
+        .moderation_attestor
+        .to_account_info()
+        .lamports();
     emit!(AttestorExitFinalized {
         attestor: entry.attestor,
         refunded_lamports: refunded,

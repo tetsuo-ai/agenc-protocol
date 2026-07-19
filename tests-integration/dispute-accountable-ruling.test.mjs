@@ -75,8 +75,8 @@ function readResolver(svm, entry) {
   };
 }
 
-// Drive a hired task to an Active dispute requesting `resolutionType`. The worker
-// (provider) opens the dispute. Returns the handles needed to resolve it.
+// Drive a hired task to an Active creator dispute against the claimed worker,
+// requesting `resolutionType`. Returns the handles needed to resolve it.
 async function hireClaimDispute(w, { resolutionType }) {
   const modProg = makeProgram(w.modAuth);
   const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
@@ -104,17 +104,20 @@ async function hireClaimDispute(w, { resolutionType }) {
     .instruction(), [w.buyer]), "p64:publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "p64:claim");
 
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), resolutionType, "evidence")
-    .accounts({ dispute, task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "p64:initiate");
+    .accounts({ dispute, task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "p64:initiate");
 
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active !== undefined, "dispute Active");
   return { task, escrow, hireRecord, claim, dispute };
@@ -135,8 +138,9 @@ async function resolveIx(w, r, { resolver, resolverEntry, approve, rationaleHash
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
-      // audit F-9 optional sweep accounts: omitted here (close_task fallback)
-      taskSubmission: null, taskValidationConfig: null,
+      // Mandatory canonical evidence: this system-owned PDA proves no submission exists.
+      taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
+      taskValidationConfig: null,
     })
     .instruction();
 }
@@ -209,6 +213,37 @@ test("accountable ruling: an over-length rationale_uri reverts and leaves the di
   assert.equal(after.last_resolved_at, 0n, "last_resolved_at unchanged after the rejected ruling");
 });
 
+// A resolver may be a valid roster member yet still be economically conflicted
+// on one task. The immutable operator/referrer snapshots are part of the ruling
+// authorization boundary, not merely payout-account validation.
+test("accountable ruling: a snapshotted operator cannot resolve a task that pays them", async () => {
+  const resolver = Keypair.generate();
+  const w = await freshWorld({
+    moderationEnabled: true,
+    price: 3_000_000,
+    operator: resolver.publicKey,
+    operatorFeeBps: 1_000,
+  });
+  w.svm.airdrop(resolver.publicKey, BigInt(100e9));
+  const resolverEntry = await assignResolver(w, resolver);
+  const r = await hireClaimDispute(w, { resolutionType: 1 }); // Complete would pay operator.
+
+  expectFail(send(w.svm,
+    await resolveIx(w, r, {
+      resolver,
+      resolverEntry,
+      approve: true,
+      rationaleHash: crypto.randomBytes(32),
+      rationaleUri: "agenc://ruling/conflicted-operator",
+    }),
+    [resolver]), "ResolverConflictOfInterest", "p64:operator resolver must be rejected");
+
+  assert.ok(decode(w.svm, "Dispute", r.dispute).status.Active !== undefined,
+    "conflicted ruling leaves dispute Active for another resolver or expiry");
+  assert.equal(readResolver(w.svm, resolverEntry).resolved_count, 0n,
+    "rejected conflicted ruling does not bump resolver telemetry");
+});
+
 // ---------------------------------------------------------------------------
 // Back-compat: the protocol authority can still resolve directly (resolverAssignment
 // = null), supplying the now-required rationale. No per-resolver counter exists to bump.
@@ -234,8 +269,9 @@ test("accountable ruling: protocol authority resolves directly with a rationale 
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
-      // audit F-9 optional sweep accounts: omitted here (close_task fallback)
-      taskSubmission: null, taskValidationConfig: null,
+      // Mandatory canonical evidence: this system-owned PDA proves no submission exists.
+      taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
+      taskValidationConfig: null,
     })
     .instruction(), [w.admin]), "p64:resolve direct by protocol authority");
 

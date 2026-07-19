@@ -43,8 +43,14 @@ check, and enforces the canary-IDL gate, so `main` cannot carry a drifting IDL.
 
 Downstream repos should consume released protocol artifacts from:
 
-- this repo's committed artifact surface, or
-- the published `@tetsuo-ai/protocol` package
+- a tagged/released artifact set that matches their target cluster, normally the
+  published `@tetsuo-ai/protocol` package; or
+- this repo's committed artifact surface only when intentionally integrating the
+  pending candidate.
+
+At current HEAD, committed artifacts describe the 97-instruction revision-5
+candidate while published `@tetsuo-ai/protocol@0.3.0` describes the live
+99-instruction revision-4 wire. They are deliberately not interchangeable before
+the coordinated program/package release.
 
 They should not treat local `target/` files or vendored copies in other repos as canonical.
-

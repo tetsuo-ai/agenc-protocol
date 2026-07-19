@@ -1,16 +1,16 @@
 //! Shared helpers for task initialization (create_task + create_dependent_task)
 
 use crate::errors::CoordinationError;
-use crate::instructions::constants::{MAX_DEADLINE_SECONDS, MAX_REPUTATION};
-use crate::state::{
-    DependencyType, ProtocolConfig, Task, TaskEscrow, TaskStatus, TaskType,
-    MANUAL_VALIDATION_SENTINEL,
+use crate::instructions::constants::{
+    DISPUTE_SAFE_MAX_WORKERS, MAX_DEADLINE_SECONDS, MAX_REPUTATION,
 };
+use crate::state::{DependencyType, ProtocolConfig, Task, TaskEscrow, TaskStatus, TaskType};
 use anchor_lang::prelude::*;
 
 /// Validates common task parameters shared between create_task and create_dependent_task.
 ///
-/// Does NOT validate reward_amount (differs: create_task requires > 0, dependent tasks allow 0).
+/// Does NOT validate reward_amount; every caller reaches the collaborative-share
+/// funding check at the shared `init_task_fields` boundary.
 pub fn validate_task_params(
     task_id: &[u8; 32],
     description: &[u8; 64],
@@ -33,16 +33,62 @@ pub fn validate_task_params(
     );
     // Validate max_workers bounds (#412)
     require!(
-        max_workers > 0 && max_workers <= 100,
+        max_workers > 0 && max_workers <= DISPUTE_SAFE_MAX_WORKERS,
         CoordinationError::InvalidMaxWorkers
     );
     require!(task_type <= 3, CoordinationError::InvalidTaskType);
+    // `Exclusive` settles after one completion and its bond/finalizer paths can
+    // name only one worker. Allowing max_workers > 1 created extra live claims
+    // that could outlive terminal settlement. Competitive and Collaborative are
+    // the explicit multi-worker modes.
+    if task_type == TaskType::Exclusive as u8 {
+        require!(max_workers == 1, CoordinationError::InvalidMaxWorkers);
+    }
     require!(
         min_reputation <= MAX_REPUTATION,
         CoordinationError::InvalidMinReputation
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod task_param_tests {
+    use super::*;
+
+    fn params(max_workers: u8, task_type: u8) -> Result<()> {
+        validate_task_params(&[1u8; 32], &[2u8; 64], 1, max_workers, task_type, 0)
+    }
+
+    #[test]
+    fn exclusive_tasks_are_single_worker_only() {
+        assert!(params(1, TaskType::Exclusive as u8).is_ok());
+        assert!(params(2, TaskType::Exclusive as u8).is_err());
+        assert!(params(2, TaskType::Collaborative as u8).is_ok());
+        assert!(params(2, TaskType::Competitive as u8).is_ok());
+    }
+
+    #[test]
+    fn multi_worker_creation_is_capped_at_dispute_safe_limit() {
+        assert!(params(DISPUTE_SAFE_MAX_WORKERS, TaskType::Collaborative as u8).is_ok());
+        assert!(params(DISPUTE_SAFE_MAX_WORKERS + 1, TaskType::Collaborative as u8).is_err());
+        assert!(params(DISPUTE_SAFE_MAX_WORKERS + 1, TaskType::Competitive as u8).is_err());
+    }
+
+    #[test]
+    fn initial_completion_cardinality_matches_task_type() {
+        assert_eq!(
+            initial_required_completions(TaskType::Collaborative as u8, 4),
+            4
+        );
+        for task_type in [
+            TaskType::Exclusive,
+            TaskType::Competitive,
+            TaskType::BidExclusive,
+        ] {
+            assert_eq!(initial_required_completions(task_type as u8, 4), 1);
+        }
+    }
 }
 
 /// Enforce that the on-chain `description` carries only a content-commitment hash,
@@ -66,6 +112,22 @@ pub fn validate_description_is_content_hash(description: &[u8; 64]) -> Result<()
     require!(
         description[..32].iter().any(|&b| b != 0),
         CoordinationError::InvalidDescription
+    );
+    Ok(())
+}
+
+/// Keep new ZK-private obligations off-chain until the complete proof stack is
+/// production-ready on mainnet.
+///
+/// `complete_task_private` remains available as a dormant exit path so a later
+/// audited deployment can settle any deliberately migrated obligation. Creation
+/// must nevertheless fail closed today: the verifier programs hard-coded by the
+/// current binary are not deployed on mainnet, and this repository does not yet
+/// contain an auditable RISC Zero guest that proves the task statement.
+pub fn require_private_task_creation_disabled(constraint_hash: Option<[u8; 32]>) -> Result<()> {
+    require!(
+        constraint_hash.is_none(),
+        CoordinationError::PrivateTaskCreationDisabled
     );
     Ok(())
 }
@@ -148,36 +210,53 @@ pub fn init_task_fields(
     min_reputation: u16,
     reward_mint: Option<Pubkey>,
 ) -> Result<()> {
-    if let Some(hash) = constraint_hash {
-        require!(
-            hash != MANUAL_VALIDATION_SENTINEL,
-            CoordinationError::InvalidInput
-        );
-    }
+    // Central fail-closed boundary shared by every Task initializer, including
+    // direct, dependent, humanless, and listing-hire creation paths. Handler-level
+    // checks provide an early explicit error; this guard prevents a future caller
+    // from bypassing the release gate by invoking the shared initializer directly.
+    require_private_task_creation_disabled(constraint_hash)?;
 
-    task.task_id = task_id;
-    task.creator = creator;
-    task.required_capabilities = required_capabilities;
-    task.description = description;
-    task.constraint_hash = constraint_hash.unwrap_or([0u8; 32]);
-    task.reward_amount = reward_amount;
-    task.max_workers = max_workers;
-    task.current_workers = 0;
-    task.status = TaskStatus::Open;
-    task.task_type = match task_type {
+    // Resolve and validate every fallible invariant before mutating `task`. This
+    // keeps the shared helper atomic even in native/unit callers that do not have
+    // Solana transaction rollback around an error.
+    let resolved_task_type = match task_type {
         0 => TaskType::Exclusive,
         1 => TaskType::Collaborative,
         2 => TaskType::Competitive,
         3 => TaskType::BidExclusive,
         _ => return Err(CoordinationError::InvalidTaskType.into()),
     };
+    let required_completions = initial_required_completions(task_type, max_workers);
+    super::completion_helpers::validate_reward_covers_required_completions(
+        resolved_task_type,
+        reward_amount,
+        required_completions,
+    )?;
+    if resolved_task_type == TaskType::Competitive {
+        require!(
+            reward_mint.is_none(),
+            CoordinationError::ContestSolRewardOnly
+        );
+        require!(deadline > 0, CoordinationError::InvalidDeadline);
+    }
+
+    task.task_id = task_id;
+    task.creator = creator;
+    task.required_capabilities = required_capabilities;
+    task.description = description;
+    task.constraint_hash = [0u8; 32];
+    task.reward_amount = reward_amount;
+    task.max_workers = max_workers;
+    task.current_workers = 0;
+    task.status = TaskStatus::Open;
+    task.task_type = resolved_task_type;
     task.created_at = timestamp;
     task.deadline = deadline;
     task.completed_at = 0;
     task.escrow = escrow_key;
     task.result = [0u8; 64];
     task.completions = 0;
-    task.required_completions = if task_type == 1 { max_workers } else { 1 };
+    task.required_completions = required_completions;
     task.bump = bump;
     task.protocol_fee_bps = protocol_fee_bps;
     task.dependency_type = DependencyType::None;
@@ -198,16 +277,18 @@ pub fn init_task_fields(
     task.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
     task.set_live_submissions(0);
 
-    // Contest rails (schema-1 Competitive): the ghost-split crank pays lamport fee
-    // legs and needs a real `ghost_at` anchor, so contests are SOL-denominated and
-    // deadline-bearing at creation — an SPL contest could otherwise reach a
-    // `ghost_at` state it cannot exit (spec §3).
-    if task.task_type == TaskType::Competitive {
-        require!(reward_mint.is_none(), CoordinationError::ContestSolRewardOnly);
-        require!(deadline > 0, CoordinationError::InvalidDeadline);
-    }
-
     Ok(())
+}
+
+/// Initial completion cardinality used by both task initialization and the
+/// creation-time reward funding preflight. Keeping it in one helper prevents the
+/// admission check from drifting away from settlement share math.
+pub(crate) fn initial_required_completions(task_type: u8, max_workers: u8) -> u8 {
+    if task_type == TaskType::Collaborative as u8 {
+        max_workers
+    } else {
+        1
+    }
 }
 
 /// Initializes escrow account fields.
@@ -267,7 +348,9 @@ mod contest_init_tests {
     fn competitive_creation_requires_sol_reward() {
         // Spec §3: contests are SOL-only — an SPL contest must never be able to
         // reach a ghost_at state it cannot exit.
-        let err = init(2, 1_700_003_600, Some(Pubkey::new_unique())).err().unwrap();
+        let err = init(2, 1_700_003_600, Some(Pubkey::new_unique()))
+            .err()
+            .unwrap();
         assert_eq!(err, CoordinationError::ContestSolRewardOnly.into());
         // SPL rewards stay fine for non-contest types.
         assert!(init(0, 1_700_003_600, Some(Pubkey::new_unique())).is_ok());
@@ -278,6 +361,126 @@ mod contest_init_tests {
         let err = init(2, 0, None).err().unwrap();
         assert_eq!(err, CoordinationError::InvalidDeadline.into());
         assert!(init(2, 1_700_003_600, None).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod collaborative_funding_tests {
+    use super::*;
+
+    fn init_collaborative(reward_amount: u64, reward_mint: Option<Pubkey>) -> Result<Task> {
+        let mut task = Task::default();
+        init_task_fields(
+            &mut task,
+            [1u8; 32],
+            Pubkey::new_unique(),
+            1,
+            [2u8; 64],
+            None,
+            reward_amount,
+            4,
+            TaskType::Collaborative as u8,
+            1_700_003_600,
+            Pubkey::new_unique(),
+            255,
+            100,
+            1_700_000_000,
+            0,
+            reward_mint,
+        )?;
+        Ok(task)
+    }
+
+    #[test]
+    fn shared_initializer_enforces_exact_collaborative_share_floor_for_sol_and_tokens() {
+        for reward_mint in [None, Some(Pubkey::new_unique())] {
+            assert!(init_collaborative(3, reward_mint).is_err());
+            let task = init_collaborative(4, reward_mint).unwrap();
+            assert_eq!(task.required_completions, 4);
+            assert_eq!(task.reward_amount, 4);
+            assert!(init_collaborative(5, reward_mint).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejected_collaborative_funding_does_not_partially_mutate_task() {
+        let mut task = Task {
+            creator: Pubkey::new_unique(),
+            reward_amount: 99,
+            ..Task::default()
+        };
+        let before = task.try_to_vec().unwrap();
+        let result = init_task_fields(
+            &mut task,
+            [1u8; 32],
+            Pubkey::new_unique(),
+            1,
+            [2u8; 64],
+            None,
+            3,
+            4,
+            TaskType::Collaborative as u8,
+            1_700_003_600,
+            Pubkey::new_unique(),
+            255,
+            100,
+            1_700_000_000,
+            0,
+            None,
+        );
+        assert!(result.is_err());
+        assert_eq!(task.try_to_vec().unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod private_task_release_gate_tests {
+    use super::*;
+
+    fn init_with_constraint(constraint_hash: Option<[u8; 32]>) -> Result<Task> {
+        let mut task = Task::default();
+        init_task_fields(
+            &mut task,
+            [1u8; 32],
+            Pubkey::new_unique(),
+            1,
+            [2u8; 64],
+            constraint_hash,
+            1_000_000,
+            1,
+            TaskType::Exclusive as u8,
+            1_700_003_600,
+            Pubkey::new_unique(),
+            255,
+            100,
+            1_700_000_000,
+            0,
+            None,
+        )?;
+        Ok(task)
+    }
+
+    #[test]
+    fn shared_initializer_keeps_every_creation_surface_fail_closed() {
+        assert!(init_with_constraint(None).is_ok());
+
+        for constraint_hash in [
+            [0u8; 32],
+            [7u8; 32],
+            crate::state::MANUAL_VALIDATION_SENTINEL,
+        ] {
+            let err = init_with_constraint(Some(constraint_hash))
+                .err()
+                .expect("private task creation must fail closed");
+            assert_eq!(err, CoordinationError::PrivateTaskCreationDisabled.into());
+        }
+    }
+
+    #[test]
+    fn release_gate_returns_the_dedicated_error() {
+        let err = require_private_task_creation_disabled(Some([9u8; 32])).unwrap_err();
+        assert_eq!(err, CoordinationError::PrivateTaskCreationDisabled.into());
+        assert!(require_private_task_creation_disabled(None).is_ok());
     }
 }
 

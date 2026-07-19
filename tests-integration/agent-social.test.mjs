@@ -49,7 +49,10 @@ function warp(svm, secs) {
 // Register a brand-new agent (real instruction) controlled by a fresh keypair.
 // Returns { kp, prog, agentPda, agentId }. The protocol config injected by
 // freshWorld is reused; min_agent_stake is 0 so no stake is required.
-async function registerAgent(w, { capabilities = 1, endpoint = "http://extra.test" } = {}) {
+async function registerAgent(
+  w,
+  { capabilities = 1, endpoint = "http://extra.test", stakeAmount = 0 } = {},
+) {
   const kp = Keypair.generate();
   w.svm.airdrop(kp.publicKey, BigInt(100e9));
   const prog = makeProgram(kp);
@@ -59,7 +62,7 @@ async function registerAgent(w, { capabilities = 1, endpoint = "http://extra.tes
     send(
       w.svm,
       await prog.methods
-        .registerAgent(arr(agentId), new BN(capabilities), endpoint, null, new BN(0))
+        .registerAgent(arr(agentId), new BN(capabilities), endpoint, null, new BN(stakeAmount))
         .accounts({ agent: agentPda, protocolConfig: w.protocolPda, authority: kp.publicKey, systemProgram: SystemProgram.programId })
         .instruction(),
       [kp],
@@ -152,12 +155,12 @@ test("update_agent: a second update inside the cooldown is rejected (UpdateTooFr
 // deregister_agent
 // ---------------------------------------------------------------------------
 
-test("deregister_agent: closes the agent PDA and decrements total_agents", async () => {
+test("deregister_agent: refunds stake, retires the identity permanently, and decrements total_agents", async () => {
   const w = await freshWorld({});
-  const a = await registerAgent(w);
+  const registrationStake = 1_000_000;
+  const a = await registerAgent(w, { stakeAmount: registrationStake });
   const totalBefore = decode(w.svm, "ProtocolConfig", w.protocolPda).total_agents.toString();
-
-  const authBalBefore = Number(w.svm.getBalance(a.kp.publicKey));
+  const agentBalanceBefore = Number(w.svm.getBalance(a.agentPda));
   expectOk(
     send(
       w.svm,
@@ -171,8 +174,20 @@ test("deregister_agent: closes the agent PDA and decrements total_agents", async
     "deregister agent",
   );
 
-  assert.ok(isClosed(w.svm, a.agentPda), "agent PDA closed");
-  assert.ok(Number(w.svm.getBalance(a.kp.publicKey)) > authBalBefore, "rent refunded to authority");
+  assert.ok(!isClosed(w.svm, a.agentPda), "identity tombstone remains on-chain");
+  const retired = decode(w.svm, "AgentRegistration", a.agentPda);
+  assert.ok(retired.status.Inactive !== undefined, "retired identity is not active");
+  assert.deepEqual(
+    Buffer.from(retired._reserved),
+    Buffer.from("RETD"),
+    "reserved tail carries the permanent-retirement marker",
+  );
+  assert.equal(retired.stake.toString(), "0", "tracked registration stake cleared");
+  assert.equal(
+    agentBalanceBefore - Number(w.svm.getBalance(a.agentPda)),
+    registrationStake,
+    "tracked registration stake refunded while rent stays with the tombstone",
+  );
   const totalAfter = decode(w.svm, "ProtocolConfig", w.protocolPda).total_agents.toString();
   assert.equal(Number(totalAfter), Number(totalBefore) - 1, "total_agents decremented");
 });
@@ -194,6 +209,51 @@ test("deregister_agent: a non-authority cannot deregister (UnauthorizedAgent)", 
     "non-authority deregister",
   );
   assert.ok(!isClosed(w.svm, a.agentPda), "agent PDA still open after rejected deregister");
+});
+
+test("deregister_agent: a suspended agent cannot erase the operator sanction", async () => {
+  const w = await freshWorld({});
+  const a = await registerAgent(w);
+  const adminProg = makeProgram(w.admin);
+
+  expectOk(
+    send(
+      w.svm,
+      await adminProg.methods
+        .suspendAgent()
+        .accounts({
+          agent: a.agentPda,
+          protocolConfig: w.protocolPda,
+          authority: w.admin.publicKey,
+        })
+        .instruction(),
+      [w.admin],
+    ),
+    "suspend agent before attempted deregistration",
+  );
+
+  expectFail(
+    send(
+      w.svm,
+      await a.prog.methods
+        .deregisterAgent()
+        .accounts({
+          agent: a.agentPda,
+          protocolConfig: w.protocolPda,
+          reputationStake: pda([enc("reputation_stake"), a.agentPda.toBuffer()])[0],
+          authority: a.kp.publicKey,
+        })
+        .remainingAccounts(deregisterRemaining(a.agentPda))
+        .instruction(),
+      [a.kp],
+    ),
+    "AgentSuspended",
+    "suspended agent deregistration",
+  );
+
+  const agent = decode(w.svm, "AgentRegistration", a.agentPda);
+  assert.ok(agent, "the sanctioned identity must remain on-chain");
+  assert.ok(agent.status.Suspended !== undefined, "the suspension must remain intact");
 });
 
 // ---------------------------------------------------------------------------

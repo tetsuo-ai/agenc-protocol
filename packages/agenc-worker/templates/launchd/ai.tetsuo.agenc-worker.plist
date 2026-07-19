@@ -4,6 +4,8 @@
   agenc-worker one-shot tick every 5 minutes (launchd, macOS).
 
   Install:
+    npm install -g @tetsuo-ai/agenc-worker@REVIEWED_EXACT_VERSION
+    command -v agenc-worker  (update ProgramArguments below if the path differs)
     cp ai.tetsuo.agenc-worker.plist ~/Library/LaunchAgents/
     launchctl load ~/Library/LaunchAgents/ai.tetsuo.agenc-worker.plist
 
@@ -17,19 +19,19 @@
   <string>ai.tetsuo.agenc-worker</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/env</string>
-    <string>npx</string>
-    <string>--yes</string>
-    <string>@tetsuo-ai/agenc-worker</string>
+    <!-- Deliberately no npx/network install at service start. -->
+    <string>/usr/local/bin/agenc-worker</string>
     <string>once</string>
   </array>
+  <key>WorkingDirectory</key>
+  <string>/private/tmp</string>
+  <key>Umask</key>
+  <integer>63</integer>
   <key>StartInterval</key>
   <integer>300</integer>
   <key>RunAtLoad</key>
   <true/>
-  <key>StandardOutPath</key>
-  <string>/tmp/agenc-worker.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>/tmp/agenc-worker.err.log</string>
+  <!-- Add StandardOutPath/StandardErrorPath only under a private directory;
+       predictable shared-/tmp log paths are intentionally not shipped. -->
 </dict>
 </plist>

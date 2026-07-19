@@ -100,25 +100,31 @@ export type Dispute = {
   /** DEPRECATED (P6.3): see `votes_for`. Reused as the reject side of the ruling bit. */
   votesAgainst: bigint;
   /**
-   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no
-   * voter is ever recorded. Retained (not shrunk) to keep the account layout stable.
+   * DEPRECATED (P6.3): the arbiter vote/quorum model is retired. New disputes
+   * store `Dispute::INITIATOR_OUTCOME_COUNTER_MARKER` here to prove that their
+   * initiator's AgentRegistration pending-outcome counter was incremented.
+   * Historical disputes retain zero. No value represents an actual voter count.
+   * The field is retained (not shrunk) to keep the account layout stable.
    */
   totalVoters: number;
   /**
-   * DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides
-   * directly with no voting-period wait. Still stamped at initiation for back-compat.
-   * voting_deadline = created_at + voting_period
+   * Legacy voting deadline, now reused as the first liveness deadline: an
+   * assigned resolver may rule immediately, but permissionless expiry opens
+   * after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`.
    */
   votingDeadline: bigint;
   /**
-   * Dispute expiration - after this, can call expire_dispute
+   * Hard dispute expiration; after this, only expire_dispute may unwind it.
    * expires_at = created_at + max_dispute_duration
    * Note: expires_at >= voting_deadline, allowing resolution after voting ends
    */
   expiresAt: bigint;
   /** Whether worker slashing has been applied */
   slashApplied: boolean;
-  /** Whether initiator slashing has been applied (for rejected disputes) */
+  /**
+   * Whether the initiator outcome finalizer has run. Rejected/cancelled
+   * outcomes apply a penalty; approved/expired outcomes are bookkeeping-only.
+   */
   initiatorSlashApplied: boolean;
   /** Snapshot of worker's stake at dispute initiation (prevents stake withdrawal attacks) */
   workerStakeAtDispute: bigint;
@@ -142,12 +148,12 @@ export type Dispute = {
    * zero/empty on a dispute that has not been resolved through `resolve_dispute`
    * (e.g. an expired dispute), which is a valid "no ruling recorded" state.
    *
-   * LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,
-   * but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary
-   * surface (the 25-instruction allowlist contains no dispute instructions), so
-   * ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface
-   * this is treated as append-only (any pre-existing dispute prefix stays valid;
-   * the new fields read back as zero/empty). See `test_dispute_size_p64_append`.
+   * LAYOUT NOTE: these fields were appended while mainnet still ran the
+   * 25-instruction canary (which exposed no dispute instructions), before the
+   * full surface created mainnet Dispute accounts. The append remains pinned for
+   * any historical devnet/full-surface prefix; deployment preflight inventories
+   * every live account size and blocks an active legacy layout. See
+   * `test_dispute_size_p64_append`.
    */
   rationaleHash: ReadonlyUint8Array;
   /**
@@ -194,25 +200,31 @@ export type DisputeArgs = {
   /** DEPRECATED (P6.3): see `votes_for`. Reused as the reject side of the ruling bit. */
   votesAgainst: number | bigint;
   /**
-   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no
-   * voter is ever recorded. Retained (not shrunk) to keep the account layout stable.
+   * DEPRECATED (P6.3): the arbiter vote/quorum model is retired. New disputes
+   * store `Dispute::INITIATOR_OUTCOME_COUNTER_MARKER` here to prove that their
+   * initiator's AgentRegistration pending-outcome counter was incremented.
+   * Historical disputes retain zero. No value represents an actual voter count.
+   * The field is retained (not shrunk) to keep the account layout stable.
    */
   totalVoters: number;
   /**
-   * DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides
-   * directly with no voting-period wait. Still stamped at initiation for back-compat.
-   * voting_deadline = created_at + voting_period
+   * Legacy voting deadline, now reused as the first liveness deadline: an
+   * assigned resolver may rule immediately, but permissionless expiry opens
+   * after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`.
    */
   votingDeadline: number | bigint;
   /**
-   * Dispute expiration - after this, can call expire_dispute
+   * Hard dispute expiration; after this, only expire_dispute may unwind it.
    * expires_at = created_at + max_dispute_duration
    * Note: expires_at >= voting_deadline, allowing resolution after voting ends
    */
   expiresAt: number | bigint;
   /** Whether worker slashing has been applied */
   slashApplied: boolean;
-  /** Whether initiator slashing has been applied (for rejected disputes) */
+  /**
+   * Whether the initiator outcome finalizer has run. Rejected/cancelled
+   * outcomes apply a penalty; approved/expired outcomes are bookkeeping-only.
+   */
   initiatorSlashApplied: boolean;
   /** Snapshot of worker's stake at dispute initiation (prevents stake withdrawal attacks) */
   workerStakeAtDispute: number | bigint;
@@ -236,12 +248,12 @@ export type DisputeArgs = {
    * zero/empty on a dispute that has not been resolved through `resolve_dispute`
    * (e.g. an expired dispute), which is a valid "no ruling recorded" state.
    *
-   * LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,
-   * but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary
-   * surface (the 25-instruction allowlist contains no dispute instructions), so
-   * ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface
-   * this is treated as append-only (any pre-existing dispute prefix stays valid;
-   * the new fields read back as zero/empty). See `test_dispute_size_p64_append`.
+   * LAYOUT NOTE: these fields were appended while mainnet still ran the
+   * 25-instruction canary (which exposed no dispute instructions), before the
+   * full surface created mainnet Dispute accounts. The append remains pinned for
+   * any historical devnet/full-surface prefix; deployment preflight inventories
+   * every live account size and blocks an active legacy layout. See
+   * `test_dispute_size_p64_append`.
    */
   rationaleHash: ReadonlyUint8Array;
   /**

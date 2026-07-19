@@ -49,6 +49,7 @@ import {
   findEscrowPda,
   findHireRecordPda,
   findProtocolConfigPda,
+  findTaskValidationConfigPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -330,15 +331,15 @@ export type ResolveDisputeAsyncInput<
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   bondTreasury: Address<TAccountBondTreasury>;
   /**
-   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-   * decrements the review counters when still live and returns its rent to the
-   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   * REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+   * canonical TaskSubmission PDA for the defendant claim. A live record is
+   * swept before claim close; the exact system-owned empty PDA proves absence.
+   * `Option` preserves the deployed account list, but `None` fails closed.
    */
   taskSubmission?: Address<TAccountTaskSubmission>;
   /**
-   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-   * swept submission is still live on a manual-validation task (pending-counter
-   * hygiene). Bound to the task in the handler.
+   * OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+   * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   approve: ResolveDisputeInstructionDataArgs["approve"];
@@ -525,6 +526,14 @@ export async function getResolveDisputeInstructionAsync<
     accounts.tokenProgram.value =
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address<"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA">;
   }
+  if (!accounts.taskValidationConfig.value) {
+    accounts.taskValidationConfig.value = await findTaskValidationConfigPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -697,15 +706,15 @@ export type ResolveDisputeInput<
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   bondTreasury: Address<TAccountBondTreasury>;
   /**
-   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-   * decrements the review counters when still live and returns its rent to the
-   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   * REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+   * canonical TaskSubmission PDA for the defendant claim. A live record is
+   * swept before claim close; the exact system-owned empty PDA proves absence.
+   * `Option` preserves the deployed account list, but `None` fails closed.
    */
   taskSubmission?: Address<TAccountTaskSubmission>;
   /**
-   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-   * swept submission is still live on a manual-validation task (pending-counter
-   * hygiene). Bound to the task in the handler.
+   * OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+   * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   approve: ResolveDisputeInstructionDataArgs["approve"];
@@ -1021,15 +1030,15 @@ export type ParsedResolveDisputeInstruction<
     workerCompletionBond: TAccountMetas[22];
     bondTreasury: TAccountMetas[23];
     /**
-     * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-     * decrements the review counters when still live and returns its rent to the
-     * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+     * REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+     * canonical TaskSubmission PDA for the defendant claim. A live record is
+     * swept before claim close; the exact system-owned empty PDA proves absence.
+     * `Option` preserves the deployed account list, but `None` fails closed.
      */
     taskSubmission?: TAccountMetas[24] | undefined;
     /**
-     * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-     * swept submission is still live on a manual-validation task (pending-counter
-     * hygiene). Bound to the task in the handler.
+     * OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+     * submission is still Submitted and therefore carries counter debt.
      */
     taskValidationConfig?: TAccountMetas[25] | undefined;
   };

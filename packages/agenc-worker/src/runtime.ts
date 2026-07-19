@@ -27,8 +27,12 @@ import {
   type ProgramAccountsSource,
   type Task,
 } from "@tetsuo-ai/marketplace-sdk";
-import type { WorkerConfig } from "./config.js";
-import { runExecutor } from "./executor.js";
+import { assertActiveWorkerConfig, type WorkerConfig } from "./config.js";
+import {
+  assertExecutorPromptFits,
+  preflightExecutor,
+  runExecutor,
+} from "./executor.js";
 import {
   fetchAndVerifyJobSpec,
   JobSpecError,
@@ -63,9 +67,13 @@ export type WorkerRuntimeConfig = Pick<
   | "capabilities"
   | "minRewardLamports"
   | "maxRewardLamports"
+  | "allowUnboundedReward"
   | "executor"
+  | "executorMode"
+  | "executorEnvAllowlist"
   | "resultUploader"
   | "creatorAllowlist"
+  | "allowAnyCreator"
   | "endpoint"
   | "executorTimeoutMs"
   | "pollIntervalMs"
@@ -90,6 +98,8 @@ export type WorkerContext = {
   dryRun?: boolean;
   /** Injectable job-spec fetcher (tests). */
   fetchUri?: UriFetcher;
+  /** Trusted resolver for agenc:// job-spec content addresses (embedders only). */
+  resolveAgencUri?: UriFetcher;
   /** Injectable fetch for the result uploader (tests). */
   uploadFetch?: typeof fetch;
   /**
@@ -406,16 +416,16 @@ async function executeAndSubmit(
   agent: WorkerAgent,
   task: Address,
   decodedTask: Task,
-  verified: VerifiedJobSpec,
+  prompt: string,
 ): Promise<ProcessOutcome> {
-  const description = decodeTaskDescription(new Uint8Array(decodedTask.description));
-  const prompt = buildPrompt(description, verified.content);
   let stdout: Buffer;
   try {
     const result = await runExecutor({
       argv: ctx.config.executor,
       prompt,
       timeoutMs: ctx.config.executorTimeoutMs,
+      envAllowlist: ctx.config.executorEnvAllowlist,
+      unsafeInheritProcessContext: ctx.config.executorMode === "unsafe",
     });
     stdout = result.stdout;
   } catch (error) {
@@ -501,11 +511,28 @@ export async function processCandidate(
       task,
       readAccount: ctx.readAccount,
       ...(ctx.fetchUri !== undefined ? { fetchUri: ctx.fetchUri } : {}),
+      ...(ctx.resolveAgencUri !== undefined
+        ? { resolveAgencUri: ctx.resolveAgencUri }
+        : {}),
     });
   } catch (error) {
     const reason =
       error instanceof JobSpecError ? error.message : `job-spec error: ${String(error)}`;
     ctx.log({ event: "task.job-spec-rejected", task, reason });
+    return { status: "skipped", task, reason };
+  }
+
+  let prompt: string;
+  try {
+    const description = decodeTaskDescription(new Uint8Array(decodedTask.description));
+    prompt = buildPrompt(description, verified.content);
+    // This is intentionally BEFORE dry-run reporting and, critically, before
+    // claimTaskWithJobSpec. A pinned but oversized task can never strand a
+    // worker by provoking E2BIG only after the claim lands.
+    assertExecutorPromptFits(prompt);
+  } catch (error) {
+    const reason = (error as Error).message;
+    ctx.log({ event: "task.prompt-rejected", task, reason });
     return { status: "skipped", task, reason };
   }
 
@@ -527,6 +554,9 @@ export async function processCandidate(
       task,
       worker: agent.agentPda,
       authority: ctx.signer,
+      // Assignment is guarded by the moderation BLOCK floor for the exact
+      // content we just fetched and verified.
+      jobSpecHash: verified.jobSpecHash,
     });
     const claimedState = loadState(ctx.stateDir);
     claimedState.openClaim = { task: task as string, claimedAt: new Date().toISOString() };
@@ -541,7 +571,7 @@ export async function processCandidate(
     return { status: "claim-failed", task, reason };
   }
 
-  return executeAndSubmit(ctx, agent, task, decodedTask, verified);
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt);
 }
 
 /**
@@ -576,13 +606,26 @@ export async function resumeOpenClaim(
       task,
       readAccount: ctx.readAccount,
       ...(ctx.fetchUri !== undefined ? { fetchUri: ctx.fetchUri } : {}),
+      ...(ctx.resolveAgencUri !== undefined
+        ? { resolveAgencUri: ctx.resolveAgencUri }
+        : {}),
     });
   } catch (error) {
     const reason = (error as Error).message;
     ctx.log({ event: "task.job-spec-rejected", task, reason });
     return { status: "execution-failed", task, reason };
   }
-  return executeAndSubmit(ctx, agent, task, decodedTask, verified);
+  let prompt: string;
+  try {
+    const description = decodeTaskDescription(new Uint8Array(decodedTask.description));
+    prompt = buildPrompt(description, verified.content);
+    assertExecutorPromptFits(prompt);
+  } catch (error) {
+    const reason = (error as Error).message;
+    ctx.log({ event: "task.prompt-rejected", task, reason });
+    return { status: "execution-failed", task, reason };
+  }
+  return executeAndSubmit(ctx, agent, task, decodedTask, prompt);
 }
 
 /** One observed settlement (or terminal outcome) for a tracked submission. */
@@ -700,6 +743,14 @@ export type TickResult = {
  * settlements.
  */
 export async function runTickOnce(ctx: WorkerContext): Promise<TickResult> {
+  // Fail before registration, discovery, or any transaction when the operator
+  // has not made the two claim-risk decisions explicit.
+  assertActiveWorkerConfig(ctx.config);
+  preflightExecutor({
+    argv: ctx.config.executor,
+    safeClaudeMode: ctx.config.executorMode === "safe",
+    envAllowlist: ctx.config.executorEnvAllowlist,
+  });
   const agent = await ensureRegistered(ctx);
   let outcome: ProcessOutcome | null = await resumeOpenClaim(ctx, agent);
   let candidateCount = 0;
@@ -741,6 +792,12 @@ export async function runUp(
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const { signal } = options;
+  assertActiveWorkerConfig(ctx.config);
+  preflightExecutor({
+    argv: ctx.config.executor,
+    safeClaudeMode: ctx.config.executorMode === "safe",
+    envAllowlist: ctx.config.executorEnvAllowlist,
+  });
   const agent = await ensureRegistered(ctx);
   await resumeOpenClaim(ctx, agent);
   await checkSettlements(ctx, agent);

@@ -1,39 +1,83 @@
-//! Fuzz target for full dispute lifecycle
+//! Stateful fuzzing for the direct-resolver dispute lifecycle.
 //!
-//! Tests invariants:
-//! - D1: Dispute can only be initiated on modeled disputable task states
-//! - D3: Voting window enforcement
-//! - D4: Resolution requires voting deadline passed and at least one vote
-//! - D5: Slash amounts bounded by stake (simulated)
-//! - D6: Cancel only before first vote (simulated)
-//!
-//! Run with: cargo test --release -p agenc-coordination-fuzz dispute_lifecycle
+//! The sequence model covers opening, accountable direct resolution, initiator
+//! cancellation, and permissionless expiry. It deliberately contains no voter,
+//! quorum, arbiter-capability, or arbiter-stake state.
 
 use crate::*;
 use proptest::prelude::*;
 
-fn simulate_cancel_dispute(dispute: &mut SimulatedDispute) -> SimulationResult {
+fn simulate_cancel_dispute(
+    dispute: &mut SimulatedDispute,
+    task: &mut SimulatedTask,
+    by_initiator: bool,
+    restore_status: u8,
+) -> SimulationResult {
     if dispute.status != dispute_status::ACTIVE {
         return SimulationResult::Error("DisputeNotActive".to_string());
     }
-
-    if dispute.total_voters != 0 {
-        return SimulationResult::Error("CannotCancelAfterVote".to_string());
+    if !by_initiator {
+        return SimulationResult::Error("UnauthorizedResolver".to_string());
+    }
+    // This retained byte is provenance, never a voter count.
+    if dispute.total_voters != 0 && dispute.total_voters != INITIATOR_OUTCOME_COUNTER_MARKER {
+        return SimulationResult::Error("InvalidLegacyVoterCount".to_string());
     }
 
-    let old_status = dispute.status;
-    dispute.status = dispute_status::EXPIRED; // treat cancellation as terminal expiry in the model
+    let old_dispute_status = dispute.status;
+    let old_task_status = task.status;
+    dispute.status = dispute_status::CANCELLED;
+    if task.status == task_status::DISPUTED {
+        task.status = restore_status;
+    }
 
     if let DisputeInvariantResult::InvalidStateTransition { from, to } =
-        check_dispute_state_transition(old_status, dispute.status)
+        check_dispute_state_transition(old_dispute_status, dispute.status)
     {
         return SimulationResult::InvariantViolation(format!(
-            "D1: Invalid dispute transition from {} to {}",
-            from, to
+            "Invalid dispute cancellation transition from {from} to {to}"
         ));
     }
-
+    if let TaskInvariantResult::InvalidStateTransition { from, to } =
+        check_task_state_transition(old_task_status, task.status)
+    {
+        return SimulationResult::InvariantViolation(format!(
+            "Invalid task restoration transition from {from} to {to}"
+        ));
+    }
     SimulationResult::Success
+}
+
+fn simulate_expiry_refund(
+    dispute: &mut SimulatedDispute,
+    task: &mut SimulatedTask,
+    escrow: &mut SimulatedEscrow,
+    timestamp: i64,
+) -> SimulationResult {
+    let result = simulate_expire_dispute(dispute, timestamp);
+    if !result.is_success() {
+        return result;
+    }
+
+    let old_task_status = task.status;
+    task.status = task_status::CANCELLED;
+    escrow.distributed = escrow.amount;
+    escrow.is_closed = true;
+    if let TaskInvariantResult::InvalidStateTransition { from, to } =
+        check_task_state_transition(old_task_status, task.status)
+    {
+        return SimulationResult::InvariantViolation(format!(
+            "Invalid task expiry transition from {from} to {to}"
+        ));
+    }
+    SimulationResult::Success
+}
+
+fn role_can_resolve(role: ResolverRole) -> bool {
+    matches!(
+        role,
+        ResolverRole::ProtocolAuthority | ResolverRole::AssignedResolver
+    )
 }
 
 proptest! {
@@ -47,140 +91,119 @@ proptest! {
             reward_amount: seq.escrow_amount,
             max_workers: 1,
             current_workers: 1,
-            required_capabilities: 0,
-            deadline: 0,
-            completions: 0,
             required_completions: 1,
-            task_type: 0,
+            ..Default::default()
         };
-
         let mut escrow = SimulatedEscrow {
             amount: seq.escrow_amount,
-            distributed: 0,
-            is_closed: false,
+            ..Default::default()
         };
-
         let mut dispute = SimulatedDispute {
             dispute_id: seq.dispute_id,
-            status: dispute_status::ACTIVE,
-            resolution_type: seq.resolution_type.min(2),
-            votes_for: 0,
-            votes_against: 0,
-            total_voters: 0,
+            resolution_type: seq.resolution_type,
             voting_deadline: seq.voting_deadline,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: seq.dispute_threshold.max(1).min(100),
-            protocol_fee_bps: seq.protocol_fee_bps,
-            min_arbiter_stake: seq.min_arbiter_stake,
+            expires_at: seq.expires_at,
+            initiator_authority: DISPUTE_INITIATOR,
+            ..Default::default()
         };
 
         let init_result = simulate_dispute_open(&mut task, &mut dispute);
-        prop_assert!(!init_result.is_invariant_violation(),
-            "Invariant violation on dispute init: {:?}\nSeq: {:?}", init_result, seq);
-
-        let disputable = seq.initial_task_status == task_status::IN_PROGRESS
-            || seq.initial_task_status == task_status::PENDING_VALIDATION;
+        prop_assert!(
+            !init_result.is_invariant_violation(),
+            "Invariant violation on dispute open: {:?}\nSequence: {:?}",
+            init_result,
+            seq
+        );
+        let disputable = matches!(
+            seq.initial_task_status,
+            task_status::IN_PROGRESS | task_status::PENDING_VALIDATION
+        );
+        prop_assert_eq!(init_result.is_success(), disputable);
 
         if disputable {
-            prop_assert!(init_result.is_success(),
-                "D1 violated: dispute init should succeed for status {}\nResult: {:?}\nSeq: {:?}",
-                seq.initial_task_status, init_result, seq);
-        } else {
-            prop_assert!(init_result.is_error(),
-                "D1 violated: dispute init should fail for status {}\nResult: {:?}\nSeq: {:?}",
-                seq.initial_task_status, init_result, seq);
-        }
-
-        // Mutable stakes for slash simulation
-        let mut arbiter_stakes = seq.arbiter_stakes.clone();
-        let mut initiator_stake = seq.initiator_stake;
-
-        for action in &seq.actions {
-            let result = match action {
-                DisputeAction::Vote { arbiter_index, approved, timestamp } => {
-                    if seq.arbiter_ids.is_empty() {
-                        SimulationResult::Error("NoArbiters".to_string())
-                    } else {
-                        let idx = (*arbiter_index as usize) % seq.arbiter_ids.len();
-                        let stake = arbiter_stakes.get(idx).copied().unwrap_or(0);
-
-                        let arbiter = SimulatedAgent {
-                            agent_id: seq.arbiter_ids[idx],
-                            capabilities: 1 << 7, // ARBITER
-                            status: agent_status::ACTIVE,
-                            active_tasks: 0,
-                            reputation: 5000,
-                            stake,
-                            tasks_completed: 0,
-                            total_earned: 0,
-                        };
-
-                        simulate_vote_dispute(&mut dispute, &arbiter, &config, *approved, *timestamp)
+            for action in &seq.actions {
+                let before = (dispute.clone(), task.clone(), escrow.clone());
+                let expected_success = match action {
+                    DisputeAction::Resolve {
+                        resolver_role,
+                        has_rationale,
+                        timestamp,
+                        ..
+                    } => {
+                        dispute.status == dispute_status::ACTIVE
+                            && task.status == task_status::DISPUTED
+                            && dispute_resolution_window_open(&dispute, *timestamp)
+                            && role_can_resolve(*resolver_role)
+                            && *has_rationale
                     }
-                }
-                DisputeAction::Resolve { timestamp } => {
-                    simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, *timestamp)
-                }
-                DisputeAction::Cancel { .. } => simulate_cancel_dispute(&mut dispute),
-                DisputeAction::Expire { timestamp } => simulate_expire_dispute(&mut dispute, *timestamp),
-                DisputeAction::ApplySlash { arbiter_index, amount } => {
-                    if seq.arbiter_ids.is_empty() {
-                        SimulationResult::Error("NoArbiters".to_string())
-                    } else {
-                        let idx = (*arbiter_index as usize) % seq.arbiter_ids.len();
-                        let current = arbiter_stakes.get(idx).copied().unwrap_or(0);
-                        if *amount > current {
-                            SimulationResult::Error("SlashExceedsStake".to_string())
-                        } else {
-                            arbiter_stakes[idx] = current.checked_sub(*amount).unwrap_or(0);
-                            SimulationResult::Success
-                        }
+                    DisputeAction::Cancel { by_initiator } => {
+                        dispute.status == dispute_status::ACTIVE && *by_initiator
                     }
-                }
-                DisputeAction::ApplyInitiatorSlash { amount } => {
-                    if *amount > initiator_stake {
-                        SimulationResult::Error("SlashExceedsStake".to_string())
-                    } else {
-                        initiator_stake = initiator_stake.checked_sub(*amount).unwrap_or(0);
-                        SimulationResult::Success
+                    DisputeAction::Expire { timestamp } => {
+                        dispute.status == dispute_status::ACTIVE
+                            && dispute_expiry_window_open(&dispute, *timestamp)
                     }
+                };
+
+                let result = match action {
+                    DisputeAction::Resolve {
+                        resolver_role,
+                        approve,
+                        has_rationale,
+                        timestamp,
+                    } => {
+                        let ruling = direct_ruling(*resolver_role, *approve, *has_rationale);
+                        simulate_resolve_dispute(
+                            &mut dispute,
+                            &mut task,
+                            &mut escrow,
+                            &ruling,
+                            *timestamp,
+                        )
+                    }
+                    DisputeAction::Cancel { by_initiator } => simulate_cancel_dispute(
+                        &mut dispute,
+                        &mut task,
+                        *by_initiator,
+                        seq.initial_task_status,
+                    ),
+                    DisputeAction::Expire { timestamp } => simulate_expiry_refund(
+                        &mut dispute,
+                        &mut task,
+                        &mut escrow,
+                        *timestamp,
+                    ),
+                };
+
+                prop_assert!(
+                    !result.is_invariant_violation(),
+                    "Invariant violation: {:?}\nAction: {:?}\nSequence: {:?}",
+                    result,
+                    action,
+                    seq
+                );
+                prop_assert_eq!(
+                    result.is_success(),
+                    expected_success,
+                    "Unexpected lifecycle result: {:?}\nAction: {:?}\nSequence: {:?}",
+                    result,
+                    action,
+                    seq
+                );
+                prop_assert_eq!(dispute.total_voters, INITIATOR_OUTCOME_COUNTER_MARKER);
+                prop_assert!(escrow.distributed <= escrow.amount);
+
+                if result.is_error() {
+                    prop_assert_eq!((&dispute, &task, &escrow), (&before.0, &before.1, &before.2));
                 }
-            };
 
-            prop_assert!(
-                !result.is_invariant_violation(),
-                "Invariant violation: {:?}\nAction: {:?}\nSeq: {:?}",
-                result,
-                action,
-                seq
-            );
-
-            // D3: voting window enforcement
-            if let DisputeAction::Vote { timestamp, .. } = action {
-                if *timestamp >= seq.voting_deadline {
-                    prop_assert!(result.is_error(),
-                        "D3 violated: vote succeeded at/after deadline. ts={}, deadline={}\nSeq: {:?}",
-                        timestamp, seq.voting_deadline, seq);
-                }
-            }
-
-            // D4: resolution timing enforcement and vote requirement
-            if let DisputeAction::Resolve { timestamp } = action {
-                if *timestamp < seq.voting_deadline {
-                    prop_assert!(result.is_error(),
-                        "D4 violated: resolve succeeded before deadline. ts={}, deadline={}\nSeq: {:?}",
-                        timestamp, seq.voting_deadline, seq);
-                }
-            }
-
-            // D6: cancel only before first vote
-            if let DisputeAction::Cancel { .. } = action {
-                if dispute.total_voters != 0 {
-                    prop_assert!(result.is_error(),
-                        "D6 violated: cancel succeeded after votes. total_voters={}\nSeq: {:?}",
-                        dispute.total_voters, seq);
+                if let DisputeAction::Resolve { approve, .. } = action {
+                    if result.is_success() {
+                        prop_assert_eq!(
+                            (dispute.votes_for, dispute.votes_against),
+                            if *approve { (1, 0) } else { (0, 1) }
+                        );
+                    }
                 }
             }
         }

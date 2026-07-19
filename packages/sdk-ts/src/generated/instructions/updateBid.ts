@@ -50,6 +50,7 @@ import {
   findBidMarketplacePda,
   findBidPda,
   findProtocolConfigPda,
+  findTaskJobSpecPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -64,6 +65,7 @@ export function getUpdateBidDiscriminatorBytes(): ReadonlyUint8Array {
 export type UpdateBidInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountTask extends string | AccountMeta<string> = string,
+  TAccountTaskJobSpec extends string | AccountMeta<string> = string,
   TAccountBidBook extends string | AccountMeta<string> = string,
   TAccountBid extends string | AccountMeta<string> = string,
   TAccountBidder extends string | AccountMeta<string> = string,
@@ -78,6 +80,9 @@ export type UpdateBidInstruction<
       TAccountTask extends string
         ? ReadonlyAccount<TAccountTask>
         : TAccountTask,
+      TAccountTaskJobSpec extends string
+        ? ReadonlyAccount<TAccountTaskJobSpec>
+        : TAccountTaskJobSpec,
       TAccountBidBook extends string
         ? WritableAccount<TAccountBidBook>
         : TAccountBidBook,
@@ -107,6 +112,8 @@ export type UpdateBidInstructionData = {
   qualityGuaranteeHash: ReadonlyUint8Array;
   metadataHash: ReadonlyUint8Array;
   expiresAt: bigint;
+  expectedJobSpecHash: ReadonlyUint8Array;
+  expectedJobSpecUpdatedAt: bigint;
 };
 
 export type UpdateBidInstructionDataArgs = {
@@ -116,6 +123,8 @@ export type UpdateBidInstructionDataArgs = {
   qualityGuaranteeHash: ReadonlyUint8Array;
   metadataHash: ReadonlyUint8Array;
   expiresAt: number | bigint;
+  expectedJobSpecHash: ReadonlyUint8Array;
+  expectedJobSpecUpdatedAt: number | bigint;
 };
 
 export function getUpdateBidInstructionDataEncoder(): FixedSizeEncoder<UpdateBidInstructionDataArgs> {
@@ -128,6 +137,8 @@ export function getUpdateBidInstructionDataEncoder(): FixedSizeEncoder<UpdateBid
       ["qualityGuaranteeHash", fixEncoderSize(getBytesEncoder(), 32)],
       ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
       ["expiresAt", getI64Encoder()],
+      ["expectedJobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["expectedJobSpecUpdatedAt", getI64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: UPDATE_BID_DISCRIMINATOR }),
   );
@@ -142,6 +153,8 @@ export function getUpdateBidInstructionDataDecoder(): FixedSizeDecoder<UpdateBid
     ["qualityGuaranteeHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["metadataHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["expiresAt", getI64Decoder()],
+    ["expectedJobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
+    ["expectedJobSpecUpdatedAt", getI64Decoder()],
   ]);
 }
 
@@ -157,6 +170,7 @@ export function getUpdateBidInstructionDataCodec(): FixedSizeCodec<
 
 export type UpdateBidAsyncInput<
   TAccountTask extends string = string,
+  TAccountTaskJobSpec extends string = string,
   TAccountBidBook extends string = string,
   TAccountBid extends string = string,
   TAccountBidder extends string = string,
@@ -165,6 +179,11 @@ export type UpdateBidAsyncInput<
   TAccountProtocolConfig extends string = string,
 > = {
   task: Address<TAccountTask>;
+  /**
+   * Current exact creator-locked job contract. A legacy unbound bid becomes
+   * accept-safe only after its bidder refreshes it through this instruction.
+   */
+  taskJobSpec?: Address<TAccountTaskJobSpec>;
   bidBook?: Address<TAccountBidBook>;
   bid?: Address<TAccountBid>;
   bidder: Address<TAccountBidder>;
@@ -177,10 +196,13 @@ export type UpdateBidAsyncInput<
   qualityGuaranteeHash: UpdateBidInstructionDataArgs["qualityGuaranteeHash"];
   metadataHash: UpdateBidInstructionDataArgs["metadataHash"];
   expiresAt: UpdateBidInstructionDataArgs["expiresAt"];
+  expectedJobSpecHash: UpdateBidInstructionDataArgs["expectedJobSpecHash"];
+  expectedJobSpecUpdatedAt: UpdateBidInstructionDataArgs["expectedJobSpecUpdatedAt"];
 };
 
 export async function getUpdateBidInstructionAsync<
   TAccountTask extends string,
+  TAccountTaskJobSpec extends string,
   TAccountBidBook extends string,
   TAccountBid extends string,
   TAccountBidder extends string,
@@ -191,6 +213,7 @@ export async function getUpdateBidInstructionAsync<
 >(
   input: UpdateBidAsyncInput<
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
@@ -203,6 +226,7 @@ export async function getUpdateBidInstructionAsync<
   UpdateBidInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
@@ -218,6 +242,7 @@ export async function getUpdateBidInstructionAsync<
   // Original accounts.
   const originalAccounts = {
     task: { value: input.task ?? null, isWritable: false },
+    taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
     bid: { value: input.bid ?? null, isWritable: true },
     bidder: { value: input.bidder ?? null, isWritable: true },
@@ -234,6 +259,14 @@ export async function getUpdateBidInstructionAsync<
   const args = { ...input };
 
   // Resolve default values.
+  if (!accounts.taskJobSpec.value) {
+    accounts.taskJobSpec.value = await findTaskJobSpecPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
   if (!accounts.bidBook.value) {
     accounts.bidBook.value = await findBidBookPda({
       task: getAddressFromResolvedInstructionAccount(
@@ -265,6 +298,7 @@ export async function getUpdateBidInstructionAsync<
   return Object.freeze({
     accounts: [
       getAccountMeta("task", accounts.task),
+      getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("bid", accounts.bid),
       getAccountMeta("bidder", accounts.bidder),
@@ -279,6 +313,7 @@ export async function getUpdateBidInstructionAsync<
   } as UpdateBidInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
@@ -290,6 +325,7 @@ export async function getUpdateBidInstructionAsync<
 
 export type UpdateBidInput<
   TAccountTask extends string = string,
+  TAccountTaskJobSpec extends string = string,
   TAccountBidBook extends string = string,
   TAccountBid extends string = string,
   TAccountBidder extends string = string,
@@ -298,6 +334,11 @@ export type UpdateBidInput<
   TAccountProtocolConfig extends string = string,
 > = {
   task: Address<TAccountTask>;
+  /**
+   * Current exact creator-locked job contract. A legacy unbound bid becomes
+   * accept-safe only after its bidder refreshes it through this instruction.
+   */
+  taskJobSpec: Address<TAccountTaskJobSpec>;
   bidBook: Address<TAccountBidBook>;
   bid: Address<TAccountBid>;
   bidder: Address<TAccountBidder>;
@@ -310,10 +351,13 @@ export type UpdateBidInput<
   qualityGuaranteeHash: UpdateBidInstructionDataArgs["qualityGuaranteeHash"];
   metadataHash: UpdateBidInstructionDataArgs["metadataHash"];
   expiresAt: UpdateBidInstructionDataArgs["expiresAt"];
+  expectedJobSpecHash: UpdateBidInstructionDataArgs["expectedJobSpecHash"];
+  expectedJobSpecUpdatedAt: UpdateBidInstructionDataArgs["expectedJobSpecUpdatedAt"];
 };
 
 export function getUpdateBidInstruction<
   TAccountTask extends string,
+  TAccountTaskJobSpec extends string,
   TAccountBidBook extends string,
   TAccountBid extends string,
   TAccountBidder extends string,
@@ -324,6 +368,7 @@ export function getUpdateBidInstruction<
 >(
   input: UpdateBidInput<
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
@@ -335,6 +380,7 @@ export function getUpdateBidInstruction<
 ): UpdateBidInstruction<
   TProgramAddress,
   TAccountTask,
+  TAccountTaskJobSpec,
   TAccountBidBook,
   TAccountBid,
   TAccountBidder,
@@ -349,6 +395,7 @@ export function getUpdateBidInstruction<
   // Original accounts.
   const originalAccounts = {
     task: { value: input.task ?? null, isWritable: false },
+    taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
     bid: { value: input.bid ?? null, isWritable: true },
     bidder: { value: input.bidder ?? null, isWritable: true },
@@ -368,6 +415,7 @@ export function getUpdateBidInstruction<
   return Object.freeze({
     accounts: [
       getAccountMeta("task", accounts.task),
+      getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("bid", accounts.bid),
       getAccountMeta("bidder", accounts.bidder),
@@ -382,6 +430,7 @@ export function getUpdateBidInstruction<
   } as UpdateBidInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidder,
@@ -398,12 +447,17 @@ export type ParsedUpdateBidInstruction<
   programAddress: Address<TProgram>;
   accounts: {
     task: TAccountMetas[0];
-    bidBook: TAccountMetas[1];
-    bid: TAccountMetas[2];
-    bidder: TAccountMetas[3];
-    authority: TAccountMetas[4];
-    bidMarketplace: TAccountMetas[5];
-    protocolConfig: TAccountMetas[6];
+    /**
+     * Current exact creator-locked job contract. A legacy unbound bid becomes
+     * accept-safe only after its bidder refreshes it through this instruction.
+     */
+    taskJobSpec: TAccountMetas[1];
+    bidBook: TAccountMetas[2];
+    bid: TAccountMetas[3];
+    bidder: TAccountMetas[4];
+    authority: TAccountMetas[5];
+    bidMarketplace: TAccountMetas[6];
+    protocolConfig: TAccountMetas[7];
   };
   data: UpdateBidInstructionData;
 };
@@ -416,12 +470,12 @@ export function parseUpdateBidInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedUpdateBidInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 7) {
+  if (instruction.accounts.length < 8) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 7,
+        expectedAccountMetas: 8,
       },
     );
   }
@@ -435,6 +489,7 @@ export function parseUpdateBidInstruction<
     programAddress: instruction.programAddress,
     accounts: {
       task: getNextAccount(),
+      taskJobSpec: getNextAccount(),
       bidBook: getNextAccount(),
       bid: getNextAccount(),
       bidder: getNextAccount(),

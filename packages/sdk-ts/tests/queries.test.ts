@@ -282,6 +282,7 @@ describe("queries offsets are drift-proofed against the generated encoders", () 
         state: 0,
         bondLamports: 0n,
         bump: 249,
+        acceptedNoShowSlashBps: 0,
       }),
     );
     expect(decodeAddressAt(data, TASK_BID_TASK_OFFSET)).toBe(addrFromByte(0xe1));
@@ -295,7 +296,7 @@ describe("queries offsets are drift-proofed against the generated encoders", () 
         operator: DEFAULT_ADDR,
         operatorFeeBps: 0,
         bump: 248,
-        reserved: new Uint8Array(32),
+        designatedProvider: addrFromByte(0xf3),
         // P6.2: no-referrer default (Pubkey::default()), fee 0.
         referrer: DEFAULT_ADDR,
         referrerFeeBps: 0,

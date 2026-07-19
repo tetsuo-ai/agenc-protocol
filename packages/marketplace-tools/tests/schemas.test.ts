@@ -118,6 +118,18 @@ describe("tool registry", () => {
     }
   });
 
+  it("requires immutable provider and job-spec bindings on money/assignment tools", () => {
+    expect(getTool("prepare_hire")!.inputSchema.required).toContain(
+      "providerAgent",
+    );
+    expect(getTool("prepare_hire_humanless")!.inputSchema.required).toContain(
+      "providerAgent",
+    );
+    expect(getTool("prepare_claim")!.inputSchema.required).toContain(
+      "jobSpecHash",
+    );
+  });
+
   it("registry resolves tools by name and rejects duplicates", () => {
     for (const name of EXPECTED_NAMES) {
       expect(getTool(name)?.name).toBe(name);

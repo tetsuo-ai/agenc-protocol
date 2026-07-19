@@ -199,8 +199,11 @@ export async function revokeModerationAttestor(
  * Registering an already-rostered wallet fails (`init`); re-registering after a
  * finalized exit re-inits a fresh entry.
  */
+export type RegisterModerationAttestorInput =
+  RegisterModerationAttestorAsyncInput;
+
 export async function registerModerationAttestor(
-  input: RegisterModerationAttestorAsyncInput,
+  input: RegisterModerationAttestorInput,
 ) {
   return getRegisterModerationAttestorInstructionAsync(input);
 }

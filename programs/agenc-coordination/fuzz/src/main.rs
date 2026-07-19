@@ -28,12 +28,6 @@ fn main() {
     failed += f;
     total_tests += p + f;
 
-    println!("Running vote_dispute fuzz tests...");
-    let (p, f) = run_vote_dispute_fuzz(100);
-    passed += p;
-    failed += f;
-    total_tests += p + f;
-
     println!("Running resolve_dispute fuzz tests...");
     let (p, f) = run_resolve_dispute_fuzz(100);
     passed += p;
@@ -168,7 +162,6 @@ fn run_complete_task_fuzz(iterations: usize) -> (usize, usize) {
 
         let config = SimulatedConfig {
             protocol_fee_bps: input.protocol_fee_bps,
-            ..Default::default()
         };
 
         let result = simulate_complete_task(
@@ -191,69 +184,6 @@ fn run_complete_task_fuzz(iterations: usize) -> (usize, usize) {
     (passed, failed)
 }
 
-fn run_vote_dispute_fuzz(iterations: usize) -> (usize, usize) {
-    let mut passed = 0;
-    let mut failed = 0;
-
-    let mut runner = proptest::test_runner::TestRunner::default();
-
-    for i in 0..iterations {
-        let input = any::<VoteDisputeInput>()
-            .new_tree(&mut runner)
-            .expect("Failed to generate VoteDisputeInput")
-            .current();
-
-        let mut dispute = SimulatedDispute {
-            dispute_id: input.dispute_id,
-            status: dispute_status::ACTIVE,
-            resolution_type: 0,
-            votes_for: input.current_votes_for,
-            votes_against: input.current_votes_against,
-            total_voters: input
-                .current_votes_for
-                .saturating_add(input.current_votes_against),
-            voting_deadline: input.voting_deadline,
-        };
-
-        let arbiter = SimulatedAgent {
-            agent_id: input.arbiter_id,
-            capabilities: 1 << 7, // ARBITER
-            status: 1,
-            active_tasks: 0,
-            reputation: 5000,
-            stake: input.arbiter_stake,
-            tasks_completed: 0,
-            total_earned: 0,
-        };
-
-        let config = SimulatedConfig {
-            min_arbiter_stake: input.min_arbiter_stake,
-            ..Default::default()
-        };
-
-        // Use timestamp before deadline to test valid voting
-        let current_time = if input.current_timestamp < input.voting_deadline {
-            input.current_timestamp
-        } else {
-            // Using saturating_sub intentionally - safe boundary calculation for tests
-            input.voting_deadline.saturating_sub(1)
-        };
-
-        let result =
-            simulate_vote_dispute(&mut dispute, &arbiter, &config, input.approve, current_time);
-
-        if result.is_invariant_violation() {
-            println!("  [FAIL] Iteration {}: {:?}", i, result);
-            failed += 1;
-        } else {
-            passed += 1;
-        }
-    }
-
-    println!("  vote_dispute: {} passed, {} failed", passed, failed);
-    (passed, failed)
-}
-
 fn run_resolve_dispute_fuzz(iterations: usize) -> (usize, usize) {
     let mut passed = 0;
     let mut failed = 0;
@@ -266,23 +196,27 @@ fn run_resolve_dispute_fuzz(iterations: usize) -> (usize, usize) {
             .expect("Failed to generate ResolveDisputeInput")
             .current();
 
-        // Ensure we have at least one vote
-        let votes_for = input.votes_for.max(1);
-        let votes_against = input.votes_against;
-
         let mut dispute = SimulatedDispute {
             dispute_id: input.dispute_id,
-            status: dispute_status::ACTIVE,
+            status: if input.dispute_active {
+                dispute_status::ACTIVE
+            } else {
+                dispute_status::RESOLVED
+            },
             resolution_type: input.resolution_type,
-            votes_for,
-            votes_against,
-            total_voters: votes_for.saturating_add(votes_against),
             voting_deadline: input.voting_deadline,
+            expires_at: input.expires_at,
+            initiator_authority: DISPUTE_INITIATOR,
+            ..Default::default()
         };
 
         let mut task = SimulatedTask {
             task_id: [0u8; 32],
-            status: task_status::DISPUTED,
+            status: if input.task_disputed {
+                task_status::DISPUTED
+            } else {
+                task_status::IN_PROGRESS
+            },
             reward_amount: input.escrow_amount,
             max_workers: 1,
             current_workers: 1,
@@ -299,19 +233,25 @@ fn run_resolve_dispute_fuzz(iterations: usize) -> (usize, usize) {
             is_closed: false,
         };
 
-        let config = SimulatedConfig {
-            dispute_threshold: input.dispute_threshold,
-            ..Default::default()
-        };
+        let ruling = direct_ruling(input.resolver_role, input.approve, input.has_rationale);
+        let expected_success = input.dispute_active
+            && input.task_disputed
+            && dispute_resolution_window_open(&dispute, input.current_timestamp)
+            && matches!(
+                input.resolver_role,
+                ResolverRole::ProtocolAuthority | ResolverRole::AssignedResolver
+            )
+            && input.has_rationale;
+        let result = simulate_resolve_dispute(
+            &mut dispute,
+            &mut task,
+            &mut escrow,
+            &ruling,
+            input.current_timestamp,
+        );
 
-        // Use timestamp after deadline
-        let current_time = input.voting_deadline.saturating_add(1);
-
-        let result =
-            simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, current_time);
-
-        if result.is_invariant_violation() {
-            println!("  [FAIL] Iteration {}: {:?}", i, result);
+        if result.is_invariant_violation() || result.is_success() != expected_success {
+            println!("  [FAIL] Iteration {}: {:?}; input={:?}", i, result, input);
             failed += 1;
         } else {
             passed += 1;
@@ -436,7 +376,6 @@ fn run_edge_case_tests() -> (usize, usize) {
 
         let config = SimulatedConfig {
             protocol_fee_bps: 10000, // 100%
-            ..Default::default()
         };
 
         let result =

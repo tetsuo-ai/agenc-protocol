@@ -43,18 +43,18 @@ proposals. Everything else listed here is a living doc.
 - [../programs/agenc-coordination/README.md](../programs/agenc-coordination/README.md) - program-specific entrypoint
 - [../packages/protocol/README.md](../packages/protocol/README.md) - npm package consumer view
 - [../migrations/README.md](../migrations/README.md) - migration authority and current-state guidance
-- [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - core protocol security invariants/assumptions; note the model-based fuzz harness that points to it (`programs/agenc-coordination/fuzz/`) is **stale** — it fuzzes the retired `vote_dispute` flow and is not active coverage
-- [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - external-auditor entry point: scope (full surface now **99** IDL instructions + the two migrations), invariants, prior internal audits, test inventory, migration choreography
-- [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - **HISTORICAL** — Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results (the deploy it prepped completed 2026-06-11; remaining hardening from the later 2026-07-16/17 adversarial audit is tracked in [../TODO.MD](../TODO.MD))
+- [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - core protocol security invariants/assumptions; its active 76-test model/property companion is `programs/agenc-coordination/fuzz/` (the retired `vote_dispute` target has been removed)
+- [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - **HISTORICAL** revision-4 external-auditor handoff: 99-instruction scope, invariants, prior internal audits, test inventory, and migration choreography; use `THREAT_MODEL.md`, `PROGRAM_SURFACE.md`, and `VALIDATION.md` for the pending revision-5 candidate
+- [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - **HISTORICAL** — Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results (the deploy it prepped completed 2026-06-11; later 2026-07-16/17 remediation is recorded in [../TODO.MD](../TODO.MD))
 - [./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md](./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md) - **HISTORICAL** — the 2026-06-11 multi-agent adversarial-verification verdicts (94 findings × 3 lens-skeptics + adjudicator) that gated the full-surface deploy
 - [./audit/PREDEPLOY_AUDIT_FIXES_20260611.md](./audit/PREDEPLOY_AUDIT_FIXES_20260611.md) - **HISTORICAL** — pre-mainnet audit: fixes applied + remaining human-owned items for the 2026-06-11 full-surface deploy
-- [../TODO.MD](../TODO.MD) - living tracker of the remaining security-hardening fixes from the 2026-07-16/17 adversarial audit (F-1..F-19 on branch `fix/audit-findings-2026-07-16`; all blocker fixes landed at `d7f9d40`, F-6 closed by on-chain verification)
+- [../TODO.MD](../TODO.MD) - detailed remediation record for the 2026-07-16/17 adversarial audit (F-1..F-19 are marked complete; current candidate evidence and deployment status live in `CHANGELOG.md` and `MAINNET_MAINLINE.md`)
 - [../PLAN.md](../PLAN.md) - **HISTORICAL** — the master roadmap authored 2026-06-09 (the phase/P-track plan that drove the protocol through the full-surface rollout); dated plan, not a current-state source
 - [../PLAN_2.md](../PLAN_2.md) - **HISTORICAL** — PLAN.md's Phase-4 companion spec for the embeddable surface (hooks → components → widget → store templates), authored 2026-06-09
 - [./design/batch-3-contest-tasks.md](./design/batch-3-contest-tasks.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** contest tasks (batch-3, `surface_revision = 3`, 96 ix)
 - [./design/batch-4-goods.md](./design/batch-4-goods.md) - **HISTORICAL** — **IMPLEMENTED + LIVE** goods market (batch-4, `surface_revision = 4`, 99 ix)
 - [./MODERATION_LIVENESS.md](./MODERATION_LIVENESS.md) - moderation heartbeat / deadman (batch-2)
-- [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority
+- [./UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md) - Squads vault upgrade authority and the pending ProgramData-capacity ceremony
 - [./VERIFIABLE_BUILDS.md](./VERIFIABLE_BUILDS.md) - reproducible build + verifying the deployed program matches source (what's provable now vs public-repo-gated)
 - [./CREDIBLE_EXIT.md](./CREDIBLE_EXIT.md) - P8.6 "the operator vanishes and it still works": the executed, reproducible zero-hosted-dependency hire→settle proof (`scripts/credible-exit.mjs`), with the honest gap list (source/verifiable-build deferred)
 - [./ENCRYPTED_DELIVERY_L2.md](./ENCRYPTED_DELIVERY_L2.md) - **DESIGN ONLY [HUMAN: approve]** P7.2 layer 2: optional on-chain `key_commitment` at submit + `reveal_key` on accept with hash-match enforcement and deadline bounds, for trustless fair-exchange (child `SubmissionKeyEscrow` PDA, no migration)
@@ -88,5 +88,5 @@ proposals. Everything else listed here is a living doc.
 - I need reviewed public-task completion: [TASK_VALIDATION_V2.md](./TASK_VALIDATION_V2.md)
 - I need private completion or zk-config context: [ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md)
 - I need job-spec-required flag context: [JOB_SPEC_REQUIRED_FLAG_DECISION.md](./JOB_SPEC_REQUIRED_FLAG_DECISION.md)
-- I need the open security-hardening fixes from the 2026-07-16/17 adversarial audit: [../TODO.MD](../TODO.MD)
+- I need the detailed security-hardening remediation record from the 2026-07-16/17 adversarial audit: [../TODO.MD](../TODO.MD)
 - I need the original execution roadmaps (historical): [../PLAN.md](../PLAN.md) / [../PLAN_2.md](../PLAN_2.md)

@@ -72,6 +72,11 @@ pub fn handler(
         ctx.accounts.attestor.key() == ctx.accounts.moderation_config.moderation_authority,
         CoordinationError::UnauthorizedModerationAttestor
     );
+    require!(
+        ctx.accounts.agent.status != crate::state::AgentStatus::Suspended
+            && !ctx.accounts.agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
 
     require!(
         validate_verified_domain(&verified_domain),

@@ -215,6 +215,7 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
       hireResult = (await hireHook.current.hire({
         humanless: true,
         listing,
+        providerAgent,
         taskId,
         expectedPrice: price,
         expectedVersion: 1n,
@@ -262,6 +263,7 @@ describe("e2e (hooks-only): hire -> review -> accept on the real program", () =>
       task,
       worker: providerAgent,
       authority: provider,
+      jobSpecHash: jobHash,
     });
     await providerClient.submitTaskResult({
       task,

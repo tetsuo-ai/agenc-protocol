@@ -39,6 +39,7 @@ import {
 } from "@solana/program-client-core";
 import {
   findAcceptTaskResultClaimPda,
+  findHireRecordPda,
   findProtocolConfigPda,
   findTaskJobSpecPda,
 } from "../pdas";
@@ -57,6 +58,9 @@ export type ClaimTaskWithJobSpecInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountTask extends string | AccountMeta<string> = string,
   TAccountTaskJobSpec extends string | AccountMeta<string> = string,
+  TAccountHireRecord extends string | AccountMeta<string> = string,
+  TAccountLegacyListing extends string | AccountMeta<string> = string,
+  TAccountModerationBlock extends string | AccountMeta<string> = string,
   TAccountClaim extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountWorker extends string | AccountMeta<string> = string,
@@ -74,6 +78,15 @@ export type ClaimTaskWithJobSpecInstruction<
       TAccountTaskJobSpec extends string
         ? ReadonlyAccount<TAccountTaskJobSpec>
         : TAccountTaskJobSpec,
+      TAccountHireRecord extends string
+        ? ReadonlyAccount<TAccountHireRecord>
+        : TAccountHireRecord,
+      TAccountLegacyListing extends string
+        ? ReadonlyAccount<TAccountLegacyListing>
+        : TAccountLegacyListing,
+      TAccountModerationBlock extends string
+        ? ReadonlyAccount<TAccountModerationBlock>
+        : TAccountModerationBlock,
       TAccountClaim extends string
         ? WritableAccount<TAccountClaim>
         : TAccountClaim,
@@ -129,6 +142,9 @@ export function getClaimTaskWithJobSpecInstructionDataCodec(): FixedSizeCodec<
 export type ClaimTaskWithJobSpecAsyncInput<
   TAccountTask extends string = string,
   TAccountTaskJobSpec extends string = string,
+  TAccountHireRecord extends string = string,
+  TAccountLegacyListing extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountClaim extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountWorker extends string = string,
@@ -137,6 +153,25 @@ export type ClaimTaskWithJobSpecAsyncInput<
 > = {
   task: Address<TAccountTask>;
   taskJobSpec?: Address<TAccountTaskJobSpec>;
+  /**
+   * owner, discriminator, task binding, and designated provider when live.
+   * A live record designates the only
+   * provider agent allowed to claim; a direct task supplies the empty system
+   * account at the same PDA. Full surface only because listing hires are not
+   * part of the canary program.
+   */
+  hireRecord?: Address<TAccountHireRecord>;
+  /**
+   * Legacy fallback for pre-hardening HireRecords whose former reserved field
+   * is zero. When needed, this must be the exact stored ServiceListing and the
+   * handler derives the designated provider from its immutable provider_agent.
+   */
+  legacyListing?: Address<TAccountLegacyListing>;
+  /**
+   * Canonical content-hash BLOCK floor. Rechecked at assignment time so a
+   * takedown recorded after publication actually stops new work.
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   claim?: Address<TAccountClaim>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   worker: Address<TAccountWorker>;
@@ -147,6 +182,9 @@ export type ClaimTaskWithJobSpecAsyncInput<
 export async function getClaimTaskWithJobSpecInstructionAsync<
   TAccountTask extends string,
   TAccountTaskJobSpec extends string,
+  TAccountHireRecord extends string,
+  TAccountLegacyListing extends string,
+  TAccountModerationBlock extends string,
   TAccountClaim extends string,
   TAccountProtocolConfig extends string,
   TAccountWorker extends string,
@@ -157,6 +195,9 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
   input: ClaimTaskWithJobSpecAsyncInput<
     TAccountTask,
     TAccountTaskJobSpec,
+    TAccountHireRecord,
+    TAccountLegacyListing,
+    TAccountModerationBlock,
     TAccountClaim,
     TAccountProtocolConfig,
     TAccountWorker,
@@ -169,6 +210,9 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     TProgramAddress,
     TAccountTask,
     TAccountTaskJobSpec,
+    TAccountHireRecord,
+    TAccountLegacyListing,
+    TAccountModerationBlock,
     TAccountClaim,
     TAccountProtocolConfig,
     TAccountWorker,
@@ -184,6 +228,12 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
   const originalAccounts = {
     task: { value: input.task ?? null, isWritable: true },
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
+    legacyListing: { value: input.legacyListing ?? null, isWritable: false },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
+      isWritable: false,
+    },
     claim: { value: input.claim ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     worker: { value: input.worker ?? null, isWritable: true },
@@ -198,6 +248,14 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
   // Resolve default values.
   if (!accounts.taskJobSpec.value) {
     accounts.taskJobSpec.value = await findTaskJobSpecPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
+  if (!accounts.hireRecord.value) {
+    accounts.hireRecord.value = await findHireRecordPda({
       task: getAddressFromResolvedInstructionAccount(
         "task",
         accounts.task.value,
@@ -229,6 +287,9 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     accounts: [
       getAccountMeta("task", accounts.task),
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
+      getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("legacyListing", accounts.legacyListing),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("claim", accounts.claim),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("worker", accounts.worker),
@@ -241,6 +302,9 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
     TProgramAddress,
     TAccountTask,
     TAccountTaskJobSpec,
+    TAccountHireRecord,
+    TAccountLegacyListing,
+    TAccountModerationBlock,
     TAccountClaim,
     TAccountProtocolConfig,
     TAccountWorker,
@@ -252,6 +316,9 @@ export async function getClaimTaskWithJobSpecInstructionAsync<
 export type ClaimTaskWithJobSpecInput<
   TAccountTask extends string = string,
   TAccountTaskJobSpec extends string = string,
+  TAccountHireRecord extends string = string,
+  TAccountLegacyListing extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountClaim extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountWorker extends string = string,
@@ -260,6 +327,25 @@ export type ClaimTaskWithJobSpecInput<
 > = {
   task: Address<TAccountTask>;
   taskJobSpec: Address<TAccountTaskJobSpec>;
+  /**
+   * owner, discriminator, task binding, and designated provider when live.
+   * A live record designates the only
+   * provider agent allowed to claim; a direct task supplies the empty system
+   * account at the same PDA. Full surface only because listing hires are not
+   * part of the canary program.
+   */
+  hireRecord: Address<TAccountHireRecord>;
+  /**
+   * Legacy fallback for pre-hardening HireRecords whose former reserved field
+   * is zero. When needed, this must be the exact stored ServiceListing and the
+   * handler derives the designated provider from its immutable provider_agent.
+   */
+  legacyListing?: Address<TAccountLegacyListing>;
+  /**
+   * Canonical content-hash BLOCK floor. Rechecked at assignment time so a
+   * takedown recorded after publication actually stops new work.
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   claim: Address<TAccountClaim>;
   protocolConfig: Address<TAccountProtocolConfig>;
   worker: Address<TAccountWorker>;
@@ -270,6 +356,9 @@ export type ClaimTaskWithJobSpecInput<
 export function getClaimTaskWithJobSpecInstruction<
   TAccountTask extends string,
   TAccountTaskJobSpec extends string,
+  TAccountHireRecord extends string,
+  TAccountLegacyListing extends string,
+  TAccountModerationBlock extends string,
   TAccountClaim extends string,
   TAccountProtocolConfig extends string,
   TAccountWorker extends string,
@@ -280,6 +369,9 @@ export function getClaimTaskWithJobSpecInstruction<
   input: ClaimTaskWithJobSpecInput<
     TAccountTask,
     TAccountTaskJobSpec,
+    TAccountHireRecord,
+    TAccountLegacyListing,
+    TAccountModerationBlock,
     TAccountClaim,
     TAccountProtocolConfig,
     TAccountWorker,
@@ -291,6 +383,9 @@ export function getClaimTaskWithJobSpecInstruction<
   TProgramAddress,
   TAccountTask,
   TAccountTaskJobSpec,
+  TAccountHireRecord,
+  TAccountLegacyListing,
+  TAccountModerationBlock,
   TAccountClaim,
   TAccountProtocolConfig,
   TAccountWorker,
@@ -305,6 +400,12 @@ export function getClaimTaskWithJobSpecInstruction<
   const originalAccounts = {
     task: { value: input.task ?? null, isWritable: true },
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
+    legacyListing: { value: input.legacyListing ?? null, isWritable: false },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
+      isWritable: false,
+    },
     claim: { value: input.claim ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     worker: { value: input.worker ?? null, isWritable: true },
@@ -327,6 +428,9 @@ export function getClaimTaskWithJobSpecInstruction<
     accounts: [
       getAccountMeta("task", accounts.task),
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
+      getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("legacyListing", accounts.legacyListing),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("claim", accounts.claim),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("worker", accounts.worker),
@@ -339,6 +443,9 @@ export function getClaimTaskWithJobSpecInstruction<
     TProgramAddress,
     TAccountTask,
     TAccountTaskJobSpec,
+    TAccountHireRecord,
+    TAccountLegacyListing,
+    TAccountModerationBlock,
     TAccountClaim,
     TAccountProtocolConfig,
     TAccountWorker,
@@ -355,11 +462,30 @@ export type ParsedClaimTaskWithJobSpecInstruction<
   accounts: {
     task: TAccountMetas[0];
     taskJobSpec: TAccountMetas[1];
-    claim: TAccountMetas[2];
-    protocolConfig: TAccountMetas[3];
-    worker: TAccountMetas[4];
-    authority: TAccountMetas[5];
-    systemProgram: TAccountMetas[6];
+    /**
+     * owner, discriminator, task binding, and designated provider when live.
+     * A live record designates the only
+     * provider agent allowed to claim; a direct task supplies the empty system
+     * account at the same PDA. Full surface only because listing hires are not
+     * part of the canary program.
+     */
+    hireRecord: TAccountMetas[2];
+    /**
+     * Legacy fallback for pre-hardening HireRecords whose former reserved field
+     * is zero. When needed, this must be the exact stored ServiceListing and the
+     * handler derives the designated provider from its immutable provider_agent.
+     */
+    legacyListing?: TAccountMetas[3] | undefined;
+    /**
+     * Canonical content-hash BLOCK floor. Rechecked at assignment time so a
+     * takedown recorded after publication actually stops new work.
+     */
+    moderationBlock: TAccountMetas[4];
+    claim: TAccountMetas[5];
+    protocolConfig: TAccountMetas[6];
+    worker: TAccountMetas[7];
+    authority: TAccountMetas[8];
+    systemProgram: TAccountMetas[9];
   };
   data: ClaimTaskWithJobSpecInstructionData;
 };
@@ -372,12 +498,12 @@ export function parseClaimTaskWithJobSpecInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedClaimTaskWithJobSpecInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 7) {
+  if (instruction.accounts.length < 10) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 7,
+        expectedAccountMetas: 10,
       },
     );
   }
@@ -387,11 +513,20 @@ export function parseClaimTaskWithJobSpecInstruction<
     accountIndex += 1;
     return accountMeta;
   };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
+  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
       task: getNextAccount(),
       taskJobSpec: getNextAccount(),
+      hireRecord: getNextAccount(),
+      legacyListing: getNextOptionalAccount(),
+      moderationBlock: getNextAccount(),
       claim: getNextAccount(),
       protocolConfig: getNextAccount(),
       worker: getNextAccount(),

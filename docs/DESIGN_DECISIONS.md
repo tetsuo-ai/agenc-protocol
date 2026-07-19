@@ -1,9 +1,11 @@
-# Accepted Design Decisions (do not re-file)
+# Reviewed Design Decisions and Resolved Residuals
 
 Dated 2026-07-18, after the three-pass 2026-07 audit and the full TODO.MD
-hardening queue. Each entry is a deliberate, reviewed trade-off — not an open
-finding. Before filing any of these as a bug, read the rationale; changing one
-requires a design discussion, not a fix PR.
+hardening queue. Entries marked **Resolved** record the implemented invariant
+and its regression boundary. The remaining entries are deliberate, reviewed
+trade-offs rather than open findings. Read the rationale before proposing a
+change: do not re-file a resolved path, and treat a change to an accepted
+trade-off as a design decision.
 
 ## D1 — Canary surface has no timeout exit from `PendingValidation`
 
@@ -62,16 +64,14 @@ flags any ACTIVE dispute whose defendant claim PDA is closed/missing (the D12
 shape) — zero of those exist either. Re-run the scan before any deploy that
 touches the dispute lifecycle.
 
-## D7 — F-2 reclaim-guard omission residual
+## D7 — Resolved: reclaim slash guard is omission-proof
 
-`reclaim_terminal_claim`'s slash-pending guard fires when the bound dispute is
-supplied as a remaining account. A griefer can OMIT it, reclaim an
-InProgress-originated deferred claim, drive `current_workers` to 0, and
-`close_task` → brick `apply_dispute_slash`. Accepted because: the reclaim pays
-only the worker/treasury (no profit for the griefer), the worker can front-run
-the finalizer themselves at any time in the 7-day window, and the omission-proof
-alternative (carving a pending-slash flag from `Task._reserved`) would create a
-third schema generation — rejected under the schema-retirement decision.
+The former F-2 residual is closed. Dispute resolution records pending worker
+slash debt in the Task's existing reserved schema, and
+`reclaim_terminal_claim` reads that mandatory task state directly. A caller can
+no longer hide the debt by omitting an optional Dispute account. The dedicated
+slash finalizer clears the flag only after the bound claim and slash state have
+been revalidated.
 
 ## D8 — ValidatorQuorum is friction, not Byzantine resistance
 
@@ -85,27 +85,25 @@ voting costs real stake per identity. An on-chain validator allowlist is a
 future design, not a bug fix — do not file "quorum members are self-asserted"
 as a finding.
 
-## D9 — Governance vote weight is refundable and recyclable
+## D9 — Resolved: governance stake stays locked through the election
 
-`vote_proposal` weights votes by the voter's CURRENT stake, and the stake is
-withdrawable after voting — so one stake can be recycled across proposals (and
-across sybil agents) within the same voting period. The
-`last_vote_timestamp` deregistration cooldown was meant to blunt this but is
-effectively dead code (24h vs multi-day voting windows). Accepted for v1:
-governance is not yet the money path (treasury spends still require the multisig
-roster in practice), and the correct fix is a redesign (vote-escrowed stake or
-snapshot weights), not another timestamp patch. File redesign proposals, not
-bugs, against this entry.
+`vote_proposal` records the proposal's voting deadline in the voter's lifecycle
+guard, and deregistration requires that deadline plus the 24-hour cooldown to
+elapse before returning registration stake. The same stake therefore cannot be
+recycled through fresh wallet/agent pairs during one election. Each proposal
+also snapshots its voter eligibility, vote cap, distinct-voter floor, approval
+threshold, and hard quorum. Fee and rate-limit mutations additionally require
+the current ProtocolConfig M-of-N signers; treasury spends require the treasury
+custodian's signature.
 
-## D10 — Resolver leg conflict is bounded, not eliminated
+## D10 — Resolved: settlement beneficiaries cannot resolve the dispute
 
-H-2 blocks a dispute resolver who equals the task creator or the defendant
-wallet. A resolver can still be the beneficiary of an operator/referrer leg on
-the disputed task's settlement and is not blocked. Accepted: the leg fees are
-capped (`MAX_OPERATOR_FEE_BPS` / `MAX_REFERRER_FEE_BPS`, plus the combined cap),
-so the conflict is worth at most a few percent of one escrow — below the
-deterrence floor the slash system already prices. Enumerating every economic
-relationship a resolver might hold is not tractable on-chain in v1.
+The H-2 guard covers the task creator, defendant authority, and every active
+operator/referrer leg snapshotted on the Task (with the canonical HireRecord
+fallback for legacy hires). A roster member who can receive money from a
+Complete/Split ruling cannot adjudicate that task. Unrelated off-chain economic
+relationships remain outside the program's knowledge, but every on-chain payout
+relationship available to the resolver is now enforced.
 
 ## D11 — Quorum accept tombstones same-round revotes (V-2 wedge)
 
@@ -117,16 +115,15 @@ bricks the double-voter's own revote (no funds at risk beyond that vote PDA's
 rent), and the recovery path is the dispute apparatus. A per-round vote nonce
 would remove it but adds an account to a hot path for no money-safety gain.
 
-## D12 — Durable-submission dispute on an Open task with a closed claim has no exit
+## D12 — Resolved: every dispute binds a live claim and exitable task state
 
-A dispute initiated against a durable submission (initiator supplies
-`taskSubmission` but no live claim) on an Open task whose claim was already
-closed is unexitable by both `resolve_dispute` and `expire_dispute` (they load
-the claim). The F-12 preflight scanner (`scripts/preflight-dispute-scan.mjs`)
-was extended to flag this shape; zero exist on mainnet. Any future dispute-lifecycle
-change must re-run the scan first. Accepted because creation requires the
-initiator to pay the dispute rent for a dispute that cannot settle — griefing
-with negative yield and no victim.
+`initiate_dispute` now accepts only `InProgress` or `PendingValidation` tasks
+with a represented live worker claim. A durable TaskSubmission cannot revive an
+Open task or substitute for a closed claim. Worker-initiated disputes also
+require a canonical live `Submitted` record, while both terminal exits require
+the canonical TaskSubmission PDA as non-skippable evidence (live and swept, or
+system-owned and empty). The preflight scanner still rejects any legacy account
+with the old unexitable shape; the 2026-07-18 mainnet scan found none.
 
 ## D13 — Proof-dependency gate is NOT added to the ghost/frozen exits
 
@@ -141,53 +138,131 @@ violating money-never-locks (spec §7). The premature-payout risk is adjudicated
 instead: the multisig resolver (frozen) can weigh the parent off-chain, and the
 ghost crank only fires after the creator has already failed to act.
 
-## D14 — The reputation side of a slash is partially dodgeable
+## D14 — Delegation shelter resolved; a depleted stake cannot be slashed twice
 
-Three accepted residuals from the 2026-07 re-review, all bounded and none newly
-introduced:
+Revision 5 disables new reputation delegations before mutation and retains
+`revoke_delegation` only as a permissionless retirement path. Retirement never
+restores the parked reputation: a slash followed by restoration would recreate
+the same shelter/evasion primitive. An identity-continuous record returns its
+rent only to the authority stored on the original AgentRegistration; a closed or
+re-registered identity returns rent only to the canonical protocol treasury.
+The three fixed instruction metas and discriminator remain wire-compatible with
+revision 4; the orphan branch appends exact `[ProtocolConfig, treasury]`
+remaining accounts.
 
-- **Standing delegations survive a slash.** The C6 defendant gate stops
-  *reactive* delegation during a dispute, but a delegation created BEFORE the
-  dispute already moved the amount out of `agent.reputation` — and the
-  delegation itself survives the slash and can be revoked back afterwards.
-  Closing this requires revoking delegations at dispute initiation (an
-  enumeration the program cannot do), so the deterrent is necessarily
-  best-effort for pre-positioned adversaries.
-- **Zero-stake defendants take no stake slash.** `calculate_slash_amount` caps
-  at the current stake, so a defendant with 0 stake and no token reserve takes
-  no lamport penalty — only the (fixed, saturating) reputation penalty and the
-  defendant bookkeeping. The stake requirement at task/dispute entry is the
-  real gate; the slash cannot retroactively create one.
-- **The delegated reputation itself is unaffected by the slash.** A sybil
-  delegatee keeps the bonus. Reputation is a friction signal (fee discounts,
-  task gates), not custody — the bounded value at risk does not justify a
-  global delegation-registry redesign in v1.
+The mandatory cutover scan found zero ReputationDelegation accounts on mainnet.
+Because deployed revision 4 did not pause-gate delegation, the upgrade rail scans
+again after the candidate lands and refuses to stamp revision 5 while any raced
+record remains. Every such record now has a deterministic, signer-independent
+purge, so it can neither preserve slash-sheltered reputation nor permanently
+block the cutover.
 
-## D15 — resolve_dispute has no expiry bound (C2 deterrent is lifecycle-anchored)
+One arithmetic property remains by design: `calculate_slash_amount` caps the
+lamport penalty at the worker's current registration stake. An identity whose
+stake was already depleted to zero cannot lose the same principal twice; it
+still takes the bounded reputation penalty and dispute bookkeeping. Fresh
+registrations and dispute initiators must meet the configured non-zero stake
+floors. New direct claims and bid creation/update/acceptance also require the
+worker's current registration stake to meet `ProtocolConfig.min_agent_stake`,
+so a previously slashed worker must replenish before accepting more work while
+all already-open assignments retain their bounded lifecycle exits.
 
-The C2 initiator-slash guard holds deregistration for
-`max(dispute_duration, voting_period) + SLASH_WINDOW` after initiation, but
-`resolve_dispute` itself accepts a resolution for any still-`Active` dispute
-with no deadline. A stale `Active` dispute resolved long after the guard window
-lapses re-opens the initiator-slash brick (the initiator has already
-deregistered). Accepted: it needs BOTH an unexpired-but-stale dispute (nobody
-cranked the permissionless expiry) AND a late resolver, expiry by design never
-slashes the initiator (full refund — an unadjudicated dispute cannot establish
-fault), and the correct fix is a resolver-liveness policy, not another
-timestamp patch. Related: disputes initiated before the C2 deploy have
-`last_dispute_initiated == 0` and skip the guard entirely (no migration).
+## D15 — Resolved: dispute resolution and expiry windows do not overlap
 
-## D16 — Dispute expiry refunds a no-show's bonds (C1 trade)
+`resolve_dispute` now fails once the bounded resolution window closes, and
+`expire_dispute` opens only after its grace boundary. A late resolver cannot
+recreate slash obligations after the initiator's lifecycle guard has elapsed.
+The preflight cutover rejects legacy Active disputes that cannot satisfy the
+new lifecycle; the 2026-07-18 mainnet scan found zero Active disputes.
 
-`expire_dispute` refunds the creator's escrow in full AND refunds the no-show
-worker's accepted-bid/completion bonds, because expiry cannot adjudicate
-fault. A no-show can therefore self-dispute and, if the resolver never acts,
-launder a certain forfeit (expire_claim would have slashed) into a refund.
-Accepted: the alternative — slashing on expiry — victimized every
-provably-submitted worker whenever the resolver ghosted, and resolver
-inaction is the *expected* failure mode expiry exists for. The resolver is the
-adjudicator; expiry is the escape hatch, and escape hatches must not
-confiscate. A future refinement (forfeit the bond iff no live `Submitted`
-submission exists at expiry) is possible but was deliberately not taken in v1.
+## D16 — Resolved: expiry penalizes only an objectively proven no-show
 
+`expire_dispute` still returns all unadjudicated task principal to the creator,
+but bond treatment is now evidence-bound. A worker bond is forfeited only when
+the claim window has ended, the claim is incomplete, no canonical live
+submission exists, and any Proof dependency was available. A live submission,
+an unfinished dependency, or an unexpired claim forces a refund. The same
+classification controls both accepted-bid and completion bonds, so a true
+no-show cannot self-dispute to launder a certain forfeit while an honest worker
+is never slashed merely because the resolver disappeared.
 
+## D17 — Resolved: fee settlement cannot count a same-lifecycle transfer
+
+Every active operator/referrer snapshot is now rejected if its payee aliases the
+creator, Task PDA, or escrow PDA. The guard runs when terms are snapshotted and
+again at normal, frozen, and dispute settlement, after applying the exact
+Task-first/canonical-HireRecord fallback. The shared lamport primitive separately
+rejects every positive same-account transfer before touching either balance, so
+future call sites cannot count a net-zero withdrawal as distribution.
+
+Operator and referrer may equal each other or a worker: those are potentially
+legitimate overlapping marketplace roles, and each fee is still debited exactly
+once from escrow. Zero-bps legacy payee values are also inert and remain valid.
+Silently redirecting an immutable fee was rejected in favor of fail-closed
+settlement. The 2026-07-18 mainnet scan decoded all 357 Tasks and their 62
+HireRecords and found zero active creator/Task/escrow payee aliases, so the
+hardened exit does not strand current state.
+
+## D18 — Resolved: every Collaborative completion has a payable gross share
+
+The shared Task initializer enforces the exact settlement precondition
+`reward_amount >= required_completions` for Collaborative tasks. This applies in
+the reward mint's native smallest unit and therefore covers both SOL and SPL
+creation, including dependent tasks. The condition follows the actual quotient
+and remainder share formula: equality gives every required worker one unit;
+one unit below equality deterministically gives a later worker zero and is
+rejected before escrow funding.
+
+The revision-5 deployment rail repeats the same invariant against current state
+and fails closed on malformed cardinality/PDA/layout bindings. The 2026-07-18
+mainnet scan found one Collaborative Task, zero underfunded Collaborative Tasks,
+and zero settlement blockers.
+
+## D19 — Dispute liabilities are provenance-tagged and cannot age out
+
+New disputes reuse the retired `Dispute.total_voters` byte as a `0xff`
+provenance marker and the retired `AgentRegistration.active_dispute_votes` byte
+as a checked pending-initiator-outcome counter. Initiation increments exactly
+once; the permissionless finalizer decrements exactly once and fails closed if a
+tagged dispute has no corresponding unit. Tagged rejected/cancelled outcomes are
+slashable without expiry, while approved/expired outcomes finalize as financial
+no-ops. This prevents cancel/deregister and historical cross-consumption races
+without changing either account layout.
+
+Historical zero-marker disputes retain their deployed behavior: only a rejected
+or cancelled loss is finalizable, only inside the original seven-day window,
+and it never decrements the new counter. No-fault or already-expired historical
+records cannot be marked or penalized retroactively. Defendant registration
+stake is likewise held by an exact `disputes_as_defendant == 0` deregistration
+gate; the former `last_active + 7d` bypass was unsafe because dispute initiation
+does not refresh the defendant's activity timestamp. The initiator's old finite
+timestamp gate was removed once the checked provenance counter became
+authoritative, so a fully finalized winner is not needlessly locked for 14 days.
+
+The 2026-07-18 cutover scan decoded 208 AgentRegistration accounts: both
+liability counters are zero on all of them. It found three zero-marker Cancelled
+disputes and zero Active disputes. Two cancelled initiator flags remain unapplied
+more than 35 days after resolution; they are expired under the deployed policy,
+are inventoried rather than blocked, and the provenance split guarantees the
+new binary cannot revive them. The resulting dispute cutover has zero blockers.
+
+## D20 — Token task custody is the canonical classic-SPL ATA only
+
+Checking only an SPL account's mint and token owner is insufficient. An attacker
+can initialize an arbitrary token account, retain its close authority, and then
+transfer token ownership to the TaskEscrow PDA. Accepting that account at task
+creation makes custody undiscoverable to ATA-deriving clients and can block or
+substitute terminal settlement.
+
+Every token-task ingress, transfer, sweep, and close therefore derives and requires
+the classic Token Program ATA for `(TaskEscrow PDA, reward mint)`. Validation also
+runs inside the lowest-level transfer and close primitives, so a future caller
+cannot bypass the binding by omitting a handler-level check. The mint must have no
+freeze authority and the custody account must remain initialized and unfrozen.
+
+This deliberately fails closed for any historical task funded into a noncanonical
+account. The 2026-07-18 mainnet scan decoded all 357 Tasks and found zero token tasks,
+so revision-5 introduces no live migration blocker. Unit tests cover ingress and
+terminal substitution, and a LiteSVM regression constructs the attacker-retained
+close-authority account and verifies task creation reverts without moving principal
+or leaving task/escrow state behind.

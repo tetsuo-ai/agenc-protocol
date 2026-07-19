@@ -330,7 +330,7 @@ pub enum CoordinationError {
     #[msg("Invalid dispute resolver: pubkey must be non-zero")]
     InvalidDisputeResolver,
 
-    #[msg("Agent has active dispute votes pending resolution")]
+    #[msg("Agent has initiated dispute outcomes pending finalization")]
     ActiveDisputeVotes,
 
     #[msg("Agent must wait 24 hours after voting before deregistering")]
@@ -422,7 +422,7 @@ pub enum CoordinationError {
     #[msg("Invalid dispute threshold: must be 1-100 (percentage of votes required)")]
     InvalidDisputeThreshold,
 
-    #[msg("Insufficient stake for arbiter registration")]
+    #[msg("Insufficient registration stake")]
     InsufficientStake,
 
     #[msg("Invalid multisig threshold")]
@@ -662,7 +662,7 @@ pub enum CoordinationError {
     #[msg("Treasury must be a program-owned PDA")]
     TreasuryNotProgramOwned,
 
-    #[msg("Treasury must be program-owned, or a signer system account for governance spends")]
+    #[msg("Treasury must be a system-owned signer account")]
     TreasuryNotSpendable,
 
     // Skill registry errors (sequential from enum position)
@@ -1036,7 +1036,9 @@ pub enum CoordinationError {
     GoodsInvalidMetadata,
     #[msg("Good price is below the minimum")]
     GoodsPriceBelowMinimum,
-    #[msg("Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0)")]
+    #[msg(
+        "Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0)"
+    )]
     GoodsInvalidSupply,
     #[msg("Good is sold out")]
     GoodsSoldOut,
@@ -1055,13 +1057,15 @@ pub enum CoordinationError {
     // NOTE: goods purchase reuses the existing `MissingOperatorAccount` variant
     // (defined in the batch-2 hire path) for a missing/mismatched operator payee.
     // Appended (audit H-2): keep this LAST so existing Anchor error codes never shift.
-    #[msg("A dispute party (the task creator or the defendant worker) cannot resolve their own dispute")]
+    #[msg("A dispute party or snapshotted settlement beneficiary cannot resolve the dispute")]
     ResolverConflictOfInterest,
     // Appended (audit M-2): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned)")]
     CompletingAcceptRequiresSoleLiveSubmission,
     // Appended (audit F-1): keep new variants LAST so existing Anchor error codes never shift.
-    #[msg("A forfeited worker completion bond must belong to a live no-show claimant of this task")]
+    #[msg(
+        "A forfeited worker completion bond must belong to a live no-show claimant of this task"
+    )]
     BondNotTiedToNoShowWorker,
     // Appended (audit F-2): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("This claim's dispute was resolved but its slash has not been applied yet")]
@@ -1076,9 +1080,80 @@ pub enum CoordinationError {
     #[msg("The delegator agent is not the same registration that created this delegation")]
     ReputationDelegationIdentityMismatch,
     // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
-    #[msg("An agent with live bids cannot deregister (their withdrawal paths load this registration)")]
+    #[msg(
+        "An agent with live bids cannot deregister (their withdrawal paths load this registration)"
+    )]
     AgentHasActiveBids,
     // Appended (2026-07 swarm): keep new variants LAST so existing Anchor error codes never shift.
     #[msg("A freshly registered agent must wait at least one slot before delegating reputation")]
     ReputationDelegationTooSoon,
+    // Appended (audit hardening): keep new variants LAST so existing Anchor error codes never shift.
+    #[msg("The dispute resolution window has expired; use expire_dispute")]
+    DisputeResolutionWindowExpired,
+    #[msg("New reputation delegations are disabled; existing delegations may still be revoked")]
+    ReputationDelegationDisabled,
+    #[msg("Task child has live submission state and requires its dedicated cleanup path")]
+    TaskChildRequiresDedicatedCleanup,
+    #[msg("The stored task-child rent recipient must be supplied as a writable account")]
+    TaskChildRentRecipientRequired,
+    #[msg("Slash percentage must be between 0 and 100")]
+    InvalidSlashPercentage,
+    #[msg("Task must be rent exempt before terminal cleanup can preserve it")]
+    TaskNotRentExempt,
+    #[msg("Dispute resolution requires a non-zero rationale content hash")]
+    InvalidRationaleHash,
+    #[msg("Token reward mints must have no freeze authority")]
+    TokenMintFreezeAuthorityEnabled,
+    #[msg("SPL token account must be initialized and not frozen")]
+    TokenEscrowFrozen,
+    #[msg("The referenced parent Task still exists; use its normal cleanup path")]
+    OrphanTaskParentStillLive,
+    #[msg(
+        "This account type may carry principal or live state and cannot use orphan rent recovery"
+    )]
+    OrphanTaskChildUnsupported,
+    // Appended (bid-contract audit hardening): keep new variants LAST so existing
+    // Anchor error discriminants never shift.
+    #[msg("Bid job-spec commitment does not match the current task job specification")]
+    BidJobSpecMismatch,
+    #[msg("Task job specification is permanently locked because its creator opened bidding")]
+    TaskJobSpecBidLocked,
+    #[msg("Legacy unbound bid must be refreshed against the locked job specification before acceptance")]
+    BidJobSpecBindingRequired,
+    #[msg("Selected bid terms changed since the creator signed acceptance")]
+    StaleBidAcceptance,
+    #[msg("Good metadata changed since preview; re-read the listing and retry")]
+    GoodsMetadataChanged,
+    #[msg("Skill content version changed since preview; re-read the skill and retry")]
+    SkillVersionChanged,
+    #[msg("Skill content hash changed since preview; re-read the skill and retry")]
+    SkillContentChanged,
+    // Appended (private-settlement release gate): keep new variants below this
+    // point append-only so every existing Anchor error discriminant remains stable.
+    #[msg(
+        "Private task creation is disabled until an audited ZK guest and mainnet verifier are activated"
+    )]
+    PrivateTaskCreationDisabled,
+    // Appended (deterministic bid matching): keep these LAST so every existing
+    // Anchor error discriminant remains stable.
+    #[msg("Bid marketplace configuration exceeds protocol safety limits")]
+    InvalidBidMarketplaceConfig,
+    #[msg(
+        "accept_bid must enumerate every other canonical open bid and matching bidder exactly once"
+    )]
+    BidBookEnumerationMismatch,
+    #[msg("The selected bid does not win the bid book's declared matching policy")]
+    BidDoesNotSatisfyMatchingPolicy,
+    // Appended (settlement alias hardening): keep these LAST so every existing
+    // Anchor error discriminant remains stable.
+    #[msg("A marketplace fee payee cannot alias the task or its escrow account")]
+    MarketplacePayeeAccountAlias,
+    #[msg("A positive lamport transfer requires distinct source and destination accounts")]
+    LamportTransferAccountAlias,
+    // Appended (revision-5 delegation cutover): keep this LAST so every existing
+    // Anchor error discriminant remains stable.
+    #[msg(
+        "Orphan delegation recovery requires the canonical protocol config and writable treasury"
+    )]
+    ReputationDelegationRecoveryAccountsRequired,
 }

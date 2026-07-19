@@ -46,9 +46,10 @@ const INITIAL_REPUTATION: u16 = 5000;
 ///   the agent-social post floor uses 5500 as an UNREACHABLE-by-default gate, and skill
 ///   fixtures use 250). So 3000 keeps honest new agents claimable on essentially all
 ///   entry-level work while still ranking below any single-slash veteran.
-/// - EARN-UP: completions add `REPUTATION_PER_COMPLETION` (100) and saturate at
-///   `MAX_REPUTATION` (10000), so a probationary agent reaches a veteran's level after
-///   honest work (20 completions to reach 5000); the start value is NOT a cap.
+/// - EARN-UP: economically qualified SOL completions add up to
+///   `REPUTATION_PER_COMPLETION` (100), proportional to the irreversible protocol fee,
+///   and saturate at `MAX_REPUTATION` (10000). A probationary agent can therefore reach
+///   a veteran's level after 20 full-award completions; the start value is NOT a cap.
 const PROBATIONARY_REPUTATION: u16 = 3000;
 
 // Compile-time invariant (P6.7): the probationary start MUST sit strictly below the
@@ -199,8 +200,10 @@ pub fn handler(
 #[cfg(test)]
 mod tests {
     use super::{INITIAL_REPUTATION, PROBATIONARY_REPUTATION};
+    use crate::instructions::completion_helpers::{completion_reputation_gain, RewardDenomination};
     use crate::instructions::constants::{
-        MAX_REPUTATION, REPUTATION_PER_COMPLETION, REPUTATION_SLASH_LOSS,
+        MAX_REPUTATION, REPUTATION_FEE_LAMPORTS_PER_POINT, REPUTATION_PER_COMPLETION,
+        REPUTATION_SLASH_LOSS,
     };
     use crate::state::ProtocolConfig;
 
@@ -268,17 +271,20 @@ mod tests {
         }
     }
 
-    /// Earn-up is NOT capped at the probationary start: completions saturate UP to
-    /// `MAX_REPUTATION`. Mirrors the increment in `update_worker_completion_stats`
-    /// (`reputation.saturating_add(REPUTATION_PER_COMPLETION).min(MAX_REPUTATION)`).
+    /// Earn-up is NOT capped at the probationary start: fee-backed SOL completions
+    /// saturate UP to `MAX_REPUTATION` through the production gain calculation.
     #[test]
     fn reputation_earns_up_to_max_not_capped_at_probationary() {
+        let full_award_fee = REPUTATION_FEE_LAMPORTS_PER_POINT
+            .checked_mul(REPUTATION_PER_COMPLETION as u64)
+            .unwrap();
+        let gain = completion_reputation_gain(full_award_fee, RewardDenomination::Sol);
+        assert_eq!(gain, REPUTATION_PER_COMPLETION);
+
         let mut rep = PROBATIONARY_REPUTATION;
-        // Enough completions to blow past both the probationary start and the max cap.
+        // Enough full-award completions to pass both the probationary start and cap.
         for _ in 0..200 {
-            rep = rep
-                .saturating_add(REPUTATION_PER_COMPLETION)
-                .min(MAX_REPUTATION);
+            rep = rep.saturating_add(gain).min(MAX_REPUTATION);
         }
         assert_eq!(rep, MAX_REPUTATION, "reputation must climb to the max cap");
         assert!(
@@ -289,15 +295,13 @@ mod tests {
         // probationary deterrent is a starting handicap, not a permanent demotion.
         let mut rep2 = PROBATIONARY_REPUTATION;
         for _ in 0..20 {
-            rep2 = rep2
-                .saturating_add(REPUTATION_PER_COMPLETION)
-                .min(MAX_REPUTATION);
+            rep2 = rep2.saturating_add(gain).min(MAX_REPUTATION);
         }
         assert!(
             rep2 >= INITIAL_REPUTATION,
-            "20 completions ({}*20) should lift a probationary agent to the neutral \
+            "20 full-award completions ({}*20) should lift a probationary agent to the neutral \
              level {INITIAL_REPUTATION}, got {rep2}",
-            REPUTATION_PER_COMPLETION,
+            gain,
         );
     }
 

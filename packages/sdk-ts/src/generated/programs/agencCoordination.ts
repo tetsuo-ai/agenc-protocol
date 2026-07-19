@@ -40,7 +40,6 @@ import {
   getAuthorityRateLimitCodec,
   getBidderMarketStateCodec,
   getBidMarketplaceConfigCodec,
-  getBindingSpendCodec,
   getCompletionBondCodec,
   getCoordinationStateCodec,
   getDefaultTrustListCodec,
@@ -57,7 +56,6 @@ import {
   getModerationAttestorCodec,
   getModerationBlockCodec,
   getModerationConfigCodec,
-  getNullifierSpendCodec,
   getProposalCodec,
   getProtocolConfigCodec,
   getPurchaseRecordCodec,
@@ -79,7 +77,6 @@ import {
   getTaskSubmissionCodec,
   getTaskValidationConfigCodec,
   getTaskValidationVoteCodec,
-  getZkConfigCodec,
   type AgentRegistration,
   type AgentRegistrationArgs,
   type AgentStats,
@@ -92,8 +89,6 @@ import {
   type BidderMarketStateArgs,
   type BidMarketplaceConfig,
   type BidMarketplaceConfigArgs,
-  type BindingSpend,
-  type BindingSpendArgs,
   type CompletionBond,
   type CompletionBondArgs,
   type CoordinationState,
@@ -126,8 +121,6 @@ import {
   type ModerationBlockArgs,
   type ModerationConfig,
   type ModerationConfigArgs,
-  type NullifierSpend,
-  type NullifierSpendArgs,
   type Proposal,
   type ProposalArgs,
   type ProtocolConfig,
@@ -170,8 +163,6 @@ import {
   type TaskValidationConfigArgs,
   type TaskValidationVote,
   type TaskValidationVoteArgs,
-  type ZkConfig,
-  type ZkConfigArgs,
 } from "../accounts";
 import {
   getAcceptBidInstructionAsync,
@@ -191,7 +182,6 @@ import {
   getCloseStoreInstructionAsync,
   getCloseTaskInstructionAsync,
   getCompleteTaskInstructionAsync,
-  getCompleteTaskPrivateInstructionAsync,
   getConfigureTaskModerationInstructionAsync,
   getConfigureTaskValidationInstructionAsync,
   getCreateBidInstructionAsync,
@@ -216,7 +206,6 @@ import {
   getInitializeBidMarketplaceInstructionAsync,
   getInitializeGovernanceInstructionAsync,
   getInitializeProtocolInstructionAsync,
-  getInitializeZkConfigInstructionAsync,
   getInitiateDisputeInstructionAsync,
   getMigrateProtocolInstruction,
   getMigrateTaskInstruction,
@@ -228,6 +217,7 @@ import {
   getRateHireInstructionAsync,
   getRateSkillInstructionAsync,
   getReclaimCompletionBondInstructionAsync,
+  getReclaimOrphanTaskChildInstruction,
   getReclaimTerminalClaimInstructionAsync,
   getRecordAgentVerificationInstructionAsync,
   getRecordListingModerationInstructionAsync,
@@ -268,7 +258,6 @@ import {
   getUpdateStateInstructionAsync,
   getUpdateStoreInstructionAsync,
   getUpdateTreasuryInstructionAsync,
-  getUpdateZkImageIdInstructionAsync,
   getUpvotePostInstructionAsync,
   getValidateTaskResultInstructionAsync,
   getVoteProposalInstructionAsync,
@@ -290,7 +279,6 @@ import {
   parseCloseStoreInstruction,
   parseCloseTaskInstruction,
   parseCompleteTaskInstruction,
-  parseCompleteTaskPrivateInstruction,
   parseConfigureTaskModerationInstruction,
   parseConfigureTaskValidationInstruction,
   parseCreateBidInstruction,
@@ -315,7 +303,6 @@ import {
   parseInitializeBidMarketplaceInstruction,
   parseInitializeGovernanceInstruction,
   parseInitializeProtocolInstruction,
-  parseInitializeZkConfigInstruction,
   parseInitiateDisputeInstruction,
   parseMigrateProtocolInstruction,
   parseMigrateTaskInstruction,
@@ -327,6 +314,7 @@ import {
   parseRateHireInstruction,
   parseRateSkillInstruction,
   parseReclaimCompletionBondInstruction,
+  parseReclaimOrphanTaskChildInstruction,
   parseReclaimTerminalClaimInstruction,
   parseRecordAgentVerificationInstruction,
   parseRecordListingModerationInstruction,
@@ -367,7 +355,6 @@ import {
   parseUpdateStateInstruction,
   parseUpdateStoreInstruction,
   parseUpdateTreasuryInstruction,
-  parseUpdateZkImageIdInstruction,
   parseUpvotePostInstruction,
   parseValidateTaskResultInstruction,
   parseVoteProposalInstruction,
@@ -389,7 +376,6 @@ import {
   type CloseStoreAsyncInput,
   type CloseTaskAsyncInput,
   type CompleteTaskAsyncInput,
-  type CompleteTaskPrivateAsyncInput,
   type ConfigureTaskModerationAsyncInput,
   type ConfigureTaskValidationAsyncInput,
   type CreateBidAsyncInput,
@@ -414,7 +400,6 @@ import {
   type InitializeBidMarketplaceAsyncInput,
   type InitializeGovernanceAsyncInput,
   type InitializeProtocolAsyncInput,
-  type InitializeZkConfigAsyncInput,
   type InitiateDisputeAsyncInput,
   type MigrateProtocolInput,
   type MigrateTaskInput,
@@ -436,7 +421,6 @@ import {
   type ParsedCloseStoreInstruction,
   type ParsedCloseTaskInstruction,
   type ParsedCompleteTaskInstruction,
-  type ParsedCompleteTaskPrivateInstruction,
   type ParsedConfigureTaskModerationInstruction,
   type ParsedConfigureTaskValidationInstruction,
   type ParsedCreateBidInstruction,
@@ -461,7 +445,6 @@ import {
   type ParsedInitializeBidMarketplaceInstruction,
   type ParsedInitializeGovernanceInstruction,
   type ParsedInitializeProtocolInstruction,
-  type ParsedInitializeZkConfigInstruction,
   type ParsedInitiateDisputeInstruction,
   type ParsedMigrateProtocolInstruction,
   type ParsedMigrateTaskInstruction,
@@ -473,6 +456,7 @@ import {
   type ParsedRateHireInstruction,
   type ParsedRateSkillInstruction,
   type ParsedReclaimCompletionBondInstruction,
+  type ParsedReclaimOrphanTaskChildInstruction,
   type ParsedReclaimTerminalClaimInstruction,
   type ParsedRecordAgentVerificationInstruction,
   type ParsedRecordListingModerationInstruction,
@@ -513,7 +497,6 @@ import {
   type ParsedUpdateStateInstruction,
   type ParsedUpdateStoreInstruction,
   type ParsedUpdateTreasuryInstruction,
-  type ParsedUpdateZkImageIdInstruction,
   type ParsedUpvotePostInstruction,
   type ParsedValidateTaskResultInstruction,
   type ParsedVoteProposalInstruction,
@@ -525,6 +508,7 @@ import {
   type RateHireAsyncInput,
   type RateSkillAsyncInput,
   type ReclaimCompletionBondAsyncInput,
+  type ReclaimOrphanTaskChildInput,
   type ReclaimTerminalClaimAsyncInput,
   type RecordAgentVerificationAsyncInput,
   type RecordListingModerationAsyncInput,
@@ -565,7 +549,6 @@ import {
   type UpdateStateAsyncInput,
   type UpdateStoreAsyncInput,
   type UpdateTreasuryAsyncInput,
-  type UpdateZkImageIdAsyncInput,
   type UpvotePostAsyncInput,
   type ValidateTaskResultAsyncInput,
   type VoteProposalAsyncInput,
@@ -625,7 +608,6 @@ import {
   findVotePda,
   findVoteProposalVotePda,
   findWorkerCompletionBondPda,
-  findZkConfigPda,
 } from "../pdas";
 
 export const AGENC_COORDINATION_PROGRAM_ADDRESS =
@@ -638,7 +620,6 @@ export enum AgencCoordinationAccount {
   AuthorityRateLimit,
   BidMarketplaceConfig,
   BidderMarketState,
-  BindingSpend,
   CompletionBond,
   CoordinationState,
   DefaultTrustList,
@@ -655,7 +636,6 @@ export enum AgencCoordinationAccount {
   ModerationAttestor,
   ModerationBlock,
   ModerationConfig,
-  NullifierSpend,
   Proposal,
   ProtocolConfig,
   PurchaseRecord,
@@ -677,7 +657,6 @@ export enum AgencCoordinationAccount {
   TaskSubmission,
   TaskValidationConfig,
   TaskValidationVote,
-  ZkConfig,
 }
 
 export function identifyAgencCoordinationAccount(
@@ -749,17 +728,6 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.BidderMarketState;
-  }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([196, 241, 81, 0, 238, 99, 30, 100]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationAccount.BindingSpend;
   }
   if (
     containsBytes(
@@ -936,17 +904,6 @@ export function identifyAgencCoordinationAccount(
     )
   ) {
     return AgencCoordinationAccount.ModerationConfig;
-  }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([254, 192, 216, 27, 119, 64, 151, 144]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationAccount.NullifierSpend;
   }
   if (
     containsBytes(
@@ -1179,17 +1136,6 @@ export function identifyAgencCoordinationAccount(
   ) {
     return AgencCoordinationAccount.TaskValidationVote;
   }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([181, 176, 242, 167, 108, 219, 13, 202]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationAccount.ZkConfig;
-  }
   throw new SolanaError(
     SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_ACCOUNT,
     { accountData: data, programName: "agencCoordination" },
@@ -1214,7 +1160,6 @@ export enum AgencCoordinationInstruction {
   CloseStore,
   CloseTask,
   CompleteTask,
-  CompleteTaskPrivate,
   ConfigureTaskModeration,
   ConfigureTaskValidation,
   CreateBid,
@@ -1239,7 +1184,6 @@ export enum AgencCoordinationInstruction {
   InitializeBidMarketplace,
   InitializeGovernance,
   InitializeProtocol,
-  InitializeZkConfig,
   InitiateDispute,
   MigrateProtocol,
   MigrateTask,
@@ -1251,6 +1195,7 @@ export enum AgencCoordinationInstruction {
   RateHire,
   RateSkill,
   ReclaimCompletionBond,
+  ReclaimOrphanTaskChild,
   ReclaimTerminalClaim,
   RecordAgentVerification,
   RecordListingModeration,
@@ -1291,7 +1236,6 @@ export enum AgencCoordinationInstruction {
   UpdateState,
   UpdateStore,
   UpdateTreasury,
-  UpdateZkImageId,
   UpvotePost,
   ValidateTaskResult,
   VoteProposal,
@@ -1488,17 +1432,6 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.CompleteTask;
-  }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([117, 181, 96, 96, 194, 254, 58, 35]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationInstruction.CompleteTaskPrivate;
   }
   if (
     containsBytes(
@@ -1768,17 +1701,6 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([160, 151, 49, 249, 201, 208, 48, 84]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationInstruction.InitializeZkConfig;
-  }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([128, 242, 160, 23, 44, 61, 171, 37]),
       ),
       0,
@@ -1895,6 +1817,17 @@ export function identifyAgencCoordinationInstruction(
     )
   ) {
     return AgencCoordinationInstruction.ReclaimCompletionBond;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([91, 115, 255, 0, 240, 58, 74, 223]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.ReclaimOrphanTaskChild;
   }
   if (
     containsBytes(
@@ -2340,17 +2273,6 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([216, 79, 225, 219, 122, 123, 169, 233]),
-      ),
-      0,
-    )
-  ) {
-    return AgencCoordinationInstruction.UpdateZkImageId;
-  }
-  if (
-    containsBytes(
-      data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([198, 186, 192, 175, 171, 226, 72, 252]),
       ),
       0,
@@ -2452,9 +2374,6 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.CompleteTask;
     } & ParsedCompleteTaskInstruction<TProgram>)
   | ({
-      instructionType: AgencCoordinationInstruction.CompleteTaskPrivate;
-    } & ParsedCompleteTaskPrivateInstruction<TProgram>)
-  | ({
       instructionType: AgencCoordinationInstruction.ConfigureTaskModeration;
     } & ParsedConfigureTaskModerationInstruction<TProgram>)
   | ({
@@ -2527,9 +2446,6 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.InitializeProtocol;
     } & ParsedInitializeProtocolInstruction<TProgram>)
   | ({
-      instructionType: AgencCoordinationInstruction.InitializeZkConfig;
-    } & ParsedInitializeZkConfigInstruction<TProgram>)
-  | ({
       instructionType: AgencCoordinationInstruction.InitiateDispute;
     } & ParsedInitiateDisputeInstruction<TProgram>)
   | ({
@@ -2562,6 +2478,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.ReclaimCompletionBond;
     } & ParsedReclaimCompletionBondInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.ReclaimOrphanTaskChild;
+    } & ParsedReclaimOrphanTaskChildInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.ReclaimTerminalClaim;
     } & ParsedReclaimTerminalClaimInstruction<TProgram>)
@@ -2682,9 +2601,6 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.UpdateTreasury;
     } & ParsedUpdateTreasuryInstruction<TProgram>)
-  | ({
-      instructionType: AgencCoordinationInstruction.UpdateZkImageId;
-    } & ParsedUpdateZkImageIdInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.UpvotePost;
     } & ParsedUpvotePostInstruction<TProgram>)
@@ -2820,13 +2736,6 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.CompleteTask,
         ...parseCompleteTaskInstruction(instruction),
-      };
-    }
-    case AgencCoordinationInstruction.CompleteTaskPrivate: {
-      assertIsInstructionWithAccounts(instruction);
-      return {
-        instructionType: AgencCoordinationInstruction.CompleteTaskPrivate,
-        ...parseCompleteTaskPrivateInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.ConfigureTaskModeration: {
@@ -2997,13 +2906,6 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseInitializeProtocolInstruction(instruction),
       };
     }
-    case AgencCoordinationInstruction.InitializeZkConfig: {
-      assertIsInstructionWithAccounts(instruction);
-      return {
-        instructionType: AgencCoordinationInstruction.InitializeZkConfig,
-        ...parseInitializeZkConfigInstruction(instruction),
-      };
-    }
     case AgencCoordinationInstruction.InitiateDispute: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3079,6 +2981,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.ReclaimCompletionBond,
         ...parseReclaimCompletionBondInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.ReclaimOrphanTaskChild: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.ReclaimOrphanTaskChild,
+        ...parseReclaimOrphanTaskChildInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.ReclaimTerminalClaim: {
@@ -3363,13 +3272,6 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseUpdateTreasuryInstruction(instruction),
       };
     }
-    case AgencCoordinationInstruction.UpdateZkImageId: {
-      assertIsInstructionWithAccounts(instruction);
-      return {
-        instructionType: AgencCoordinationInstruction.UpdateZkImageId,
-        ...parseUpdateZkImageIdInstruction(instruction),
-      };
-    }
     case AgencCoordinationInstruction.UpvotePost: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3428,8 +3330,6 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<BidMarketplaceConfigArgs, BidMarketplaceConfig>;
   bidderMarketState: ReturnType<typeof getBidderMarketStateCodec> &
     SelfFetchFunctions<BidderMarketStateArgs, BidderMarketState>;
-  bindingSpend: ReturnType<typeof getBindingSpendCodec> &
-    SelfFetchFunctions<BindingSpendArgs, BindingSpend>;
   completionBond: ReturnType<typeof getCompletionBondCodec> &
     SelfFetchFunctions<CompletionBondArgs, CompletionBond>;
   coordinationState: ReturnType<typeof getCoordinationStateCodec> &
@@ -3462,8 +3362,6 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<ModerationBlockArgs, ModerationBlock>;
   moderationConfig: ReturnType<typeof getModerationConfigCodec> &
     SelfFetchFunctions<ModerationConfigArgs, ModerationConfig>;
-  nullifierSpend: ReturnType<typeof getNullifierSpendCodec> &
-    SelfFetchFunctions<NullifierSpendArgs, NullifierSpend>;
   proposal: ReturnType<typeof getProposalCodec> &
     SelfFetchFunctions<ProposalArgs, Proposal>;
   protocolConfig: ReturnType<typeof getProtocolConfigCodec> &
@@ -3505,8 +3403,6 @@ export type AgencCoordinationPluginAccounts = {
     SelfFetchFunctions<TaskValidationConfigArgs, TaskValidationConfig>;
   taskValidationVote: ReturnType<typeof getTaskValidationVoteCodec> &
     SelfFetchFunctions<TaskValidationVoteArgs, TaskValidationVote>;
-  zkConfig: ReturnType<typeof getZkConfigCodec> &
-    SelfFetchFunctions<ZkConfigArgs, ZkConfig>;
 };
 
 export type AgencCoordinationPluginInstructions = {
@@ -3577,10 +3473,6 @@ export type AgencCoordinationPluginInstructions = {
   completeTask: (
     input: CompleteTaskAsyncInput,
   ) => ReturnType<typeof getCompleteTaskInstructionAsync> &
-    SelfPlanAndSendFunctions;
-  completeTaskPrivate: (
-    input: CompleteTaskPrivateAsyncInput,
-  ) => ReturnType<typeof getCompleteTaskPrivateInstructionAsync> &
     SelfPlanAndSendFunctions;
   configureTaskModeration: (
     input: ConfigureTaskModerationAsyncInput,
@@ -3678,10 +3570,6 @@ export type AgencCoordinationPluginInstructions = {
     input: InitializeProtocolAsyncInput,
   ) => ReturnType<typeof getInitializeProtocolInstructionAsync> &
     SelfPlanAndSendFunctions;
-  initializeZkConfig: (
-    input: InitializeZkConfigAsyncInput,
-  ) => ReturnType<typeof getInitializeZkConfigInstructionAsync> &
-    SelfPlanAndSendFunctions;
   initiateDispute: (
     input: InitiateDisputeAsyncInput,
   ) => ReturnType<typeof getInitiateDisputeInstructionAsync> &
@@ -3724,6 +3612,10 @@ export type AgencCoordinationPluginInstructions = {
   reclaimCompletionBond: (
     input: ReclaimCompletionBondAsyncInput,
   ) => ReturnType<typeof getReclaimCompletionBondInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  reclaimOrphanTaskChild: (
+    input: ReclaimOrphanTaskChildInput,
+  ) => ReturnType<typeof getReclaimOrphanTaskChildInstruction> &
     SelfPlanAndSendFunctions;
   reclaimTerminalClaim: (
     input: ReclaimTerminalClaimAsyncInput,
@@ -3884,10 +3776,6 @@ export type AgencCoordinationPluginInstructions = {
     input: UpdateTreasuryAsyncInput,
   ) => ReturnType<typeof getUpdateTreasuryInstructionAsync> &
     SelfPlanAndSendFunctions;
-  updateZkImageId: (
-    input: UpdateZkImageIdAsyncInput,
-  ) => ReturnType<typeof getUpdateZkImageIdInstructionAsync> &
-    SelfPlanAndSendFunctions;
   upvotePost: (
     input: UpvotePostAsyncInput,
   ) => ReturnType<typeof getUpvotePostInstructionAsync> &
@@ -3917,17 +3805,16 @@ export type AgencCoordinationPluginPdas = {
   escrow: typeof findEscrowPda;
   taskValidationConfig: typeof findTaskValidationConfigPda;
   taskSubmission: typeof findTaskSubmissionPda;
+  hireRecord: typeof findHireRecordPda;
   creatorCompletionBond: typeof findCreatorCompletionBondPda;
   workerCompletionBond: typeof findWorkerCompletionBondPda;
   disputeResolver: typeof findDisputeResolverPda;
   moderationConfig: typeof findModerationConfigPda;
   moderationAttestor: typeof findModerationAttestorPda;
-  hireRecord: typeof findHireRecordPda;
   cancelTaskCreatorCompletionBond: typeof findCancelTaskCreatorCompletionBondPda;
   cancelTaskWorkerCompletionBond: typeof findCancelTaskWorkerCompletionBondPda;
   agentStats: typeof findAgentStatsPda;
   store: typeof findStorePda;
-  zkConfig: typeof findZkConfigPda;
   taskAttestorConfig: typeof findTaskAttestorConfigPda;
   bidMarketplace: typeof findBidMarketplacePda;
   task: typeof findTaskPda;
@@ -4000,7 +3887,6 @@ export function agencCoordinationProgram() {
             client,
             getBidderMarketStateCodec(),
           ),
-          bindingSpend: addSelfFetchFunctions(client, getBindingSpendCodec()),
           completionBond: addSelfFetchFunctions(
             client,
             getCompletionBondCodec(),
@@ -4046,10 +3932,6 @@ export function agencCoordinationProgram() {
           moderationConfig: addSelfFetchFunctions(
             client,
             getModerationConfigCodec(),
-          ),
-          nullifierSpend: addSelfFetchFunctions(
-            client,
-            getNullifierSpendCodec(),
           ),
           proposal: addSelfFetchFunctions(client, getProposalCodec()),
           protocolConfig: addSelfFetchFunctions(
@@ -4105,7 +3987,6 @@ export function agencCoordinationProgram() {
             client,
             getTaskValidationVoteCodec(),
           ),
-          zkConfig: addSelfFetchFunctions(client, getZkConfigCodec()),
         },
         instructions: {
           acceptBid: (input) =>
@@ -4192,11 +4073,6 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getCompleteTaskInstructionAsync(input),
-            ),
-          completeTaskPrivate: (input) =>
-            addSelfPlanAndSendFunctions(
-              client,
-              getCompleteTaskPrivateInstructionAsync(input),
             ),
           configureTaskModeration: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4318,11 +4194,6 @@ export function agencCoordinationProgram() {
               client,
               getInitializeProtocolInstructionAsync(input),
             ),
-          initializeZkConfig: (input) =>
-            addSelfPlanAndSendFunctions(
-              client,
-              getInitializeZkConfigInstructionAsync(input),
-            ),
           initiateDispute: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4383,6 +4254,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getReclaimCompletionBondInstructionAsync(input),
+            ),
+          reclaimOrphanTaskChild: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getReclaimOrphanTaskChildInstruction(input),
             ),
           reclaimTerminalClaim: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4584,11 +4460,6 @@ export function agencCoordinationProgram() {
               client,
               getUpdateTreasuryInstructionAsync(input),
             ),
-          updateZkImageId: (input) =>
-            addSelfPlanAndSendFunctions(
-              client,
-              getUpdateZkImageIdInstructionAsync(input),
-            ),
           upvotePost: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4621,18 +4492,17 @@ export function agencCoordinationProgram() {
           escrow: findEscrowPda,
           taskValidationConfig: findTaskValidationConfigPda,
           taskSubmission: findTaskSubmissionPda,
+          hireRecord: findHireRecordPda,
           creatorCompletionBond: findCreatorCompletionBondPda,
           workerCompletionBond: findWorkerCompletionBondPda,
           disputeResolver: findDisputeResolverPda,
           moderationConfig: findModerationConfigPda,
           moderationAttestor: findModerationAttestorPda,
-          hireRecord: findHireRecordPda,
           cancelTaskCreatorCompletionBond:
             findCancelTaskCreatorCompletionBondPda,
           cancelTaskWorkerCompletionBond: findCancelTaskWorkerCompletionBondPda,
           agentStats: findAgentStatsPda,
           store: findStorePda,
-          zkConfig: findZkConfigPda,
           taskAttestorConfig: findTaskAttestorConfigPda,
           bidMarketplace: findBidMarketplacePda,
           task: findTaskPda,

@@ -8,11 +8,12 @@ use crate::instructions::bid_settlement_helpers::{
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::completion_helpers::build_marketplace_fee_legs;
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    build_referrer_leg, calculate_fee_with_reputation, execute_completion_rewards,
-    validate_task_dependency, OperatorLeg,
+    calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
@@ -20,13 +21,17 @@ use crate::instructions::task_validation_helpers::{
     validate_completing_accept_sole_submission, validate_contest_accept_window,
 };
 #[cfg(feature = "spl-token-rewards")]
-use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
+use crate::instructions::token_helpers::{
+    validate_token_account, validate_token_escrow_account, validate_unchecked_token_mint,
+};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::CompletionBond;
 use crate::state::{
-    AgentRegistration, HireRecord, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow,
-    TaskStatus, TaskSubmission, TaskValidationConfig, ValidationMode,
+    AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
+    TaskSubmission, TaskValidationConfig, ValidationMode,
 };
+#[cfg(feature = "mainnet-canary")]
+use crate::state::{DependencyType, TaskType};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 #[cfg(feature = "spl-token-rewards")]
@@ -95,10 +100,14 @@ pub struct AcceptTaskResult<'info> {
     )]
     pub treasury: UncheckedAccount<'info>,
 
-    /// CHECK: Receives escrow rent on final settlement, validated against task.creator.
+    /// CHECK: Creator signer on the normal path. In the frozen canary build only,
+    /// this signer becomes the permissionless timeout crank after review_deadline_at;
+    /// the actual creator/rent recipient is then carried in the otherwise-unused
+    /// writable `operator` slot and revalidated in the handler.
     #[account(
         mut,
-        constraint = creator.key() == task.creator @ CoordinationError::InvalidCreator
+        constraint = creator.key() == task.creator || cfg!(feature = "mainnet-canary")
+            @ CoordinationError::InvalidCreator
     )]
     pub creator: Signer<'info>,
 
@@ -110,8 +119,19 @@ pub struct AcceptTaskResult<'info> {
     pub worker_authority: UncheckedAccount<'info>,
 
     // === §4 operator leg (makes manual-review settlement hire-aware) ===
-    /// CHECK: ["hire", task] record — optional, read-only. Pre-Batch-2 fallback for the
-    /// operator-fee terms; for current hires the terms are read from the Task itself.
+    /// CHECK: canonical ["hire", task] record. Always supplied on the full surface;
+    /// direct tasks pass the empty system-owned PDA. Requiring the address prevents
+    /// legacy hired tasks from omitting their unstamped operator/referrer fee terms.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+    /// CHECK: frozen-canary ABI compatibility. Listing hires do not exist on this
+    /// surface, so the historical account remains optional. If supplied, the
+    /// handler accepts only the canonical empty system-owned ["hire", task] PDA.
+    #[cfg(feature = "mainnet-canary")]
     pub hire_record: Option<UncheckedAccount<'info>>,
     /// CHECK: operator payee — validated == the task's resolved operator. Required only
     /// when the task carries a non-zero operator fee (a listing hire); receives the
@@ -171,6 +191,101 @@ pub struct AcceptTaskResult<'info> {
     pub system_program: Program<'info, System>,
 }
 
+fn ensure_accept_review_state(
+    task_status: TaskStatus,
+    submission_status: SubmissionStatus,
+) -> Result<()> {
+    require!(
+        task_status == TaskStatus::PendingValidation,
+        CoordinationError::TaskNotPendingValidation
+    );
+    require!(
+        submission_status == SubmissionStatus::Submitted,
+        CoordinationError::SubmissionNotPending
+    );
+    Ok(())
+}
+
+/// The canary timeout branch deliberately supports only the economic shape the
+/// canary can create: direct, single-worker, SOL-only tasks with no affiliate or
+/// dependency legs. This makes reusing the writable `operator` slot as the stored
+/// creator's rent recipient unambiguous and fail-closed.
+#[cfg(feature = "mainnet-canary")]
+fn ensure_canary_accept_shape(task: &Task) -> Result<()> {
+    require!(
+        task.task_type == TaskType::Exclusive,
+        CoordinationError::InvalidTaskType
+    );
+    require!(
+        task.max_workers == 1 && task.required_completions == 1,
+        CoordinationError::InvalidMaxWorkers
+    );
+    require!(
+        task.reward_mint.is_none(),
+        CoordinationError::InvalidTokenMint
+    );
+    require!(
+        task.dependency_type == DependencyType::None && task.depends_on.is_none(),
+        CoordinationError::InvalidInput
+    );
+    require!(
+        task.operator == Pubkey::default()
+            && task.operator_fee_bps == 0
+            && task.referrer == Pubkey::default()
+            && task.referrer_fee_bps == 0,
+        CoordinationError::InvalidInput
+    );
+    Ok(())
+}
+
+/// Return true when the canary signer is acting as a post-timeout crank. Before
+/// the deadline, only the stored creator may accept. After it, any signer may
+/// crank acceptance, but only when the writable alias account is exactly the
+/// stored creator (the escrow-rent recipient cannot be redirected).
+#[cfg(feature = "mainnet-canary")]
+fn canary_timeout_accept_mode(
+    task_creator: Pubkey,
+    accept_signer: Pubkey,
+    timeout_creator_recipient: Option<Pubkey>,
+    review_deadline_at: i64,
+    now: i64,
+) -> Result<bool> {
+    if accept_signer == task_creator {
+        require!(
+            timeout_creator_recipient.is_none(),
+            CoordinationError::InvalidInput
+        );
+        return Ok(false);
+    }
+
+    require!(
+        review_deadline_at > 0 && now >= review_deadline_at,
+        CoordinationError::ReviewWindowNotElapsed
+    );
+    require!(
+        timeout_creator_recipient == Some(task_creator),
+        CoordinationError::InvalidCreator
+    );
+    Ok(true)
+}
+
+#[cfg(feature = "mainnet-canary")]
+fn ensure_canary_hire_record_absent(
+    task_key: &Pubkey,
+    hire_record: Option<&UncheckedAccount<'_>>,
+) -> Result<()> {
+    if let Some(hire_record) = hire_record {
+        let (expected, _) = Pubkey::find_program_address(&[b"hire", task_key.as_ref()], &crate::ID);
+        require!(
+            hire_record.key() == expected
+                && hire_record.owner == &anchor_lang::system_program::ID
+                && hire_record.data_is_empty(),
+            CoordinationError::InvalidHireRecord
+        );
+    }
+    Ok(())
+}
+
 pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     // Settlement path: accepting a submission resolves an in-flight, already-
     // escrowed task and pays the worker. It must work while the protocol is paused
@@ -179,10 +294,10 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
 
-    require!(
-        ctx.accounts.task.status == TaskStatus::PendingValidation,
-        CoordinationError::TaskNotPendingValidation
-    );
+    ensure_accept_review_state(
+        ctx.accounts.task.status,
+        ctx.accounts.task_submission.status,
+    )?;
     require!(
         is_manual_validation_task(&ctx.accounts.task),
         CoordinationError::TaskValidationConfigRequired
@@ -196,10 +311,38 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         &ctx.accounts.task_validation_config,
         ValidationMode::CreatorReview,
     )?;
-    require!(
-        ctx.accounts.task_submission.status == SubmissionStatus::Submitted,
-        CoordinationError::SubmissionNotPending
-    );
+    #[cfg(feature = "mainnet-canary")]
+    let canary_timeout_crank = {
+        ensure_canary_accept_shape(&ctx.accounts.task)?;
+        ensure_canary_hire_record_absent(
+            &ctx.accounts.task.key(),
+            ctx.accounts.hire_record.as_ref(),
+        )?;
+        require!(
+            ctx.accounts.referrer.is_none(),
+            CoordinationError::InvalidInput
+        );
+        canary_timeout_accept_mode(
+            ctx.accounts.task.creator,
+            ctx.accounts.creator.key(),
+            ctx.accounts.operator.as_ref().map(|account| account.key()),
+            ctx.accounts.task_submission.review_deadline_at,
+            clock.unix_timestamp,
+        )?
+    };
+
+    #[cfg(feature = "mainnet-canary")]
+    let creator_recipient_info = if canary_timeout_crank {
+        ctx.accounts
+            .operator
+            .as_ref()
+            .ok_or(CoordinationError::InvalidCreator)?
+            .to_account_info()
+    } else {
+        ctx.accounts.creator.to_account_info()
+    };
+    #[cfg(not(feature = "mainnet-canary"))]
+    let creator_recipient_info = ctx.accounts.creator.to_account_info();
     // Batch 3 WS-CONTEST temporal partition (spec §3): a contest winner may be
     // accepted only strictly BEFORE `ghost_at` (afterwards the permissionless
     // ghost-split crank owns settlement), and only once every other live
@@ -274,7 +417,11 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
         );
-        validate_token_account(token_escrow, &mint.key(), &ctx.accounts.escrow.key())?;
+        validate_token_escrow_account(
+            &token_escrow.to_account_info(),
+            &mint.key(),
+            &ctx.accounts.escrow.key(),
+        )?;
         validate_token_account(
             treasury_ta,
             &mint.key(),
@@ -328,67 +475,24 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     ctx.accounts.claim.is_validated = true;
     ctx.accounts.claim.completed_at = clock.unix_timestamp;
 
-    // §4 3-way split on the manual-review path (Task-first, HireRecord fallback) — mirrors
-    // complete_task so a hired task settled via CreatorReview still pays the operator leg.
-    // The operator terms come from program-owned state (the Task, stamped at hire; or the
-    // ["hire", task] record), so the leg can't be dodged; the accounts are optional so a
-    // non-hired CreatorReview task (task.operator == default) settles unchanged with None.
-    let accept_task_key = ctx.accounts.task.key();
-    let (operator_pubkey, operator_fee_bps_resolved, referrer_pubkey, referrer_fee_bps_resolved) =
-        if ctx.accounts.task.operator != Pubkey::default()
-            || ctx.accounts.task.referrer != Pubkey::default()
-        {
-            (
-                ctx.accounts.task.operator,
-                ctx.accounts.task.operator_fee_bps,
-                ctx.accounts.task.referrer,
-                ctx.accounts.task.referrer_fee_bps,
-            )
-        } else if let Some(hr) = ctx.accounts.hire_record.as_ref() {
-            if hr.owner == &crate::ID {
-                let hire_info = hr.to_account_info();
-                let hire = {
-                    let data = hire_info.try_borrow_data()?;
-                    HireRecord::try_deserialize(&mut &data[..])?
-                };
-                require!(
-                    hire.task == accept_task_key,
-                    CoordinationError::InvalidHireRecord
-                );
-                (
-                    hire.operator,
-                    hire.operator_fee_bps,
-                    hire.referrer,
-                    hire.referrer_fee_bps,
-                )
-            } else {
-                (Pubkey::default(), 0, Pubkey::default(), 0)
-            }
-        } else {
-            (Pubkey::default(), 0, Pubkey::default(), 0)
-        };
-    let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
-        let op = ctx
-            .accounts
+    // Resolve every marketplace leg through the shared Task-first / legacy
+    // HireRecord fallback so all completion-style exits enforce identical terms.
+    #[cfg(not(feature = "mainnet-canary"))]
+    let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+        ctx.accounts.task.as_ref(),
+        ctx.accounts.task.key(),
+        &ctx.accounts.hire_record.to_account_info(),
+        ctx.accounts
             .operator
             .as_ref()
-            .ok_or(CoordinationError::MissingOperatorAccount)?;
-        require!(
-            op.key() == operator_pubkey,
-            CoordinationError::InvalidOperatorAccount
-        );
-        Some(OperatorLeg {
-            payee: op.to_account_info(),
-            fee_bps: operator_fee_bps_resolved,
-        })
-    } else {
-        None
-    };
-    let referrer_leg = build_referrer_leg(
-        referrer_pubkey,
-        referrer_fee_bps_resolved,
-        ctx.accounts.referrer.as_ref().map(|r| r.as_ref()),
+            .map(|account| account.as_ref()),
+        ctx.accounts
+            .referrer
+            .as_ref()
+            .map(|account| account.as_ref()),
     )?;
+    #[cfg(feature = "mainnet-canary")]
+    let (operator_leg, referrer_leg) = (None, None);
 
     execute_completion_rewards(
         &mut ctx.accounts.task,
@@ -398,7 +502,7 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
         &mut ctx.accounts.protocol_config,
         &ctx.accounts.worker_authority.to_account_info(),
         &ctx.accounts.treasury.to_account_info(),
-        &ctx.accounts.creator.to_account_info(),
+        &creator_recipient_info,
         protocol_fee_bps,
         reward_amount_override,
         Some(ctx.accounts.task_submission.result_data),
@@ -469,4 +573,129 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_anchor_error_code<T>(result: Result<T>, expected: CoordinationError) {
+        let expected_code: u32 = expected.into();
+        match result {
+            Ok(_) => panic!("expected AnchorError code {expected_code}, got success"),
+            Err(anchor_lang::error::Error::AnchorError(anchor_err)) => {
+                assert_eq!(anchor_err.error_code_number, expected_code);
+            }
+            Err(other) => panic!("expected AnchorError code {expected_code}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_review_state_rejects_replay_and_non_pending_tasks() {
+        ensure_accept_review_state(TaskStatus::PendingValidation, SubmissionStatus::Submitted)
+            .unwrap();
+        assert_anchor_error_code(
+            ensure_accept_review_state(TaskStatus::Completed, SubmissionStatus::Submitted),
+            CoordinationError::TaskNotPendingValidation,
+        );
+        assert_anchor_error_code(
+            ensure_accept_review_state(TaskStatus::PendingValidation, SubmissionStatus::Accepted),
+            CoordinationError::SubmissionNotPending,
+        );
+    }
+
+    #[cfg(feature = "mainnet-canary")]
+    mod canary {
+        use super::*;
+
+        fn canary_task() -> Task {
+            Task {
+                task_type: TaskType::Exclusive,
+                max_workers: 1,
+                required_completions: 1,
+                dependency_type: DependencyType::None,
+                ..Task::default()
+            }
+        }
+
+        #[test]
+        fn timeout_crank_is_rejected_before_review_deadline() {
+            let creator = Pubkey::new_unique();
+            assert_anchor_error_code(
+                canary_timeout_accept_mode(
+                    creator,
+                    Pubkey::new_unique(),
+                    Some(creator),
+                    1_000,
+                    999,
+                ),
+                CoordinationError::ReviewWindowNotElapsed,
+            );
+        }
+
+        #[test]
+        fn timeout_crank_rejects_wrong_creator_recipient() {
+            let creator = Pubkey::new_unique();
+            assert_anchor_error_code(
+                canary_timeout_accept_mode(
+                    creator,
+                    Pubkey::new_unique(),
+                    Some(Pubkey::new_unique()),
+                    1_000,
+                    1_000,
+                ),
+                CoordinationError::InvalidCreator,
+            );
+        }
+
+        #[test]
+        fn timeout_crank_opens_at_exact_deadline_and_creator_path_stays_immediate() {
+            let creator = Pubkey::new_unique();
+            assert!(canary_timeout_accept_mode(
+                creator,
+                Pubkey::new_unique(),
+                Some(creator),
+                1_000,
+                1_000,
+            )
+            .unwrap());
+            assert!(!canary_timeout_accept_mode(creator, creator, None, 1_000, 1).unwrap());
+        }
+
+        #[test]
+        fn timeout_accept_fails_closed_for_non_canary_money_shapes() {
+            ensure_canary_accept_shape(&canary_task()).unwrap();
+
+            let mut task = canary_task();
+            task.reward_mint = Some(Pubkey::new_unique());
+            assert_anchor_error_code(
+                ensure_canary_accept_shape(&task),
+                CoordinationError::InvalidTokenMint,
+            );
+
+            let mut task = canary_task();
+            task.operator = Pubkey::new_unique();
+            task.operator_fee_bps = 100;
+            assert_anchor_error_code(
+                ensure_canary_accept_shape(&task),
+                CoordinationError::InvalidInput,
+            );
+
+            let mut task = canary_task();
+            task.referrer = Pubkey::new_unique();
+            task.referrer_fee_bps = 100;
+            assert_anchor_error_code(
+                ensure_canary_accept_shape(&task),
+                CoordinationError::InvalidInput,
+            );
+
+            let mut task = canary_task();
+            task.depends_on = Some(Pubkey::new_unique());
+            task.dependency_type = DependencyType::Proof;
+            assert_anchor_error_code(
+                ensure_canary_accept_shape(&task),
+                CoordinationError::InvalidInput,
+            );
+        }
+    }
 }

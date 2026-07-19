@@ -3,13 +3,13 @@
 Status: **HISTORICAL / EXECUTED 2026-06-09** (Loops 0–5 built on branch `feat/marketplace-sdk`, local only).
 Decisions locked 2026-06-09.
 
-> Current-state note (2026-07-17): this plan is retained as implementation
-> history. The loops below are executed and the automation exists: the live full
-> surface is now 99 instructions (since 2026-07-09, `surface_revision = 4`),
-> `@tetsuo-ai/marketplace-sdk` is 0.11.0 with a Codama-generated client covering
-> the 99-instruction IDL, and the `sdk:generate` codegen + `sdk:drift` drift gate
-> described below are wired and run. The package README is the current SDK status
-> surface.
+> Current-state note (2026-07-18): this plan is retained as implementation
+> history. Mainnet and the published SDK 0.11.0 still speak the 99-instruction
+> revision-4 wire. The workspace now contains the 97-instruction revision-5
+> candidate client, which must ship with the program upgrade. `sdk:drift` hashes
+> the generated path/byte tree immediately before and after deterministic
+> regeneration; it no longer compares an intentionally dirty reviewed tree to
+> HEAD. The package README is the current SDK status surface.
 
 > Historical execution summary: `packages/sdk-ts` = `@tetsuo-ai/marketplace-sdk` v0.1.0 (publish-ready).
 > Codama-generated `@solana/kit` client (77 instructions at that time) + facade wrapping **75/77**
@@ -60,7 +60,7 @@ agenc-protocol/
   scripts/
     sdk-generate.mjs     # IDL -> src/generated/ (Codama), then prettier
     sdk-coverage.mjs     # facade-vs-IDL flow diff (work queue + gate)
-    sdk-drift-check.mjs  # regen to temp + `git diff --exit-code`
+    sdk-drift-check.mjs  # digest tree -> regenerate -> digest tree
 ```
 
 ---
@@ -75,9 +75,10 @@ createFromRoot(rootNodeFromAnchor(idl))     // @codama/nodes-from-anchor
 ```
 
 - `npm run sdk:generate` → regenerates `src/generated/` from the IDL, then prettier.
-- `npm run sdk:drift` → regenerate to a temp dir, `git diff --exit-code` vs committed
-  `src/generated/`. Non-empty diff = "SDK is stale vs the program." This generalizes the
-  existing `scripts/check-canary-idl.mjs` surface check.
+- `npm run sdk:drift` → digest every generated path/byte, regenerate in place, then
+  digest again. A changed digest means "SDK is stale vs the program." This fails a
+  stale clean checkout in CI without treating unrelated reviewed working-tree state
+  as drift.
 - Commit `src/generated/` (reviewable, diffable, powers the gate).
 
 ---

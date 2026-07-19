@@ -61,21 +61,22 @@ pub struct InitiateDispute<'info> {
     )]
     pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
-    /// Optional: Initiator's claim if they are a worker (not the creator)
+    /// Initiator's live claim; required when the initiator is a worker.
     #[account(
         seeds = [b"claim", task.key().as_ref(), agent.key().as_ref()],
         bump,
     )]
     pub initiator_claim: Option<Box<Account<'info, TaskClaim>>>,
 
-    /// Optional: Worker agent to be disputed (required when initiator is task creator)
+    /// Worker agent to be disputed; required when initiator is task creator.
     #[account(mut)]
     pub worker_agent: Option<Box<Account<'info, AgentRegistration>>>,
 
-    /// Optional: Worker's claim (required when worker_agent is provided)
+    /// Defendant's live claim; required when the initiator is task creator.
     pub worker_claim: Option<Box<Account<'info, TaskClaim>>>,
 
-    /// Optional durable submission record used once the claim slot has been released.
+    /// Submitted delivery record; required for worker-initiated disputes. A
+    /// submission never substitutes for the live claim required by both exits.
     pub task_submission: Option<Box<Account<'info, TaskSubmission>>>,
 
     #[account(mut)]
@@ -105,14 +106,16 @@ pub fn handler<'info>(
                 task_submission.task == task.key(),
                 CoordinationError::TaskSubmissionRequired
             );
-            Ok((task_submission.worker, task_submission.status))
+            Ok((
+                task_submission.worker,
+                task_submission.claim,
+                task_submission.status,
+            ))
         })
         .transpose()?;
 
     // A frozen (terminally-rejected) task cannot be disputed, and a disputed task
-    // cannot be frozen. The durable-submission path below SKIPS the
-    // can_transition_to(Disputed) check, so guard the freeze EXPLICITLY here rather
-    // than relying on the status transition (Batch 3 §8 dispute mutual-exclusion).
+    // cannot be frozen. Keep the explicit guard local to this money-locking entry.
     require!(
         task.status != TaskStatus::RejectFrozen,
         CoordinationError::TaskFrozenCannotDispute
@@ -126,11 +129,6 @@ pub fn handler<'info>(
         ctx.accounts.agent.status == AgentStatus::Active,
         CoordinationError::AgentNotActive
     );
-
-    let submission_is_disputable = task_submission
-        .as_ref()
-        .map(|(_, status)| is_disputable_submission_status(*status))
-        .unwrap_or(false);
 
     // Batch 3 WS-CONTEST: contests carry NO dispute apparatus (founder ruling —
     // losers lose nothing; the winner is protected by the ghost-split guarantee).
@@ -146,29 +144,27 @@ pub fn handler<'info>(
     );
 
     // Verify task is in a disputable state
-    validate_disputable_task_state(task.status, submission_is_disputable)?;
+    validate_disputable_task_state(task.status)?;
 
     // Verify task has workers to dispute (fix #502)
-    validate_disputable_worker_count(task.current_workers, submission_is_disputable)?;
+    validate_disputable_worker_count(task.current_workers)?;
 
-    // Verify initiator is task participant (creator or has claim)
-    // Compare task.creator (wallet) with authority (signer's wallet), not agent PDA
+    // Compare task.creator (wallet) with authority (signer's wallet), not agent PDA.
+    // Every dispute must bind a LIVE claim so both resolution exits can close it.
+    // A worker initiator must additionally bind a live Submitted record: allowing
+    // a bare no-show claim to self-dispute let the no-show evade the completion-
+    // bond forfeit and hold the creator's escrow until expiry.
     let is_creator = task.creator == ctx.accounts.authority.key();
-    let has_claim = ctx.accounts.initiator_claim.is_some();
-    let has_submission = task_submission
-        .as_ref()
-        .map(|(worker, status)| {
-            *worker == ctx.accounts.agent.key() && is_disputable_submission_status(*status)
-        })
-        .unwrap_or(false);
-
-    require!(
-        is_creator || has_claim || has_submission,
-        CoordinationError::NotTaskParticipant
-    );
-
-    // If initiator has a claim, verify it's still valid for dispute
-    if let Some(claim) = &ctx.accounts.initiator_claim {
+    if !is_creator {
+        let claim = ctx
+            .accounts
+            .initiator_claim
+            .as_ref()
+            .ok_or(CoordinationError::NotTaskParticipant)?;
+        require!(
+            claim.task == task.key() && claim.worker == ctx.accounts.agent.key(),
+            CoordinationError::NotTaskParticipant
+        );
         // Workers with completed claims cannot dispute - they already got paid
         require!(
             !claim.is_completed,
@@ -177,6 +173,15 @@ pub fn handler<'info>(
         require!(
             claim.expires_at > clock.unix_timestamp,
             CoordinationError::ClaimExpired
+        );
+        let (submission_worker, submission_claim, submission_status) = task_submission
+            .as_ref()
+            .ok_or(CoordinationError::TaskSubmissionRequired)?;
+        require!(
+            *submission_worker == ctx.accounts.agent.key()
+                && *submission_claim == claim.key()
+                && is_disputable_submission_status(*submission_status),
+            CoordinationError::TaskSubmissionRequired
         );
     }
 
@@ -232,19 +237,24 @@ pub fn handler<'info>(
 
     let agent = ctx.accounts.agent.as_mut();
 
-    // Audit (2026-07 swarm): stamp the dispute-lifecycle guard field that
-    // deregister_agent's initiator-slash gate reads (deregister_agent.rs:98).
-    // It was never written before, so the guard was dead code and an initiator
-    // could initiate a frivolous dispute, immediately deregister (recovering
-    // their registration stake), and permanently brick apply_initiator_slash —
-    // evading the only initiator-side deterrent. The guard now holds for
-    // max(max_dispute_duration, voting_period) + SLASH_WINDOW after initiation.
+    // Retain the conservative timestamp/cooldown anchor as a second layer against
+    // immediate identity/stake recycling after dispute initiation. The pending
+    // outcome counter below is the non-expiring liability gate; this timestamp is
+    // no longer relied upon to prove that every dispute has reached a terminal
+    // initiator outcome.
     agent.last_dispute_initiated = clock.unix_timestamp;
+    // The retired arbiter-vote byte is now an ABI-preserving count of initiator
+    // outcomes that still need the permissionless finalizer. Do not decrement it
+    // in resolve/cancel/expire: `apply_initiator_slash` is the single atomic point
+    // that either applies a loss or records a no-fault terminal outcome. This
+    // blocks stale Active disputes and cancel+deregister races without adding an
+    // initiator account to every dispute exit.
+    agent.note_dispute_initiated()?;
 
     // === Determine Worker Stake to Snapshot (fix #550) ===
     // Snapshot the worker's stake at dispute initiation time to prevent
     // attackers from withdrawing stake before being slashed.
-    let worker_stake = if has_claim || has_submission {
+    let worker_stake = if !is_creator {
         // Initiator is the worker - use their stake
         agent.stake
     } else {
@@ -254,19 +264,20 @@ pub fn handler<'info>(
             .worker_agent
             .as_ref()
             .ok_or(CoordinationError::WorkerAgentRequired)?;
-        if let Some(w_claim) = ctx.accounts.worker_claim.as_ref() {
-            require!(w_claim.task == task.key(), CoordinationError::TaskNotFound);
+        let w_claim = ctx
+            .accounts
+            .worker_claim
+            .as_ref()
+            .ok_or(CoordinationError::WorkerClaimRequired)?;
+        require!(w_claim.task == task.key(), CoordinationError::TaskNotFound);
+        require!(
+            w_claim.worker == worker.key(),
+            CoordinationError::UnauthorizedAgent
+        );
+        if let Some((submission_worker, submission_claim, _)) = task_submission.as_ref() {
             require!(
-                w_claim.worker == worker.key(),
-                CoordinationError::UnauthorizedAgent
-            );
-        } else {
-            let submission = task_submission
-                .as_ref()
-                .ok_or(CoordinationError::TaskSubmissionRequired)?;
-            require!(
-                submission.0 == worker.key(),
-                CoordinationError::UnauthorizedAgent
+                *submission_worker == worker.key() && *submission_claim == w_claim.key(),
+                CoordinationError::TaskSubmissionRequired
             );
         }
 
@@ -291,7 +302,10 @@ pub fn handler<'info>(
     dispute.resolved_at = 0;
     dispute.votes_for = 0;
     dispute.votes_against = 0;
-    dispute.total_voters = 0; // Will be set during voting
+    // Retired vote/quorum layout field. The sentinel proves this new dispute
+    // owns exactly one unit of the initiator AgentRegistration counter. Legacy
+    // disputes retain zero and therefore cannot consume a later counter unit.
+    dispute.total_voters = Dispute::INITIATOR_OUTCOME_COUNTER_MARKER;
     dispute.voting_deadline = clock
         .unix_timestamp
         .checked_add(config.voting_period)
@@ -361,68 +375,35 @@ fn is_disputable_submission_status(status: SubmissionStatus) -> bool {
     status == SubmissionStatus::Submitted
 }
 
-fn validate_disputable_task_state(
-    status: TaskStatus,
-    submission_is_disputable: bool,
-) -> Result<()> {
-    // One dispute per task. The normal path is blocked from re-disputing by the
-    // (Disputed -> Disputed) transition being absent from the state machine, but the
-    // durable-submission path SKIPS can_transition_to when the submission is still
-    // Submitted — so an already-Disputed task with a live Submitted submission could
-    // otherwise be disputed again. Each extra dispute increments the worker's
-    // disputes_as_defendant and, once the first dispute resolves the task out of
-    // Disputed, the surplus disputes can never be resolved/expired (both require
-    // task.status == Disputed), permanently locking the worker's reputation stake
-    // (withdraw_reputation_stake requires disputes_as_defendant == 0). Guard it
-    // explicitly so it holds on BOTH the normal and durable paths (audit).
+fn validate_disputable_task_state(status: TaskStatus) -> Result<()> {
+    // One dispute per task. A second dispute would leave surplus defendant
+    // bookkeeping that can never be cleared after the first one settles.
     require!(
         status != TaskStatus::Disputed,
         CoordinationError::InvalidStatusTransition
     );
 
-    // Audit H-3: reject TERMINAL / review-frozen task statuses on BOTH admission paths.
-    // The durable-submission branch lets `submission_is_disputable` substitute for the
-    // InProgress/PendingValidation status check below; without this guard a Completed or
-    // Cancelled task carrying an orphaned Submitted submission (reachable via a stomped
-    // review status, or a dispute -> expire -> re-dispute sequence) would be admitted. A
-    // dispute on a terminal task can never be resolved or expired (both require
-    // task.status == Disputed) and cancel_dispute is initiator-only, so it pins the
-    // defendant's disputes_as_defendant > 0 forever — freezing their reputation +
-    // registration stake (withdraw_reputation_stake / deregister_agent both require
-    // disputes_as_defendant == 0). RejectFrozen already cannot transition to Disputed;
-    // rejecting it here too keeps the invariant local and defense-in-depth.
+    // Disputes are admitted only while a live claim is represented in the task
+    // counters. The old durable-submission bypass admitted Open/current_workers=0
+    // states whose claim was already closed; neither resolution exit could then
+    // run, permanently pinning the task and defendant.
     require!(
-        !matches!(
-            status,
-            TaskStatus::Completed | TaskStatus::Cancelled | TaskStatus::RejectFrozen
-        ),
+        status == TaskStatus::InProgress || status == TaskStatus::PendingValidation,
         CoordinationError::TaskNotInProgress
     );
-
     require!(
-        status == TaskStatus::InProgress
-            || status == TaskStatus::PendingValidation
-            || submission_is_disputable,
-        CoordinationError::TaskNotInProgress
+        status.can_transition_to(TaskStatus::Disputed),
+        CoordinationError::InvalidStatusTransition
     );
-
-    if !submission_is_disputable {
-        require!(
-            status.can_transition_to(TaskStatus::Disputed),
-            CoordinationError::InvalidStatusTransition
-        );
-    }
 
     Ok(())
 }
 
-fn validate_disputable_worker_count(
-    current_workers: u8,
-    submission_is_disputable: bool,
-) -> Result<()> {
+fn validate_disputable_worker_count(current_workers: u8) -> Result<()> {
+    require!(current_workers > 0, CoordinationError::NoWorkers);
     require!(
-        current_workers > 0 || submission_is_disputable,
-        CoordinationError::NoWorkers
+        current_workers <= crate::instructions::constants::DISPUTE_SAFE_MAX_WORKERS,
+        CoordinationError::InvalidMaxWorkers
     );
 
     Ok(())
@@ -432,78 +413,60 @@ fn validate_disputable_worker_count(
 mod tests {
     use super::*;
 
-    // Audit H-3 (revert-sensitive): a terminal / review-frozen task carrying a still-
-    // "disputable" (Submitted) submission must be REJECTED on the durable path. Removing
-    // the explicit terminal guard lets `submission_is_disputable = true` slip Completed /
-    // Cancelled / RejectFrozen past the status check, pinning the defendant's
-    // disputes_as_defendant forever.
+    // A submitted record never substitutes for a live claim/task state. Terminal,
+    // frozen, and Open tasks cannot enter an unexitable Disputed state.
     #[test]
-    fn terminal_task_with_disputable_submission_is_rejected() {
+    fn only_live_claim_task_states_are_disputable() {
         for status in [
+            TaskStatus::Open,
             TaskStatus::Completed,
             TaskStatus::Cancelled,
             TaskStatus::RejectFrozen,
         ] {
             assert!(
-                validate_disputable_task_state(status, true).is_err(),
-                "terminal status must not be disputable even with a live submission"
+                validate_disputable_task_state(status).is_err(),
+                "status without a live represented claim must not be disputable"
             );
         }
+        assert!(validate_disputable_task_state(TaskStatus::InProgress).is_ok());
+        assert!(validate_disputable_task_state(TaskStatus::PendingValidation).is_ok());
     }
 
     #[test]
-    fn active_task_with_disputable_submission_is_allowed() {
-        // The legitimate durable path still works for the active review states.
-        assert!(validate_disputable_task_state(TaskStatus::InProgress, true).is_ok());
-        assert!(validate_disputable_task_state(TaskStatus::PendingValidation, true).is_ok());
-    }
-
-    #[test]
-    fn submitted_submission_can_use_durable_dispute_path() {
+    fn submitted_submission_is_disputable_evidence() {
         assert!(is_disputable_submission_status(SubmissionStatus::Submitted));
     }
 
     #[test]
-    fn rejected_submission_cannot_use_durable_dispute_path() {
+    fn rejected_submission_is_not_disputable_evidence() {
         assert!(!is_disputable_submission_status(SubmissionStatus::Rejected));
     }
 
     #[test]
     fn rejected_submission_does_not_bypass_terminal_task_state() {
-        let err = validate_disputable_task_state(TaskStatus::Completed, false).unwrap_err();
+        let err = validate_disputable_task_state(TaskStatus::Completed).unwrap_err();
 
         assert_eq!(err, CoordinationError::TaskNotInProgress.into());
     }
 
     #[test]
     fn rejected_submission_does_not_bypass_missing_worker_count() {
-        let err = validate_disputable_worker_count(0, false).unwrap_err();
+        let err = validate_disputable_worker_count(0).unwrap_err();
 
         assert_eq!(err, CoordinationError::NoWorkers.into());
     }
 
     #[test]
-    fn active_submission_still_allows_released_slot_dispute_path() {
-        assert!(validate_disputable_task_state(TaskStatus::Open, true).is_ok());
-        assert!(validate_disputable_worker_count(0, true).is_ok());
+    fn submitted_record_does_not_revive_a_released_claim_slot() {
+        assert!(is_disputable_submission_status(SubmissionStatus::Submitted));
+        assert!(validate_disputable_task_state(TaskStatus::Open).is_err());
+        assert!(validate_disputable_worker_count(0).is_err());
     }
 
-    // Revert-sensitive (audit: concurrent disputes via the durable-submission path):
-    // an already-Disputed task must NOT be disputable again on EITHER path. Drop the
-    // `status != Disputed` guard in validate_disputable_task_state and the durable
-    // (submission_is_disputable == true) case below stops failing, re-opening the
-    // multiple-concurrent-dispute fund-lock.
+    // Revert-sensitive: a second dispute would pin surplus defendant bookkeeping.
     #[test]
     fn already_disputed_task_cannot_be_redisputed_normal_path() {
-        let err = validate_disputable_task_state(TaskStatus::Disputed, false).unwrap_err();
-        assert_eq!(err, CoordinationError::InvalidStatusTransition.into());
-    }
-
-    #[test]
-    fn already_disputed_task_cannot_be_redisputed_durable_path() {
-        // Even with a live Submitted submission (the path that skips can_transition_to),
-        // a Disputed task is refused.
-        let err = validate_disputable_task_state(TaskStatus::Disputed, true).unwrap_err();
+        let err = validate_disputable_task_state(TaskStatus::Disputed).unwrap_err();
         assert_eq!(err, CoordinationError::InvalidStatusTransition.into());
     }
 }

@@ -22,7 +22,7 @@
 //     apply_dispute_slash send fails).
 //   - Re-introduce a required `(vote, arbiter)` prefix in
 //     `validate_remaining_accounts_structure` -> resolve with no remaining accounts on a
-//     `total_voters == 0` dispute would no longer be accepted as "all worker pairs";
+//     provenance-tagged dispute would no longer be accepted as "all worker pairs";
 //     test (1)/(2) resolve sends would change behavior.
 //   - Test (3) pins that a rejected ruling does NOT slash the worker (the worker was
 //     vindicated): flip the worker_lost derivation and apply_dispute_slash would slash
@@ -92,7 +92,10 @@ async function hireClaimCreatorDispute(w, { resolutionType }) {
     .instruction(), [w.buyer]), "p63:publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "p63:claim");
 
   // Give the worker a slashable stake so apply_dispute_slash has something to take.
@@ -108,10 +111,10 @@ async function hireClaimCreatorDispute(w, { resolutionType }) {
     .accounts({ dispute, task, agent: w.buyerAgent, authorityRateLimit: buyerRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "p63:initiate (creator vs worker)");
 
-  // The dispute records ZERO voters — the vote machinery is gone.
+  // The retired voter byte carries provenance, not a voter count.
   const d = decode(w.svm, "Dispute", dispute);
   assert.ok(d.status.Active !== undefined, "dispute Active");
-  assert.equal(Number(d.total_voters), 0, "total_voters == 0 (no arbiters, vote model retired)");
+  assert.equal(Number(d.total_voters), 255, "total_voters is the initiator-counter provenance sentinel");
   return { task, escrow, hireRecord, claim, dispute };
 }
 
@@ -130,8 +133,9 @@ async function resolveAsAssigned(w, r, { resolver, resolverEntry, approve, ratio
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
-      // audit F-9 optional sweep accounts: omitted here (close_task fallback)
-      taskSubmission: null, taskValidationConfig: null,
+      // Mandatory canonical evidence: this system-owned PDA proves no submission exists.
+      taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
+      taskValidationConfig: null,
     })
     .instruction(); // NOTE: no .remainingAccounts() — there are no (vote, arbiter) pairs.
 }

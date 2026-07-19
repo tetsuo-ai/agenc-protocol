@@ -41,6 +41,7 @@ import {
   findAcceptTaskResultClaimPda,
   findCreatorCompletionBondPda,
   findEscrowPda,
+  findHireRecordPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
@@ -215,9 +216,17 @@ export type AcceptTaskResultAsyncInput<
   worker: Address<TAccountWorker>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
+  /**
+   * this signer becomes the permissionless timeout crank after review_deadline_at;
+   * the actual creator/rent recipient is then carried in the otherwise-unused
+   * writable `operator` slot and revalidated in the handler.
+   */
   creator: TransactionSigner<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
-  /** operator-fee terms; for current hires the terms are read from the Task itself. */
+  /**
+   * direct tasks pass the empty system-owned PDA. Requiring the address prevents
+   * legacy hired tasks from omitting their unstamped operator/referrer fee terms.
+   */
   hireRecord?: Address<TAccountHireRecord>;
   /**
    * when the task carries a non-zero operator fee (a listing hire); receives the
@@ -401,6 +410,14 @@ export async function getAcceptTaskResultInstructionAsync<
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
+  if (!accounts.hireRecord.value) {
+    accounts.hireRecord.value = await findHireRecordPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
   if (!accounts.creatorCompletionBond.value) {
     accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
       task: getAddressFromResolvedInstructionAccount(
@@ -518,10 +535,18 @@ export type AcceptTaskResultInput<
   worker: Address<TAccountWorker>;
   protocolConfig: Address<TAccountProtocolConfig>;
   treasury: Address<TAccountTreasury>;
+  /**
+   * this signer becomes the permissionless timeout crank after review_deadline_at;
+   * the actual creator/rent recipient is then carried in the otherwise-unused
+   * writable `operator` slot and revalidated in the handler.
+   */
   creator: TransactionSigner<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
-  /** operator-fee terms; for current hires the terms are read from the Task itself. */
-  hireRecord?: Address<TAccountHireRecord>;
+  /**
+   * direct tasks pass the empty system-owned PDA. Requiring the address prevents
+   * legacy hired tasks from omitting their unstamped operator/referrer fee terms.
+   */
+  hireRecord: Address<TAccountHireRecord>;
   /**
    * when the task carries a non-zero operator fee (a listing hire); receives the
    * operator fee leg in SOL.
@@ -739,10 +764,18 @@ export type ParsedAcceptTaskResultInstruction<
     worker: TAccountMetas[5];
     protocolConfig: TAccountMetas[6];
     treasury: TAccountMetas[7];
+    /**
+     * this signer becomes the permissionless timeout crank after review_deadline_at;
+     * the actual creator/rent recipient is then carried in the otherwise-unused
+     * writable `operator` slot and revalidated in the handler.
+     */
     creator: TAccountMetas[8];
     workerAuthority: TAccountMetas[9];
-    /** operator-fee terms; for current hires the terms are read from the Task itself. */
-    hireRecord?: TAccountMetas[10] | undefined;
+    /**
+     * direct tasks pass the empty system-owned PDA. Requiring the address prevents
+     * legacy hired tasks from omitting their unstamped operator/referrer fee terms.
+     */
+    hireRecord: TAccountMetas[10];
     /**
      * when the task carries a non-zero operator fee (a listing hire); receives the
      * operator fee leg in SOL.
@@ -807,7 +840,7 @@ export function parseAcceptTaskResultInstruction<
       treasury: getNextAccount(),
       creator: getNextAccount(),
       workerAuthority: getNextAccount(),
-      hireRecord: getNextOptionalAccount(),
+      hireRecord: getNextAccount(),
       operator: getNextOptionalAccount(),
       referrer: getNextOptionalAccount(),
       creatorCompletionBond: getNextAccount(),

@@ -7,6 +7,12 @@ use crate::state::{AgentRegistration, AgentStatus, ProtocolConfig, SkillRegistra
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
+fn next_skill_version(current: u8) -> Result<u8> {
+    current
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow.into())
+}
+
 #[derive(Accounts)]
 pub struct UpdateSkill<'info> {
     #[account(
@@ -69,7 +75,11 @@ pub fn handler(
     if let Some(active) = is_active {
         skill.is_active = active;
     }
-    skill.version = skill.version.saturating_add(1);
+    // Version is a buyer-facing concurrency and provenance guard. Saturating at
+    // u8::MAX would allow later content/price mutations to reuse version 255,
+    // violating the monotonic contract and making version-only indexers stale.
+    // Fail the update instead; a future layout migration can widen the counter.
+    skill.version = next_skill_version(skill.version)?;
     skill.updated_at = clock.unix_timestamp;
 
     emit!(SkillUpdated {
@@ -82,4 +92,16 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_version_is_strictly_monotonic_and_never_reused() {
+        assert_eq!(next_skill_version(1).unwrap(), 2);
+        assert_eq!(next_skill_version(u8::MAX - 1).unwrap(), u8::MAX);
+        assert!(next_skill_version(u8::MAX).is_err());
+    }
 }

@@ -9,19 +9,23 @@ use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 #[cfg(feature = "spl-token-rewards")]
-use anchor_spl::associated_token::AssociatedToken;
-#[cfg(feature = "spl-token-rewards")]
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-use super::completion_helpers::resolve_referrer_snapshot;
+use super::completion_helpers::{
+    resolve_referrer_snapshot, validate_marketplace_payee_destinations,
+};
 use super::launch_controls::require_task_type_index_enabled;
 use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use super::task_init_helpers::{
-    increment_total_tasks, init_escrow_fields, init_task_fields, validate_bid_task_mode,
-    validate_deadline, validate_description_is_content_hash, validate_task_params,
+    increment_total_tasks, init_escrow_fields, init_task_fields,
+    require_private_task_creation_disabled, validate_bid_task_mode, validate_deadline,
+    validate_description_is_content_hash, validate_task_params,
 };
 #[cfg(feature = "spl-token-rewards")]
-use super::token_helpers::ensure_token_escrow_ata;
+use super::token_helpers::{
+    ensure_token_escrow_ata, validate_token_account, validate_token_escrow_account,
+    validate_token_reward_custody, AssociatedToken,
+};
 
 #[derive(Accounts)]
 #[instruction(task_id: [u8; 32])]
@@ -137,6 +141,11 @@ pub fn handler(
         task_type,
         min_reputation,
     )?;
+    // Release gate: the current trusted router/verifier pair is devnet-only and
+    // no audited in-repo guest image exists. Reject the obligation before any
+    // account mutation. `complete_task_private` exists only in an explicitly
+    // feature-gated `private-zk` build and is absent from the production default.
+    require_private_task_creation_disabled(constraint_hash)?;
     // Zero-trust content gate (audit): the on-chain [u8;64] `description` must be a 32-byte
     // content commitment with a zero tail, so a caller bypassing the kit cannot smuggle up
     // to 64 bytes of readable, un-moderated (potentially illegal) prose into permanent
@@ -152,15 +161,15 @@ pub fn handler(
         );
         require!(max_workers == 1, CoordinationError::InvalidMaxWorkers);
         require!(reward_mint.is_none(), CoordinationError::InvalidTokenMint);
-        require!(constraint_hash.is_none(), CoordinationError::InvalidInput);
         // P6.2 referral fee leg is UNAUDITED money-routing — fail it CLOSED on the
-        // conservative live mainnet (canary) surface until Phase 9 / audit. Mirrors the
-        // reward_mint / constraint_hash rejections above. This guarantees every canary
+        // conservative `mainnet-canary` build until Phase 9 / audit. Mirrors the
+        // reward-mint rejection above and the global private-task gate. This guarantees every canary
         // task has `referrer == default` and `referrer_fee_bps == 0`, so the shared
         // settlement (completion_helpers) always SKIPS the referrer leg on this surface.
         super::task_init_helpers::require_canary_referrer_disabled(referrer, referrer_fee_bps)?;
     }
-    // Validate reward is not zero (#540) - not in shared validator since dependent tasks allow zero
+    // Direct and dependent task creation both reject zero rewards; keep the direct
+    // path's historical InvalidReward error code.
     require!(reward_amount > 0, CoordinationError::InvalidReward);
 
     let clock = Clock::get()?;
@@ -218,7 +227,6 @@ pub fn handler(
         min_reputation,
         reward_mint,
     )?;
-
     // P6.2 demand-side referral leg: a creator may credit the embedder who brought
     // them (referrer + bps). No operator leg exists on a direct create_task, so the
     // combined cap is checked against protocol + referrer only. Validated + stamped
@@ -237,19 +245,17 @@ pub fn handler(
         referrer_bps == 0 || reward_mint.is_none(),
         CoordinationError::InvalidTokenMint
     );
-    // A referrer fee leg is only honored by the CreatorReview settlement paths
-    // (accept_task_result / auto_accept_task_result). The ZK private-completion path
-    // (complete_task_private) hardcodes referrer_leg = None, so a referrer fee on a
-    // private task (constraint_hash present) would silently stiff the referrer and
-    // over-pay the worker (audit). Reject it at creation — fail closed. (The
-    // ValidatorQuorum / ExternalAttestation case for non-private tasks is blocked
-    // separately in configure_task_validation.)
-    require!(
-        referrer_bps == 0 || constraint_hash.is_none(),
-        CoordinationError::InvalidInput
-    );
     task.referrer = referrer_key;
     task.referrer_fee_bps = referrer_bps;
+    validate_marketplace_payee_destinations(
+        task.key(),
+        escrow_key,
+        creator_key,
+        task.operator,
+        task.operator_fee_bps,
+        referrer_key,
+        referrer_bps,
+    )?;
 
     let escrow = ctx.accounts.escrow.as_mut();
     init_escrow_fields(escrow, task.key(), reward_amount, ctx.bumps.escrow);
@@ -297,6 +303,11 @@ pub fn handler(
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
         );
+        validate_token_account(
+            creator_ta.as_ref(),
+            &mint.key(),
+            &ctx.accounts.creator.key(),
+        )?;
 
         let token_escrow_info = token_escrow_ata.to_account_info();
         if token_escrow_info.owner == &system_program::ID {
@@ -309,34 +320,13 @@ pub fn handler(
                 token_program,
                 ata_program,
             )?;
-            let created_escrow_ata = ctx
-                .accounts
-                .token_escrow_ata
-                .as_ref()
-                .ok_or(CoordinationError::MissingTokenAccounts)?
-                .to_account_info();
-            require!(
-                created_escrow_ata.owner == token_program.key,
-                CoordinationError::InvalidTokenEscrow
-            );
-        } else {
-            require!(
-                token_escrow_info.owner == token_program.key,
-                CoordinationError::InvalidTokenEscrow
-            );
-            let escrow_ata_mint = token::accessor::mint(&token_escrow_info)
-                .map_err(|_| CoordinationError::InvalidTokenEscrow)?;
-            require!(
-                escrow_ata_mint == mint.key(),
-                CoordinationError::InvalidTokenMint
-            );
-            let escrow_ata_authority = token::accessor::authority(&token_escrow_info)
-                .map_err(|_| CoordinationError::InvalidTokenEscrow)?;
-            require!(
-                escrow_ata_authority == ctx.accounts.escrow.key(),
-                CoordinationError::InvalidTokenEscrow
-            );
         }
+
+        // One centralized check covers both a freshly created ATA and a supplied
+        // existing account: classic Token owner, canonical ATA address, mint,
+        // escrow authority, and initialized state.
+        validate_token_escrow_account(&token_escrow_info, &mint.key(), &ctx.accounts.escrow.key())?;
+        validate_token_reward_custody(mint.as_ref(), &token_escrow_info)?;
 
         // Transfer tokens from creator ATA to escrow ATA
         token::transfer(
@@ -472,14 +462,14 @@ mod create_task_canary_gate_tests {
     #[test]
     fn create_accepts_default_referrer_on_canary() {
         // Sanity: a hash-shaped task with NO referrer leg passes the canary gate. This is
-        // the only referral shape the live mainnet surface allows.
+        // the only referral shape the `mainnet-canary` build allows.
         assert!(run_canary_create_preconditions_full(&hash_description(), None, 0).is_ok());
     }
 
     #[test]
     fn create_rejects_nondefault_referrer_on_canary() {
         // The P6.2 referrer fee leg is UNAUDITED money-routing and must fail CLOSED on
-        // the live mainnet (canary) surface. A non-default referrer (with or without a
+        // the `mainnet-canary` build. A non-default referrer (with or without a
         // fee) is rejected with InvalidInput before any state change.
         //
         // REVERT-SENSITIVE: against the pre-fix code (no canary referrer gate), this

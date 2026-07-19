@@ -107,7 +107,10 @@ async function setupSubmittedManual(w) {
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "trk:claim");
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   const sdesc = Buffer.alloc(64); sdesc.set(crypto.randomBytes(32), 0);
@@ -137,6 +140,7 @@ test("track-record: reject_task_result bumps the worker's tasks_rejected (AgentS
       workerAuthority: w.provider.publicKey,
       // P6.6 optional track-record accounts:
       agentStats: workerStats, systemProgram: SystemProgram.programId,
+      workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
     })
     .instruction(), [w.buyer]), "reject_task_result with agent_stats");
 
@@ -223,18 +227,21 @@ async function hireClaimDispute(w, { resolutionType }) {
     .instruction(), [w.buyer]), "disp-trk:publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "disp-trk:claim");
 
-  // worker (provider) opens a dispute requesting `resolutionType`.
+  // Creator opens a dispute against the claimed worker, requesting `resolutionType`.
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), resolutionType, "evidence")
-    .accounts({ dispute, task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "disp-trk:initiate");
+    .accounts({ dispute, task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "disp-trk:initiate");
 
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active !== undefined, "dispute Active");
   return { task, escrow, hireRecord, claim, dispute };
@@ -257,8 +264,9 @@ async function resolveWithStats(w, r, approve) {
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
-      // audit F-9 optional sweep accounts: omitted here (close_task fallback)
-      taskSubmission: null, taskValidationConfig: null,
+      // Mandatory canonical evidence: this system-owned PDA proves no submission exists.
+      taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
+      taskValidationConfig: null,
       // P6.6 optional track-record account:
       agentStats: defendantStats,
     })

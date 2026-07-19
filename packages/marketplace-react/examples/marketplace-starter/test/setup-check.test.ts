@@ -15,6 +15,7 @@ const VALID_ENV = {
   VITE_AGENC_RPC_SUBSCRIPTIONS_URL: "wss://api.devnet.solana.com",
   VITE_AGENC_INDEXER_URL: "https://indexer.example",
   VITE_AGENC_BACKEND_URL: "https://market.example",
+  VITE_AGENC_MODERATOR: VALID_WALLET,
   VITE_AGENC_REFERRER_WALLET: VALID_WALLET,
   VITE_AGENC_REFERRER_FEE_BPS: "50",
   AGENC_JOB_SPEC_DIR: ".data/job-specs",
@@ -40,6 +41,7 @@ test("valid starter setup env returns normalized frontend and backend config", (
     rpcSubscriptionsUrl: "wss://api.devnet.solana.com",
     indexerUrl: "https://indexer.example",
     backendUrl: "https://market.example",
+    moderator: VALID_WALLET,
     referrer: {
       wallet: VALID_WALLET,
       feeBps: 50,
@@ -62,6 +64,7 @@ test("missing required frontend and backend vars produce setup errors", () => {
   assert.match(errors, /VITE_AGENC_RPC_URL is required/);
   assert.match(errors, /VITE_AGENC_INDEXER_URL is required/);
   assert.match(errors, /VITE_AGENC_BACKEND_URL is required/);
+  assert.match(errors, /VITE_AGENC_MODERATOR is required/);
   assert.match(errors, /AGENC_JOB_SPEC_DIR is required/);
   assert.match(errors, /AGENC_JOB_SPEC_PUBLIC_BASE_URL is required/);
   assert.match(errors, /AGENC_TASK_MODERATION_ATTEST_URL is required/);
@@ -82,6 +85,11 @@ test("invalid starter setup values fail closed with named env errors", () => {
       name: "unsupported network",
       patch: { VITE_AGENC_NETWORK: "testnet" },
       expected: /must be "devnet" or "mainnet"/,
+    },
+    {
+      name: "invalid moderator",
+      patch: { VITE_AGENC_MODERATOR: "not-a-wallet" },
+      expected: /VITE_AGENC_MODERATOR must be a valid Solana address/,
     },
     {
       name: "bad rpc url",

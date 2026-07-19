@@ -60,7 +60,7 @@ Marketplace V2 does not replace the task lifecycle. It wraps the existing flow:
 
 1. creator opens a bid book for an eligible task
 2. bidders submit bids against that task
-3. creator accepts one active bid
+3. creator accepts the active bid selected by the book's declared policy
 4. acceptance creates the normal `TaskClaim`
 5. task completion, cancellation, claim expiry, and dispute resolution continue to use the existing
    task escrow and claim settlement logic, with bid-specific bond settlement hooks layered on top
@@ -72,7 +72,7 @@ Repricing or re-estimation is handled as an update to that bid, not as a new sib
 
 This keeps indexing simple and reduces spam through account fan-out.
 
-### Policy Is Recorded On-Chain, Selection Remains Explicit
+### Policy Is Recorded And Enforced On-Chain
 
 The bid book stores a matching policy:
 
@@ -87,15 +87,12 @@ For `WeightedScore`, the book also stores basis-point weights for:
 - confidence
 - reliability
 
-The protocol records this policy on-chain so clients can rank bids consistently and so the creator's
-selection context is explicit. The protocol does not attempt to prove that the accepted bid is the
-mathematically optimal bid under that policy. Acceptance remains an explicit creator action.
-
-This is deliberate:
-
-- it avoids high-compute ranking logic on-chain
-- it allows off-chain consumers to present richer matching views
-- it preserves creator discretion while still making the advertised policy indexable
+Acceptance remains an explicit creator action, but the selected bid must be the deterministic
+winner. `accept_bid` receives every other canonical open bid as an exact repeating
+`[TaskBid, AgentRegistration]` pair, checks the list exactly against `TaskBidBook.active_bids`, and
+rejects omissions, duplicates, substituted identities, non-canonical PDAs, closed bids, or a
+selection that loses the declared policy. An optional dependency parent is the first remaining
+account; bid/agent pair enumeration begins immediately after that prefix.
 
 ## Accounts And PDAs
 
@@ -299,10 +296,11 @@ Checks:
 
 - protocol version compatibility
 - protocol multisig threshold
-- non-zero bond
-- valid cooldown / lifetime
-- non-zero per-window rate limit
-- non-zero per-task bid capacity
+- bond in `1..=1 SOL`
+- cooldown in `0..=24 hours`
+- per-window rate limit in `1..=1,000`
+- per-task bid capacity in `1..=20`
+- bid lifetime in `1 second..=7 days`
 - `accepted_no_show_slash_bps <= 10_000`
 
 ### `update_bid_marketplace_config`
@@ -332,10 +330,12 @@ Checks:
 - task is open
 - bid book is open
 - bidder agent is active
+- bidder registration stake is at least `ProtocolConfig.min_agent_stake`
 - bidder capabilities satisfy task requirements
 - bidder reputation satisfies `task.min_reputation`
 - requested reward is `> 0` and `<= task.reward_amount`
 - ETA is positive
+- ETA remains achievable before the task deadline
 - confidence is within basis-point bounds
 - expiry is in the future
 - expiry does not exceed the task deadline if a deadline exists
@@ -359,7 +359,9 @@ Checks:
 - bid is active
 - bid book is open
 - task is still open
+- bidder registration stake is still at least `ProtocolConfig.min_agent_stake`
 - updated price / ETA / confidence / expiry remain valid
+- updated ETA remains achievable before the task deadline
 
 Effects:
 
@@ -385,7 +387,8 @@ Effects:
 
 ### `accept_bid`
 
-Creator accepts one active bid and converts it into the normal task-assignment path.
+Creator accepts the deterministic policy winner and converts it into the normal task-assignment
+path.
 
 Checks:
 
@@ -393,7 +396,12 @@ Checks:
 - task has no current worker
 - bid book is open
 - bid is active and unexpired
+- selected bid terms match the creator-signed terms hash
+- every other canonical open bid and its matching canonical `AgentRegistration` are supplied as an
+  exact pair after the optional dependency-parent prefix
+- selected bid wins `BestPrice`, `BestEta`, or `WeightedScore` under the deterministic rules below
 - bidder is still active
+- bidder registration stake is still at least `ProtocolConfig.min_agent_stake`
 - bidder still satisfies capabilities and minimum reputation
 - bidder has room under the worker active-task cap
 
@@ -429,6 +437,20 @@ close before every non-accepted bid is individually cleaned up.
 - `BestEta`
 - `WeightedScore`
 
+### Deterministic Ranking
+
+- `BestPrice`: lowest price, then lowest ETA, highest confidence, highest reputation snapshot, and
+  finally the lexicographically lowest bid PDA.
+- `BestEta`: lowest ETA, then lowest price, highest confidence, highest reputation snapshot, and
+  finally the lexicographically lowest bid PDA.
+- `WeightedScore`: highest weighted score, then the `BestPrice` tie-break chain.
+
+Expired bids, legacy unbound bids, and bids whose ETA no longer fits before the deadline remain
+enumerated while open but are ineligible to win. A competing bidder that is no longer Active, is
+below the registration-stake floor, no longer meets the task's capabilities/current minimum
+reputation, or is at the active-task cap is also ineligible to win. Its exact bid/agent pair must
+still be enumerated so a caller cannot choose which competitors the program evaluates.
+
 ### Weighted Score Inputs
 
 - quoted price
@@ -436,25 +458,13 @@ close before every non-accepted bid is individually cleaned up.
 - bidder confidence
 - bidder reliability signal
 
-In the current protocol shape, reliability is represented through bid-time reputation snapshotting
-and associated off-chain interpretation. The book stores the weights so that consumers can compute a
-consistent ranking.
+Reliability is the bid-time reputation snapshot. Price and ETA are normalized to basis points:
 
-### Why Not Enforce Optimality On-Chain
+- `price_score = (task_budget - bid_price) * 10_000 / task_budget`
+- `eta_score = (seconds_remaining - bid_eta) * 10_000 / seconds_remaining`
 
-The protocol intentionally does not reject an accepted bid for not being the mathematically best bid.
-
-That avoids:
-
-- iterating and scoring every bid on-chain
-- higher compute and state-coupling costs
-- forcing one universal ranking interpretation into the lowest-level protocol layer
-
-The protocol guarantee is therefore:
-
-- the selection policy is declared and indexable
-- the accepted bid is explicit and auditable
-- clients may rank and explain bids according to the stored policy
+The program compares the full weighted numerator (before division), using `u128` checked arithmetic.
+Weights must sum to exactly `10_000` basis points.
 
 ## Bond, Reward, Fees, And Treasury
 

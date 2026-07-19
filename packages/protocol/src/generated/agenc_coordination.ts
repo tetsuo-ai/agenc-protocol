@@ -243,6 +243,13 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "moderationBlock",
+          "docs": [
+            "Canonical content-hash BLOCK floor, rechecked at assignment time so a",
+            "takedown recorded after the bid was created prevents acceptance."
+          ]
+        },
+        {
           "name": "creator",
           "writable": true,
           "signer": true
@@ -252,7 +259,17 @@ export type AgencCoordination = {
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "expectedBidTermsHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "acceptTaskResult",
@@ -460,6 +477,11 @@ export type AgencCoordination = {
         },
         {
           "name": "creator",
+          "docs": [
+            "this signer becomes the permissionless timeout crank after review_deadline_at;",
+            "the actual creator/rent recipient is then carried in the otherwise-unused",
+            "writable `operator` slot and revalidated in the handler."
+          ],
           "writable": true,
           "signer": true
         },
@@ -470,9 +492,26 @@ export type AgencCoordination = {
         {
           "name": "hireRecord",
           "docs": [
-            "operator-fee terms; for current hires the terms are read from the Task itself."
+            "direct tasks pass the empty system-owned PDA. Requiring the address prevents",
+            "legacy hired tasks from omitting their unstamped operator/referrer fee terms."
           ],
-          "optional": true
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
         },
         {
           "name": "operator",
@@ -2275,6 +2314,49 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "hireRecord",
+          "docs": [
+            "owner, discriminator, task binding, and designated provider when live.",
+            "A live record designates the only",
+            "provider agent allowed to claim; a direct task supplies the empty system",
+            "account at the same PDA. Full surface only because listing hires are not",
+            "part of the canary program."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "legacyListing",
+          "docs": [
+            "Legacy fallback for pre-hardening HireRecords whose former reserved field",
+            "is zero. When needed, this must be the exact stored ServiceListing and the",
+            "handler derives the designated provider from its immutable provider_agent."
+          ],
+          "optional": true
+        },
+        {
+          "name": "moderationBlock",
+          "docs": [
+            "Canonical content-hash BLOCK floor. Rechecked at assignment time so a",
+            "takedown recorded after publication actually stops new work."
+          ]
+        },
+        {
           "name": "claim",
           "writable": true,
           "pda": {
@@ -2497,8 +2579,8 @@ export type AgencCoordination = {
     {
       "name": "closeTask",
       "docs": [
-        "Reclaim a terminal task's account rent (and optional leftover job-spec",
-        "pointer). Allowed only when the task is Completed or Cancelled."
+        "Clean supplied children of a terminal task while retaining the rent-exempt",
+        "Task as a durable liveness anchor for any children not supplied."
       ],
       "discriminator": [
         55,
@@ -2577,9 +2659,11 @@ export type AgencCoordination = {
         {
           "name": "escrow",
           "docs": [
-            "Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow",
-            "account open (drained, `is_closed = true`) on a terminal task; provide it",
-            "here to reclaim its rent. Bound to this task by seeds + constraint."
+            "Optional already-settled escrow PDA. `resolve_dispute` can leave a token",
+            "task's state escrow open after draining it and setting `is_closed = true`;",
+            "provide it here to reclaim its rent. A pending token reserve is still marked",
+            "open and is rejected until its slash finalizer runs. Bound to this task by",
+            "seeds + constraint."
           ],
           "writable": true,
           "optional": true,
@@ -2735,7 +2819,7 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Task creator; receives the reclaimed rent. Mutable to credit lamports."
+            "Task creator; receives child rent and any Task balance above rent minimum."
           ],
           "writable": true,
           "signer": true
@@ -3123,415 +3207,6 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "completeTaskPrivate",
-      "docs": [
-        "Complete a task with private proof verification."
-      ],
-      "discriminator": [
-        117,
-        181,
-        96,
-        96,
-        194,
-        254,
-        58,
-        35
-      ],
-      "accounts": [
-        {
-          "name": "task",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  97,
-                  115,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task.creator",
-                "account": "task"
-              },
-              {
-                "kind": "account",
-                "path": "task.task_id",
-                "account": "task"
-              }
-            ]
-          }
-        },
-        {
-          "name": "claim",
-          "docs": [
-            "claim can surface `NotClaimed` instead of Anchor's `AccountNotInitialized`."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  108,
-                  97,
-                  105,
-                  109
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task"
-              },
-              {
-                "kind": "account",
-                "path": "worker"
-              }
-            ]
-          }
-        },
-        {
-          "name": "escrow",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  101,
-                  115,
-                  99,
-                  114,
-                  111,
-                  119
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "task"
-              }
-            ]
-          }
-        },
-        {
-          "name": "creator",
-          "writable": true
-        },
-        {
-          "name": "worker",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  97,
-                  103,
-                  101,
-                  110,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "worker.agent_id",
-                "account": "agentRegistration"
-              }
-            ]
-          }
-        },
-        {
-          "name": "protocolConfig",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "zkConfig",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  122,
-                  107,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "bindingSpend",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  105,
-                  110,
-                  100,
-                  105,
-                  110,
-                  103,
-                  95,
-                  115,
-                  112,
-                  101,
-                  110,
-                  100
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "proof.binding_seed"
-              }
-            ]
-          }
-        },
-        {
-          "name": "nullifierSpend",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  110,
-                  117,
-                  108,
-                  108,
-                  105,
-                  102,
-                  105,
-                  101,
-                  114,
-                  95,
-                  115,
-                  112,
-                  101,
-                  110,
-                  100
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "proof.nullifier_seed"
-              }
-            ]
-          }
-        },
-        {
-          "name": "treasury",
-          "writable": true
-        },
-        {
-          "name": "authority",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "worker"
-          ]
-        },
-        {
-          "name": "routerProgram"
-        },
-        {
-          "name": "router",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  111,
-                  117,
-                  116,
-                  101,
-                  114
-                ]
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                195,
-                89,
-                147,
-                29,
-                248,
-                238,
-                101,
-                197,
-                174,
-                31,
-                10,
-                216,
-                76,
-                113,
-                153,
-                238,
-                176,
-                144,
-                8,
-                143,
-                208,
-                155,
-                45,
-                91,
-                116,
-                152,
-                221,
-                57,
-                217,
-                158,
-                48,
-                222
-              ]
-            }
-          }
-        },
-        {
-          "name": "verifierEntry",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  118,
-                  101,
-                  114,
-                  105,
-                  102,
-                  105,
-                  101,
-                  114
-                ]
-              },
-              {
-                "kind": "const",
-                "value": [
-                  82,
-                  90,
-                  86,
-                  77
-                ]
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                195,
-                89,
-                147,
-                29,
-                248,
-                238,
-                101,
-                197,
-                174,
-                31,
-                10,
-                216,
-                76,
-                113,
-                153,
-                238,
-                176,
-                144,
-                8,
-                143,
-                208,
-                155,
-                45,
-                91,
-                116,
-                152,
-                221,
-                57,
-                217,
-                158,
-                48,
-                222
-              ]
-            }
-          }
-        },
-        {
-          "name": "verifierProgram"
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "tokenEscrowAta",
-          "writable": true,
-          "optional": true
-        },
-        {
-          "name": "workerTokenAccount",
-          "writable": true,
-          "optional": true
-        },
-        {
-          "name": "treasuryTokenAccount",
-          "writable": true,
-          "optional": true
-        },
-        {
-          "name": "rewardMint",
-          "optional": true
-        },
-        {
-          "name": "tokenProgram",
-          "optional": true,
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        }
-      ],
-      "args": [
-        {
-          "name": "taskId",
-          "type": "u64"
-        },
-        {
-          "name": "proof",
-          "type": {
-            "defined": {
-              "name": "privateCompletionPayload"
-            }
-          }
-        }
-      ]
-    },
-    {
       "name": "configureTaskModeration",
       "docs": [
         "Configure the moderation authority required before task job-spec publication."
@@ -3893,6 +3568,38 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "taskJobSpec",
+          "docs": [
+            "The exact creator-locked content-addressed job contract the bidder signs."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
           "name": "bidBook",
           "writable": true,
           "pda": {
@@ -4040,6 +3747,19 @@ export type AgencCoordination = {
         },
         {
           "name": "expiresAt",
+          "type": "i64"
+        },
+        {
+          "name": "expectedJobSpecHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedJobSpecUpdatedAt",
           "type": "i64"
         }
       ]
@@ -5429,10 +5149,48 @@ export type AgencCoordination = {
         },
         {
           "name": "delegatorAgent",
-          "writable": true
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "delegator_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
         },
         {
-          "name": "delegateeAgent"
+          "name": "delegateeAgent",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "delegatee_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
         },
         {
           "name": "delegation",
@@ -5560,9 +5318,7 @@ export type AgencCoordination = {
             "it to dodge the \"stake must be withdrawn first\" guard (audit). For an agent that",
             "never staked this is an empty system-owned PDA (the handler treats it as zero",
             "stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve",
-            "`slash_count` history — so the agent must withdraw its stake before deregistering;",
-            "otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the",
-            "`agent_id` becomes re-registerable by anyone, withdrawable by a new owner."
+            "`slash_count` history — so the agent must withdraw its stake before retirement."
           ],
           "pda": {
             "seeds": [
@@ -5961,11 +5717,12 @@ export type AgencCoordination = {
         {
           "name": "treasury",
           "docs": [
-            "Must match protocol_config.treasury. Spend path supports:",
-            "- program-owned treasury (direct lamport mutation), or",
-            "- system-owned treasury when this account signs."
+            "Treasury account for TreasurySpend proposals. The optional signer type",
+            "makes custody consent explicit in generated account metas.",
+            "Must match protocol_config.treasury and be system owned."
           ],
           "writable": true,
+          "signer": true,
           "optional": true
         },
         {
@@ -6574,9 +6331,9 @@ export type AgencCoordination = {
         {
           "name": "workerClaim",
           "docs": [
-            "Worker's claim on the disputed task (fix #137)",
-            "Optional - when provided, allows decrementing worker's active_tasks",
-            "and enables fair refund distribution (fix #418)"
+            "Worker's canonical claim on the disputed task.",
+            "Retained as an optional ABI slot, but required by the handler on every expiry",
+            "to bind the defendant and unwind the claim and worker counters."
           ],
           "writable": true,
           "optional": true,
@@ -6615,7 +6372,8 @@ export type AgencCoordination = {
         {
           "name": "workerWallet",
           "docs": [
-            "Required when worker should receive funds on expiration"
+            "Receives closed-account rent and any refundable worker bond, never unresolved",
+            "task principal; validated against `worker.authority` before funds can move."
           ],
           "writable": true,
           "optional": true
@@ -6623,9 +6381,7 @@ export type AgencCoordination = {
         {
           "name": "hireRecord",
           "docs": [
-            "Hire link PDA ([\"hire\", task]) — ALWAYS required so a hired task's operator fee",
-            "cannot be bypassed when an expired dispute pays the worker. Live (program-owned)",
-            "forces the operator leg; non-hired tasks pass the empty system-owned PDA."
+            "never pays a marketplace leg; all unresolved principal returns to the creator."
           ],
           "pda": {
             "seeds": [
@@ -6647,19 +6403,11 @@ export type AgencCoordination = {
         },
         {
           "name": "disputeOperator",
-          "docs": [
-            "HireRecord fallback); required only when those terms carry a non-zero operator fee",
-            "and the worker is paid. Receives SOL."
-          ],
           "writable": true,
           "optional": true
         },
         {
           "name": "disputeReferrer",
-          "docs": [
-            "dispute exits honor the snapshotted referrer leg); required only when those terms",
-            "carry a non-zero referrer fee and the worker is paid. Receives SOL."
-          ],
           "writable": true,
           "optional": true
         },
@@ -6681,9 +6429,6 @@ export type AgencCoordination = {
         },
         {
           "name": "workerTokenAccountAta",
-          "docs": [
-            "Worker's token account for payment (optional)"
-          ],
           "writable": true,
           "optional": true
         },
@@ -6713,9 +6458,10 @@ export type AgencCoordination = {
         {
           "name": "taskSubmission",
           "docs": [
-            "OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —",
-            "decrements the review counters when still live and returns its rent to the",
-            "worker authority. Validated + bound in the handler (`sweep_dispute_submission`)."
+            "REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the",
+            "canonical TaskSubmission PDA for the defendant claim. A live record is",
+            "swept before claim close; the exact system-owned empty PDA proves absence.",
+            "`Option` preserves the deployed account list, but `None` fails closed."
           ],
           "writable": true,
           "optional": true
@@ -6723,12 +6469,39 @@ export type AgencCoordination = {
         {
           "name": "taskValidationConfig",
           "docs": [
-            "OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the",
-            "swept submission is still live on a manual-validation task (pending-counter",
-            "hygiene). Bound to the task in the handler."
+            "OPTIONAL: canonical TaskValidationConfig, required when the swept manual",
+            "submission is still Submitted and therefore carries counter debt."
           ],
           "writable": true,
-          "optional": true
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -6914,6 +6687,39 @@ export type AgencCoordination = {
         {
           "name": "workerAuthority",
           "writable": true
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "system-owned PDA. A legacy live record carries fee terms not stamped on Task."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "operator",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "referrer",
+          "writable": true,
+          "optional": true
         },
         {
           "name": "authority",
@@ -7211,6 +7017,33 @@ export type AgencCoordination = {
                 "kind": "account",
                 "path": "listing.listing_id",
                 "account": "serviceListing"
+              }
+            ]
+          }
+        },
+        {
+          "name": "providerAgent",
+          "docs": [
+            "Provider identity behind the standing listing. A listing is durable,",
+            "but a suspended or permanently retired provider must not receive new",
+            "hires. Existing hires settle independently through their Task/HireRecord."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_agent.agent_id",
+                "account": "agentRegistration"
               }
             ]
           }
@@ -7603,6 +7436,31 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "providerAgent",
+          "docs": [
+            "Durable listings cannot outlive the provider's permission to take new work."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
           "name": "protocolConfig",
           "writable": true,
           "pda": {
@@ -7814,6 +7672,41 @@ export type AgencCoordination = {
                 "kind": "account",
                 "path": "task.task_id",
                 "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskJobSpec",
+          "docs": [
+            "Exact job contract the creator irrevocably freezes when opening bidding.",
+            "This explicit creator-signed transition prevents a bidder from grief-locking",
+            "an otherwise editable TaskJobSpec."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
               }
             ]
           }
@@ -8129,7 +8022,12 @@ export type AgencCoordination = {
           }
         },
         {
-          "name": "treasury"
+          "name": "treasury",
+          "docs": [
+            "Treasury account to receive protocol fees. Production clients must request",
+            "the custody key's signature in generated account metas."
+          ],
+          "signer": true
         },
         {
           "name": "authority",
@@ -8175,89 +8073,6 @@ export type AgencCoordination = {
           "name": "multisigOwners",
           "type": {
             "vec": "pubkey"
-          }
-        }
-      ]
-    },
-    {
-      "name": "initializeZkConfig",
-      "docs": [
-        "Initialize the trusted ZK image ID config."
-      ],
-      "discriminator": [
-        160,
-        151,
-        49,
-        249,
-        201,
-        208,
-        48,
-        84
-      ],
-      "accounts": [
-        {
-          "name": "protocolConfig",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "zkConfig",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  122,
-                  107,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "authority",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "protocolConfig"
-          ]
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "activeImageId",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
           }
         }
       ]
@@ -8423,7 +8238,7 @@ export type AgencCoordination = {
         {
           "name": "initiatorClaim",
           "docs": [
-            "Optional: Initiator's claim if they are a worker (not the creator)"
+            "Initiator's live claim; required when the initiator is a worker."
           ],
           "optional": true,
           "pda": {
@@ -8452,7 +8267,7 @@ export type AgencCoordination = {
         {
           "name": "workerAgent",
           "docs": [
-            "Optional: Worker agent to be disputed (required when initiator is task creator)"
+            "Worker agent to be disputed; required when initiator is task creator."
           ],
           "writable": true,
           "optional": true
@@ -8460,14 +8275,15 @@ export type AgencCoordination = {
         {
           "name": "workerClaim",
           "docs": [
-            "Optional: Worker's claim (required when worker_agent is provided)"
+            "Defendant's live claim; required when the initiator is task creator."
           ],
           "optional": true
         },
         {
           "name": "taskSubmission",
           "docs": [
-            "Optional durable submission record used once the claim slot has been released."
+            "Submitted delivery record; required for worker-initiated disputes. A",
+            "submission never substitutes for the live claim required by both exits."
           ],
           "optional": true
         },
@@ -8721,7 +8537,6 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "task",
-          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -8742,6 +8557,26 @@ export type AgencCoordination = {
                 "kind": "account",
                 "path": "task.task_id",
                 "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
               }
             ]
           }
@@ -8785,6 +8620,41 @@ export type AgencCoordination = {
               }
             ]
           }
+        },
+        {
+          "name": "worker",
+          "docs": [
+            "Worker identity for ROLE_WORKER. Omitted for ROLE_CREATOR."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "worker.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "workerClaim",
+          "docs": [
+            "Live claim proving the worker signer is actually assigned to this task.",
+            "Typed for ownership/discriminator checks; canonical PDA + bindings are",
+            "verified in the handler because `worker` is role-conditional."
+          ],
+          "optional": true
         },
         {
           "name": "authority",
@@ -9148,6 +9018,15 @@ export type AgencCoordination = {
         {
           "name": "expectedPrice",
           "type": "u64"
+        },
+        {
+          "name": "expectedMetadataHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -9363,6 +9242,19 @@ export type AgencCoordination = {
         {
           "name": "expectedPrice",
           "type": "u64"
+        },
+        {
+          "name": "expectedVersion",
+          "type": "u8"
+        },
+        {
+          "name": "expectedContentHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -9705,6 +9597,32 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "authorAgent",
+          "docs": [
+            "Skill author's durable registration. Required so a legacy purchase made",
+            "through another agent controlled by the same wallet cannot self-rate."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "author_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
           "name": "protocolConfig",
           "pda": {
             "seeds": [
@@ -9855,6 +9773,62 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "reclaimOrphanTaskChild",
+      "docs": [
+        "Return rent from a historical rent-only task child whose parent was",
+        "destroyed by an older close_task implementation. The destination is",
+        "derived from stored program state; the permissionless cranker cannot pick it."
+      ],
+      "discriminator": [
+        91,
+        115,
+        255,
+        0,
+        240,
+        58,
+        74,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "child",
+          "docs": [
+            "validated in the handler before any lamports move."
+          ],
+          "writable": true
+        },
+        {
+          "name": "parentTask",
+          "docs": [
+            "children, `TaskSubmission` for validation votes) and be a provably",
+            "absent system-owned, zero-data account. The field name is ABI-stable."
+          ]
+        },
+        {
+          "name": "workerAgent",
+          "docs": [
+            "worker AgentRegistration and is fully deserialized/canonically verified."
+          ]
+        },
+        {
+          "name": "rentRecipient",
+          "docs": [
+            "writable. The cranker can never choose the rent destination."
+          ],
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "Permissionless cranker. Its signature provides transaction accountability",
+            "but grants no authority over the rent destination."
+          ],
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "reclaimTerminalClaim",
       "docs": [
         "Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim",
@@ -9974,6 +9948,44 @@ export type AgencCoordination = {
               {
                 "kind": "account",
                 "path": "claim"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taskValidationConfig",
+          "docs": [
+            "Validation counters for terminal cleanup of a still-Submitted",
+            "Collaborative straggler. Omitted for the historical no-submission and",
+            "Rejected-submission cleanup forms."
+          ],
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
               }
             ]
           }
@@ -10831,6 +10843,32 @@ export type AgencCoordination = {
           "signer": true
         },
         {
+          "name": "protocolConfig",
+          "docs": [
+            "Emergency entry-control. A paused or version-incompatible protocol must",
+            "not accept a fresh seven-day moderation bond while ordinary marketplace",
+            "entry is disabled. Exit instructions intentionally do not carry this",
+            "pause gate, so existing attestors can always recover their bond."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
         }
@@ -11529,6 +11567,48 @@ export type AgencCoordination = {
           ],
           "optional": true,
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "workerCompletionBond",
+          "docs": [
+            "The rejected worker's completion bond is refunded at the same atomic",
+            "boundary that closes their claim. Leaving it alive after the worker",
+            "identity disappears from the Task made later cancel/close callers unable",
+            "to prove which worker bond still existed and allowed permanent stranding."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  108,
+                  101,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  98,
+                  111,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "workerAuthority"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -12138,9 +12218,10 @@ export type AgencCoordination = {
         {
           "name": "taskSubmission",
           "docs": [
-            "OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —",
-            "decrements the review counters when still live and returns its rent to the",
-            "worker authority. Validated + bound in the handler (`sweep_dispute_submission`)."
+            "REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the",
+            "canonical TaskSubmission PDA for the defendant claim. A live record is",
+            "swept before claim close; the exact system-owned empty PDA proves absence.",
+            "`Option` preserves the deployed account list, but `None` fails closed."
           ],
           "writable": true,
           "optional": true
@@ -12148,12 +12229,39 @@ export type AgencCoordination = {
         {
           "name": "taskValidationConfig",
           "docs": [
-            "OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the",
-            "swept submission is still live on a manual-validation task (pending-counter",
-            "hygiene). Bound to the task in the handler."
+            "OPTIONAL: canonical TaskValidationConfig, required when the swept manual",
+            "submission is still Submitted and therefore carries counter debt."
           ],
           "writable": true,
-          "optional": true
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -12360,6 +12468,39 @@ export type AgencCoordination = {
           "writable": true
         },
         {
+          "name": "hireRecord",
+          "docs": [
+            "system-owned PDA. A legacy live record carries fee terms not stamped on Task."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "operator",
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "referrer",
+          "writable": true,
+          "optional": true
+        },
+        {
           "name": "authority",
           "docs": [
             "Multisig review authority; `remaining_accounts` carries the co-signers."
@@ -12555,8 +12696,11 @@ export type AgencCoordination = {
     {
       "name": "revokeDelegation",
       "docs": [
-        "Revoke a reputation delegation and close the account.",
-        "Rent is returned to the delegator's authority."
+        "Permissionlessly retire a legacy reputation delegation without restoring",
+        "slash-sheltered reputation. An identity-continuous record returns rent to",
+        "its recorded authority; an orphan sends rent only to the canonical treasury.",
+        "Orphan recovery appends exactly two accounts after the three fixed metas:",
+        "`[canonical ProtocolConfig readonly, configured treasury writable]`."
       ],
       "discriminator": [
         188,
@@ -12571,14 +12715,19 @@ export type AgencCoordination = {
       "accounts": [
         {
           "name": "authority",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "delegatorAgent"
-          ]
+          "docs": [
+            "recorded on `delegator_agent` and is the rent recipient. It deliberately",
+            "need not sign: delegation is a retired, non-beneficial feature, and making",
+            "the exit permissionless prevents an owner from blocking a mainnet cutover."
+          ],
+          "writable": true
         },
         {
           "name": "delegatorAgent",
+          "docs": [
+            "in the handler. Unchecked is required because deployed revision 4 could",
+            "close this PDA after creating a delegation."
+          ],
           "writable": true
         },
         {
@@ -13035,7 +13184,10 @@ export type AgencCoordination = {
     {
       "name": "setServiceListingState",
       "docs": [
-        "Pause / reactivate / retire a service listing (provider-only)."
+        "Pause / reactivate / retire a service listing (provider-only). Reactivating",
+        "to `Active` requires exactly one readonly remaining account: the listing's",
+        "canonical provider `AgentRegistration`. Pausing or retiring requires no",
+        "remaining accounts, so a closed provider identity cannot block safe exits."
       ],
       "discriminator": [
         87,
@@ -13372,7 +13524,26 @@ export type AgencCoordination = {
           ]
         },
         {
-          "name": "agent"
+          "name": "agent",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
         },
         {
           "name": "reputationStake",
@@ -13403,6 +13574,26 @@ export type AgencCoordination = {
               {
                 "kind": "account",
                 "path": "agent"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
               }
             ]
           }
@@ -13888,6 +14079,39 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "taskJobSpec",
+          "docs": [
+            "Current exact creator-locked job contract. A legacy unbound bid becomes",
+            "accept-safe only after its bidder refreshes it through this instruction."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  106,
+                  111,
+                  98,
+                  95,
+                  115,
+                  112,
+                  101,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
           "name": "bidBook",
           "writable": true,
           "pda": {
@@ -14047,6 +14271,19 @@ export type AgencCoordination = {
         },
         {
           "name": "expiresAt",
+          "type": "i64"
+        },
+        {
+          "name": "expectedJobSpecHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedJobSpecUpdatedAt",
           "type": "i64"
         }
       ]
@@ -14651,6 +14888,28 @@ export type AgencCoordination = {
           }
         },
         {
+          "name": "providerAgent",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "provider_agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
           "name": "protocolConfig",
           "pda": {
             "seeds": [
@@ -15134,10 +15393,10 @@ export type AgencCoordination = {
         {
           "name": "newTreasury",
           "docs": [
-            "Must be either:",
-            "- program-owned (preferred), or",
-            "- a system-owned signer account (legacy compatibility)."
-          ]
+            "Must be a system-owned signer. Production clients request the new custody",
+            "key's signature through this typed account in generated account metas."
+          ],
+          "signer": true
         },
         {
           "name": "authority",
@@ -15145,81 +15404,6 @@ export type AgencCoordination = {
         }
       ],
       "args": []
-    },
-    {
-      "name": "updateZkImageId",
-      "docs": [
-        "Rotate the trusted ZK image ID."
-      ],
-      "discriminator": [
-        216,
-        79,
-        225,
-        219,
-        122,
-        123,
-        169,
-        233
-      ],
-      "accounts": [
-        {
-          "name": "protocolConfig",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "zkConfig",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  122,
-                  107,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "authority",
-          "signer": true
-        }
-      ],
-      "args": [
-        {
-          "name": "newImageId",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        }
-      ]
     },
     {
       "name": "upvotePost",
@@ -15623,8 +15807,11 @@ export type AgencCoordination = {
         {
           "name": "validatorAgent",
           "docs": [
-            "Optional validator agent for validator-quorum mode, validated in handler."
+            "Optional validator agent for validator-quorum mode, validated in handler.",
+            "Writable because a quorum vote must lock the registration stake against",
+            "immediate identity recycling (see `last_vote_timestamp` in the handler)."
           ],
+          "writable": true,
           "optional": true
         },
         {
@@ -15838,6 +16025,7 @@ export type AgencCoordination = {
         },
         {
           "name": "voter",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -15924,7 +16112,26 @@ export type AgencCoordination = {
           ]
         },
         {
-          "name": "agent"
+          "name": "agent",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "agent.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
         },
         {
           "name": "reputationStake",
@@ -16045,19 +16252,6 @@ export type AgencCoordination = {
         32,
         197,
         88
-      ]
-    },
-    {
-      "name": "bindingSpend",
-      "discriminator": [
-        196,
-        241,
-        81,
-        0,
-        238,
-        99,
-        30,
-        100
       ]
     },
     {
@@ -16266,19 +16460,6 @@ export type AgencCoordination = {
         141,
         52,
         148
-      ]
-    },
-    {
-      "name": "nullifierSpend",
-      "discriminator": [
-        254,
-        192,
-        216,
-        27,
-        119,
-        64,
-        151,
-        144
       ]
     },
     {
@@ -16553,19 +16734,6 @@ export type AgencCoordination = {
         68,
         65
       ]
-    },
-    {
-      "name": "zkConfig",
-      "discriminator": [
-        181,
-        176,
-        242,
-        167,
-        108,
-        219,
-        13,
-        202
-      ]
     }
   ],
   "events": [
@@ -16791,19 +16959,6 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "bondDeposited",
-      "discriminator": [
-        210,
-        149,
-        47,
-        232,
-        72,
-        128,
-        248,
-        153
-      ]
-    },
-    {
       "name": "bondForfeited",
       "discriminator": [
         141,
@@ -16814,19 +16969,6 @@ export type AgencCoordination = {
         16,
         129,
         169
-      ]
-    },
-    {
-      "name": "bondLocked",
-      "discriminator": [
-        89,
-        45,
-        139,
-        7,
-        22,
-        105,
-        232,
-        59
       ]
     },
     {
@@ -16853,32 +16995,6 @@ export type AgencCoordination = {
         139,
         123,
         17
-      ]
-    },
-    {
-      "name": "bondReleased",
-      "discriminator": [
-        191,
-        161,
-        250,
-        29,
-        188,
-        146,
-        120,
-        251
-      ]
-    },
-    {
-      "name": "bondSlashed",
-      "discriminator": [
-        59,
-        7,
-        252,
-        195,
-        234,
-        156,
-        42,
-        54
       ]
     },
     {
@@ -17233,6 +17349,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "orphanTaskChildReclaimed",
+      "discriminator": [
+        165,
+        132,
+        90,
+        130,
+        152,
+        229,
+        223,
+        11
+      ]
+    },
+    {
       "name": "postCreated",
       "discriminator": [
         209,
@@ -17428,16 +17557,16 @@ export type AgencCoordination = {
       ]
     },
     {
-      "name": "reputationDelegated",
+      "name": "reputationDelegationRetired",
       "discriminator": [
-        143,
-        11,
-        134,
-        202,
-        135,
-        97,
-        121,
-        223
+        203,
+        239,
+        238,
+        102,
+        18,
+        140,
+        179,
+        89
       ]
     },
     {
@@ -17594,19 +17723,6 @@ export type AgencCoordination = {
         5,
         98,
         98
-      ]
-    },
-    {
-      "name": "speculativeCommitmentCreated",
-      "discriminator": [
-        72,
-        69,
-        96,
-        30,
-        161,
-        244,
-        6,
-        183
       ]
     },
     {
@@ -17893,32 +18009,6 @@ export type AgencCoordination = {
         38,
         85,
         145
-      ]
-    },
-    {
-      "name": "zkConfigInitialized",
-      "discriminator": [
-        193,
-        65,
-        2,
-        44,
-        100,
-        107,
-        71,
-        177
-      ]
-    },
-    {
-      "name": "zkImageIdUpdated",
-      "discriminator": [
-        78,
-        188,
-        106,
-        56,
-        159,
-        201,
-        60,
-        2
       ]
     }
   ],
@@ -18456,7 +18546,7 @@ export type AgencCoordination = {
     {
       "code": 6106,
       "name": "activeDisputeVotes",
-      "msg": "Agent has active dispute votes pending resolution"
+      "msg": "Agent has initiated dispute outcomes pending finalization"
     },
     {
       "code": 6107,
@@ -18606,7 +18696,7 @@ export type AgencCoordination = {
     {
       "code": 6136,
       "name": "insufficientStake",
-      "msg": "Insufficient stake for arbiter registration"
+      "msg": "Insufficient registration stake"
     },
     {
       "code": 6137,
@@ -18981,7 +19071,7 @@ export type AgencCoordination = {
     {
       "code": 6211,
       "name": "treasuryNotSpendable",
-      "msg": "Treasury must be program-owned, or a signer system account for governance spends"
+      "msg": "Treasury must be a system-owned signer account"
     },
     {
       "code": 6212,
@@ -19696,7 +19786,7 @@ export type AgencCoordination = {
     {
       "code": 6354,
       "name": "resolverConflictOfInterest",
-      "msg": "A dispute party (the task creator or the defendant worker) cannot resolve their own dispute"
+      "msg": "A dispute party or snapshotted settlement beneficiary cannot resolve the dispute"
     },
     {
       "code": 6355,
@@ -19737,6 +19827,131 @@ export type AgencCoordination = {
       "code": 6362,
       "name": "reputationDelegationTooSoon",
       "msg": "A freshly registered agent must wait at least one slot before delegating reputation"
+    },
+    {
+      "code": 6363,
+      "name": "disputeResolutionWindowExpired",
+      "msg": "The dispute resolution window has expired; use expire_dispute"
+    },
+    {
+      "code": 6364,
+      "name": "reputationDelegationDisabled",
+      "msg": "New reputation delegations are disabled; existing delegations may still be revoked"
+    },
+    {
+      "code": 6365,
+      "name": "taskChildRequiresDedicatedCleanup",
+      "msg": "Task child has live submission state and requires its dedicated cleanup path"
+    },
+    {
+      "code": 6366,
+      "name": "taskChildRentRecipientRequired",
+      "msg": "The stored task-child rent recipient must be supplied as a writable account"
+    },
+    {
+      "code": 6367,
+      "name": "invalidSlashPercentage",
+      "msg": "Slash percentage must be between 0 and 100"
+    },
+    {
+      "code": 6368,
+      "name": "taskNotRentExempt",
+      "msg": "Task must be rent exempt before terminal cleanup can preserve it"
+    },
+    {
+      "code": 6369,
+      "name": "invalidRationaleHash",
+      "msg": "Dispute resolution requires a non-zero rationale content hash"
+    },
+    {
+      "code": 6370,
+      "name": "tokenMintFreezeAuthorityEnabled",
+      "msg": "Token reward mints must have no freeze authority"
+    },
+    {
+      "code": 6371,
+      "name": "tokenEscrowFrozen",
+      "msg": "SPL token account must be initialized and not frozen"
+    },
+    {
+      "code": 6372,
+      "name": "orphanTaskParentStillLive",
+      "msg": "The referenced parent Task still exists; use its normal cleanup path"
+    },
+    {
+      "code": 6373,
+      "name": "orphanTaskChildUnsupported",
+      "msg": "This account type may carry principal or live state and cannot use orphan rent recovery"
+    },
+    {
+      "code": 6374,
+      "name": "bidJobSpecMismatch",
+      "msg": "Bid job-spec commitment does not match the current task job specification"
+    },
+    {
+      "code": 6375,
+      "name": "taskJobSpecBidLocked",
+      "msg": "Task job specification is permanently locked because its creator opened bidding"
+    },
+    {
+      "code": 6376,
+      "name": "bidJobSpecBindingRequired",
+      "msg": "Legacy unbound bid must be refreshed against the locked job specification before acceptance"
+    },
+    {
+      "code": 6377,
+      "name": "staleBidAcceptance",
+      "msg": "Selected bid terms changed since the creator signed acceptance"
+    },
+    {
+      "code": 6378,
+      "name": "goodsMetadataChanged",
+      "msg": "Good metadata changed since preview; re-read the listing and retry"
+    },
+    {
+      "code": 6379,
+      "name": "skillVersionChanged",
+      "msg": "Skill content version changed since preview; re-read the skill and retry"
+    },
+    {
+      "code": 6380,
+      "name": "skillContentChanged",
+      "msg": "Skill content hash changed since preview; re-read the skill and retry"
+    },
+    {
+      "code": 6381,
+      "name": "privateTaskCreationDisabled",
+      "msg": "Private task creation is disabled until an audited ZK guest and mainnet verifier are activated"
+    },
+    {
+      "code": 6382,
+      "name": "invalidBidMarketplaceConfig",
+      "msg": "Bid marketplace configuration exceeds protocol safety limits"
+    },
+    {
+      "code": 6383,
+      "name": "bidBookEnumerationMismatch",
+      "msg": "accept_bid must enumerate every other canonical open bid and matching bidder exactly once"
+    },
+    {
+      "code": 6384,
+      "name": "bidDoesNotSatisfyMatchingPolicy",
+      "msg": "The selected bid does not win the bid book's declared matching policy"
+    },
+    {
+      "code": 6385,
+      "name": "marketplacePayeeAccountAlias",
+      "msg": "A marketplace fee payee cannot alias the task or its escrow account"
+    },
+    {
+      "code": 6386,
+      "name": "lamportTransferAccountAlias",
+      "msg": "A positive lamport transfer requires distinct source and destination accounts"
+    },
+    {
+      "code": 6387,
+      "name": "reputationDelegationRecoveryAccountsRequired",
+      "msg": "Orphan delegation recovery requires the canonical protocol config and writable treasury"
     }
   ],
   "types": [
@@ -19893,14 +20108,15 @@ export type AgencCoordination = {
           {
             "name": "tasksCompleted",
             "docs": [
-              "Total tasks completed"
+              "Total tasks completed (saturating telemetry)"
             ],
             "type": "u64"
           },
           {
             "name": "totalEarned",
             "docs": [
-              "Total rewards earned"
+              "Total SOL rewards earned, in lamports (excludes SPL-token base units;",
+              "saturating telemetry)"
             ],
             "type": "u64"
           },
@@ -19923,7 +20139,7 @@ export type AgencCoordination = {
           {
             "name": "stake",
             "docs": [
-              "Stake amount (for arbiters)"
+              "Slashable stake used for protocol eligibility and governance weight"
             ],
             "type": "u64"
           },
@@ -19937,7 +20153,7 @@ export type AgencCoordination = {
           {
             "name": "lastTaskCreated",
             "docs": [
-              "Timestamp of last task creation"
+              "Historical timestamp of last task creation"
             ],
             "type": "i64"
           },
@@ -19951,37 +20167,46 @@ export type AgencCoordination = {
           {
             "name": "taskCount24h",
             "docs": [
-              "Number of tasks created in current 24h window"
+              "Historical agent-scoped task count"
             ],
             "type": "u8"
           },
           {
             "name": "disputeCount24h",
             "docs": [
-              "Number of disputes initiated in current 24h window"
+              "Historical agent-scoped dispute count"
             ],
             "type": "u8"
           },
           {
             "name": "rateLimitWindowStart",
             "docs": [
-              "Start of current rate limit window (unix timestamp)"
+              "Historical agent-scoped rate-limit window start"
             ],
             "type": "i64"
           },
           {
             "name": "activeDisputeVotes",
             "docs": [
-              "DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing",
-              "increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a",
-              "permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable."
+              "Number of disputes initiated by this agent whose initiator outcome has not",
+              "yet been finalized by `apply_initiator_slash`.",
+              "",
+              "P6.3 retired the arbiter-vote model that originally used this byte. Reusing",
+              "it as a pending-outcome counter preserves the deployed AgentRegistration",
+              "layout while making deregistration wait for every initiator liability (or",
+              "no-fault outcome) to be finalized. The historical field name is retained",
+              "deliberately so account layouts and generated decoders remain compatible."
             ],
             "type": "u8"
           },
           {
             "name": "lastVoteTimestamp",
             "docs": [
-              "DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore."
+              "Governance registration-stake lock anchor. Governance voting stores the",
+              "proposal voting deadline here; deregistration then enforces its 24-hour",
+              "post-vote cooldown after that deadline. Legacy dispute-vote timestamps",
+              "remain valid conservative anchors. The field is retained in place so the",
+              "AgentRegistration layout does not change."
             ],
             "type": "i64"
           },
@@ -20024,7 +20249,7 @@ export type AgencCoordination = {
         "`AgentRegistration` only tracks success-side stats (`tasks_completed`,",
         "`total_earned`) and has just FOUR reserved bytes, so the negative counters",
         "(rejections, dispute outcomes, expirations, cancellations) do NOT fit there.",
-        "Rather than a size-extending migration of every live mainnet agent account,",
+        "Rather than a size-extending migration of every existing agent account,",
         "these live in a SEPARATE aggregate PDA `[\"agent_stats\", agent]` that is created",
         "lazily on first write (`init_if_needed`), keyed on the agent's",
         "`AgentRegistration` PDA. No `AgentRegistration` layout change / migration is",
@@ -20941,86 +21166,6 @@ export type AgencCoordination = {
       }
     },
     {
-      "name": "bindingSpend",
-      "docs": [
-        "Binding spend account to prevent statement replay for the same",
-        "task/authority/commitment context.",
-        "PDA seeds: [\"binding_spend\", binding]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "binding",
-            "docs": [
-              "Binding value committed in the private journal."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "task",
-            "docs": [
-              "The task where this binding was first used"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "agent",
-            "docs": [
-              "The agent who spent this binding"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "spentAt",
-            "docs": [
-              "Timestamp when binding was spent"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "bump",
-            "docs": [
-              "Bump seed for PDA"
-            ],
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
-      "name": "bondDeposited",
-      "docs": [
-        "Emitted when bond is deposited to speculation bond account"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "agent",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "type": "u64"
-          },
-          {
-            "name": "newTotal",
-            "type": "u64"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
       "name": "bondForfeited",
       "docs": [
         "Emitted when a completion bond's principal is forfeited (to the creator or treasury)."
@@ -21047,33 +21192,6 @@ export type AgencCoordination = {
           {
             "name": "recipient",
             "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "bondLocked",
-      "docs": [
-        "Emitted when bond is locked for a commitment"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "agent",
-            "type": "pubkey"
-          },
-          {
-            "name": "commitment",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "type": "u64"
           },
           {
             "name": "timestamp",
@@ -21136,64 +21254,6 @@ export type AgencCoordination = {
           {
             "name": "amount",
             "type": "u64"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "bondReleased",
-      "docs": [
-        "Emitted when bond is released back to agent after successful proof"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "agent",
-            "type": "pubkey"
-          },
-          {
-            "name": "commitment",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "type": "u64"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "bondSlashed",
-      "docs": [
-        "Emitted when an agent's bond is slashed due to failed speculation"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "agent",
-            "type": "pubkey"
-          },
-          {
-            "name": "commitment",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "type": "u64"
-          },
-          {
-            "name": "reason",
-            "type": "u8"
           },
           {
             "name": "timestamp",
@@ -21693,24 +21753,27 @@ export type AgencCoordination = {
           {
             "name": "totalVoters",
             "docs": [
-              "DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no",
-              "voter is ever recorded. Retained (not shrunk) to keep the account layout stable."
+              "DEPRECATED (P6.3): the arbiter vote/quorum model is retired. New disputes",
+              "store `Dispute::INITIATOR_OUTCOME_COUNTER_MARKER` here to prove that their",
+              "initiator's AgentRegistration pending-outcome counter was incremented.",
+              "Historical disputes retain zero. No value represents an actual voter count.",
+              "The field is retained (not shrunk) to keep the account layout stable."
             ],
             "type": "u8"
           },
           {
             "name": "votingDeadline",
             "docs": [
-              "DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides",
-              "directly with no voting-period wait. Still stamped at initiation for back-compat.",
-              "voting_deadline = created_at + voting_period"
+              "Legacy voting deadline, now reused as the first liveness deadline: an",
+              "assigned resolver may rule immediately, but permissionless expiry opens",
+              "after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`."
             ],
             "type": "i64"
           },
           {
             "name": "expiresAt",
             "docs": [
-              "Dispute expiration - after this, can call expire_dispute",
+              "Hard dispute expiration; after this, only expire_dispute may unwind it.",
               "expires_at = created_at + max_dispute_duration",
               "Note: expires_at >= voting_deadline, allowing resolution after voting ends"
             ],
@@ -21726,7 +21789,8 @@ export type AgencCoordination = {
           {
             "name": "initiatorSlashApplied",
             "docs": [
-              "Whether initiator slashing has been applied (for rejected disputes)"
+              "Whether the initiator outcome finalizer has run. Rejected/cancelled",
+              "outcomes apply a penalty; approved/expired outcomes are bookkeeping-only."
             ],
             "type": "bool"
           },
@@ -21770,12 +21834,12 @@ export type AgencCoordination = {
               "zero/empty on a dispute that has not been resolved through `resolve_dispute`",
               "(e.g. an expired dispute), which is a valid \"no ruling recorded\" state.",
               "",
-              "LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,",
-              "but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary",
-              "surface (the 25-instruction allowlist contains no dispute instructions), so",
-              "ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface",
-              "this is treated as append-only (any pre-existing dispute prefix stays valid;",
-              "the new fields read back as zero/empty). See `test_dispute_size_p64_append`."
+              "LAYOUT NOTE: these fields were appended while mainnet still ran the",
+              "25-instruction canary (which exposed no dispute instructions), before the",
+              "full surface created mainnet Dispute accounts. The append remains pinned for",
+              "any historical devnet/full-surface prefix; deployment preflight inventories",
+              "every live account size and blocks an active legacy layout. See",
+              "`test_dispute_size_p64_append`."
             ],
             "type": {
               "array": [
@@ -22807,7 +22871,8 @@ export type AgencCoordination = {
           {
             "name": "quorumBps",
             "docs": [
-              "Quorum in basis points of total agents' stake"
+              "Quorum in basis points of the bounded two-voter vote-weight capacity.",
+              "New proposals also enforce `2 * min_proposal_stake` as an absolute floor."
             ],
             "type": "u16"
           },
@@ -23138,24 +23203,19 @@ export type AgencCoordination = {
             "type": "u8"
           },
           {
-            "name": "reserved",
+            "name": "designatedProvider",
             "docs": [
-              "Reserved for future hire metadata."
+              "The provider agent designated by the listing at hire time. Only this",
+              "registration may claim the resulting one-shot task. This carves the",
+              "original 32-byte reserved region without changing the account layout."
             ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
+            "type": "pubkey"
           },
           {
             "name": "referrer",
             "docs": [
-              "Referrer (embedder) payee snapshot for the §4 4-way split",
-              "(`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have",
-              "NO live mainnet accounts (`hire_from_listing` is full-module only), so this is",
-              "a fresh-init size bump — no realloc migration needed for HireRecord."
+              "Referrer (embedder) payee snapshot for the four-way split",
+              "(`Pubkey::default()` = none)."
             ],
             "type": "pubkey"
           },
@@ -23988,58 +24048,6 @@ export type AgencCoordination = {
       }
     },
     {
-      "name": "nullifierSpend",
-      "docs": [
-        "Nullifier spend account to prevent global proof/knowledge replay.",
-        "PDA seeds: [\"nullifier_spend\", nullifier]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "nullifier",
-            "docs": [
-              "Nullifier value committed in the private journal."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "task",
-            "docs": [
-              "The task where this nullifier was first used"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "agent",
-            "docs": [
-              "The agent who spent this nullifier"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "spentAt",
-            "docs": [
-              "Timestamp when nullifier was spent"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "bump",
-            "docs": [
-              "Bump seed for PDA"
-            ],
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
       "name": "operatorFeePaid",
       "docs": [
         "Emitted when an operator (embedding-site) fee leg is paid out of a settlement",
@@ -24068,6 +24076,46 @@ export type AgencCoordination = {
           {
             "name": "operatorFeeBps",
             "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "orphanTaskChildReclaimed",
+      "docs": [
+        "Emitted when the recovery rail returns rent from a historical auxiliary",
+        "child whose parent Task was destroyed by an older close_task implementation."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "child",
+            "type": "pubkey"
+          },
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "cranker",
+            "type": "pubkey"
+          },
+          {
+            "name": "childKind",
+            "type": "u8"
+          },
+          {
+            "name": "reclaimedLamports",
+            "type": "u64"
           },
           {
             "name": "timestamp",
@@ -24146,49 +24194,6 @@ export type AgencCoordination = {
           {
             "name": "timestamp",
             "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "privateCompletionPayload",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "sealBytes",
-            "type": "bytes"
-          },
-          {
-            "name": "journal",
-            "type": "bytes"
-          },
-          {
-            "name": "imageId",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "bindingSeed",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "nullifierSeed",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
           }
         ]
       }
@@ -24540,7 +24545,9 @@ export type AgencCoordination = {
           {
             "name": "disputeThreshold",
             "docs": [
-              "Minimum votes needed to resolve dispute (percentage, 1-100)"
+              "Approval-percentage threshold used to interpret persisted dispute outcomes.",
+              "Current resolver rulings encode approved/rejected as 100%/0%; historical",
+              "disputes may contain vote totals from the retired arbiter model."
             ],
             "type": "u8"
           },
@@ -24554,7 +24561,8 @@ export type AgencCoordination = {
           {
             "name": "minArbiterStake",
             "docs": [
-              "Minimum stake required to register as arbiter"
+              "Governance vote-weight basis retained under its historical field name.",
+              "Agent registration uses `min_agent_stake`."
             ],
             "type": "u64"
           },
@@ -24596,14 +24604,15 @@ export type AgencCoordination = {
           {
             "name": "completedTasks",
             "docs": [
-              "Total tasks completed"
+              "Total tasks completed (saturating telemetry)"
             ],
             "type": "u64"
           },
           {
             "name": "totalValueDistributed",
             "docs": [
-              "Total value distributed"
+              "Total SOL value distributed, in lamports (excludes SPL-token base units;",
+              "saturating telemetry)"
             ],
             "type": "u64"
           },
@@ -24680,7 +24689,8 @@ export type AgencCoordination = {
           {
             "name": "votingPeriod",
             "docs": [
-              "Voting period for disputes in seconds (default: 24 hours)"
+              "Initial resolver-action window for disputes in seconds (default: 24 hours).",
+              "No dispute voting occurs on the current assigned-resolver path."
             ],
             "type": "i64"
           },
@@ -24738,8 +24748,8 @@ export type AgencCoordination = {
               "Deployed instruction-surface revision stamp.",
               "",
               "APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte",
-              "pre-P6.5 prefix (the live mainnet config account) stays valid. The live",
-              "account is migrated up to the new size by `migrate_protocol` (realloc +",
+              "historical pre-P6.5 prefix stays valid. A legacy account is migrated up to",
+              "the new size by `migrate_protocol` (realloc +",
               "zero-init), which lands this at `0` = \"surface not yet stamped\". An operator",
               "then sets the real revision via `update_launch_controls` (the existing",
               "multisig-gated config-update authority path).",
@@ -24920,7 +24930,9 @@ export type AgencCoordination = {
           {
             "name": "reserved",
             "docs": [
-              "Reserved for future use"
+              "Purchase metadata carved from the existing reserved tail:",
+              "`_reserved[0]` snapshots the purchased `SkillRegistration::version`;",
+              "bytes `[1..4]` remain reserved and must stay zero."
             ],
             "type": {
               "array": [
@@ -25139,37 +25151,6 @@ export type AgencCoordination = {
       }
     },
     {
-      "name": "reputationDelegated",
-      "docs": [
-        "Emitted when an agent delegates reputation to a peer"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "delegator",
-            "type": "pubkey"
-          },
-          {
-            "name": "delegatee",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "type": "u16"
-          },
-          {
-            "name": "expiresAt",
-            "type": "i64"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
       "name": "reputationDelegation",
       "docs": [
         "Reputation delegation — agent delegates reputation points to a trusted peer.",
@@ -25232,6 +25213,52 @@ export type AgencCoordination = {
                 8
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "reputationDelegationRetired",
+      "docs": [
+        "Emitted when revision 5 permanently retires a legacy delegation. Reputation",
+        "is never restored because doing so after a slash would recreate the retired",
+        "shelter primitive. Rent goes to the recorded authority only for an",
+        "identity-continuous registration; otherwise it goes to the canonical treasury."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "delegation",
+            "type": "pubkey"
+          },
+          {
+            "name": "delegator",
+            "type": "pubkey"
+          },
+          {
+            "name": "delegatee",
+            "type": "pubkey"
+          },
+          {
+            "name": "discardedReputation",
+            "type": "u16"
+          },
+          {
+            "name": "recoveredRent",
+            "type": "u64"
+          },
+          {
+            "name": "rentRecipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "identityContinuous",
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -25976,6 +26003,19 @@ export type AgencCoordination = {
             "type": "pubkey"
           },
           {
+            "name": "contentHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "contentVersion",
+            "type": "u8"
+          },
+          {
             "name": "pricePaid",
             "type": "u64"
           },
@@ -26361,43 +26401,6 @@ export type AgencCoordination = {
       }
     },
     {
-      "name": "speculativeCommitmentCreated",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "task",
-            "type": "pubkey"
-          },
-          {
-            "name": "producer",
-            "type": "pubkey"
-          },
-          {
-            "name": "resultHash",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "bondedStake",
-            "type": "u64"
-          },
-          {
-            "name": "expiresAt",
-            "type": "i64"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
       "name": "stateUpdated",
       "docs": [
         "Emitted when coordination state is updated"
@@ -26445,7 +26448,7 @@ export type AgencCoordination = {
         "wallet is the identity; `handle` is DISPLAY-ONLY and not unique on-chain",
         "(uniqueness is a surface concern — see `docs/P5_2_STORE_IDENTITY_SPEC.md` §6).",
         "Fee fields are advertised DEFAULTS, not enforcement: listings and hires keep",
-        "snapshotting terms exactly as today (`ServiceListing` / `HireRecord`); NO money",
+        "snapshotting terms in `ServiceListing` / `HireRecord`; NO money",
         "path reads this account in v1 (spec §8 Q6, ratified).",
         "",
         "PDA seeds: [\"store\", owner]"
@@ -26968,7 +26971,9 @@ export type AgencCoordination = {
               "see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).",
               "* `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with",
               "status `Submitted`; maintained ONLY for schema-1 tasks).",
-              "Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields)."
+              "* `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker",
+              "slash, 1 = the defendant claim is reserved for apply_dispute_slash).",
+              "Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields)."
             ],
             "type": {
               "array": [
@@ -26983,8 +26988,8 @@ export type AgencCoordination = {
               "Referrer (embedder who brought the buyer) payee for the §4 4-way split.",
               "`Pubkey::default()` means no referrer leg (the common case). Snapshotted from",
               "the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields",
-              "exceed the 16B `_reserved`, so this is a size-extending migration of the 149",
-              "live tasks (see `migrate_task`)."
+              "exceed the 16B `_reserved`, so this is a size-extending migration for",
+              "historical task layouts (see `migrate_task`)."
             ],
             "type": "pubkey"
           },
@@ -27151,6 +27156,14 @@ export type AgencCoordination = {
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "acceptedNoShowSlashBps",
+            "docs": [
+              "Immutable no-show penalty agreed when the bidder funded this bid.",
+              "Appended so all pre-existing field offsets remain stable."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -27241,6 +27254,9 @@ export type AgencCoordination = {
           },
           {
             "name": "accepted"
+          },
+          {
+            "name": "boundActive"
           }
         ]
       }
@@ -28779,114 +28795,6 @@ export type AgencCoordination = {
           {
             "name": "reliabilityWeightBps",
             "type": "u16"
-          }
-        ]
-      }
-    },
-    {
-      "name": "zkConfig",
-      "docs": [
-        "ZK verifier configuration account",
-        "PDA seeds: [\"zk_config\"]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "activeImageId",
-            "docs": [
-              "Active trusted RISC Zero guest image ID."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "bump",
-            "docs": [
-              "Bump seed for PDA."
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "reserved",
-            "docs": [
-              "Reserved for future ZK config extensions."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                31
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "zkConfigInitialized",
-      "docs": [
-        "Emitted when the trusted ZK image ID config is initialized."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "imageId",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "authority",
-            "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "zkImageIdUpdated",
-      "docs": [
-        "Emitted when the trusted ZK image ID is rotated."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "oldImageId",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "newImageId",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "updatedBy",
-            "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
           }
         ]
       }

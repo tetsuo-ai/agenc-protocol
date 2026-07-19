@@ -27,12 +27,13 @@ The protocol covers that lifecycle plus advanced primitives:
 - **Task lifecycle** — create / activate (`set_task_job_spec`) / claim
   (`claim_task_with_job_spec`) / submit / accept / reject / request changes /
   cancel / `close_task` / `expire_claim`, plus dependent tasks.
-- **Completion modes (three):**
+- **Completion modes:**
   - **auto-settled** public completion via `complete_task`
   - **reviewed** public completion via Task Validation V2 (CreatorReview / ValidatorQuorum /
     ExternalAttestation) — see [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)
-  - **private** zk-backed completion via `complete_task_private` — see
-    [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) (deferred until the prover path is ready)
+  - **private development-only** zk-backed completion via `complete_task_private` — see
+    [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md). This exists only in the
+    explicit `private-zk` build and is excluded from the production release.
 - **4-way fee split** — worker / protocol (treasury) / operator / referrer, sourced via
   `Task` and `HireRecord`, with a worker floor and per-leg/combined bps caps; dispute and
   freeze-exit payouts preserve the same legs.
@@ -49,19 +50,22 @@ The protocol covers that lifecycle plus advanced primitives:
   (fail-closed); permissionless bonded attestor roster (P1.2) — see
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Store identity, contest tasks, goods market, bid marketplace, reputation, skills,
-  governance (multisig), and a social feed** round out the surface (**99 instructions**
-  in the full module / committed IDL; canary build remains 25).
+  governance (multisig), and a social feed** round out the surface. The current
+  default production candidate and committed IDL contain **97 instructions**;
+  the restricted canary remains 25 and explicit private-ZK development is 100.
 
-> **Two program surfaces.** `lib.rs` has two `#[program]` modules: the full/dev module
-> (everything, **live on mainnet** at `surface_revision = 4`) and the conservative
-> **mainnet-canary** module (the restricted 25-instruction build, retained in source but
-> no longer what is live). New feature work is gated to the full module; `migrate_task` is
-> in both.
+> **Build surfaces.** `lib.rs` has a default production module (97 instructions in
+> this revision-5 candidate) and a conservative **mainnet-canary** module (the
+> frozen 25-instruction build). Enabling `private-zk` adds three quarantined
+> development instructions to production, yielding 100; deployment rails reject
+> that feature for a production release. Mainnet still runs the prior 99-instruction
+> revision-4 binary until a separately reviewed and approved upgrade occurs.
 
 ## Mainnet source of truth
 
-`main` is the canonical public source-of-truth branch for the currently **deployed** AgenC
-mainnet program. Authoritative deploy record:
+`main` is the canonical public development/source branch, but it can be ahead of the
+currently deployed AgenC mainnet program. The authoritative deployed commit and rollout
+record are maintained in:
 [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md).
 
 > **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
@@ -71,7 +75,9 @@ mainnet program. Authoritative deploy record:
 > (2026-06-11) → 90-ix P1.2 open roster (2026-07-03) → 94/96/99 via additive batches 2–4.
 > Any `Task` / `ProtocolConfig` layout change remains a real, irreversible migration.
 
-- The current `main` tree matches the deployed mainnet (full-surface) program source.
+- The deployed mainnet binary is still revision 4. This working tree is the pending
+  revision-5 hardening candidate and intentionally does **not** claim byte-for-byte
+  equality with the live program before an approved upgrade.
 - See [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md),
   [docs/MAINNET_ROLLOUT_RUNBOOK.md](docs/MAINNET_ROLLOUT_RUNBOOK.md) (the completed rollout
   record), and [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md).
@@ -115,8 +121,8 @@ surface.
 
 | Package | Path | Version | What |
 |---------|------|---------|------|
-| `@tetsuo-ai/protocol` | `packages/protocol` | 0.3.0 | Committed canonical IDL + TS types + manifest. Derived from `artifacts/anchor/*`. |
-| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | 0.11.0 | Codama-generated `@solana/kit` client for all **99** instructions + ergonomic facade. Facade intentionally omits only `claim_task` (fail-closed) and `complete_task_private` (ZK gated). See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/protocol` | `packages/protocol` | 0.3.0 (workspace; release bump pending) | Committed 97-instruction candidate IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 still contains live revision 4 and must not be overwritten. |
+| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | 0.11.0 (workspace; release bump pending) | Codama-generated `@solana/kit` client for the **97-instruction revision-5 candidate** + ergonomic facade. The published 0.11.0 release still targets live revision 4; program and SDK must ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
 | `@tetsuo-ai/marketplace-react` | `packages/marketplace-react` | 0.4.1 | React hooks/components for embeddable marketplace UIs. |
 | `@tetsuo-ai/marketplace-tools` | `packages/marketplace-tools` | 0.4.0 | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
 | `@tetsuo-ai/marketplace-mcp` | `packages/marketplace-mcp` | 0.4.0 | MCP server exposing marketplace tools. |
@@ -154,9 +160,14 @@ npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/prot
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
 ```
 
-**Test coverage (runner totals as of 2026-07-18):** **414** Rust unit tests
-(`cargo test --lib`) · **296** litesvm integration tests · **520** SDK tests. Audit status:
-the batch 1–3 internal audits closed with 0 open findings
+**Test coverage (runner totals as of 2026-07-18):** Rust **521** production /
+**521** `validation-timings` / **546** private-ZK / **319** canary; **76**
+model/property tests; **388** compiled-program integrations (387 pass, one
+canary-only conditional skip), plus the separate canary compiled test at **1/1**;
+SDK **545 pass + one skip**; all npm workspaces
+**1,012 pass + one skip**; deployment/preflight **185 pass**. Exact commands and
+artifact hashes are in [docs/VALIDATION.md](docs/VALIDATION.md). Audit status:
+the batch 1–3 internal audits closed with 0 open findings **at that time**
 ([docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)); the 2026-07-16/17 adversarial
 audit (three passes, branch `fix/audit-findings-2026-07-16`) landed all blocker fixes,
 and its full hardening queue is now **complete** — all 19 findings (F-1–F-19)
@@ -189,14 +200,23 @@ these) rather than assuming `target/` or runtime-vendored copies are canonical. 
 Before any mainnet deploy that changes the deployed surface or account layout:
 
 1. **§11.5 human go/no-go.**
-2. **Adversarial security review** of the changed surface (the standing gate —
-   a deliberate decision replaced an external audit; see
-   [docs/WP-A1-DEPLOY-READINESS.md](docs/WP-A1-DEPLOY-READINESS.md) for the
-   executed pattern).
-3. **The irreversible task-layout migration choreography** — binary-first → migrate all
+2. **Professional external security audit** of the changed surface. Internal
+   adversarial reviews and green gates are evidence, not proof that no unknown
+   vulnerability remains. A deliberate decision used the internal pattern for a
+   prior rollout; see
+   [docs/WP-A1-DEPLOY-READINESS.md](docs/WP-A1-DEPLOY-READINESS.md).
+3. **Working private vulnerability intake.** GitHub Private Vulnerability
+   Reporting is currently disabled and the documented security mailbox is not
+   confirmed active. Enable and test at least one private channel, then activate
+   `.well-known/security.txt`; do not ship a false contact record.
+4. **ProgramData capacity ceremony.** The current candidate is 73,880 bytes too
+   large for the live allocation. Before upgrade, execute a separately reviewed
+   Squads-CPI `ExtendProgramChecked`, wait for a later slot, and rerun the full
+   capacity/rent/authority preflight. Never let deploy auto-extend.
+5. **The irreversible task-layout migration choreography** — binary-first → migrate all
    live tasks → version-bump last; multisig/upgrade-authority gated. (The 2026-06-11
    upgrade migrated 169 tasks.)
-4. **SDK/client updates** for any new required accounts.
+6. **SDK/client updates** for any new required accounts.
 
 ## Security & trust
 
@@ -206,8 +226,9 @@ artifacts (PLAN.md Phase 8):
 - **Verifiable builds** — the deployed program is **OtterSec-verified against
   this public repo**:
   [verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK)
-  reports `is_verified: true` at the deployed commit (since 2026-07-03). Every
-  `protocol-v*` release also records a reproducible SHA-256 of the program
+  reports `is_verified: true` for deployed revision 4 at commit `097ded1`
+  (verified 2026-07-10). Every `protocol-v*` release requires a successful
+  reusable verifiable build and records reproducible SHA-256 hashes of the program
   built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
   yourself with `solana-verify verify-from-repo` — see
   [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md).

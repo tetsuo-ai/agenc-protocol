@@ -32,6 +32,11 @@ pub fn handler(ctx: Context<SuspendAgent>) -> Result<()> {
     let agent = &mut ctx.accounts.agent;
 
     require!(
+        !agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
+
+    require!(
         agent.status != AgentStatus::Suspended,
         CoordinationError::AgentSuspended
     );

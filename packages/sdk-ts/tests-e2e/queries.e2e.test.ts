@@ -14,8 +14,10 @@ import {
   findEscrowPda,
   findListingPda,
   findTaskJobSpecPda,
+  findModerationBlockPda,
   getBidMarketplaceConfigEncoder,
   getTaskDecoder,
+  getTaskJobSpecDecoder,
   getTaskClaimSize,
   ListingState,
   TaskStatus,
@@ -38,6 +40,10 @@ import {
   PROGRAM,
 } from "./harness.js";
 import { GpaSimulator } from "./gpa-sim.js";
+
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
 
 // REAL on-chain world for the query layer: listings (2 providers, 2 categories,
 // one paused), tasks (2 creators, one claimed so its status differs), bids on two
@@ -191,6 +197,7 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
     await send(svm, providerA, [
       await facade.setServiceListingState({
         listing: L2,
+        providerAgent: agentA,
         authority: providerA,
         state: "Paused",
       }),
@@ -232,35 +239,49 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
     T4 = await mkTask(creator1, agentC1, new Uint8Array(32).fill(14), 1n, REWARD, 3); // BidExclusive
     T5 = await mkTask(creator2, agentC2, new Uint8Array(32).fill(15), 1n, REWARD, 3); // BidExclusive
 
-    // T3: moderate -> publish job spec -> agentA claims => InProgress.
+    // Assignment and bid entry both pin a creator-published, moderated spec.
     const t3JobHash = new Uint8Array(32).fill(13);
-    await send(svm, moderator, [
-      await facade.recordTaskModeration({
-        moderator,
-        task: T3,
-        jobSpecHash: t3JobHash,
-        status: 0, // CLEAN
-        riskScore: 0,
-        categoryMask: 0n,
-        policyHash: new Uint8Array(32).fill(1),
-        scannerHash: new Uint8Array(32).fill(2),
-        expiresAt: 0n,
-      }),
-    ]);
-    await send(svm, creator2, [
-      await facade.setTaskJobSpec({
-        creator: creator2,
-        task: T3,
-        jobSpecHash: t3JobHash,
-        jobSpecUri: "agenc://job-spec/sha256/queries-t3",
-        moderator: moderator.address,
-      }),
-    ]);
+    const t4JobHash = new Uint8Array(32).fill(14);
+    const t5JobHash = new Uint8Array(32).fill(15);
+    const publishTaskSpec = async (
+      task: Address,
+      creator: KeyPairSigner,
+      jobSpecHash: Uint8Array,
+      tag: string,
+    ) => {
+      await send(svm, moderator, [
+        await facade.recordTaskModeration({
+          moderator,
+          task,
+          jobSpecHash,
+          status: 0,
+          riskScore: 0,
+          categoryMask: 0n,
+          policyHash: new Uint8Array(32).fill(1),
+          scannerHash: new Uint8Array(32).fill(2),
+          expiresAt: 0n,
+        }),
+      ]);
+      await send(svm, creator, [
+        await facade.setTaskJobSpec({
+          creator,
+          task,
+          jobSpecHash,
+          jobSpecUri: `agenc://job-spec/sha256/${tag}`,
+          moderator: moderator.address,
+        }),
+      ]);
+    };
+    await publishTaskSpec(T3, creator2, t3JobHash, "queries-t3");
+    await publishTaskSpec(T4, creator1, t4JobHash, "queries-t4");
+    await publishTaskSpec(T5, creator2, t5JobHash, "queries-t5");
     await send(svm, providerA, [
       await facade.claimTaskWithJobSpec({
         authority: providerA,
         worker: agentA,
         task: T3,
+        moderationBlock: await moderationBlockFor(t3JobHash),
+        jobSpecHash: t3JobHash,
       }),
     ]);
     [C3] = await findClaimPda({ task: T3, bidder: agentA });
@@ -291,17 +312,22 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
       bidder: Address,
       task: Address,
     ): Promise<Address> => {
+      const expectedJobSpecHash = task === T4 ? t4JobHash : t5JobHash;
+      const [taskJobSpec] = await findTaskJobSpecPda({ task });
+      const spec = getTaskJobSpecDecoder().decode(accountData(svm, taskJobSpec)!);
       await send(svm, signer, [
         await facade.createBid({
           task,
           bidder,
           authority: signer,
           requestedRewardLamports: REWARD,
-          etaSeconds: 3600,
+          etaSeconds: 900,
           confidenceBps: 5000,
           qualityGuaranteeHash: new Uint8Array(32).fill(4),
           metadataHash: new Uint8Array(32).fill(5),
           expiresAt: now + 1800n,
+          expectedJobSpecHash,
+          expectedJobSpecUpdatedAt: spec.updatedAt,
         }),
       ]);
       const [bid] = await findBidPda({ task, bidder });
@@ -329,6 +355,7 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
     await send(svm, creator1, [
       await facade.hireFromListing({
         listing: L1,
+        providerAgent: agentA,
         creatorAgent: agentC1,
         authority: creator1,
         creator: creator1,

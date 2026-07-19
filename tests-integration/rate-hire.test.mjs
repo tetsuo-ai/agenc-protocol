@@ -63,7 +63,8 @@ async function hireToCompleted(w) {
   expectOk(send(w.svm, await w.buyerProg.methods
     .hireFromListing(arr(taskId), new BN(w.price), new BN(1), null, 0, w.modAuth.publicKey)
     .accounts({
-      task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
+      task, escrow, hireRecord, listing: w.listing, providerAgent: w.providerAgent,
+      protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration: listingMod, moderationAttestor: null,
       moderationBlock: moderationBlockPda(w.specHash)[0],
       creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey,
@@ -89,7 +90,10 @@ async function hireToCompleted(w) {
 
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "rate-hire:claim");
 
   // Return BEFORE completion when the caller wants to test the non-terminal guard.

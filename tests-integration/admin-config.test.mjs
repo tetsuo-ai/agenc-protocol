@@ -1,15 +1,15 @@
 // litesvm integration tests for the protocol admin / config instructions of
 // agenc-coordination. Covers the multisig-gated protocol-config mutators
 // (update_protocol_fee, update_treasury, update_rate_limits, update_multisig,
-// update_min_version), the per-agent update_state, and the ZK-config lifecycle
-// (initialize_zk_config + update_zk_image_id).
+// update_min_version), the per-agent update_state, and the release-disabled
+// ZK-config activation/rotation instructions.
 //
 // Mirrors the style of marketplace.test.mjs and reuses the shared harness.
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
   freshWorld, makeProgram, send, expectOk, expectFail, decode,
-  pda, enc, arr, id32, setMultisig,
+  pda, enc, arr, id32, setMultisig, setMinAgentStake,
   BN, Keypair, PublicKey, SystemProgram,
   coder, PID,
 } from "./harness.mjs";
@@ -146,6 +146,10 @@ test("update_rate_limits: 2-of-2 multisig sets new limits; below-minimum cooldow
   const w = await freshWorld();
   const { signerMetas, signers } = twoOfTwoMultisig(w);
   await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
+  // The dispute floor is now registration-relative as well as absolutely
+  // bounded. Give this config a coherent registration floor so the test reaches
+  // the cooldown guard it is intended to exercise.
+  await setMinAgentStake(w.svm, 5_000);
 
   const limitsIx = (args, metas) => makeProgram(w.admin).methods
     .updateRateLimits(
@@ -162,7 +166,7 @@ test("update_rate_limits: 2-of-2 multisig sets new limits; below-minimum cooldow
   // NEGATIVE: task_creation_cooldown = 0 trips the >= 1 minimum guard.
   expectFail(
     send(w.svm, await limitsIx(
-      { taskCooldown: 0, maxTasks: 10, disputeCooldown: 60, maxDisputes: 5, minDisputeStake: 1000 },
+      { taskCooldown: 0, maxTasks: 10, disputeCooldown: 60, maxDisputes: 5, minDisputeStake: 5000 },
       signerMetas,
     ), signers),
     "RateLimitBelowMinimum",
@@ -360,103 +364,10 @@ test("update_state: agent authority writes namespaced state; wrong authority rej
   assert.ok(st.owner.equals(w.provider.publicKey), "owner set to authority");
 });
 
-// ---------------------------------------------------------------------------
-// initialize_zk_config (has_one = authority on protocol_config)
-// ---------------------------------------------------------------------------
-
-test("initialize_zk_config: multisig inits the trusted image; non-authority and single signer rejected", async () => {
+test("production release excludes every private-ZK entrypoint", async () => {
   const w = await freshWorld();
-  const { signerMetas, signers } = twoOfTwoMultisig(w);
-  await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
-  const [zkPda] = pda([enc("zk_config")]);
-  const imageId = id32(); // non-zero
-
-  const initIx = (signerKp, metas = []) => makeProgram(signerKp).methods
-    .initializeZkConfig(arr(imageId))
-    .accounts({
-      protocolConfig: w.protocolPda,
-      zkConfig: zkPda,
-      authority: signerKp.publicKey,
-      systemProgram: SystemProgram.programId,
-    })
-    .remainingAccounts(metas)
-    .instruction();
-
-  // NEGATIVE: a non-authority signer cannot init (has_one = authority on
-  // protocol_config -> UnauthorizedProtocolAuthority).
-  expectFail(
-    send(w.svm, await initIx(w.buyer), [w.buyer]),
-    "UnauthorizedProtocolAuthority",
-    "initialize_zk_config non-authority rejected",
-  );
-
-  // NEGATIVE (revert-sensitive, audit H-5): the protocol authority ALONE cannot init the
-  // ZK root of trust — the one-shot init is multisig-gated exactly like the rotation
-  // (update_zk_image_id). Drop require_multisig_threshold from initialize_zk_config and
-  // this single-signer init stops failing.
-  w.svm.expireBlockhash();
-  expectFail(
-    send(w.svm, await initIx(w.admin, [signerMetas[0]]), [w.admin]),
-    "MultisigNotEnoughSigners",
-    "initialize_zk_config single signer rejected",
-  );
-
-  // POSITIVE: the full M-of-N multisig initializes the ZK config.
-  w.svm.expireBlockhash();
-  expectOk(send(w.svm, await initIx(w.admin, signerMetas), signers), "initialize_zk_config ok");
-  const zk = decode(w.svm, "ZkConfig", zkPda);
-  assert.ok(Buffer.from(zk.active_image_id).equals(imageId), "active_image_id stored");
-});
-
-// ---------------------------------------------------------------------------
-// update_zk_image_id (M-of-N multisig gated — audit: the active ZK image ID is the
-// money-critical root of trust for complete_task_private escrow settlement, so it must
-// not be rotatable by a single authority key, matching update_treasury / fee controls)
-// ---------------------------------------------------------------------------
-
-test("update_zk_image_id: 2-of-2 multisig rotates the image; single signer rejected", async () => {
-  const w = await freshWorld();
-  const { signerMetas, signers } = twoOfTwoMultisig(w);
-  await setMultisig(w.svm, [signerMetas[0].pubkey, signerMetas[1].pubkey], 2);
-  const [zkPda] = pda([enc("zk_config")]);
-  const firstImage = id32();
-  const secondImage = id32();
-
-  // Init the ZK config first (audit H-5: initialize_zk_config is now multisig-gated too,
-  // so it takes the same co-signers in remaining_accounts as the rotation below).
-  expectOk(
-    send(w.svm, await makeProgram(w.admin).methods
-      .initializeZkConfig(arr(firstImage))
-      .accounts({
-        protocolConfig: w.protocolPda, zkConfig: zkPda,
-        authority: w.admin.publicKey, systemProgram: SystemProgram.programId,
-      })
-      .remainingAccounts(signerMetas)
-      .instruction(), signers),
-    "init zk config for rotation",
-  );
-
-  const rotateIx = (metas, image) => makeProgram(w.admin).methods
-    .updateZkImageId(arr(image))
-    .accounts({
-      protocolConfig: w.protocolPda, zkConfig: zkPda, authority: w.admin.publicKey,
-    })
-    .remainingAccounts(metas)
-    .instruction();
-
-  // NEGATIVE (revert-sensitive): a single signer cannot pass the 2-of-2 gate. Before the
-  // audit fix this used has_one/single-key auth and one signer succeeded; drop the
-  // require_multisig_threshold call and this stops failing.
-  expectFail(
-    send(w.svm, await rotateIx([signerMetas[0]], secondImage), [w.admin]),
-    "MultisigNotEnoughSigners",
-    "update_zk_image_id single signer rejected",
-  );
-
-  // POSITIVE: the full M-of-N multisig rotates to a new image id.
-  w.svm.expireBlockhash();
-  expectOk(send(w.svm, await rotateIx(signerMetas, secondImage), signers), "update_zk_image_id ok");
-  const zk = decode(w.svm, "ZkConfig", zkPda);
-  assert.ok(Buffer.from(zk.active_image_id).equals(secondImage), "active_image_id rotated");
-  assert.ok(!Buffer.from(zk.active_image_id).equals(firstImage), "image actually changed");
+  const methods = makeProgram(w.admin).methods;
+  assert.equal(methods.initializeZkConfig, undefined, "ZK trust-root initialization is absent");
+  assert.equal(methods.updateZkImageId, undefined, "ZK trust-root rotation is absent");
+  assert.equal(methods.completeTaskPrivate, undefined, "private settlement is absent");
 });

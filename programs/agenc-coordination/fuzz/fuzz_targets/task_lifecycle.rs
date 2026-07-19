@@ -49,17 +49,16 @@ proptest! {
 
         let config = SimulatedConfig {
             protocol_fee_bps: seq.protocol_fee_bps,
-            ..Default::default()
         };
 
         let mut dispute = SimulatedDispute {
             dispute_id: [0u8; 32],
             status: dispute_status::ACTIVE,
             resolution_type: 0,
-            votes_for: 0,
-            votes_against: 0,
-            total_voters: 0,
             voting_deadline: seq.current_timestamp.saturating_add(10),
+            expires_at: seq.current_timestamp.saturating_add(1_000),
+            initiator_authority: DISPUTE_INITIATOR,
+            ..Default::default()
         };
 
         for action in &seq.actions {

@@ -120,7 +120,7 @@ export type ValidateTaskResultInstruction<
         ? WritableAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
       TAccountValidatorAgent extends string
-        ? ReadonlyAccount<TAccountValidatorAgent>
+        ? WritableAccount<TAccountValidatorAgent>
         : TAccountValidatorAgent,
       TAccountTreasury extends string
         ? WritableAccount<TAccountTreasury>
@@ -233,7 +233,11 @@ export type ValidateTaskResultAsyncInput<
   taskValidationVote?: Address<TAccountTaskValidationVote>;
   worker: Address<TAccountWorker>;
   protocolConfig?: Address<TAccountProtocolConfig>;
-  /** Optional validator agent for validator-quorum mode, validated in handler. */
+  /**
+   * Optional validator agent for validator-quorum mode, validated in handler.
+   * Writable because a quorum vote must lock the registration stake against
+   * immediate identity recycling (see `last_vote_timestamp` in the handler).
+   */
   validatorAgent?: Address<TAccountValidatorAgent>;
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
@@ -351,7 +355,7 @@ export async function getValidateTaskResultInstructionAsync<
     },
     worker: { value: input.worker ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
-    validatorAgent: { value: input.validatorAgent ?? null, isWritable: false },
+    validatorAgent: { value: input.validatorAgent ?? null, isWritable: true },
     treasury: { value: input.treasury ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
@@ -568,7 +572,11 @@ export type ValidateTaskResultInput<
   taskValidationVote: Address<TAccountTaskValidationVote>;
   worker: Address<TAccountWorker>;
   protocolConfig: Address<TAccountProtocolConfig>;
-  /** Optional validator agent for validator-quorum mode, validated in handler. */
+  /**
+   * Optional validator agent for validator-quorum mode, validated in handler.
+   * Writable because a quorum vote must lock the registration stake against
+   * immediate identity recycling (see `last_vote_timestamp` in the handler).
+   */
   validatorAgent?: Address<TAccountValidatorAgent>;
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
@@ -684,7 +692,7 @@ export function getValidateTaskResultInstruction<
     },
     worker: { value: input.worker ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
-    validatorAgent: { value: input.validatorAgent ?? null, isWritable: false },
+    validatorAgent: { value: input.validatorAgent ?? null, isWritable: true },
     treasury: { value: input.treasury ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
@@ -800,7 +808,11 @@ export type ParsedValidateTaskResultInstruction<
     taskValidationVote: TAccountMetas[6];
     worker: TAccountMetas[7];
     protocolConfig: TAccountMetas[8];
-    /** Optional validator agent for validator-quorum mode, validated in handler. */
+    /**
+     * Optional validator agent for validator-quorum mode, validated in handler.
+     * Writable because a quorum vote must lock the registration stake against
+     * immediate identity recycling (see `last_vote_timestamp` in the handler).
+     */
     validatorAgent?: TAccountMetas[9] | undefined;
     treasury: TAccountMetas[10];
     creator: TAccountMetas[11];

@@ -226,7 +226,7 @@ export const AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED = 0x17d7; // 610
 export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER = 0x17d8; // 6104
 /** InvalidDisputeResolver: Invalid dispute resolver: pubkey must be non-zero */
 export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER = 0x17d9; // 6105
-/** ActiveDisputeVotes: Agent has active dispute votes pending resolution */
+/** ActiveDisputeVotes: Agent has initiated dispute outcomes pending finalization */
 export const AGENC_COORDINATION_ERROR__ACTIVE_DISPUTE_VOTES = 0x17da; // 6106
 /** RecentVoteActivity: Agent must wait 24 hours after voting before deregistering */
 export const AGENC_COORDINATION_ERROR__RECENT_VOTE_ACTIVITY = 0x17db; // 6107
@@ -286,7 +286,7 @@ export const AGENC_COORDINATION_ERROR__INVALID_PROTOCOL_FEE = 0x17f5; // 6133
 export const AGENC_COORDINATION_ERROR__INVALID_TREASURY = 0x17f6; // 6134
 /** InvalidDisputeThreshold: Invalid dispute threshold: must be 1-100 (percentage of votes required) */
 export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_THRESHOLD = 0x17f7; // 6135
-/** InsufficientStake: Insufficient stake for arbiter registration */
+/** InsufficientStake: Insufficient registration stake */
 export const AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE = 0x17f8; // 6136
 /** MultisigInvalidThreshold: Invalid multisig threshold */
 export const AGENC_COORDINATION_ERROR__MULTISIG_INVALID_THRESHOLD = 0x17f9; // 6137
@@ -436,7 +436,7 @@ export const AGENC_COORDINATION_ERROR__TIMELOCK_NOT_ELAPSED = 0x1840; // 6208
 export const AGENC_COORDINATION_ERROR__INVALID_GOVERNANCE_PARAM = 0x1841; // 6209
 /** TreasuryNotProgramOwned: Treasury must be a program-owned PDA */
 export const AGENC_COORDINATION_ERROR__TREASURY_NOT_PROGRAM_OWNED = 0x1842; // 6210
-/** TreasuryNotSpendable: Treasury must be program-owned, or a signer system account for governance spends */
+/** TreasuryNotSpendable: Treasury must be a system-owned signer account */
 export const AGENC_COORDINATION_ERROR__TREASURY_NOT_SPENDABLE = 0x1843; // 6211
 /** SkillInvalidId: Skill ID cannot be all zeros */
 export const AGENC_COORDINATION_ERROR__SKILL_INVALID_ID = 0x1844; // 6212
@@ -722,7 +722,7 @@ export const AGENC_COORDINATION_ERROR__GOODS_SELF_PURCHASE = 0x18cf; // 6351
 export const AGENC_COORDINATION_ERROR__GOODS_UNAUTHORIZED_UPDATE = 0x18d0; // 6352
 /** GoodsInvalidOperatorTerms: Operator and operator_fee_bps must be set together, and the operator may not be the seller */
 export const AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS = 0x18d1; // 6353
-/** ResolverConflictOfInterest: A dispute party (the task creator or the defendant worker) cannot resolve their own dispute */
+/** ResolverConflictOfInterest: A dispute party or snapshotted settlement beneficiary cannot resolve the dispute */
 export const AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST = 0x18d2; // 6354
 /** CompletingAcceptRequiresSoleLiveSubmission: An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned) */
 export const AGENC_COORDINATION_ERROR__COMPLETING_ACCEPT_REQUIRES_SOLE_LIVE_SUBMISSION = 0x18d3; // 6355
@@ -740,6 +740,56 @@ export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH =
 export const AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_BIDS = 0x18d9; // 6361
 /** ReputationDelegationTooSoon: A freshly registered agent must wait at least one slot before delegating reputation */
 export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_TOO_SOON = 0x18da; // 6362
+/** DisputeResolutionWindowExpired: The dispute resolution window has expired; use expire_dispute */
+export const AGENC_COORDINATION_ERROR__DISPUTE_RESOLUTION_WINDOW_EXPIRED = 0x18db; // 6363
+/** ReputationDelegationDisabled: New reputation delegations are disabled; existing delegations may still be revoked */
+export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_DISABLED = 0x18dc; // 6364
+/** TaskChildRequiresDedicatedCleanup: Task child has live submission state and requires its dedicated cleanup path */
+export const AGENC_COORDINATION_ERROR__TASK_CHILD_REQUIRES_DEDICATED_CLEANUP = 0x18dd; // 6365
+/** TaskChildRentRecipientRequired: The stored task-child rent recipient must be supplied as a writable account */
+export const AGENC_COORDINATION_ERROR__TASK_CHILD_RENT_RECIPIENT_REQUIRED = 0x18de; // 6366
+/** InvalidSlashPercentage: Slash percentage must be between 0 and 100 */
+export const AGENC_COORDINATION_ERROR__INVALID_SLASH_PERCENTAGE = 0x18df; // 6367
+/** TaskNotRentExempt: Task must be rent exempt before terminal cleanup can preserve it */
+export const AGENC_COORDINATION_ERROR__TASK_NOT_RENT_EXEMPT = 0x18e0; // 6368
+/** InvalidRationaleHash: Dispute resolution requires a non-zero rationale content hash */
+export const AGENC_COORDINATION_ERROR__INVALID_RATIONALE_HASH = 0x18e1; // 6369
+/** TokenMintFreezeAuthorityEnabled: Token reward mints must have no freeze authority */
+export const AGENC_COORDINATION_ERROR__TOKEN_MINT_FREEZE_AUTHORITY_ENABLED = 0x18e2; // 6370
+/** TokenEscrowFrozen: SPL token account must be initialized and not frozen */
+export const AGENC_COORDINATION_ERROR__TOKEN_ESCROW_FROZEN = 0x18e3; // 6371
+/** OrphanTaskParentStillLive: The referenced parent Task still exists; use its normal cleanup path */
+export const AGENC_COORDINATION_ERROR__ORPHAN_TASK_PARENT_STILL_LIVE = 0x18e4; // 6372
+/** OrphanTaskChildUnsupported: This account type may carry principal or live state and cannot use orphan rent recovery */
+export const AGENC_COORDINATION_ERROR__ORPHAN_TASK_CHILD_UNSUPPORTED = 0x18e5; // 6373
+/** BidJobSpecMismatch: Bid job-spec commitment does not match the current task job specification */
+export const AGENC_COORDINATION_ERROR__BID_JOB_SPEC_MISMATCH = 0x18e6; // 6374
+/** TaskJobSpecBidLocked: Task job specification is permanently locked because its creator opened bidding */
+export const AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_BID_LOCKED = 0x18e7; // 6375
+/** BidJobSpecBindingRequired: Legacy unbound bid must be refreshed against the locked job specification before acceptance */
+export const AGENC_COORDINATION_ERROR__BID_JOB_SPEC_BINDING_REQUIRED = 0x18e8; // 6376
+/** StaleBidAcceptance: Selected bid terms changed since the creator signed acceptance */
+export const AGENC_COORDINATION_ERROR__STALE_BID_ACCEPTANCE = 0x18e9; // 6377
+/** GoodsMetadataChanged: Good metadata changed since preview; re-read the listing and retry */
+export const AGENC_COORDINATION_ERROR__GOODS_METADATA_CHANGED = 0x18ea; // 6378
+/** SkillVersionChanged: Skill content version changed since preview; re-read the skill and retry */
+export const AGENC_COORDINATION_ERROR__SKILL_VERSION_CHANGED = 0x18eb; // 6379
+/** SkillContentChanged: Skill content hash changed since preview; re-read the skill and retry */
+export const AGENC_COORDINATION_ERROR__SKILL_CONTENT_CHANGED = 0x18ec; // 6380
+/** PrivateTaskCreationDisabled: Private task creation is disabled until an audited ZK guest and mainnet verifier are activated */
+export const AGENC_COORDINATION_ERROR__PRIVATE_TASK_CREATION_DISABLED = 0x18ed; // 6381
+/** InvalidBidMarketplaceConfig: Bid marketplace configuration exceeds protocol safety limits */
+export const AGENC_COORDINATION_ERROR__INVALID_BID_MARKETPLACE_CONFIG = 0x18ee; // 6382
+/** BidBookEnumerationMismatch: accept_bid must enumerate every other canonical open bid and matching bidder exactly once */
+export const AGENC_COORDINATION_ERROR__BID_BOOK_ENUMERATION_MISMATCH = 0x18ef; // 6383
+/** BidDoesNotSatisfyMatchingPolicy: The selected bid does not win the bid book's declared matching policy */
+export const AGENC_COORDINATION_ERROR__BID_DOES_NOT_SATISFY_MATCHING_POLICY = 0x18f0; // 6384
+/** MarketplacePayeeAccountAlias: A marketplace fee payee cannot alias the task or its escrow account */
+export const AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_ACCOUNT_ALIAS = 0x18f1; // 6385
+/** LamportTransferAccountAlias: A positive lamport transfer requires distinct source and destination accounts */
+export const AGENC_COORDINATION_ERROR__LAMPORT_TRANSFER_ACCOUNT_ALIAS = 0x18f2; // 6386
+/** ReputationDelegationRecoveryAccountsRequired: Orphan delegation recovery requires the canonical protocol config and writable treasury */
+export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_RECOVERY_ACCOUNTS_REQUIRED = 0x18f3; // 6387
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -767,9 +817,13 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED
   | typeof AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED
+  | typeof AGENC_COORDINATION_ERROR__BID_BOOK_ENUMERATION_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_NOT_ACCEPTED
   | typeof AGENC_COORDINATION_ERROR__BID_BOOK_NOT_OPEN
+  | typeof AGENC_COORDINATION_ERROR__BID_DOES_NOT_SATISFY_MATCHING_POLICY
   | typeof AGENC_COORDINATION_ERROR__BID_EXCLUSIVE_REQUIRES_SINGLE_WORKER
+  | typeof AGENC_COORDINATION_ERROR__BID_JOB_SPEC_BINDING_REQUIRED
+  | typeof AGENC_COORDINATION_ERROR__BID_JOB_SPEC_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__BID_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__BID_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__BID_PRICE_EXCEEDS_TASK_BUDGET
@@ -819,6 +873,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED
+  | typeof AGENC_COORDINATION_ERROR__DISPUTE_RESOLUTION_WINDOW_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER
   | typeof AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG
   | typeof AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH
@@ -830,6 +885,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_NAME
   | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS
   | typeof AGENC_COORDINATION_ERROR__GOODS_INVALID_SUPPLY
+  | typeof AGENC_COORDINATION_ERROR__GOODS_METADATA_CHANGED
   | typeof AGENC_COORDINATION_ERROR__GOODS_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__GOODS_PRICE_BELOW_MINIMUM
   | typeof AGENC_COORDINATION_ERROR__GOODS_PRICE_CHANGED
@@ -860,6 +916,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_BID_CONFIDENCE
   | typeof AGENC_COORDINATION_ERROR__INVALID_BID_ETA
   | typeof AGENC_COORDINATION_ERROR__INVALID_BID_EXPIRY
+  | typeof AGENC_COORDINATION_ERROR__INVALID_BID_MARKETPLACE_CONFIG
   | typeof AGENC_COORDINATION_ERROR__INVALID_CAPABILITIES
   | typeof AGENC_COORDINATION_ERROR__INVALID_COOLDOWN
   | typeof AGENC_COORDINATION_ERROR__INVALID_CREATOR
@@ -902,6 +959,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_TYPE
   | typeof AGENC_COORDINATION_ERROR__INVALID_PROTOCOL_FEE
   | typeof AGENC_COORDINATION_ERROR__INVALID_RATING_SCORE
+  | typeof AGENC_COORDINATION_ERROR__INVALID_RATIONALE_HASH
   | typeof AGENC_COORDINATION_ERROR__INVALID_REFERRER_ACCOUNT
   | typeof AGENC_COORDINATION_ERROR__INVALID_RENT_RECIPIENT
   | typeof AGENC_COORDINATION_ERROR__INVALID_REQUIRED_CAPABILITIES
@@ -910,6 +968,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_REWARD
   | typeof AGENC_COORDINATION_ERROR__INVALID_SEAL_ENCODING
   | typeof AGENC_COORDINATION_ERROR__INVALID_SLASH_AMOUNT
+  | typeof AGENC_COORDINATION_ERROR__INVALID_SLASH_PERCENTAGE
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATE_KEY
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE
   | typeof AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION
@@ -935,6 +994,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__INVALID_VALIDATOR_QUORUM
   | typeof AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN
   | typeof AGENC_COORDINATION_ERROR__INVALID_WEIGHTED_SCORE_WEIGHTS
+  | typeof AGENC_COORDINATION_ERROR__LAMPORT_TRANSFER_ACCOUNT_ALIAS
   | typeof AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED
   | typeof AGENC_COORDINATION_ERROR__LISTING_INVALID_ID
@@ -950,6 +1010,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__LISTING_VERSION_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_PRIVATE_TASK_UNSUPPORTED
   | typeof AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_REQUIRES_REVIEW_FLOW
+  | typeof AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_ACCOUNT_ALIAS
   | typeof AGENC_COORDINATION_ERROR__MAX_ACTIVE_TASKS_REACHED
   | typeof AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED
   | typeof AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT
@@ -970,10 +1031,13 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__NO_WORKERS
   | typeof AGENC_COORDINATION_ERROR__NULLIFIER_ALREADY_SPENT
   | typeof AGENC_COORDINATION_ERROR__OPERATOR_IS_CREATOR
+  | typeof AGENC_COORDINATION_ERROR__ORPHAN_TASK_CHILD_UNSUPPORTED
+  | typeof AGENC_COORDINATION_ERROR__ORPHAN_TASK_PARENT_STILL_LIVE
   | typeof AGENC_COORDINATION_ERROR__PARENT_TASK_ACCOUNT_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__PARENT_TASK_CANCELLED
   | typeof AGENC_COORDINATION_ERROR__PARENT_TASK_DISPUTED
   | typeof AGENC_COORDINATION_ERROR__PARENT_TASK_NOT_COMPLETED
+  | typeof AGENC_COORDINATION_ERROR__PRIVATE_TASK_CREATION_DISABLED
   | typeof AGENC_COORDINATION_ERROR__PRIVATE_TASK_REQUIRES_ZK_PROOF
   | typeof AGENC_COORDINATION_ERROR__PROPOSAL_ALREADY_EXECUTED
   | typeof AGENC_COORDINATION_ERROR__PROPOSAL_INSUFFICIENT_QUORUM
@@ -1002,8 +1066,10 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID
+  | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_DISABLED
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_RECOVERY_ACCOUNTS_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_TOO_SOON
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING
@@ -1017,6 +1083,7 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL
   | typeof AGENC_COORDINATION_ERROR__ROUTER_ACCOUNT_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__SELF_TASK_NOT_ALLOWED
+  | typeof AGENC_COORDINATION_ERROR__SKILL_CONTENT_CHANGED
   | typeof AGENC_COORDINATION_ERROR__SKILL_INVALID_CONTENT_HASH
   | typeof AGENC_COORDINATION_ERROR__SKILL_INVALID_ID
   | typeof AGENC_COORDINATION_ERROR__SKILL_INVALID_NAME
@@ -1027,9 +1094,11 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__SKILL_SELF_PURCHASE
   | typeof AGENC_COORDINATION_ERROR__SKILL_SELF_RATING
   | typeof AGENC_COORDINATION_ERROR__SKILL_UNAUTHORIZED_UPDATE
+  | typeof AGENC_COORDINATION_ERROR__SKILL_VERSION_CHANGED
   | typeof AGENC_COORDINATION_ERROR__SLASH_ALREADY_APPLIED
   | typeof AGENC_COORDINATION_ERROR__SLASH_WINDOW_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__STAKE_TOO_LOW
+  | typeof AGENC_COORDINATION_ERROR__STALE_BID_ACCEPTANCE
   | typeof AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS
   | typeof AGENC_COORDINATION_ERROR__STATE_NOT_FOUND
   | typeof AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION
@@ -1042,11 +1111,14 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__TASK_ALREADY_COMPLETED
   | typeof AGENC_COORDINATION_ERROR__TASK_ATTESTOR_CONFIG_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_CANNOT_BE_CANCELLED
+  | typeof AGENC_COORDINATION_ERROR__TASK_CHILD_RENT_RECIPIENT_REQUIRED
+  | typeof AGENC_COORDINATION_ERROR__TASK_CHILD_REQUIRES_DEDICATED_CLEANUP
   | typeof AGENC_COORDINATION_ERROR__TASK_DISCRIMINATOR_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__TASK_EXPIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_FROZEN_CANNOT_DISPUTE
   | typeof AGENC_COORDINATION_ERROR__TASK_FULLY_CLAIMED
   | typeof AGENC_COORDINATION_ERROR__TASK_HAS_LIVE_COMPLETION_BOND
+  | typeof AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_BID_LOCKED
   | typeof AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_TASK_MISMATCH
   | typeof AGENC_COORDINATION_ERROR__TASK_MODERATION_EXPIRED
@@ -1064,12 +1136,15 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_OPEN
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_PENDING_VALIDATION
   | typeof AGENC_COORDINATION_ERROR__TASK_NOT_REJECT_FROZEN
+  | typeof AGENC_COORDINATION_ERROR__TASK_NOT_RENT_EXEMPT
   | typeof AGENC_COORDINATION_ERROR__TASK_SUBMISSION_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_TYPE_DISABLED
   | typeof AGENC_COORDINATION_ERROR__TASK_VALIDATION_ALREADY_CONFIGURED
   | typeof AGENC_COORDINATION_ERROR__TASK_VALIDATION_CONFIG_REQUIRED
   | typeof AGENC_COORDINATION_ERROR__TASK_VALIDATION_IMMUTABLE_AFTER_CLAIM
   | typeof AGENC_COORDINATION_ERROR__TIMELOCK_NOT_ELAPSED
+  | typeof AGENC_COORDINATION_ERROR__TOKEN_ESCROW_FROZEN
+  | typeof AGENC_COORDINATION_ERROR__TOKEN_MINT_FREEZE_AUTHORITY_ENABLED
   | typeof AGENC_COORDINATION_ERROR__TOKEN_TRANSFER_FAILED
   | typeof AGENC_COORDINATION_ERROR__TOO_MANY_DISPUTE_VOTERS
   | typeof AGENC_COORDINATION_ERROR__TREASURY_INSUFFICIENT_BALANCE
@@ -1114,7 +1189,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW]: `Account version too new: program upgrade required`,
     [AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_OLD]: `Account version too old: migration required`,
     [AGENC_COORDINATION_ERROR__ACTIVE_DISPUTES_EXIST]: `Agent has active disputes as defendant and cannot deregister`,
-    [AGENC_COORDINATION_ERROR__ACTIVE_DISPUTE_VOTES]: `Agent has active dispute votes pending resolution`,
+    [AGENC_COORDINATION_ERROR__ACTIVE_DISPUTE_VOTES]: `Agent has initiated dispute outcomes pending finalization`,
     [AGENC_COORDINATION_ERROR__AGENT_ALREADY_REGISTERED]: `Agent is already registered`,
     [AGENC_COORDINATION_ERROR__AGENT_BUSY_WITH_TASKS]: `Agent cannot set status to Active while having active tasks`,
     [AGENC_COORDINATION_ERROR__AGENT_HAS_ACTIVE_BIDS]: `An agent with live bids cannot deregister (their withdrawal paths load this registration)`,
@@ -1136,9 +1211,13 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__AUTHORITY_ALREADY_VOTED]: `Authority has already voted on this dispute`,
     [AGENC_COORDINATION_ERROR__BID_ALREADY_ACCEPTED]: `Bid has already been accepted`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_CAPACITY_REACHED]: `Bid book has reached its active bid capacity`,
+    [AGENC_COORDINATION_ERROR__BID_BOOK_ENUMERATION_MISMATCH]: `accept_bid must enumerate every other canonical open bid and matching bidder exactly once`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_NOT_ACCEPTED]: `Bid book is not in accepted state`,
     [AGENC_COORDINATION_ERROR__BID_BOOK_NOT_OPEN]: `Bid book is not open`,
+    [AGENC_COORDINATION_ERROR__BID_DOES_NOT_SATISFY_MATCHING_POLICY]: `The selected bid does not win the bid book's declared matching policy`,
     [AGENC_COORDINATION_ERROR__BID_EXCLUSIVE_REQUIRES_SINGLE_WORKER]: `Bid-exclusive tasks must use max_workers = 1`,
+    [AGENC_COORDINATION_ERROR__BID_JOB_SPEC_BINDING_REQUIRED]: `Legacy unbound bid must be refreshed against the locked job specification before acceptance`,
+    [AGENC_COORDINATION_ERROR__BID_JOB_SPEC_MISMATCH]: `Bid job-spec commitment does not match the current task job specification`,
     [AGENC_COORDINATION_ERROR__BID_NOT_ACTIVE]: `Bid is not active`,
     [AGENC_COORDINATION_ERROR__BID_NOT_EXPIRED]: `Bid has not expired and bid book is not closed`,
     [AGENC_COORDINATION_ERROR__BID_PRICE_EXCEEDS_TASK_BUDGET]: `Bid price exceeds task budget`,
@@ -1188,6 +1267,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_ACTIVE]: `Dispute is not active`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_EXPIRED]: `Dispute has not expired`,
     [AGENC_COORDINATION_ERROR__DISPUTE_NOT_RESOLVED]: `Dispute has not been resolved`,
+    [AGENC_COORDINATION_ERROR__DISPUTE_RESOLUTION_WINDOW_EXPIRED]: `The dispute resolution window has expired; use expire_dispute`,
     [AGENC_COORDINATION_ERROR__DUPLICATE_ARBITER]: `Duplicate arbiter provided in remaining_accounts`,
     [AGENC_COORDINATION_ERROR__EVIDENCE_TOO_LONG]: `Dispute evidence exceeds maximum allowed length`,
     [AGENC_COORDINATION_ERROR__FEED_INVALID_CONTENT_HASH]: `Feed content hash cannot be all zeros`,
@@ -1199,6 +1279,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__GOODS_INVALID_NAME]: `Good name must be non-zero`,
     [AGENC_COORDINATION_ERROR__GOODS_INVALID_OPERATOR_TERMS]: `Operator and operator_fee_bps must be set together, and the operator may not be the seller`,
     [AGENC_COORDINATION_ERROR__GOODS_INVALID_SUPPLY]: `Good supply must be positive (create: total_supply > 0; restock: additional_supply > 0)`,
+    [AGENC_COORDINATION_ERROR__GOODS_METADATA_CHANGED]: `Good metadata changed since preview; re-read the listing and retry`,
     [AGENC_COORDINATION_ERROR__GOODS_NOT_ACTIVE]: `Goods listing is not active`,
     [AGENC_COORDINATION_ERROR__GOODS_PRICE_BELOW_MINIMUM]: `Good price is below the minimum`,
     [AGENC_COORDINATION_ERROR__GOODS_PRICE_CHANGED]: `Good price changed since preview; re-read the listing and retry`,
@@ -1218,7 +1299,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INSUFFICIENT_QUORUM]: `Insufficient quorum: minimum number of voters not reached`,
     [AGENC_COORDINATION_ERROR__INSUFFICIENT_REPUTATION]: `Agent reputation below task minimum requirement`,
     [AGENC_COORDINATION_ERROR__INSUFFICIENT_SEED_ENTROPY]: `Binding or nullifier seed has insufficient byte diversity (min 8 distinct bytes required)`,
-    [AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE]: `Insufficient stake for arbiter registration`,
+    [AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE]: `Insufficient registration stake`,
     [AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE_FOR_CREATOR_DISPUTE]: `Creator-initiated disputes require 2x the minimum stake`,
     [AGENC_COORDINATION_ERROR__INSUFFICIENT_STAKE_FOR_DISPUTE]: `Insufficient stake to initiate dispute`,
     [AGENC_COORDINATION_ERROR__INSUFFICIENT_VOTES]: `Insufficient votes to resolve`,
@@ -1229,6 +1310,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_BID_CONFIDENCE]: `Bid confidence must be between 0 and 10000 basis points`,
     [AGENC_COORDINATION_ERROR__INVALID_BID_ETA]: `Bid ETA must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_BID_EXPIRY]: `Bid expiry is invalid`,
+    [AGENC_COORDINATION_ERROR__INVALID_BID_MARKETPLACE_CONFIG]: `Bid marketplace configuration exceeds protocol safety limits`,
     [AGENC_COORDINATION_ERROR__INVALID_CAPABILITIES]: `Agent capabilities bitmask cannot be zero`,
     [AGENC_COORDINATION_ERROR__INVALID_COOLDOWN]: `Cooldown value cannot be negative`,
     [AGENC_COORDINATION_ERROR__INVALID_CREATOR]: `Invalid creator`,
@@ -1271,6 +1353,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_PROPOSAL_TYPE]: `Invalid proposal type`,
     [AGENC_COORDINATION_ERROR__INVALID_PROTOCOL_FEE]: `Invalid protocol fee (must be <= 1000 bps)`,
     [AGENC_COORDINATION_ERROR__INVALID_RATING_SCORE]: `Rating score must be in the range 1..=5`,
+    [AGENC_COORDINATION_ERROR__INVALID_RATIONALE_HASH]: `Dispute resolution requires a non-zero rationale content hash`,
     [AGENC_COORDINATION_ERROR__INVALID_REFERRER_ACCOUNT]: `Referrer payee account does not match the snapshotted referrer`,
     [AGENC_COORDINATION_ERROR__INVALID_RENT_RECIPIENT]: `Invalid rent recipient: must be worker authority`,
     [AGENC_COORDINATION_ERROR__INVALID_REQUIRED_CAPABILITIES]: `Invalid required capabilities: required_capabilities cannot be zero`,
@@ -1279,6 +1362,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_REWARD]: `Invalid reward: reward must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_SEAL_ENCODING]: `Invalid RISC0 seal encoding`,
     [AGENC_COORDINATION_ERROR__INVALID_SLASH_AMOUNT]: `Slash amount must be greater than zero`,
+    [AGENC_COORDINATION_ERROR__INVALID_SLASH_PERCENTAGE]: `Slash percentage must be between 0 and 100`,
     [AGENC_COORDINATION_ERROR__INVALID_STATE_KEY]: `Invalid state key: state_key cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_STATE_VALUE]: `Invalid state value: state_value cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__INVALID_STATUS_TRANSITION]: `Invalid task status transition`,
@@ -1304,6 +1388,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__INVALID_VALIDATOR_QUORUM]: `Validator quorum must be greater than zero`,
     [AGENC_COORDINATION_ERROR__INVALID_VERIFIED_DOMAIN]: `Verified domain is empty, too long, or not a valid DNS name`,
     [AGENC_COORDINATION_ERROR__INVALID_WEIGHTED_SCORE_WEIGHTS]: `Weighted score weights must sum to 10000 basis points`,
+    [AGENC_COORDINATION_ERROR__LAMPORT_TRANSFER_ACCOUNT_ALIAS]: `A positive lamport transfer requires distinct source and destination accounts`,
     [AGENC_COORDINATION_ERROR__LISTING_CAPABILITIES_REQUIRED]: `Service listing must declare at least one required capability`,
     [AGENC_COORDINATION_ERROR__LISTING_CAPACITY_REACHED]: `Service listing has reached its maximum concurrent open hires`,
     [AGENC_COORDINATION_ERROR__LISTING_INVALID_ID]: `Service listing ID cannot be all zeros`,
@@ -1319,6 +1404,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__LISTING_VERSION_MISMATCH]: `Service listing version does not match the expected version`,
     [AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_PRIVATE_TASK_UNSUPPORTED]: `Creator-review validation is not supported for private tasks yet`,
     [AGENC_COORDINATION_ERROR__MANUAL_VALIDATION_REQUIRES_REVIEW_FLOW]: `Task uses creator-review validation and must submit through Task Validation V2`,
+    [AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_ACCOUNT_ALIAS]: `A marketplace fee payee cannot alias the task or its escrow account`,
     [AGENC_COORDINATION_ERROR__MAX_ACTIVE_TASKS_REACHED]: `Agent has reached maximum active tasks`,
     [AGENC_COORDINATION_ERROR__MAX_REVISION_ROUNDS_EXCEEDED]: `Maximum revision rounds exceeded; escalate to reject`,
     [AGENC_COORDINATION_ERROR__MISSING_COMPLETION_BOND_ACCOUNT]: `A required completion bond account was not provided`,
@@ -1339,10 +1425,13 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__NO_WORKERS]: `Task has no workers`,
     [AGENC_COORDINATION_ERROR__NULLIFIER_ALREADY_SPENT]: `Nullifier has already been spent - proof/knowledge reuse detected`,
     [AGENC_COORDINATION_ERROR__OPERATOR_IS_CREATOR]: `Operator payee cannot be the task creator (operator self-deal)`,
+    [AGENC_COORDINATION_ERROR__ORPHAN_TASK_CHILD_UNSUPPORTED]: `This account type may carry principal or live state and cannot use orphan rent recovery`,
+    [AGENC_COORDINATION_ERROR__ORPHAN_TASK_PARENT_STILL_LIVE]: `The referenced parent Task still exists; use its normal cleanup path`,
     [AGENC_COORDINATION_ERROR__PARENT_TASK_ACCOUNT_REQUIRED]: `Parent task account required for proof-dependent task completion`,
     [AGENC_COORDINATION_ERROR__PARENT_TASK_CANCELLED]: `Parent task has been cancelled`,
     [AGENC_COORDINATION_ERROR__PARENT_TASK_DISPUTED]: `Parent task is in disputed state`,
     [AGENC_COORDINATION_ERROR__PARENT_TASK_NOT_COMPLETED]: `Parent task must be completed before completing a proof-dependent task`,
+    [AGENC_COORDINATION_ERROR__PRIVATE_TASK_CREATION_DISABLED]: `Private task creation is disabled until an audited ZK guest and mainnet verifier are activated`,
     [AGENC_COORDINATION_ERROR__PRIVATE_TASK_REQUIRES_ZK_PROOF]: `Private tasks (non-zero constraint_hash) must use complete_task_private`,
     [AGENC_COORDINATION_ERROR__PROPOSAL_ALREADY_EXECUTED]: `Proposal has already been executed`,
     [AGENC_COORDINATION_ERROR__PROPOSAL_INSUFFICIENT_QUORUM]: `Insufficient quorum for proposal execution`,
@@ -1371,8 +1460,10 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE]: `Agent must be Active to participate in reputation economy`,
     [AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF]: `Cannot delegate reputation to self`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID]: `Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT`,
+    [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_DISABLED]: `New reputation delegations are disabled; existing delegations may still be revoked`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_EXPIRED]: `Reputation delegation has expired`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_IDENTITY_MISMATCH]: `The delegator agent is not the same registration that created this delegation`,
+    [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_RECOVERY_ACCOUNTS_REQUIRED]: `Orphan delegation recovery requires the canonical protocol config and writable treasury`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_TOO_SOON]: `A freshly registered agent must wait at least one slot before delegating reputation`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_WHILE_DEFENDANT]: `An agent with active disputes as defendant cannot delegate reputation`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DISPUTES_PENDING]: `Agent has pending disputes as defendant: cannot withdraw stake`,
@@ -1380,12 +1471,13 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_INSUFFICIENT_BALANCE]: `Reputation stake has insufficient balance for withdrawal`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_LOCKED]: `Reputation stake is locked: withdrawal before cooldown`,
     [AGENC_COORDINATION_ERROR__REPUTATION_STAKE_NOT_WITHDRAWN]: `Reputation stake must be fully withdrawn before the agent can be deregistered`,
-    [AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST]: `A dispute party (the task creator or the defendant worker) cannot resolve their own dispute`,
+    [AGENC_COORDINATION_ERROR__RESOLVER_CONFLICT_OF_INTEREST]: `A dispute party or snapshotted settlement beneficiary cannot resolve the dispute`,
     [AGENC_COORDINATION_ERROR__REVIEW_URI_TOO_LONG]: `Review URI exceeds the maximum allowed length`,
     [AGENC_COORDINATION_ERROR__REVIEW_WINDOW_NOT_ELAPSED]: `Review window has not elapsed yet`,
     [AGENC_COORDINATION_ERROR__REWARD_TOO_SMALL]: `Reward too small: worker must receive at least 1 lamport`,
     [AGENC_COORDINATION_ERROR__ROUTER_ACCOUNT_MISMATCH]: `RISC0 router account constraints failed`,
     [AGENC_COORDINATION_ERROR__SELF_TASK_NOT_ALLOWED]: `Cannot claim own task: worker authority matches task creator`,
+    [AGENC_COORDINATION_ERROR__SKILL_CONTENT_CHANGED]: `Skill content hash changed since preview; re-read the skill and retry`,
     [AGENC_COORDINATION_ERROR__SKILL_INVALID_CONTENT_HASH]: `Skill content hash cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__SKILL_INVALID_ID]: `Skill ID cannot be all zeros`,
     [AGENC_COORDINATION_ERROR__SKILL_INVALID_NAME]: `Skill name cannot be all zeros`,
@@ -1396,9 +1488,11 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__SKILL_SELF_PURCHASE]: `Cannot purchase own skill`,
     [AGENC_COORDINATION_ERROR__SKILL_SELF_RATING]: `Cannot rate own skill`,
     [AGENC_COORDINATION_ERROR__SKILL_UNAUTHORIZED_UPDATE]: `Only the skill author can update this skill`,
+    [AGENC_COORDINATION_ERROR__SKILL_VERSION_CHANGED]: `Skill content version changed since preview; re-read the skill and retry`,
     [AGENC_COORDINATION_ERROR__SLASH_ALREADY_APPLIED]: `Dispute slashing already applied`,
     [AGENC_COORDINATION_ERROR__SLASH_WINDOW_EXPIRED]: `Slash window expired: must apply slashing within 7 days of resolution`,
     [AGENC_COORDINATION_ERROR__STAKE_TOO_LOW]: `Stake value is below minimum required (0.001 SOL)`,
+    [AGENC_COORDINATION_ERROR__STALE_BID_ACCEPTANCE]: `Selected bid terms changed since the creator signed acceptance`,
     [AGENC_COORDINATION_ERROR__STATE_KEY_EXISTS]: `State key already exists`,
     [AGENC_COORDINATION_ERROR__STATE_NOT_FOUND]: `State not found`,
     [AGENC_COORDINATION_ERROR__STATE_OWNERSHIP_VIOLATION]: `State ownership violation: only the creator agent can update this state`,
@@ -1411,11 +1505,14 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__TASK_ALREADY_COMPLETED]: `Task is already completed`,
     [AGENC_COORDINATION_ERROR__TASK_ATTESTOR_CONFIG_REQUIRED]: `Task attestor configuration is required`,
     [AGENC_COORDINATION_ERROR__TASK_CANNOT_BE_CANCELLED]: `Task cannot be cancelled`,
+    [AGENC_COORDINATION_ERROR__TASK_CHILD_RENT_RECIPIENT_REQUIRED]: `The stored task-child rent recipient must be supplied as a writable account`,
+    [AGENC_COORDINATION_ERROR__TASK_CHILD_REQUIRES_DEDICATED_CLEANUP]: `Task child has live submission state and requires its dedicated cleanup path`,
     [AGENC_COORDINATION_ERROR__TASK_DISCRIMINATOR_MISMATCH]: `Task account discriminator does not match the Task type`,
     [AGENC_COORDINATION_ERROR__TASK_EXPIRED]: `Task has expired`,
     [AGENC_COORDINATION_ERROR__TASK_FROZEN_CANNOT_DISPUTE]: `A frozen (rejected) task cannot be disputed`,
     [AGENC_COORDINATION_ERROR__TASK_FULLY_CLAIMED]: `Task has reached maximum workers`,
     [AGENC_COORDINATION_ERROR__TASK_HAS_LIVE_COMPLETION_BOND]: `Task has a live completion bond; reclaim it before closing the task`,
+    [AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_BID_LOCKED]: `Task job specification is permanently locked because its creator opened bidding`,
     [AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED]: `Task claim requires a moderated job specification pointer`,
     [AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_TASK_MISMATCH]: `Task job specification account does not belong to this task`,
     [AGENC_COORDINATION_ERROR__TASK_MODERATION_EXPIRED]: `Task moderation decision is expired`,
@@ -1433,17 +1530,20 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__TASK_NOT_OPEN]: `Task is not open for claims`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_PENDING_VALIDATION]: `Task is not pending validation`,
     [AGENC_COORDINATION_ERROR__TASK_NOT_REJECT_FROZEN]: `Task is not in the RejectFrozen state`,
+    [AGENC_COORDINATION_ERROR__TASK_NOT_RENT_EXEMPT]: `Task must be rent exempt before terminal cleanup can preserve it`,
     [AGENC_COORDINATION_ERROR__TASK_SUBMISSION_REQUIRED]: `Task submission is required`,
     [AGENC_COORDINATION_ERROR__TASK_TYPE_DISABLED]: `Task type is disabled by multisig launch controls`,
     [AGENC_COORDINATION_ERROR__TASK_VALIDATION_ALREADY_CONFIGURED]: `Task already has validation configured`,
     [AGENC_COORDINATION_ERROR__TASK_VALIDATION_CONFIG_REQUIRED]: `Task validation configuration required`,
     [AGENC_COORDINATION_ERROR__TASK_VALIDATION_IMMUTABLE_AFTER_CLAIM]: `Task validation cannot be reconfigured once work has started`,
     [AGENC_COORDINATION_ERROR__TIMELOCK_NOT_ELAPSED]: `Execution timelock has not elapsed`,
+    [AGENC_COORDINATION_ERROR__TOKEN_ESCROW_FROZEN]: `SPL token account must be initialized and not frozen`,
+    [AGENC_COORDINATION_ERROR__TOKEN_MINT_FREEZE_AUTHORITY_ENABLED]: `Token reward mints must have no freeze authority`,
     [AGENC_COORDINATION_ERROR__TOKEN_TRANSFER_FAILED]: `SPL token transfer CPI failed`,
     [AGENC_COORDINATION_ERROR__TOO_MANY_DISPUTE_VOTERS]: `Dispute has reached maximum voter capacity`,
     [AGENC_COORDINATION_ERROR__TREASURY_INSUFFICIENT_BALANCE]: `Treasury spend amount exceeds available balance`,
     [AGENC_COORDINATION_ERROR__TREASURY_NOT_PROGRAM_OWNED]: `Treasury must be a program-owned PDA`,
-    [AGENC_COORDINATION_ERROR__TREASURY_NOT_SPENDABLE]: `Treasury must be program-owned, or a signer system account for governance spends`,
+    [AGENC_COORDINATION_ERROR__TREASURY_NOT_SPENDABLE]: `Treasury must be a system-owned signer account`,
     [AGENC_COORDINATION_ERROR__TRUSTED_SELECTOR_MISMATCH]: `RISC0 seal selector does not match trusted selector`,
     [AGENC_COORDINATION_ERROR__TRUSTED_VERIFIER_PROGRAM_MISMATCH]: `RISC0 verifier program does not match trusted verifier`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_AGENT]: `Only the agent authority can perform this action`,

@@ -9,23 +9,29 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Install Node dependencies
         run: npm ci
@@ -36,14 +42,48 @@ jobs:
       - name: Check zkVM guest formatting
         run: cargo fmt --manifest-path zkvm/guest/Cargo.toml --all --check
 
-      - name: Run Marketplace V2 bid scenario tests
-        run: cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml bid_marketplace
+      # Host-side program gates cover every supported release profile. These are
+      # intentionally cargo test/clippy builds rather than SBF builds: sdk.yml and
+      # idl-drift.yml already perform the costly production SBF/Anchor builds.
+      - name: Clippy production program (strict)
+        run: cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets -- -D warnings
 
-      - name: Check minimal mainnet canary build
-        run: cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary
+      - name: Test production program
+        run: cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets
+
+      - name: Clippy validation-timings profile (strict)
+        run: cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings -- -D warnings
+
+      - name: Test validation-timings profile
+        run: cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings
+
+      - name: Clippy private-ZK program (strict)
+        run: cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk -- -D warnings
+
+      - name: Test private-ZK program
+        run: cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk
+
+      - name: Clippy minimal mainnet-canary program (strict)
+        run: cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary -- -D warnings
+
+      - name: Run property/fuzz model suite
+        run: cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml --all-targets
 
       - name: Test minimal mainnet canary build
-        run: cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary
+        run: cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary
+
+      - name: Reject mixed release surfaces
+        run: |
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --features mainnet-canary 2>&1); then
+            echo "default features + mainnet-canary unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary must be built with --no-default-features" <<<"${mixed_output}"
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary,private-zk 2>&1); then
+            echo "mainnet-canary + private-zk unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary and private-zk are mutually exclusive" <<<"${mixed_output}"
 
       # NOTE: no `anchor build` runs in this job, so the sync-anchor-artifacts
       # leg of this check is existence-only here (it does NOT detect

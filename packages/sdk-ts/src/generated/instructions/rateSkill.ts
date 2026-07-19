@@ -64,6 +64,7 @@ export type RateSkillInstruction<
   TAccountRatingAccount extends string | AccountMeta<string> = string,
   TAccountRater extends string | AccountMeta<string> = string,
   TAccountPurchaseRecord extends string | AccountMeta<string> = string,
+  TAccountAuthorAgent extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
@@ -85,6 +86,9 @@ export type RateSkillInstruction<
       TAccountPurchaseRecord extends string
         ? ReadonlyAccount<TAccountPurchaseRecord>
         : TAccountPurchaseRecord,
+      TAccountAuthorAgent extends string
+        ? ReadonlyAccount<TAccountAuthorAgent>
+        : TAccountAuthorAgent,
       TAccountProtocolConfig extends string
         ? ReadonlyAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
@@ -144,6 +148,7 @@ export type RateSkillAsyncInput<
   TAccountRatingAccount extends string = string,
   TAccountRater extends string = string,
   TAccountPurchaseRecord extends string = string,
+  TAccountAuthorAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
@@ -152,6 +157,11 @@ export type RateSkillAsyncInput<
   ratingAccount?: Address<TAccountRatingAccount>;
   rater: Address<TAccountRater>;
   purchaseRecord?: Address<TAccountPurchaseRecord>;
+  /**
+   * Skill author's durable registration. Required so a legacy purchase made
+   * through another agent controlled by the same wallet cannot self-rate.
+   */
+  authorAgent: Address<TAccountAuthorAgent>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -164,6 +174,7 @@ export async function getRateSkillInstructionAsync<
   TAccountRatingAccount extends string,
   TAccountRater extends string,
   TAccountPurchaseRecord extends string,
+  TAccountAuthorAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
@@ -174,6 +185,7 @@ export async function getRateSkillInstructionAsync<
     TAccountRatingAccount,
     TAccountRater,
     TAccountPurchaseRecord,
+    TAccountAuthorAgent,
     TAccountProtocolConfig,
     TAccountAuthority,
     TAccountSystemProgram
@@ -186,6 +198,7 @@ export async function getRateSkillInstructionAsync<
     TAccountRatingAccount,
     TAccountRater,
     TAccountPurchaseRecord,
+    TAccountAuthorAgent,
     TAccountProtocolConfig,
     TAccountAuthority,
     TAccountSystemProgram
@@ -201,6 +214,7 @@ export async function getRateSkillInstructionAsync<
     ratingAccount: { value: input.ratingAccount ?? null, isWritable: true },
     rater: { value: input.rater ?? null, isWritable: false },
     purchaseRecord: { value: input.purchaseRecord ?? null, isWritable: false },
+    authorAgent: { value: input.authorAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
@@ -253,6 +267,7 @@ export async function getRateSkillInstructionAsync<
       getAccountMeta("ratingAccount", accounts.ratingAccount),
       getAccountMeta("rater", accounts.rater),
       getAccountMeta("purchaseRecord", accounts.purchaseRecord),
+      getAccountMeta("authorAgent", accounts.authorAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
@@ -267,6 +282,7 @@ export async function getRateSkillInstructionAsync<
     TAccountRatingAccount,
     TAccountRater,
     TAccountPurchaseRecord,
+    TAccountAuthorAgent,
     TAccountProtocolConfig,
     TAccountAuthority,
     TAccountSystemProgram
@@ -278,6 +294,7 @@ export type RateSkillInput<
   TAccountRatingAccount extends string = string,
   TAccountRater extends string = string,
   TAccountPurchaseRecord extends string = string,
+  TAccountAuthorAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
@@ -286,6 +303,11 @@ export type RateSkillInput<
   ratingAccount: Address<TAccountRatingAccount>;
   rater: Address<TAccountRater>;
   purchaseRecord: Address<TAccountPurchaseRecord>;
+  /**
+   * Skill author's durable registration. Required so a legacy purchase made
+   * through another agent controlled by the same wallet cannot self-rate.
+   */
+  authorAgent: Address<TAccountAuthorAgent>;
   protocolConfig: Address<TAccountProtocolConfig>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -298,6 +320,7 @@ export function getRateSkillInstruction<
   TAccountRatingAccount extends string,
   TAccountRater extends string,
   TAccountPurchaseRecord extends string,
+  TAccountAuthorAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
@@ -308,6 +331,7 @@ export function getRateSkillInstruction<
     TAccountRatingAccount,
     TAccountRater,
     TAccountPurchaseRecord,
+    TAccountAuthorAgent,
     TAccountProtocolConfig,
     TAccountAuthority,
     TAccountSystemProgram
@@ -319,6 +343,7 @@ export function getRateSkillInstruction<
   TAccountRatingAccount,
   TAccountRater,
   TAccountPurchaseRecord,
+  TAccountAuthorAgent,
   TAccountProtocolConfig,
   TAccountAuthority,
   TAccountSystemProgram
@@ -333,6 +358,7 @@ export function getRateSkillInstruction<
     ratingAccount: { value: input.ratingAccount ?? null, isWritable: true },
     rater: { value: input.rater ?? null, isWritable: false },
     purchaseRecord: { value: input.purchaseRecord ?? null, isWritable: false },
+    authorAgent: { value: input.authorAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
@@ -358,6 +384,7 @@ export function getRateSkillInstruction<
       getAccountMeta("ratingAccount", accounts.ratingAccount),
       getAccountMeta("rater", accounts.rater),
       getAccountMeta("purchaseRecord", accounts.purchaseRecord),
+      getAccountMeta("authorAgent", accounts.authorAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
@@ -372,6 +399,7 @@ export function getRateSkillInstruction<
     TAccountRatingAccount,
     TAccountRater,
     TAccountPurchaseRecord,
+    TAccountAuthorAgent,
     TAccountProtocolConfig,
     TAccountAuthority,
     TAccountSystemProgram
@@ -388,9 +416,14 @@ export type ParsedRateSkillInstruction<
     ratingAccount: TAccountMetas[1];
     rater: TAccountMetas[2];
     purchaseRecord: TAccountMetas[3];
-    protocolConfig: TAccountMetas[4];
-    authority: TAccountMetas[5];
-    systemProgram: TAccountMetas[6];
+    /**
+     * Skill author's durable registration. Required so a legacy purchase made
+     * through another agent controlled by the same wallet cannot self-rate.
+     */
+    authorAgent: TAccountMetas[4];
+    protocolConfig: TAccountMetas[5];
+    authority: TAccountMetas[6];
+    systemProgram: TAccountMetas[7];
   };
   data: RateSkillInstructionData;
 };
@@ -403,12 +436,12 @@ export function parseRateSkillInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRateSkillInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 7) {
+  if (instruction.accounts.length < 8) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 7,
+        expectedAccountMetas: 8,
       },
     );
   }
@@ -425,6 +458,7 @@ export function parseRateSkillInstruction<
       ratingAccount: getNextAccount(),
       rater: getNextAccount(),
       purchaseRecord: getNextAccount(),
+      authorAgent: getNextAccount(),
       protocolConfig: getNextAccount(),
       authority: getNextAccount(),
       systemProgram: getNextAccount(),

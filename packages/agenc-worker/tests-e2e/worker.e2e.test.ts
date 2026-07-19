@@ -24,6 +24,7 @@ import {
   getTaskSubmissionDecoder,
   SubmissionStatus,
   TaskStatus,
+  values,
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   checkSettlements,
@@ -33,6 +34,7 @@ import {
 } from "../src/runtime.js";
 import { hexToBytes, loadState } from "../src/state.js";
 import { sha256, sha256Hex } from "../src/result.js";
+import { DEFAULT_MAX_EXECUTOR_PROMPT_BYTES } from "../src/executor.js";
 import {
   accountData,
   freshSvm,
@@ -43,9 +45,38 @@ import {
 import { createLiteSvmTransport } from "./litesvm-transport.js";
 import { GpaSimulator } from "./gpa-sim.js";
 
-const SPEC_BODY = new TextEncoder().encode(
-  '{"title":"haiku","summary":"write a haiku about solana on stdout"}',
-);
+const ENCODER = new TextEncoder();
+
+function jobSpecDocument(payload: Record<string, unknown>): {
+  body: Uint8Array;
+  canonicalPayload: Uint8Array;
+  hash: Uint8Array;
+  hex: string;
+} {
+  const canonicalPayload = ENCODER.encode(values.canonicalJobSpecJson(payload));
+  const hash = sha256(canonicalPayload);
+  const hex = sha256Hex(canonicalPayload);
+  return {
+    body: ENCODER.encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: hex,
+        },
+        payload,
+      }),
+    ),
+    canonicalPayload,
+    hash,
+    hex,
+  };
+}
+
+const SPEC = jobSpecDocument({
+  title: "haiku",
+  summary: "write a haiku about solana on stdout",
+});
 
 /**
  * The on-chain 64-byte description is a CONTENT-HASH COMMITMENT (sha256 of the
@@ -100,7 +131,7 @@ describe("e2e: one worker tick against the real program", () => {
         creatorAgent,
         taskId,
         requiredCapabilities: 1n,
-        description: descriptionCommitment(SPEC_BODY),
+        description: descriptionCommitment(SPEC.canonicalPayload),
         rewardAmount: reward,
         maxWorkers: 1,
         deadline: now + 3600n,
@@ -124,9 +155,9 @@ describe("e2e: one worker tick against the real program", () => {
       }),
     ]);
 
-    // Moderate + pin the REAL sha256 of the job-spec body, so the worker's
-    // fetch+verify path runs the genuine hash check (not the agenc:// bypass).
-    const jobSpecHash = sha256(SPEC_BODY);
+    // Moderate + pin the canonical envelope payload hash, so the worker's
+    // fetch+verify path runs the protocol's genuine json-stable-v1 contract.
+    const jobSpecHash = SPEC.hash;
     const jobSpecUri = "https://specs.example/haiku.json";
     await modClient.send([
       await facade.recordTaskModeration({
@@ -172,9 +203,13 @@ describe("e2e: one worker tick against the real program", () => {
         capabilities: 1n,
         minRewardLamports: 0n,
         maxRewardLamports: 10_000_000n,
+        allowUnboundedReward: false,
         executor: [process.execPath, "-e", 'console.log("result")', "{prompt}"],
+        executorMode: "sandboxed",
+        executorEnvAllowlist: [],
         resultUploader: null,
         creatorAllowlist: null,
+        allowAnyCreator: true,
         endpoint: "http://worker.test",
         executorTimeoutMs: 60_000,
         pollIntervalMs: 1_000,
@@ -187,7 +222,7 @@ describe("e2e: one worker tick against the real program", () => {
       log,
       fetchUri: async (uri) => {
         expect(uri).toBe(jobSpecUri);
-        return SPEC_BODY;
+        return SPEC.body;
       },
       // Exercises the pre-registration funding preflight (the wallet is
       // funded well past the requirement, so registration proceeds).
@@ -332,7 +367,7 @@ describe("e2e: one worker tick against the real program", () => {
         creatorAgent,
         taskId,
         requiredCapabilities: 1n,
-        description: descriptionCommitment(SPEC_BODY),
+        description: descriptionCommitment(SPEC.canonicalPayload),
         rewardAmount: 1_000_000n,
         maxWorkers: 1,
         deadline: now + 3600n,
@@ -343,7 +378,7 @@ describe("e2e: one worker tick against the real program", () => {
       }),
     ]);
     const [task] = await findTaskPda({ creator: creator.address, taskId });
-    const jobSpecHash = sha256(SPEC_BODY);
+    const jobSpecHash = SPEC.hash;
     await modClient.send([
       await facade.recordTaskModeration({
         task,
@@ -375,9 +410,13 @@ describe("e2e: one worker tick against the real program", () => {
         capabilities: 1n,
         minRewardLamports: 0n,
         maxRewardLamports: null,
+        allowUnboundedReward: true,
         executor: [process.execPath, "-e", 'console.log("never runs")', "{prompt}"],
+        executorMode: "sandboxed",
+        executorEnvAllowlist: [],
         resultUploader: null,
         creatorAllowlist: null,
+        allowAnyCreator: true,
         endpoint: "http://worker2.test",
         executorTimeoutMs: 60_000,
         pollIntervalMs: 1_000,
@@ -388,9 +427,10 @@ describe("e2e: one worker tick against the real program", () => {
       readAccount: async (addr: Address) => accountData(svm, addr),
       stateDir,
       log: (event) => events.push(event),
-      // The host serves DIFFERENT bytes than the creator pinned on-chain.
+      // The host serves a different internally-valid envelope than the creator
+      // pinned on-chain.
       fetchUri: async () =>
-        new TextEncoder().encode('{"title":"swapped","summary":"malicious"}'),
+        jobSpecDocument({ title: "swapped", summary: "malicious" }).body,
     };
 
     const tick = await runTickOnce(ctx);
@@ -408,5 +448,71 @@ describe("e2e: one worker tick against the real program", () => {
     expect(decoded.currentWorkers).toBe(0);
     expect(loadState(stateDir).openClaim).toBeNull();
     expect(loadState(stateDir).submissions).toHaveLength(0);
+
+    // Re-pin the valid payload under its canonical agenc:// content address.
+    // The standalone runtime has no resolver, so even a valid HTTP injection
+    // seam must not become an empty-content or cross-scheme bypass.
+    await creatorClient.setTaskJobSpec({
+      task,
+      creator,
+      jobSpecHash,
+      jobSpecUri: `agenc://job-spec/sha256/${SPEC.hex}`,
+      moderator: modAuth.address,
+    });
+    let httpFetcherCalled = false;
+    ctx.fetchUri = async () => {
+      httpFetcherCalled = true;
+      return SPEC.body;
+    };
+    const unresolvedAgencTick = await runTickOnce(ctx);
+    expect(unresolvedAgencTick.outcome?.status).toBe("skipped");
+    expect(
+      events.some(
+        (e) =>
+          e.event === "task.job-spec-rejected" &&
+          String(e.reason).includes("no trusted agenc:// resolver"),
+      ),
+    ).toBe(true);
+    expect(httpFetcherCalled).toBe(false);
+    const afterUnresolvedAgenc = getTaskDecoder().decode(accountData(svm, task)!);
+    expect(afterUnresolvedAgenc.status).toBe(TaskStatus.Open);
+    expect(afterUnresolvedAgenc.currentWorkers).toBe(0);
+    expect(loadState(stateDir).openClaim).toBeNull();
+
+    // Re-pin valid but argv-oversized content. Hash verification now passes,
+    // but the worker must reject it BEFORE claimTaskWithJobSpec lands.
+    const oversized = jobSpecDocument({
+      data: "x".repeat(DEFAULT_MAX_EXECUTOR_PROMPT_BYTES + 1),
+    });
+    const oversizedHash = oversized.hash;
+    await modClient.send([
+      await facade.recordTaskModeration({
+        task,
+        moderator: modAuth,
+        jobSpecHash: oversizedHash,
+        status: 0,
+        riskScore: 0,
+        categoryMask: 0n,
+        policyHash: new Uint8Array(32).fill(5),
+        scannerHash: new Uint8Array(32).fill(6),
+        expiresAt: 0n,
+      }),
+    ]);
+    await creatorClient.setTaskJobSpec({
+      task,
+      creator,
+      jobSpecHash: oversizedHash,
+      jobSpecUri: "https://specs.example/oversized.txt",
+      moderator: modAuth.address,
+    });
+    ctx.fetchUri = async () => oversized.body;
+
+    const oversizedTick = await runTickOnce(ctx);
+    expect(oversizedTick.outcome?.status).toBe("skipped");
+    expect(events.some((e) => e.event === "task.prompt-rejected")).toBe(true);
+    const afterOversized = getTaskDecoder().decode(accountData(svm, task)!);
+    expect(afterOversized.status).toBe(TaskStatus.Open);
+    expect(afterOversized.currentWorkers).toBe(0);
+    expect(loadState(stateDir).openClaim).toBeNull();
   });
 });

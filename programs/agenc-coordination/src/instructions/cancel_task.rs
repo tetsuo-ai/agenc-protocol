@@ -6,17 +6,22 @@ use crate::events::TaskCancelled;
 use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
-    close_bid_book_without_accepted_bid, settle_accepted_bid, AcceptedBidBondDisposition,
-    AcceptedBidBookDisposition,
+    accepted_bid_no_show_bond_disposition, close_bid_book_without_accepted_bid,
+    settle_accepted_bid, AcceptedBidBookDisposition,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+use crate::instructions::lamport_transfer::transfer_lamports;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::post_completion_bond::dependency_parent_completed;
+use crate::instructions::program_account_helpers::{
+    close_program_account, deserialize_program_account,
+};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::task_validation_helpers::is_contest_configured_task;
-use crate::instructions::lamport_transfer::transfer_lamports;
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{
-    close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
+    close_token_escrow, transfer_tokens_from_escrow, validate_token_escrow_account,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::AgentStats;
@@ -208,14 +213,8 @@ pub fn process_cancel_task<'info>(
     Ok(())
 }
 
-pub(crate) fn load_task_escrow<'info>(
-    escrow_info: &UncheckedAccount<'info>,
-) -> Result<Account<'info, TaskEscrow>> {
-    // SAFETY: same rationale as `load_task_claim_or_not_claimed`; the wrapped
-    // `AccountInfo` already lives for `'info`.
-    let escrow_info_ref: &'info AccountInfo<'info> =
-        unsafe { std::mem::transmute(escrow_info.as_ref()) };
-    Account::<TaskEscrow>::try_from(escrow_info_ref)
+pub(crate) fn load_task_escrow(escrow_info: &UncheckedAccount<'_>) -> Result<TaskEscrow> {
+    deserialize_program_account::<TaskEscrow>(escrow_info.as_ref())
 }
 
 fn validate_cancel_prereqs(task: &Task, now: i64) -> Result<()> {
@@ -274,31 +273,60 @@ fn bond_forfeit_wallet_is_live_noshow(
     live_worker_wallets.iter().any(|w| w == worker_wallet)
 }
 
+#[cfg(not(feature = "mainnet-canary"))]
+fn worker_bond_forfeit_allowed(is_no_show_cancel: bool, dependency_parent_completed: bool) -> bool {
+    is_no_show_cancel && dependency_parent_completed
+}
+
+/// Classify the optional canonical parent prefix used by cancellation. Legacy
+/// in-flight children may predate assignment-time dependency gating, so the
+/// parent account is optional on this EXIT path: omitted, absent, or not yet
+/// Completed means the worker cannot be blamed for a no-show and their bonds are
+/// refunded. When supplied, it must be the exact stored parent address.
+#[cfg(not(feature = "mainnet-canary"))]
+fn split_cancel_dependency_parent<'accounts, 'info>(
+    task: &Task,
+    remaining_accounts: &'accounts [AccountInfo<'info>],
+    expected_accounts_without_parent: usize,
+) -> Result<(&'accounts [AccountInfo<'info>], bool)> {
+    if task.dependency_type == crate::state::DependencyType::None {
+        require!(
+            remaining_accounts.len() == expected_accounts_without_parent,
+            CoordinationError::InvalidInput
+        );
+        return Ok((remaining_accounts, true));
+    }
+
+    // Missing parent evidence is accepted for liveness, but never establishes
+    // worker fault for a bond slash.
+    if remaining_accounts.len() == expected_accounts_without_parent {
+        return Ok((remaining_accounts, false));
+    }
+    let expected_with_parent = expected_accounts_without_parent
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    require!(
+        remaining_accounts.len() == expected_with_parent,
+        CoordinationError::InvalidInput
+    );
+
+    let parent_completed = dependency_parent_completed(task, remaining_accounts, &crate::ID)?;
+
+    Ok((&remaining_accounts[1..], parent_completed))
+}
+
 fn process_cancel_task_impl<'info>(
     accounts: &mut CancelTask<'info>,
     remaining_accounts: &[AccountInfo<'info>],
 ) -> Result<()> {
-    require!(
-        accounts.authority.is_signer,
-        CoordinationError::UnauthorizedTaskAction
-    );
     // Exit path: a paused protocol must still let an escrowed task be cancelled
     // (money never locks, spec §7). Type-disable gates entry only, so it is NOT
     // re-checked here.
     check_version_compatible_for_exit(&accounts.protocol_config)?;
-    require!(
-        accounts.authority.is_signer,
-        CoordinationError::UnauthorizedTaskAction
-    );
-
     let task = &mut accounts.task;
-    // SAFETY: `remaining_accounts` entries already carry `'info`; we only need
-    // to rebind the slice reference itself so derived sub-slices can be reused
-    // across the V2 settlement branches.
-    let remaining_accounts: &'info [AccountInfo<'info>] =
-        unsafe { std::mem::transmute(remaining_accounts) };
     let clock = Clock::get()?;
-    require!(task.bump > 0, CoordinationError::CorruptedData);
+    // The account constraint above already verifies the canonical PDA against
+    // the stored bump. Zero is a valid Solana PDA bump and must not brick exits.
 
     // Validate protocol-level cancellation rules before escrow deserialization.
     validate_cancel_prereqs(task, clock.unix_timestamp)?;
@@ -321,34 +349,58 @@ fn process_cancel_task_impl<'info>(
     let is_no_show_cancel =
         matches!(task.status, TaskStatus::InProgress) && task.current_workers > 0;
 
-    let mut escrow = load_task_escrow(&accounts.escrow)?;
-    require!(escrow.bump > 0, CoordinationError::CorruptedData);
+    let escrow = load_task_escrow(&accounts.escrow)?;
+    let escrow_info = accounts.escrow.to_account_info();
+    // `escrow` is seeds-pinned by Anchor; its stored bump may legitimately be 0.
+
+    #[cfg(not(feature = "mainnet-canary"))]
+    let worker_accounts_len = usize::from(task.current_workers)
+        .checked_mul(3)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    #[cfg(not(feature = "mainnet-canary"))]
+    let bid_suffix_len = if task.task_type == TaskType::BidExclusive {
+        if task.current_workers == 0 {
+            1
+        } else {
+            3
+        }
+    } else {
+        0
+    };
+    #[cfg(not(feature = "mainnet-canary"))]
+    let expected_accounts_without_parent = worker_accounts_len
+        .checked_add(bid_suffix_len)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    #[cfg(not(feature = "mainnet-canary"))]
+    let (settlement_accounts, dependency_parent_completed) =
+        split_cancel_dependency_parent(task, remaining_accounts, expected_accounts_without_parent)?;
 
     #[cfg(not(feature = "mainnet-canary"))]
     let (worker_accounts, bid_book_only, accepted_bid_accounts) =
         if task.task_type == TaskType::BidExclusive {
             if task.current_workers == 0 {
                 require!(
-                    remaining_accounts.len() == 1,
-                    CoordinationError::BidSettlementAccountsRequired
-                );
-                (&remaining_accounts[..0], Some(&remaining_accounts[0]), None)
-            } else {
-                let worker_accounts_len = usize::from(task.current_workers)
-                    .checked_mul(3)
-                    .ok_or(CoordinationError::ArithmeticOverflow)?;
-                require!(
-                    remaining_accounts.len() == worker_accounts_len + 3,
+                    settlement_accounts.len() == 1,
                     CoordinationError::BidSettlementAccountsRequired
                 );
                 (
-                    &remaining_accounts[..worker_accounts_len],
+                    &settlement_accounts[..0],
+                    Some(&settlement_accounts[0]),
                     None,
-                    Some(&remaining_accounts[worker_accounts_len..]),
+                )
+            } else {
+                require!(
+                    settlement_accounts.len() == worker_accounts_len + 3,
+                    CoordinationError::BidSettlementAccountsRequired
+                );
+                (
+                    &settlement_accounts[..worker_accounts_len],
+                    None,
+                    Some(&settlement_accounts[worker_accounts_len..]),
                 )
             }
         } else {
-            (remaining_accounts, None, None)
+            (settlement_accounts, None, None)
         };
     #[cfg(feature = "mainnet-canary")]
     let worker_accounts = remaining_accounts;
@@ -408,7 +460,11 @@ fn process_cancel_task_impl<'info>(
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
         );
-        validate_token_account(token_escrow, &mint.key(), &escrow.key())?;
+        validate_token_escrow_account(
+            &token_escrow.to_account_info(),
+            &mint.key(),
+            &accounts.escrow.key(),
+        )?;
         token_escrow_starting_amount = Some(
             anchor_spl::token::accessor::amount(&token_escrow.to_account_info())
                 .map_err(|_| CoordinationError::TokenTransferFailed)?,
@@ -423,7 +479,7 @@ fn process_cancel_task_impl<'info>(
         transfer_tokens_from_escrow(
             token_escrow,
             &creator_ta.to_account_info(),
-            &escrow.to_account_info(),
+            &escrow_info,
             refund_amount,
             escrow_seeds,
             token_program,
@@ -434,7 +490,7 @@ fn process_cancel_task_impl<'info>(
     } else {
         // SOL path: existing lamport transfer (unchanged)
         transfer_lamports(
-            &escrow.to_account_info(),
+            &escrow_info,
             &accounts.authority.to_account_info(),
             refund_amount,
         )?;
@@ -442,7 +498,7 @@ fn process_cancel_task_impl<'info>(
     #[cfg(not(feature = "spl-token-rewards"))]
     {
         transfer_lamports(
-            &escrow.to_account_info(),
+            &escrow_info,
             &accounts.authority.to_account_info(),
             refund_amount,
         )?;
@@ -450,8 +506,6 @@ fn process_cancel_task_impl<'info>(
 
     // Update task status
     task.status = TaskStatus::Cancelled;
-    escrow.is_closed = true;
-
     emit!(TaskCancelled {
         task_id: task.task_id,
         creator: task.creator,
@@ -466,6 +520,10 @@ fn process_cancel_task_impl<'info>(
 
     #[cfg(not(feature = "mainnet-canary"))]
     if let Some(bid_accounts) = accepted_bid_accounts {
+        let bid_no_show_penalty_allowed =
+            worker_bond_forfeit_allowed(is_no_show_cancel, dependency_parent_completed);
+        let bid_bond_disposition =
+            accepted_bid_no_show_bond_disposition(bid_no_show_penalty_allowed);
         let claim_info = &worker_accounts[0];
         let rent_recipient_info = &worker_accounts[2];
         require!(
@@ -488,7 +546,7 @@ fn process_cancel_task_impl<'info>(
             Some(creator_info),
             clock.unix_timestamp,
             AcceptedBidBookDisposition::Close,
-            AcceptedBidBondDisposition::FullSlashToCreator,
+            bid_bond_disposition,
         )?;
     }
 
@@ -654,7 +712,7 @@ fn process_cancel_task_impl<'info>(
             residual_amount,
             &creator_ta.to_account_info(),
             &accounts.authority.to_account_info(),
-            &escrow.to_account_info(),
+            &escrow_info,
             escrow_seeds,
             token_program,
         )?;
@@ -663,7 +721,8 @@ fn process_cancel_task_impl<'info>(
     // Reset current_workers since all workers are removed on cancel
     task.current_workers = 0;
 
-    escrow.close(accounts.authority.to_account_info())?;
+    let authority_info = accounts.authority.to_account_info();
+    close_program_account(&escrow_info, &authority_info)?;
 
     // Batch 3 §8 bond disposition on cancel (authority == creator): refund the
     // creator's bond; forfeit a worker's bond to the creator ONLY on a genuine no-show
@@ -684,28 +743,26 @@ fn process_cancel_task_impl<'info>(
         let worker_wallet = accounts.worker_bond_authority.to_account_info();
         // #70 fix: forfeit to the creator ONLY on a genuine no-show; on an Open cancel
         // the worker is not at fault, so refund their bond to them (the poster).
-        let disposition = if is_no_show_cancel {
-            // Audit F-1: the forfeited bond must belong to a LIVE no-show claimant —
-            // one of the workers whose claims are being drained above (their
-            // rent-recipient wallets are already constrained == worker.authority).
-            // Without this binding a creator could sybil-claim, no-show, and forfeit
-            // the bond of an honest, already-rejected worker (whose bond stays
-            // hostage while the task is live). settle_completion_bond separately
-            // enforces poster_wallet == bond.party + the canonical PDA, so
-            // membership here fully pins the forfeit to a real no-show.
-            require!(
-                bond_forfeit_wallet_is_live_noshow(
-                    &worker_wallet.key(),
-                    &live_worker_wallets
-                ),
-                CoordinationError::BondNotTiedToNoShowWorker
-            );
-            BondDisposition::Forfeit {
-                recipient: &creator_info,
-            }
-        } else {
-            BondDisposition::Refund
-        };
+        let disposition =
+            if worker_bond_forfeit_allowed(is_no_show_cancel, dependency_parent_completed) {
+                // Audit F-1: the forfeited bond must belong to a LIVE no-show claimant —
+                // one of the workers whose claims are being drained above (their
+                // rent-recipient wallets are already constrained == worker.authority).
+                // Without this binding a creator could sybil-claim, no-show, and forfeit
+                // the bond of an honest, already-rejected worker (whose bond stays
+                // hostage while the task is live). settle_completion_bond separately
+                // enforces poster_wallet == bond.party + the canonical PDA, so
+                // membership here fully pins the forfeit to a real no-show.
+                require!(
+                    bond_forfeit_wallet_is_live_noshow(&worker_wallet.key(), &live_worker_wallets),
+                    CoordinationError::BondNotTiedToNoShowWorker
+                );
+                BondDisposition::Forfeit {
+                    recipient: &creator_info,
+                }
+            } else {
+                BondDisposition::Refund
+            };
         settle_completion_bond(
             &accounts.worker_completion_bond.to_account_info(),
             &worker_wallet,
@@ -875,5 +932,160 @@ mod tests {
         // An empty set (Open cancel / zero live workers) never validates a forfeit —
         // the refund path handles those without consulting this predicate.
         assert!(!bond_forfeit_wallet_is_live_noshow(&w_honest, &[]));
+    }
+
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn dependency_failure_always_disables_worker_bond_forfeit() {
+        assert!(worker_bond_forfeit_allowed(true, true));
+        assert!(!worker_bond_forfeit_allowed(true, false));
+        assert!(!worker_bond_forfeit_allowed(false, true));
+        assert!(!worker_bond_forfeit_allowed(false, false));
+    }
+
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn missing_dependency_parent_is_a_refund_signal_not_an_exit_error() {
+        let child = Task {
+            dependency_type: crate::state::DependencyType::Data,
+            depends_on: Some(Pubkey::new_unique()),
+            ..Task::default()
+        };
+        let accounts: [AccountInfo<'_>; 0] = [];
+        let (settlement_accounts, completed) =
+            split_cancel_dependency_parent(&child, &accounts, 0).unwrap();
+        assert!(settlement_accounts.is_empty());
+        assert!(!completed);
+    }
+
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn closed_system_owned_dependency_parent_is_also_a_refund_signal() {
+        let parent_key = Pubkey::new_unique();
+        let child = Task {
+            dependency_type: crate::state::DependencyType::Ordering,
+            depends_on: Some(parent_key),
+            ..Task::default()
+        };
+        let mut lamports = 1u64;
+        let mut data: [u8; 0] = [];
+        let parent_info = AccountInfo::new(
+            &parent_key,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &anchor_lang::system_program::ID,
+            false,
+            0,
+        );
+        let accounts = [parent_info];
+        let (settlement_accounts, completed) =
+            split_cancel_dependency_parent(&child, &accounts, 0).unwrap();
+        assert!(settlement_accounts.is_empty());
+        assert!(!completed);
+    }
+
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn dependency_parent_prefix_is_stripped_without_reordering_settlement_suffix() {
+        let parent_key = Pubkey::new_unique();
+        let first_tail_key = Pubkey::new_unique();
+        let second_tail_key = Pubkey::new_unique();
+        let child = Task {
+            dependency_type: crate::state::DependencyType::Data,
+            depends_on: Some(parent_key),
+            ..Task::default()
+        };
+        let mut parent_lamports = 0u64;
+        let mut first_lamports = 0u64;
+        let mut second_lamports = 0u64;
+        let mut parent_data: [u8; 0] = [];
+        let mut first_data: [u8; 0] = [];
+        let mut second_data: [u8; 0] = [];
+        let parent_info = AccountInfo::new(
+            &parent_key,
+            false,
+            false,
+            &mut parent_lamports,
+            &mut parent_data,
+            &anchor_lang::system_program::ID,
+            false,
+            0,
+        );
+        let first_tail = AccountInfo::new(
+            &first_tail_key,
+            false,
+            false,
+            &mut first_lamports,
+            &mut first_data,
+            &anchor_lang::system_program::ID,
+            false,
+            0,
+        );
+        let second_tail = AccountInfo::new(
+            &second_tail_key,
+            false,
+            false,
+            &mut second_lamports,
+            &mut second_data,
+            &anchor_lang::system_program::ID,
+            false,
+            0,
+        );
+        let accounts = [parent_info, first_tail, second_tail];
+
+        let (settlement_accounts, completed) =
+            split_cancel_dependency_parent(&child, &accounts, 2).unwrap();
+        assert!(!completed);
+        assert_eq!(settlement_accounts.len(), 2);
+        assert_eq!(settlement_accounts[0].key(), first_tail_key);
+        assert_eq!(settlement_accounts[1].key(), second_tail_key);
+    }
+
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn only_a_canonical_completed_parent_enables_forfeit() {
+        let creator = Pubkey::new_unique();
+        let task_id = [31u8; 32];
+        let (parent_key, parent_bump) = Pubkey::find_program_address(
+            &[b"task", creator.as_ref(), task_id.as_ref()],
+            &crate::ID,
+        );
+        let parent = Task {
+            creator,
+            task_id,
+            status: TaskStatus::Completed,
+            bump: parent_bump,
+            ..Task::default()
+        };
+        let child = Task {
+            dependency_type: crate::state::DependencyType::Proof,
+            depends_on: Some(parent_key),
+            ..Task::default()
+        };
+        let mut data = Vec::new();
+        parent.try_serialize(&mut data).unwrap();
+        // Runtime accounts are allocated to the declared account size. Preserve
+        // that invariant in this synthetic AccountInfo so the canonical loader's
+        // exact layout guard is exercised instead of failing on an unpadded test
+        // serialization buffer.
+        data.resize(Task::SIZE, 0);
+        let mut lamports = 1_000_000u64;
+        let parent_info = AccountInfo::new(
+            &parent_key,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &crate::ID,
+            false,
+            0,
+        );
+        let accounts = [parent_info];
+        let (settlement_accounts, completed) =
+            split_cancel_dependency_parent(&child, &accounts, 0).unwrap();
+        assert!(settlement_accounts.is_empty());
+        assert!(completed);
     }
 }

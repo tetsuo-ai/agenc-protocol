@@ -12,8 +12,7 @@ use crate::events::TaskRejectFrozen;
 use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
-    is_manual_validation_task,
-    note_submission_left_review,
+    is_manual_validation_task, note_submission_left_review,
 };
 use crate::state::{
     AgentStats, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus, TaskSubmission,

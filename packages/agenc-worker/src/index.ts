@@ -6,6 +6,7 @@
 // long-running watch.
 export {
   ConfigError,
+  assertActiveWorkerConfig,
   configFromEnv,
   defaultConfigPath,
   defaultStateDir,
@@ -14,24 +15,36 @@ export {
   DEFAULT_CAPABILITIES,
   DEFAULT_ENDPOINT,
   DEFAULT_EXECUTOR,
+  DEFAULT_EXECUTOR_ENV_ALLOWLIST,
   DEFAULT_EXECUTOR_TIMEOUT_MS,
   DEFAULT_POLL_INTERVAL_MS,
   type WorkerConfig,
   type WorkerConfigInput,
+  type ExecutorMode,
 } from "./config.js";
 export {
   buildExecutorArgv,
+  assertExecutorPromptFits,
+  preflightExecutor,
   runExecutor,
   ExecutorError,
   DEFAULT_MAX_STDOUT_BYTES,
+  DEFAULT_MAX_STDERR_BYTES,
+  DEFAULT_MAX_EXECUTOR_PROMPT_BYTES,
   PROMPT_PLACEHOLDER,
   type ExecutorResult,
 } from "./executor.js";
 export {
   fetchAndVerifyJobSpec,
+  createPublicUriFetcher,
+  isPublicIpAddress,
   JobSpecError,
   DEFAULT_MAX_JOB_SPEC_BYTES,
+  DEFAULT_MAX_JOB_SPEC_REDIRECTS,
   type AccountReader,
+  type HostResolver,
+  type PinnedHttpRequester,
+  type ResolvedAddress,
   type UriFetcher,
   type VerifiedJobSpec,
 } from "./job-spec.js";

@@ -69,11 +69,18 @@ export type ProtocolConfig = {
    * Can be updated via multisig-gated `update_treasury`.
    */
   treasury: Address;
-  /** Minimum votes needed to resolve dispute (percentage, 1-100) */
+  /**
+   * Approval-percentage threshold used to interpret persisted dispute outcomes.
+   * Current resolver rulings encode approved/rejected as 100%/0%; historical
+   * disputes may contain vote totals from the retired arbiter model.
+   */
   disputeThreshold: number;
   /** Protocol fee in basis points (1/100th of a percent) */
   protocolFeeBps: number;
-  /** Minimum stake required to register as arbiter */
+  /**
+   * Governance vote-weight basis retained under its historical field name.
+   * Agent registration uses `min_agent_stake`.
+   */
   minArbiterStake: bigint;
   /** Minimum stake required to register as agent */
   minAgentStake: bigint;
@@ -85,9 +92,12 @@ export type ProtocolConfig = {
   totalAgents: bigint;
   /** Total tasks created */
   totalTasks: bigint;
-  /** Total tasks completed */
+  /** Total tasks completed (saturating telemetry) */
   completedTasks: bigint;
-  /** Total value distributed */
+  /**
+   * Total SOL value distributed, in lamports (excludes SPL-token base units;
+   * saturating telemetry)
+   */
   totalValueDistributed: bigint;
   /** Bump seed for PDA */
   bump: number;
@@ -109,7 +119,10 @@ export type ProtocolConfig = {
   slashPercentage: number;
   /** Cooldown between state updates per agent (seconds, 0 = disabled) (fix #415) */
   stateUpdateCooldown: bigint;
-  /** Voting period for disputes in seconds (default: 24 hours) */
+  /**
+   * Initial resolver-action window for disputes in seconds (default: 24 hours).
+   * No dispute voting occurs on the current assigned-resolver path.
+   */
   votingPeriod: bigint;
   /** Current protocol version (for upgrades) */
   protocolVersion: number;
@@ -135,8 +148,8 @@ export type ProtocolConfig = {
    * Deployed instruction-surface revision stamp.
    *
    * APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte
-   * pre-P6.5 prefix (the live mainnet config account) stays valid. The live
-   * account is migrated up to the new size by `migrate_protocol` (realloc +
+   * historical pre-P6.5 prefix stays valid. A legacy account is migrated up to
+   * the new size by `migrate_protocol` (realloc +
    * zero-init), which lands this at `0` = "surface not yet stamped". An operator
    * then sets the real revision via `update_launch_controls` (the existing
    * multisig-gated config-update authority path).
@@ -162,11 +175,18 @@ export type ProtocolConfigArgs = {
    * Can be updated via multisig-gated `update_treasury`.
    */
   treasury: Address;
-  /** Minimum votes needed to resolve dispute (percentage, 1-100) */
+  /**
+   * Approval-percentage threshold used to interpret persisted dispute outcomes.
+   * Current resolver rulings encode approved/rejected as 100%/0%; historical
+   * disputes may contain vote totals from the retired arbiter model.
+   */
   disputeThreshold: number;
   /** Protocol fee in basis points (1/100th of a percent) */
   protocolFeeBps: number;
-  /** Minimum stake required to register as arbiter */
+  /**
+   * Governance vote-weight basis retained under its historical field name.
+   * Agent registration uses `min_agent_stake`.
+   */
   minArbiterStake: number | bigint;
   /** Minimum stake required to register as agent */
   minAgentStake: number | bigint;
@@ -178,9 +198,12 @@ export type ProtocolConfigArgs = {
   totalAgents: number | bigint;
   /** Total tasks created */
   totalTasks: number | bigint;
-  /** Total tasks completed */
+  /** Total tasks completed (saturating telemetry) */
   completedTasks: number | bigint;
-  /** Total value distributed */
+  /**
+   * Total SOL value distributed, in lamports (excludes SPL-token base units;
+   * saturating telemetry)
+   */
   totalValueDistributed: number | bigint;
   /** Bump seed for PDA */
   bump: number;
@@ -202,7 +225,10 @@ export type ProtocolConfigArgs = {
   slashPercentage: number;
   /** Cooldown between state updates per agent (seconds, 0 = disabled) (fix #415) */
   stateUpdateCooldown: number | bigint;
-  /** Voting period for disputes in seconds (default: 24 hours) */
+  /**
+   * Initial resolver-action window for disputes in seconds (default: 24 hours).
+   * No dispute voting occurs on the current assigned-resolver path.
+   */
   votingPeriod: number | bigint;
   /** Current protocol version (for upgrades) */
   protocolVersion: number;
@@ -228,8 +254,8 @@ export type ProtocolConfigArgs = {
    * Deployed instruction-surface revision stamp.
    *
    * APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte
-   * pre-P6.5 prefix (the live mainnet config account) stays valid. The live
-   * account is migrated up to the new size by `migrate_protocol` (realloc +
+   * historical pre-P6.5 prefix stays valid. A legacy account is migrated up to
+   * the new size by `migrate_protocol` (realloc +
    * zero-init), which lands this at `0` = "surface not yet stamped". An operator
    * then sets the real revision via `update_launch_controls` (the existing
    * multisig-gated config-update authority path).

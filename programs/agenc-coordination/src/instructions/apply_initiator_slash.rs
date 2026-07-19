@@ -1,18 +1,18 @@
-//! Apply slashing to a dispute initiator when their dispute is rejected.
+//! Finalize a terminal dispute's initiator outcome, applying slashing on loss.
 //!
 //! # Permissionless Design
-//! Can be called by anyone after dispute resolves unfavorably.
-//! This is intentional - ensures slashing cannot be avoided.
-//!
-//! # Time Window (fix #414)
-//! Slashing must occur within 7 days of dispute resolution.
-//! After this window, slashing can no longer be applied.
+//! For provenance-tagged current disputes, anyone may finalize after resolution,
+//! expiry, or cancellation. Rejected/cancelled initiators are slashed; approved
+//! and expired outcomes are financial no-ops, and the exact tracked counter unit
+//! is released. Historical zero-marker disputes retain the deployed seven-day,
+//! loss-only policy and never touch the new counter, preventing retroactive
+//! penalties or cross-consumption across the upgrade boundary.
 
 use crate::errors::CoordinationError;
 use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::slash_helpers::{
-    apply_reputation_penalty, calculate_approval_percentage, transfer_slash_to_treasury,
-    validate_slash_window,
+    apply_reputation_penalty, calculate_approval_percentage, calculate_slash_amount,
+    initiator_lost_dispute, transfer_slash_to_treasury, validate_slash_window,
 };
 use crate::state::{AgentRegistration, Dispute, DisputeStatus, ProtocolConfig};
 use crate::utils::version::check_version_compatible_for_exit;
@@ -57,36 +57,105 @@ pub struct ApplyInitiatorSlash<'info> {
     pub authority: Signer<'info>,
 }
 
+/// Interpret the terminal initiator outcome without consulting mutable protocol
+/// thresholds. P6.3 writes exactly one of `(1,0)` / `(0,1)` for a resolver ruling;
+/// expiry is no-fault and cancellation is an explicit initiator loss.
+fn terminal_initiator_lost(
+    status: DisputeStatus,
+    votes_for: u64,
+    votes_against: u64,
+) -> Result<bool> {
+    let approved = match status {
+        DisputeStatus::Resolved => match (votes_for, votes_against) {
+            (1, 0) => true,
+            (0, 1) => false,
+            _ => return Err(CoordinationError::CorruptedData.into()),
+        },
+        DisputeStatus::Expired | DisputeStatus::Cancelled => false,
+        DisputeStatus::Active => return Err(CoordinationError::DisputeNotResolved.into()),
+    };
+    Ok(initiator_lost_dispute(status, approved))
+}
+
+/// Select the finalization policy from the retired-byte provenance marker.
+///
+/// Current tagged disputes have a non-expiring, all-terminal finalizer because
+/// their exact agent-side counter keeps stake locked. Historical zero-marker
+/// disputes retain the deployed policy exactly: only rejected/cancelled losses,
+/// only during the original seven-day window, and no no-fault bookkeeping.
+fn initiator_lost_under_provenance_policy(
+    dispute: &Dispute,
+    dispute_threshold: u8,
+    clock: &Clock,
+) -> Result<bool> {
+    if dispute.initiator_outcome_counter_tracked()? {
+        require!(
+            matches!(
+                dispute.status,
+                DisputeStatus::Resolved | DisputeStatus::Expired | DisputeStatus::Cancelled
+            ),
+            CoordinationError::DisputeNotResolved
+        );
+        require!(dispute.resolved_at > 0, CoordinationError::InvalidInput);
+        return terminal_initiator_lost(dispute.status, dispute.votes_for, dispute.votes_against);
+    }
+
+    require!(
+        matches!(
+            dispute.status,
+            DisputeStatus::Resolved | DisputeStatus::Cancelled
+        ),
+        CoordinationError::DisputeNotResolved
+    );
+    validate_slash_window(dispute.resolved_at, clock)?;
+    let initiator_lost = if dispute.status == DisputeStatus::Cancelled {
+        true
+    } else {
+        let (_total_votes, approval_pct) =
+            calculate_approval_percentage(dispute.votes_for, dispute.votes_against)?;
+        approval_pct < dispute_threshold as u64
+    };
+    require!(initiator_lost, CoordinationError::InvalidInput);
+    Ok(true)
+}
+
+/// Release only the counter unit proven to belong to this dispute. Historical
+/// zero-marker outcomes may still be finalized, but can never consume a unit
+/// incremented by a newer dispute from the same agent.
+fn release_tracked_initiator_outcome(
+    dispute: &Dispute,
+    initiator_agent: &mut AgentRegistration,
+) -> Result<()> {
+    if dispute.initiator_outcome_counter_tracked()? {
+        initiator_agent.note_initiator_outcome_finalized()?;
+    }
+    Ok(())
+}
+
 pub fn handler(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::InvalidInput
     );
 
+    // Clone the account handle before taking the long-lived mutable data borrow.
+    // The handle is only used for the checked lamport transfer below.
+    let initiator_agent_info = ctx.accounts.initiator_agent.to_account_info();
     let dispute = &mut ctx.accounts.dispute;
     let initiator_agent = &mut ctx.accounts.initiator_agent;
     let config = &ctx.accounts.protocol_config;
 
-    // Exit/finalizer gate, matching the sibling apply_dispute_slash. This permissionless
-    // finalizer's own docstring says "slashing cannot be avoided", but it previously used
-    // the ENTRY gate (rejects while paused) + require_task_type_enabled (entry-only): a
-    // pause or a retroactive task-type disable that outlasts the 7-day SLASH_WINDOW would
-    // make it permanently unrunnable, silently evading the frivolous-dispute deterrent
-    // (audit). The exit gate keeps slashing available while paused; no escrow moves here
-    // beyond the initiator's own stake, so it is settlement-class.
+    // Exit/finalizer gate, matching the sibling apply_dispute_slash. A tagged
+    // pending initiator-outcome counter does not age out, so its permissionless
+    // finalizer must remain callable while entry is paused. Historical records
+    // still enforce their original deadline below.
     check_version_compatible_for_exit(config)?;
-    require!(
-        dispute.status == DisputeStatus::Resolved || dispute.status == DisputeStatus::Cancelled,
-        CoordinationError::DisputeNotResolved
-    );
     require!(
         !dispute.initiator_slash_applied,
         CoordinationError::SlashAlreadyApplied
     );
 
-    // Check slash window hasn't expired (fix #414)
     let clock = Clock::get()?;
-    validate_slash_window(dispute.resolved_at, &clock)?;
 
     require!(
         initiator_agent.key() == dispute.initiator,
@@ -111,57 +180,150 @@ pub fn handler(ctx: Context<ApplyInitiatorSlash>) -> Result<()> {
         CoordinationError::NotTaskParticipant
     );
 
-    let initiator_lost = if dispute.status == DisputeStatus::Cancelled {
-        // Cancellation = admission of frivolous dispute; always slash
-        true
-    } else {
-        // Resolved (P6.3): read the resolver's RULING bit that `resolve_dispute` wrote
-        // into `(votes_for, votes_against)` — (1,0)=approved, (0,1)=rejected. No vote
-        // tally is involved; `calculate_approval_percentage` recovers 100%/0% and the
-        // same `dispute_threshold` comparison yields the resolver's decision.
-        let (_total_votes, approval_pct) =
-            calculate_approval_percentage(dispute.votes_for, dispute.votes_against)?;
-        let approved = approval_pct >= config.dispute_threshold as u64;
-        !approved // Initiator loses if dispute was not approved
-    };
+    let counter_tracked = dispute.initiator_outcome_counter_tracked()?;
+    let initiator_lost =
+        initiator_lost_under_provenance_policy(dispute, config.dispute_threshold, &clock)?;
 
-    // Only slash the initiator if they lost (dispute rejected or cancelled)
-    require!(initiator_lost, CoordinationError::InvalidInput);
-    require!(
-        initiator_agent.stake > 0,
-        CoordinationError::InsufficientStake
-    );
+    if initiator_lost {
+        // Only a losing outcome depends on slash configuration. Approved and
+        // expired no-fault finalization must remain available even if mutable
+        // legacy config is malformed, or an innocent initiator could be locked.
+        require!(
+            config.slash_percentage <= 100,
+            CoordinationError::InvalidInput
+        );
+        // Preserve the old zero-marker behavior exactly, including the nonzero
+        // stake requirement and u64 checked arithmetic. Tagged disputes use the
+        // hardened zero-principal bookkeeping path so an exhausted stake cannot
+        // permanently trap an otherwise valid counter unit.
+        let slash_amount = if counter_tracked {
+            calculate_slash_amount(
+                initiator_agent.stake,
+                initiator_agent.stake,
+                config.slash_percentage,
+            )?
+        } else {
+            require!(
+                initiator_agent.stake > 0,
+                CoordinationError::InsufficientStake
+            );
+            initiator_agent
+                .stake
+                .checked_mul(config.slash_percentage as u64)
+                .ok_or(CoordinationError::ArithmeticOverflow)?
+                .checked_div(PERCENT_BASE)
+                .ok_or(CoordinationError::ArithmeticOverflow)?
+        };
 
-    require!(
-        config.slash_percentage <= 100,
-        CoordinationError::InvalidInput
-    );
+        // Apply reputation penalty before the lamport transfer to satisfy the
+        // borrow checker. This still runs when slash_amount == 0.
+        apply_reputation_penalty(initiator_agent, &clock)?;
 
-    let slash_amount = initiator_agent
-        .stake
-        .checked_mul(config.slash_percentage as u64)
-        .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(PERCENT_BASE)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+        if slash_amount > 0 {
+            initiator_agent.stake = initiator_agent
+                .stake
+                .checked_sub(slash_amount)
+                .ok_or(CoordinationError::ArithmeticOverflow)?;
 
-    // Apply reputation penalty for frivolous dispute (before lamport transfer to satisfy borrow checker)
-    apply_reputation_penalty(initiator_agent, &clock)?;
-
-    if slash_amount > 0 {
-        initiator_agent.stake = initiator_agent
-            .stake
-            .checked_sub(slash_amount)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-
-        // Fix #374: Actually transfer lamports to treasury
-        transfer_slash_to_treasury(
-            &ctx.accounts.initiator_agent.to_account_info(),
-            &ctx.accounts.treasury.to_account_info(),
-            slash_amount,
-        )?;
+            transfer_slash_to_treasury(
+                &initiator_agent_info,
+                &ctx.accounts.treasury.to_account_info(),
+                slash_amount,
+            )?;
+        }
     }
 
     dispute.initiator_slash_applied = true;
+    release_tracked_initiator_outcome(dispute, initiator_agent)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_terminal_initiator_outcome_has_an_exact_policy() {
+        assert!(!terminal_initiator_lost(DisputeStatus::Resolved, 1, 0).unwrap());
+        assert!(terminal_initiator_lost(DisputeStatus::Resolved, 0, 1).unwrap());
+        assert!(!terminal_initiator_lost(DisputeStatus::Expired, 0, 0).unwrap());
+        assert!(terminal_initiator_lost(DisputeStatus::Cancelled, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn malformed_or_active_ruling_never_releases_the_counter() {
+        for ruling in [(0, 0), (1, 1), (2, 0), (0, 2)] {
+            assert!(terminal_initiator_lost(DisputeStatus::Resolved, ruling.0, ruling.1,).is_err());
+        }
+        assert!(terminal_initiator_lost(DisputeStatus::Active, 0, 0).is_err());
+    }
+
+    #[test]
+    fn historical_no_fault_outcome_cannot_consume_a_new_counter_unit() {
+        let mut initiator = AgentRegistration {
+            active_dispute_votes: 1,
+            ..AgentRegistration::default()
+        };
+        let historical = Dispute {
+            total_voters: 0,
+            status: DisputeStatus::Expired,
+            ..Dispute::default()
+        };
+        release_tracked_initiator_outcome(&historical, &mut initiator).unwrap();
+        assert_eq!(initiator.active_dispute_votes, 1);
+
+        let current = Dispute {
+            total_voters: Dispute::INITIATOR_OUTCOME_COUNTER_MARKER,
+            status: DisputeStatus::Expired,
+            ..Dispute::default()
+        };
+        release_tracked_initiator_outcome(&current, &mut initiator).unwrap();
+        assert_eq!(initiator.active_dispute_votes, 0);
+
+        // A tagged dispute with no corresponding unit is corruption, not a
+        // saturating no-op that could be marked finalized.
+        assert!(release_tracked_initiator_outcome(&current, &mut initiator).is_err());
+        assert_eq!(initiator.active_dispute_votes, 0);
+
+        let malformed = Dispute {
+            total_voters: 1,
+            ..Dispute::default()
+        };
+        assert!(release_tracked_initiator_outcome(&malformed, &mut initiator).is_err());
+    }
+
+    #[test]
+    fn legacy_policy_never_revives_an_expired_penalty_or_no_fault_outcome() {
+        let in_window = Clock {
+            unix_timestamp: 604_900,
+            ..Clock::default()
+        };
+        let after_window = Clock {
+            unix_timestamp: 604_901,
+            ..Clock::default()
+        };
+        let legacy_cancelled = Dispute {
+            status: DisputeStatus::Cancelled,
+            resolved_at: 100,
+            total_voters: 0,
+            ..Dispute::default()
+        };
+        assert!(initiator_lost_under_provenance_policy(&legacy_cancelled, 60, &in_window).unwrap());
+        assert!(
+            initiator_lost_under_provenance_policy(&legacy_cancelled, 60, &after_window).is_err()
+        );
+
+        for status in [DisputeStatus::Expired, DisputeStatus::Resolved] {
+            let no_fault = Dispute {
+                status,
+                resolved_at: 100,
+                votes_for: u64::from(status == DisputeStatus::Resolved),
+                votes_against: 0,
+                total_voters: 0,
+                ..Dispute::default()
+            };
+            assert!(initiator_lost_under_provenance_policy(&no_fault, 60, &in_window).is_err());
+        }
+    }
 }

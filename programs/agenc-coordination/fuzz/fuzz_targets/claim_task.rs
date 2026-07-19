@@ -22,10 +22,9 @@ proptest! {
             status: task_status::OPEN,
             reward_amount: input.task_reward,
             max_workers: input.task_max_workers.max(1),
-            // Use checked arithmetic to properly detect underflow in test setup
-            current_workers: input.task_current_workers.min(
-                input.task_max_workers.checked_sub(1).unwrap_or(0)
-            ),
+            current_workers: input
+                .task_current_workers
+                .min(input.task_max_workers.saturating_sub(1)),
             required_capabilities: input.task_required_capabilities,
             deadline: input.task_deadline,
             completions: 0,

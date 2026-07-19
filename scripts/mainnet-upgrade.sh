@@ -2,8 +2,15 @@
 # =============================================================================
 # mainnet-upgrade.sh — one-command wrapper for the full-surface mainnet upgrade
 # =============================================================================
-# Pre-fills every known, verified value so the ONLY things you decide are:
-#   (1) your RPC endpoint, and (2) plan vs execute.
+# Thin wrapper around the fail-closed orchestrator. Signer paths and independently
+# reviewed artifact digests are supplied at runtime; this file intentionally embeds
+# neither workstation paths nor a digest from a historical release.
+#
+# Mainnet's loader authority is currently a Squads vault. This wrapper will verify
+# that live authority and REFUSE the direct `solana program deploy` step when the
+# supplied ProtocolConfig signer is not the loader signer. Execute the reviewed
+# binary upgrade in Squads, then use this wrapper/orchestrator for the verified
+# post-deploy stamp + IDL steps.
 #
 # This is a thin wrapper around scripts/mainnet-upgrade.mjs — it does NOT change
 # any of that script's safety: PLAN broadcasts nothing; EXECUTE still makes YOU
@@ -11,11 +18,13 @@
 # for now (--skip-zk-config); private completion stays dark until you set the
 # audited image id later.
 #
-# ROLLOUT: this wrapper ENABLES ALL task types at the surface stamp via
-# DISABLED_TASK_TYPE_MASK=0 (the bid marketplace + collaborative + competitive go
-# live alongside exclusive). Edit that one variable below to change the live set;
-# the PLAN prints "mask 14 -> 0 (ALL task types ENABLED)" and the bid economics so
-# you can confirm before executing.
+# ROLLOUT: this wrapper preserves the live task-type mask unless the operator
+# explicitly exports DISABLED_TASK_TYPE_MASK. Set 0 only when the reviewed rollout
+# intentionally enables every task type; the PLAN prints the exact old/new mask.
+# Before either PLAN or EXECUTE, the in-program multisig must separately set
+# protocol_paused=true while preserving the live mask/revision. The orchestrator
+# verifies that state, repeats the cutover scans before deploy and before stamp,
+# and never unpauses. Unpause later through a separate reviewed multisig action.
 #
 #   ./scripts/mainnet-upgrade.sh            # PLAN  (read-only, broadcasts nothing)
 #   ./scripts/mainnet-upgrade.sh execute    # EXECUTE (prompts for typed program id)
@@ -26,16 +35,16 @@
 # =============================================================================
 set -euo pipefail
 
-REPO="/home/tetsuo/git/AgenC/agenc-protocol"
-BACKUP="/home/tetsuo/agenc-mainnet-restore/mainnet/sensitive-index"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-# ---- pre-filled, verified values --------------------------------------------
-UPGRADE_AUTHORITY="$BACKUP/upgrade-authority.json"          # Hcecp… (loader auth + multisig owner[0])
-COSIGNERS="$BACKUP/multisig-second.json"                    # owner[1]; with the authority = 2-of-3
-SO_PATH="$REPO/programs/agenc-coordination/target/deploy/agenc_coordination.so"  # sha ea2fa9…, 84-ix surface
-IDL_PATH="$REPO/target/idl/agenc_coordination.json"        # full 84-instruction IDL
-# (any 2 of upgrade-authority.json / multisig-second.json / multisig-third.json
-#  satisfy the 2-of-3 — swap COSIGNERS if you'd rather sign with the third key.)
+# ---- reviewed runtime inputs ------------------------------------------------
+PROTOCOL_AUTHORITY="${PROTOCOL_AUTHORITY:-}"
+COSIGNERS="${COSIGNERS:-}"
+SO_PATH="${SO_PATH:-$REPO/programs/agenc-coordination/target/deploy/agenc_coordination.so}"
+IDL_PATH="${IDL_PATH:-$REPO/target/idl/agenc_coordination.json}"
+EXPECTED_SO_SHA256="${EXPECTED_SO_SHA256:-}"
+EXPECTED_IDL_SHA256="${EXPECTED_IDL_SHA256:-}"
 
 # ---- ROLLOUT KNOB: which task types go LIVE at the surface stamp ------------
 # The surface stamp (update_launch_controls) writes disabled_task_type_mask. A SET bit
@@ -43,9 +52,9 @@ IDL_PATH="$REPO/target/idl/agenc_coordination.json"        # full 84-instruction
 #   0  = enable ALL task types (Exclusive + Collaborative + Competitive + BidExclusive) <-- rollout default
 #   6  = BidExclusive + Exclusive only (disable Collaborative+Competitive)
 #   14 = Exclusive only (the previous live value, everything else disabled)
-# Edit this one number to change which task types are live. (Leave EMPTY to PRESERVE the
-# current live mask untouched instead of overriding it.)
-DISABLED_TASK_TYPE_MASK="0"
+# Unset/empty preserves the current live mask. Requiring an explicit environment
+# value avoids accidentally enabling dormant surfaces merely by running the wrapper.
+DISABLED_TASK_TYPE_MASK="${DISABLED_TASK_TYPE_MASK:-}"
 
 # ---- BID-MARKETPLACE ECONOMICS: set EXPLICITLY (confirmed values, no silent defaults) ----
 # initialize_bid_marketplace writes these; they govern bidding once it's live. Edit any value
@@ -69,7 +78,17 @@ if [ -z "$RPC_URL" ]; then
   echo "  Public mainnet RPC will throttle the migrate sweep — use a dedicated endpoint." >&2
   exit 1
 fi
-for f in "$UPGRADE_AUTHORITY" "$COSIGNERS" "$SO_PATH" "$IDL_PATH"; do
+if [ -z "$PROTOCOL_AUTHORITY" ] || [ -z "$COSIGNERS" ]; then
+  echo "ERROR: PROTOCOL_AUTHORITY and COSIGNERS must name reviewed keypair paths." >&2
+  exit 1
+fi
+if ! [[ "$EXPECTED_SO_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || ! [[ "$EXPECTED_IDL_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "ERROR: EXPECTED_SO_SHA256 and EXPECTED_IDL_SHA256 must be independently reviewed 64-hex digests." >&2
+  echo "Do not compute-and-approve them inline in this wrapper; compare them to the signed release evidence." >&2
+  exit 1
+fi
+IFS=',' read -r -a COSIGNER_PATHS <<< "$COSIGNERS"
+for f in "$PROTOCOL_AUTHORITY" "${COSIGNER_PATHS[@]}" "$SO_PATH" "$IDL_PATH"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: required file is missing: $f" >&2
     [ "$f" = "$SO_PATH" ] && echo "  (rebuild it: cargo-build-sbf --manifest-path programs/agenc-coordination/Cargo.toml --sbf-out-dir programs/agenc-coordination/target/deploy)" >&2
@@ -106,14 +125,17 @@ case "$MODE" in
     ;;
 esac
 
-# Hand off to the safe orchestrator. It re-validates .so sha, authority pubkey,
-# balance, the 2-of-3 cosigner set, and the live task count, then runs:
+# Hand off to the safe orchestrator. It re-validates both artifact hashes, mainnet
+# genesis, the live ProtocolConfig authority, loader authority, exact ProgramData
+# bytes, balance, signer threshold, and live task count, then runs:
 #   deploy -> migrate sweep -> init configs -> stamp surface_revision -> publish IDL
 exec node scripts/mainnet-upgrade.mjs \
   --rpc "$RPC_URL" \
-  --upgrade-authority "$UPGRADE_AUTHORITY" \
+  --protocol-authority "$PROTOCOL_AUTHORITY" \
   --cosigners "$COSIGNERS" \
   --so "$SO_PATH" \
   --idl "$IDL_PATH" \
+  --expected-so-sha256 "$EXPECTED_SO_SHA256" \
+  --expected-idl-sha256 "$EXPECTED_IDL_SHA256" \
   --skip-zk-config \
   "${EXTRA[@]}"

@@ -6,8 +6,9 @@
 use crate::errors::CoordinationError;
 use crate::events::ProposalExecuted;
 use crate::instructions::constants::MAX_PROTOCOL_FEE_BPS;
-use crate::instructions::lamport_transfer::transfer_lamports;
+use crate::instructions::rate_limit_helpers::is_valid_dispute_stake_limit;
 use crate::state::{GovernanceConfig, Proposal, ProposalStatus, ProposalType, ProtocolConfig};
+use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
@@ -18,8 +19,37 @@ const MAX_RATE_LIMIT: u64 = 1000;
 /// Maximum cooldown value: 1 week in seconds (matches update_rate_limits.rs)
 const MAX_COOLDOWN: i64 = 604_800;
 
-/// Minimum dispute stake to prevent free dispute spam (matches update_rate_limits.rs)
-const MIN_DISPUTE_STAKE: u64 = 1000;
+/// A passed proposal cannot retain executable authority forever. Seven days is
+/// deliberately longer than the normal timelock while still bounding stale
+/// treasury/config authority.
+const PROPOSAL_EXECUTION_WINDOW: i64 = 7 * 24 * 60 * 60;
+
+fn outcome_requirements_met(
+    total_votes: u64,
+    votes_for: u64,
+    quorum: u64,
+    total_voters: u16,
+    min_distinct_voters: u16,
+    approval_threshold_bps: u16,
+) -> Result<bool> {
+    if total_votes == 0 || total_votes < quorum || total_voters < min_distinct_voters {
+        return Ok(false);
+    }
+    let lhs = (votes_for as u128)
+        .checked_mul(10_000)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let rhs = (total_votes as u128)
+        .checked_mul(approval_threshold_bps as u128)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    Ok(lhs > rhs)
+}
+
+fn proposal_requires_protocol_multisig(proposal_type: ProposalType) -> bool {
+    matches!(
+        proposal_type,
+        ProposalType::FeeChange | ProposalType::RateLimitChange
+    )
+}
 
 #[derive(Accounts)]
 pub struct ExecuteProposal<'info> {
@@ -46,12 +76,11 @@ pub struct ExecuteProposal<'info> {
     /// Authority can be anyone (permissionless after voting ends)
     pub authority: Signer<'info>,
 
-    /// CHECK: Treasury account for TreasurySpend proposals.
-    /// Must match protocol_config.treasury. Spend path supports:
-    /// - program-owned treasury (direct lamport mutation), or
-    /// - system-owned treasury when this account signs.
+    /// Treasury account for TreasurySpend proposals. The optional signer type
+    /// makes custody consent explicit in generated account metas.
+    /// Must match protocol_config.treasury and be system owned.
     #[account(mut)]
-    pub treasury: Option<UncheckedAccount<'info>>,
+    pub treasury: Option<Signer<'info>>,
 
     /// CHECK: Recipient for TreasurySpend proposals.
     /// Validated from proposal payload in handler.
@@ -64,7 +93,6 @@ pub struct ExecuteProposal<'info> {
 pub fn handler(ctx: Context<ExecuteProposal>) -> Result<()> {
     let proposal = &mut ctx.accounts.proposal;
     let config = &mut ctx.accounts.protocol_config;
-    let governance = &ctx.accounts.governance_config;
     let clock = Clock::get()?;
 
     check_version_compatible(config)?;
@@ -85,28 +113,45 @@ pub fn handler(ctx: Context<ExecuteProposal>) -> Result<()> {
         CoordinationError::ProposalVotingNotEnded
     );
 
-    // Check quorum and approval — if not met, mark as Defeated
+    // Schema-0 proposals are historical terminal records after the revision-5
+    // zero-Active cutover. If one appears Active, fail closed into Defeated: it
+    // remains permissionlessly terminalizable but can never execute under the
+    // retired weak election rules. Corrupt rule snapshots receive the same safe
+    // terminal treatment.
+    let rules = match proposal.governance_rules() {
+        Ok(rules) => rules,
+        Err(_) => {
+            proposal.status = ProposalStatus::Defeated;
+            proposal.executed_at = clock.unix_timestamp;
+            emit!(ProposalExecuted {
+                proposal: proposal.key(),
+                proposal_type: proposal.proposal_type as u8,
+                votes_for: proposal.votes_for,
+                votes_against: proposal.votes_against,
+                total_voters: proposal.total_voters,
+                timestamp: clock.unix_timestamp,
+            });
+            return Ok(());
+        }
+    };
+
+    // Check the immutable snapshotted quorum, distinct-voter floor, and approval
+    // threshold. GovernanceConfig cannot retroactively change this election.
     let total_votes = proposal
         .votes_for
         .checked_add(proposal.votes_against)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
-    let quorum_met = total_votes >= proposal.quorum;
+    let outcome_met = outcome_requirements_met(
+        total_votes,
+        proposal.votes_for,
+        proposal.quorum,
+        proposal.total_voters,
+        rules.min_distinct_voters,
+        rules.approval_threshold_bps,
+    )?;
 
-    // Approval threshold check: votes_for * 10000 > total_votes * threshold_bps
-    let approval_met = if total_votes > 0 {
-        let lhs = (proposal.votes_for as u128)
-            .checked_mul(10000)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        let rhs = (total_votes as u128)
-            .checked_mul(governance.approval_threshold_bps as u128)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        lhs > rhs
-    } else {
-        false
-    };
-
-    if !quorum_met || !approval_met {
+    if !outcome_met {
         proposal.status = ProposalStatus::Defeated;
         proposal.executed_at = clock.unix_timestamp;
 
@@ -127,6 +172,35 @@ pub fn handler(ctx: Context<ExecuteProposal>) -> Result<()> {
         clock.unix_timestamp >= proposal.execution_after,
         CoordinationError::TimelockNotElapsed
     );
+
+    let execution_deadline = proposal
+        .execution_after
+        .checked_add(PROPOSAL_EXECUTION_WINDOW)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    if clock.unix_timestamp > execution_deadline {
+        proposal.status = ProposalStatus::Defeated;
+        proposal.executed_at = clock.unix_timestamp;
+        emit!(ProposalExecuted {
+            proposal: proposal.key(),
+            proposal_type: proposal.proposal_type as u8,
+            votes_for: proposal.votes_for,
+            votes_against: proposal.votes_against,
+            total_voters: proposal.total_voters,
+            timestamp: clock.unix_timestamp,
+        });
+        return Ok(());
+    }
+
+    // Permissionless identity registration and refundable stake make voting an
+    // unsafe sole authority for protocol configuration. A successful FeeChange
+    // or RateLimitChange is therefore dual-control: the election must pass AND
+    // the current ProtocolConfig M-of-N must co-sign this execution. Perform the
+    // check only immediately before mutation so failed/expired proposals remain
+    // permissionlessly terminalizable.
+    if proposal_requires_protocol_multisig(proposal.proposal_type) {
+        let unique_signers = unique_account_infos(ctx.remaining_accounts);
+        require_multisig_threshold(config, &unique_signers)?;
+    }
 
     // Execute based on proposal type
     match proposal.proposal_type {
@@ -169,19 +243,10 @@ fn execute_fee_change(proposal: &Proposal, config: &mut ProtocolConfig) -> Resul
     Ok(())
 }
 
-/// A program-owned treasury spend must leave the account either fully drained (the
-/// runtime-permitted RentExempt -> Uninitialized close) or still rent-exempt. Landing in
-/// the `(0, rent_floor)` window is a disallowed RentExempt -> RentPaying transition that
-/// the runtime rejects with `InsufficientFundsForRent`. Pulled out as a pure fn for
-/// revert-sensitive unit testing of the boundary. (Solana accounts doc — RentState rules.)
-fn treasury_spend_preserves_rent(post_balance: u64, rent_floor: u64) -> bool {
-    post_balance == 0 || post_balance >= rent_floor
-}
-
 fn execute_treasury_spend<'info>(
     proposal: &Proposal,
     config: &ProtocolConfig,
-    treasury_opt: Option<&UncheckedAccount<'info>>,
+    treasury_opt: Option<&Signer<'info>>,
     recipient_opt: Option<&UncheckedAccount<'info>>,
     system_prog: &Program<'info, System>,
 ) -> Result<()> {
@@ -219,43 +284,20 @@ fn execute_treasury_spend<'info>(
         CoordinationError::TreasuryInsufficientBalance
     );
 
-    if treasury.owner == &crate::ID {
-        // Program-owned treasury: mutate lamports directly. The runtime rejects any tx
-        // that leaves a data-bearing account below its rent-exempt minimum (RentExempt ->
-        // RentPaying is a disallowed transition: InsufficientFundsForRent). So a partial
-        // spend landing the balance in the (0, rent_min) window would fail at the runtime
-        // with a cryptic error. Guard it here with a clear error, and explicitly allow a
-        // full drain-to-zero (the runtime-permitted close transition) so the funds always
-        // stay fully recoverable. (Solana accounts doc — RentState transition rules.)
-        let post_balance = treasury
-            .lamports()
-            .checked_sub(amount)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        let rent_floor = Rent::get()?.minimum_balance(treasury.data_len());
-        require!(
-            treasury_spend_preserves_rent(post_balance, rent_floor),
-            CoordinationError::TreasuryInsufficientBalance
-        );
-        transfer_lamports(
-            &treasury.to_account_info(),
-            &recipient.to_account_info(),
-            amount,
-        )?;
-    } else if treasury.owner == &system_program::ID && treasury.is_signer {
-        // System-owned treasury fallback: requires treasury signer at execution.
-        system_program::transfer(
-            CpiContext::new(
-                system_prog.to_account_info(),
-                system_program::Transfer {
-                    from: treasury.to_account_info(),
-                    to: recipient.to_account_info(),
-                },
-            ),
-            amount,
-        )?;
-    } else {
-        return Err(CoordinationError::TreasuryNotSpendable.into());
-    }
+    require!(
+        treasury.owner == &system_program::ID && treasury.is_signer,
+        CoordinationError::TreasuryNotSpendable
+    );
+    system_program::transfer(
+        CpiContext::new(
+            system_prog.to_account_info(),
+            system_program::Transfer {
+                from: treasury.to_account_info(),
+                to: recipient.to_account_info(),
+            },
+        ),
+        amount,
+    )?;
     Ok(())
 }
 
@@ -310,9 +352,9 @@ fn execute_rate_limit_change(proposal: &Proposal, config: &mut ProtocolConfig) -
         CoordinationError::InvalidProposalPayload
     );
 
-    // Enforce minimum dispute stake (matches update_rate_limits.rs)
+    // Enforce the exact shared absolute + minimum-registration-relative cap.
     require!(
-        min_stake_for_dispute >= MIN_DISPUTE_STAKE,
+        is_valid_dispute_stake_limit(min_stake_for_dispute, config.min_agent_stake),
         CoordinationError::InvalidProposalPayload
     );
 
@@ -326,24 +368,44 @@ fn execute_rate_limit_change(proposal: &Proposal, config: &mut ProtocolConfig) -
 
 #[cfg(test)]
 mod tests {
-    use super::treasury_spend_preserves_rent;
+    use super::*;
 
-    // Revert-sensitive guard for the program-owned TreasurySpend rent floor. Drop the
-    // `post_balance == 0` arm and the full-drain case goes red; weaken `>=` to `>` and the
-    // exact-floor case goes red; remove the floor entirely and the rent-tail cases go red.
     #[test]
-    fn treasury_spend_rent_floor_boundary() {
-        let floor: u64 = 890_880; // ~rent-exempt minimum for a 0-data account (non-zero!)
+    fn one_heavily_weighted_voter_cannot_execute() {
+        assert!(!outcome_requirements_met(1_000_000, 1_000_000, 10, 1, 3, 5_000).unwrap());
+    }
 
-        // Allowed: a full drain to zero is the runtime-permitted close transition.
-        assert!(treasury_spend_preserves_rent(0, floor));
-        // Allowed: staying at or above the rent-exempt minimum.
-        assert!(treasury_spend_preserves_rent(floor, floor));
-        assert!(treasury_spend_preserves_rent(floor + 1, floor));
+    #[test]
+    fn two_fully_weighted_voters_cannot_execute() {
+        assert!(
+            !outcome_requirements_met(200_000_000, 200_000_000, 100_000_000, 2, 3, 5_000,).unwrap()
+        );
+    }
 
-        // Rejected: any non-zero balance below the rent-exempt minimum (the RentPaying
-        // limbo the runtime would reject with InsufficientFundsForRent).
-        assert!(!treasury_spend_preserves_rent(1, floor));
-        assert!(!treasury_spend_preserves_rent(floor - 1, floor));
+    #[test]
+    fn three_distinct_voters_can_meet_weight_and_approval() {
+        assert!(
+            outcome_requirements_met(100_000_000, 90_000_000, 100_000_000, 3, 3, 5_000).unwrap()
+        );
+    }
+
+    #[test]
+    fn distinct_voters_do_not_replace_quorum_or_approval() {
+        assert!(!outcome_requirements_met(9, 9, 10, 3, 3, 5_000).unwrap());
+        assert!(!outcome_requirements_met(10, 5, 10, 3, 3, 5_000).unwrap());
+    }
+
+    #[test]
+    fn only_protocol_mutations_need_dual_control() {
+        assert!(proposal_requires_protocol_multisig(ProposalType::FeeChange));
+        assert!(proposal_requires_protocol_multisig(
+            ProposalType::RateLimitChange
+        ));
+        assert!(!proposal_requires_protocol_multisig(
+            ProposalType::TreasurySpend
+        ));
+        assert!(!proposal_requires_protocol_multisig(
+            ProposalType::ProtocolUpgrade
+        ));
     }
 }

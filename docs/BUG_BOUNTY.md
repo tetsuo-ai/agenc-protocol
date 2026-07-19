@@ -100,8 +100,9 @@ cleverness. Examples are concrete and tied to the actual program.
 
 - **Total budget:** TBD — **[HUMAN: decides]**.
 - **Platform:** TBD — Immunefi / HackerOne / Cantina / self-hosted advisory —
-  **[HUMAN: decides]**. Until a platform is chosen, intake is the private channel
-  in `SECURITY.md` §1.
+  **[HUMAN: decides]**. There is currently no verified private intake channel;
+  `SECURITY.md` §1 records the blocker. The bounty must not launch until a
+  platform or other private channel is enabled and tested end to end.
 - **Payment:** TBD (currency, KYC threshold) — **[HUMAN: decides]**.
 - Rewards scale with **demonstrated impact and report quality** (a working PoC /
   failing test against `scripts/localnet-up.mjs` earns the top of its band).

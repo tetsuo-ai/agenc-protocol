@@ -135,11 +135,13 @@ export type PurchaseGoodInstructionData = {
   discriminator: ReadonlyUint8Array;
   expectedSerial: bigint;
   expectedPrice: bigint;
+  expectedMetadataHash: ReadonlyUint8Array;
 };
 
 export type PurchaseGoodInstructionDataArgs = {
   expectedSerial: number | bigint;
   expectedPrice: number | bigint;
+  expectedMetadataHash: ReadonlyUint8Array;
 };
 
 export function getPurchaseGoodInstructionDataEncoder(): FixedSizeEncoder<PurchaseGoodInstructionDataArgs> {
@@ -148,6 +150,7 @@ export function getPurchaseGoodInstructionDataEncoder(): FixedSizeEncoder<Purcha
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["expectedSerial", getU64Encoder()],
       ["expectedPrice", getU64Encoder()],
+      ["expectedMetadataHash", fixEncoderSize(getBytesEncoder(), 32)],
     ]),
     (value) => ({ ...value, discriminator: PURCHASE_GOOD_DISCRIMINATOR }),
   );
@@ -158,6 +161,7 @@ export function getPurchaseGoodInstructionDataDecoder(): FixedSizeDecoder<Purcha
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["expectedSerial", getU64Decoder()],
     ["expectedPrice", getU64Decoder()],
+    ["expectedMetadataHash", fixDecoderSize(getBytesDecoder(), 32)],
   ]);
 }
 
@@ -232,6 +236,7 @@ export type PurchaseGoodAsyncInput<
   tokenProgram?: Address<TAccountTokenProgram>;
   expectedSerial: PurchaseGoodInstructionDataArgs["expectedSerial"];
   expectedPrice: PurchaseGoodInstructionDataArgs["expectedPrice"];
+  expectedMetadataHash: PurchaseGoodInstructionDataArgs["expectedMetadataHash"];
 };
 
 export async function getPurchaseGoodInstructionAsync<
@@ -470,6 +475,7 @@ export type PurchaseGoodInput<
   tokenProgram?: Address<TAccountTokenProgram>;
   expectedSerial: PurchaseGoodInstructionDataArgs["expectedSerial"];
   expectedPrice: PurchaseGoodInstructionDataArgs["expectedPrice"];
+  expectedMetadataHash: PurchaseGoodInstructionDataArgs["expectedMetadataHash"];
 };
 
 export function getPurchaseGoodInstruction<

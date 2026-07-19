@@ -1,6 +1,9 @@
 # agenc-worker one-shot tick — paired with agenc-worker.timer.
 #
 # Install (user units, no root):
+#   npm install --global @tetsuo-ai/agenc-worker@REVIEWED_EXACT_VERSION
+#   command -v agenc-worker  # update ExecStart below if this path differs
+#   mkdir -p ~/.local/state/agenc-worker
 #   mkdir -p ~/.config/systemd/user
 #   cp agenc-worker.service agenc-worker.timer ~/.config/systemd/user/
 #   systemctl --user daemon-reload
@@ -16,14 +19,50 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-# npx resolves the installed @tetsuo-ai/agenc-worker; replace with an absolute
-# path to the binary if you installed it globally.
-ExecStart=/usr/bin/env npx --yes @tetsuo-ai/agenc-worker once
+# Deliberately no npx/network install here. Pin and install a reviewed package
+# version ahead of time, then use its absolute path.
+ExecStart=/usr/local/bin/agenc-worker once
 # Uncomment to configure via environment instead of the config file:
 # Environment=AGENC_WORKER_RPC_URL=https://your-rpc.example
 # Environment=AGENC_WORKER_WALLET=%h/.config/agenc-worker/hot-wallet.json
 # Environment=AGENC_WORKER_MAX_REWARD_LAMPORTS=100000000
+# The safe default Claude executor requires ANTHROPIC_API_KEY. Put it in a
+# mode-0600 EnvironmentFile owned by this user; never commit it into this unit.
+# EnvironmentFile=%h/.config/agenc-worker/worker.env
 TimeoutStartSec=30min
+KillMode=control-group
+SendSIGKILL=true
+TasksMax=64
+LimitNOFILE=1024
+LimitCORE=0
+MemoryMax=1G
+OOMPolicy=kill
+KeyringMode=private
+
+# Host-level defense in depth around the worker's own executor isolation.
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=-%h/.local/state/agenc-worker
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=default.target

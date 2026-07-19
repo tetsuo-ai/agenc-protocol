@@ -3,6 +3,7 @@ import {
   facade,
   fetchTaskGuarantee,
   findCompletionBondPda,
+  findModerationBlockPda,
   getCompletionBondDecoder,
   getTaskDecoder,
   TaskStatus,
@@ -18,6 +19,10 @@ import {
   send,
   accountData,
 } from "./harness.js";
+
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
 
 // REAL on-chain execution of the completion-bond lifecycle. Each test drives the
 // COMPILED program in litesvm with SDK-built (@solana/kit) instructions and real
@@ -165,6 +170,8 @@ async function claimedAutoTask(salt: number): Promise<BondWorld> {
       authority: worker,
       worker: workerAgent,
       task,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     }),
   ]);
 
@@ -239,7 +246,12 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
       await facade.postCompletionBond({ authority: w.creator, task: w.task, role: 0 }),
     ]);
     await send(w.svm, w.worker, [
-      await facade.postCompletionBond({ authority: w.worker, task: w.task, role: 1 }),
+      await facade.postCompletionBond({
+        authority: w.worker,
+        task: w.task,
+        role: 1,
+        worker: w.workerAgent,
+      }),
     ]);
 
     const [creatorBond] = await findCompletionBondPda({
@@ -280,7 +292,12 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
       await facade.postCompletionBond({ authority: w.creator, task: w.task, role: 0 }),
     ]);
     await send(w.svm, w.worker, [
-      await facade.postCompletionBond({ authority: w.worker, task: w.task, role: 1 }),
+      await facade.postCompletionBond({
+        authority: w.worker,
+        task: w.task,
+        role: 1,
+        worker: w.workerAgent,
+      }),
     ]);
 
     const [creatorBond] = await findCompletionBondPda({
@@ -380,7 +397,12 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
     const w = await claimedAutoTask(40);
 
     await send(w.svm, w.worker, [
-      await facade.postCompletionBond({ authority: w.worker, task: w.task, role: 1 }),
+      await facade.postCompletionBond({
+        authority: w.worker,
+        task: w.task,
+        role: 1,
+        worker: w.workerAgent,
+      }),
     ]);
     const [workerBond] = await findCompletionBondPda({
       task: w.task,
@@ -433,7 +455,12 @@ describe("e2e: completion-bond lifecycle executes on the real program", () => {
 
     // Worker posts the role-1 bond -> guaranteed, with the on-chain 25% stake.
     await send(w.svm, w.worker, [
-      await facade.postCompletionBond({ authority: w.worker, task: w.task, role: 1 }),
+      await facade.postCompletionBond({
+        authority: w.worker,
+        task: w.task,
+        role: 1,
+        worker: w.workerAgent,
+      }),
     ]);
     const live = await fetchTaskGuarantee(gpa, w.task);
     expect(live.guaranteed).toBe(true);

@@ -45,7 +45,7 @@ the WP-B2 mainnet decode in `MEMORY.md`):
 | Min task reward | **> 0** (any positive lamport) | `create_task.rs:164` |
 | Worker settlement floor | **≥ 60% (6000 bps)** to the worker at the fee caps | `constants.rs` `WORKER_FLOOR_BPS` |
 | Task-creation rate limit | **50 / 24h**, 60 s cooldown, per-agent AND per-authority-wallet | `constants.rs:120-129`; `rate_limit_helpers.rs` |
-| Reputation per completion | **+100**, probationary start **3000**, max **10000** | `constants.rs:39`; `register_agent.rs:52,144` |
+| Reputation per completion | **0–100**, proportional to irreversible SOL protocol fee at **1 point / 100,000 lamports**; SPL-token completions earn 0. Start **3000**, max **10000** | `completion_helpers.rs`; `constants.rs`; `register_agent.rs` |
 | Rent (rent-exempt min) | `(bytes + 128) * 6960` lamports (≈ 6960 lamports/byte incl. overhead) | Solana rent formula |
 
 Two rent figures matter below:
@@ -111,24 +111,25 @@ five-star listing history for well under the price of one real job. The
 `total_rating`/`rating_count` aggregate on a listing is therefore **not
 trustworthy as displayed** without off-chain weighting.
 
-**(b2) Agent reputation farming (`AgentRegistration.reputation`).** Every task
-completion grants the worker **+100 reputation** capped at 10000
-(`completion_helpers.rs:313-316`). A worker starts probationary at 3000
-(`register_agent.rs:144`), so **70 completions** reach the 10000 cap. Via
-self-hires that is **70 × ≈ 0.004 SOL ≈ 0.28 SOL (~$42)** to max a worker's
-reputation from scratch. Reputation buys: passing task `min_reputation` gates,
-and protocol-fee discounts (5/10/15 bps at 8000/9000/9500,
-`compute_budget.rs` `REPUTATION_FEE_TIERS`). The discount is small relative to
-the farming cost, so reputation-for-fee-discount is not economically rational to
-wash; **reputation-to-pass-`min_reputation`-gates and to look trustworthy in
-discovery is the real payoff**, and it is cheap.
+**(b2) Agent reputation farming (`AgentRegistration.reputation`).** This section
+was superseded by the 2026-07-18 hardening. A SOL completion now grants one
+point per 100,000 lamports of irreversible protocol fee, capped at 100 points;
+SPL-token completions grant zero. Dust self-hires therefore grant zero rather
+than +100. Moving from the probationary 3000 to the 10000 cap requires at least
+**0.7 SOL of protocol fees** (7000 × 100,000 lamports), regardless of how the
+attacker splits the work. At the 5% live fee, a full +100 award requires a
+0.2-SOL reward and burns 0.01 SOL; 70 such completions burn 0.7 SOL. Adding a
+rating to every wash trade still burns the separate HireRating rent discussed
+in b1. Raw reputation remains an economic signal rather than proof of distinct
+counterparties, but it no longer rides for free on minimum-price work or mixes
+unpriced SPL units into SOL economics.
 
 > **Code discovery correcting the problem statement's "one self-hire ≈ one
 > rating":** a self-hire produces *both* one listing rating (b1) *and* one
 > worker reputation increment (b2) — they are separate on-chain writes with
 > different persistence. The permanent-rent burn (b1's `HireRating`, ≈ 0.004
-> SOL) is the binding cost; the reputation increment (b2) rides along for free
-> on the same completion. `rate_hire` does **not** touch `AgentStats` or agent
+> SOL) is the binding cost for the rating. Reputation (b2) has its own
+> irreversible SOL-fee floor and does not ride for free. `rate_hire` does **not** touch `AgentStats` or agent
 > reputation (`rate_hire.rs:25-30` — provider-agent aggregate is explicitly
 > DEFERRED to P6.3), so listing ratings and agent reputation are today
 > **disjoint** signals.
@@ -199,7 +200,7 @@ trusts an attestor must treat a *re-registered* key as a **new** trust decision
 | --- | --- | --- | --- | --- |
 | a | Self-attested spam listing | ~0.005–0.01 SOL (mostly reclaimable) | ~0 | Edge trust list (surface doesn't show it) |
 | b1 | Fake listing rating | **~0.004 SOL burned** | — | Provenance-weighted discovery |
-| b2 | Max a worker's reputation (3000→10000) | **~0.28 SOL** | — | Distinctness-weighted rep (deferred) |
+| b2 | Max a worker's reputation (3000→10000) | **≥0.7 SOL burned as protocol fees** | — | Fee-backed gain + provenance-weighted discovery |
 | c | Sybil attestor farm | ~0 (bonds refundable) | 7-day float × N | Trust *which*, never *how many* |
 | d | Poison default trust list | **2-of-3 multisig compromise** | — | Multisig + inclusion/distrust log |
 | e1 | BLOCK-floor griefing | **no on-chain vector** | — | (n/a — multisig-only write) |
@@ -217,7 +218,7 @@ structurally strong.** That shape drives the recommendation.
 | --- | --- | --- |
 | **Edge trust lists** (surface-chosen attestor sets; agenc.ag trusts global authority + attest.agenc.ag + env extras) | Protect a **surface's** discovery: a self-attested spam listing (a) is invisible on a surface that doesn't trust its attestor. This is the primary spam defense. | They protect *surfaces*, **not the network**. Every surface must curate its own list; a naive surface that trusts everyone inherits all of (a)/(c). No global spam floor. |
 | **BLOCK floor** (`["moderation_block", hash]`, required on all 3 gates, multisig-written, content-hash-keyed) | Reactive, real-time **takedown** of a specific content hash, un-evadable by re-minting under a fresh PDA (`moderation_gate_helpers.rs:170-188`). | It is a **blacklist for known-bad content**, not a spam classifier. It is an **entry gate, not a settlement freeze** (P1.2 §9.5): already-live tasks still settle. It cannot proactively stop novel spam; someone must identify the hash first. |
-| **Probationary reputation** (fresh agents start 3000, not 5000; `register_agent.rs:144`) | A wiped-and-re-registered sybil no longer outranks its slashed predecessor; raises the cost of reputation-laundering by re-registration. | A fresh sybil that *never misbehaved* still starts at 3000 and earns +100/completion — farming (b2) is unaffected. It handicaps *recidivists*, not *first-time* sybils. |
+| **Probationary + fee-backed reputation** (fresh agents start 3000; SOL completions earn 0–100 from irreversible fees) | A wiped identity no longer outranks its slashed predecessor; dust and SPL-token wash completions earn zero; reaching 10000 burns at least 0.7 SOL in protocol fees. | It still cannot prove distinct counterparties. A sufficiently funded attacker can buy the signal, so discovery must retain provenance weighting. |
 | **Agent stake** (`min_agent_stake` = 0.01 SOL, refundable) | Every agent identity costs a (refundable) 0.01 SOL, a trivial concurrency cap and a slashing target for disputes. | Refundable ⇒ near-zero identity-*creation* cost. 0.01 SOL does not deter sybils at any scale that matters. |
 | **Atomic protocol fee** (5% live, taken at settlement) | Wash-trade friction: every self-hire round-trip burns 5% of the reward irretrievably. | At `MIN_SKILL_PRICE` (1000 lamports) the fee is **50 lamports** — the friction floors out. The fee scales with *reward*, and the attacker sets the reward to the minimum. |
 | **Rent** (per-account rent-exempt minimum) | Spam friction: each task/listing/rating costs rent. The **`HireRating` rent (≈0.004 SOL) is permanently burned** — the single most load-bearing anti-wash cost today. | Task/escrow/listing rent is **reclaimable** (`close_task`), so only the `HireRating` burn actually bites, and 0.004 SOL/rating is low (attack b1). |
@@ -467,7 +468,7 @@ P6.4 must not repeat it for a spam problem that the indexer solves.
 | Per-attestor rate limit (Option D) | A single attestor writes **> M CLEAN records/24h** of spam that reaches a trusted surface (start M = 500), i.e. §4.1 clustering is being out-run at record-write speed. |
 | On-chain distinctness proof (beyond hints) | Only if a **credibly sybil-resistant on-chain identity** primitive (e.g. a stake-weighted or proof-of-personhood attestation the protocol is willing to depend on) becomes available — do not build a bespoke one. |
 | Registration bond curve | **Never** unless concurrent-sybil-attestor count on trusted lists becomes a demonstrated problem AND §4.1 cannot weight it out — and even then, prefer trust-list curation (a governance dial is an exclusion dial, P1.2 §7). |
-| Reputation-farming friction (b2) | Fresh-sybil reputation farming observed materially gaming `min_reputation`-gated tasks; first response is to **weight reputation down in discovery** (§4.1), only then consider a per-completion cost. |
+| Reputation-farming friction (b2) | **Implemented 2026-07-18:** 1 point per 100,000 lamports of irreversible SOL protocol fee, capped at 100; token/dust completions earn zero. Provenance weighting remains necessary because paid wash trading is still possible. |
 
 ### 4.4 What this recommendation deliberately does NOT solve
 
@@ -513,7 +514,7 @@ P6.4 must not repeat it for a spam problem that the indexer solves.
    (mirrors P1.2 Open Question 5's "ship alone first"). Confirm.
 
 4. **Reputation as a ranking signal.** `AgentRegistration.reputation` is cheaply
-   farmed (b2: ~0.28 SOL to max). Recommend the SDK **down-weight raw reputation
+   farmed (b2: at least 0.7 SOL of irreversible fees to max). Recommend the SDK **down-weight raw reputation
    to a soft signal** and never rank on it, preferring settled-distinct-volume +
    dispute-loss ratio. Agree, or is there a product reason to keep reputation
    prominent (and accept it is wash-inflatable)?
@@ -552,7 +553,7 @@ P6.4 must not repeat it for a spam problem that the indexer solves.
 - `rate_hire` guards + permanent `HireRating` rent (no close): `rate_hire.rs:67-195`,
   `state.rs:1810-1845` (`HireRating`, seeds `["hire_rating", task]`).
 - Self-hire guard (forces 2 wallets to wash): `hire_from_listing.rs:77-80`.
-- Reputation +100/completion, cap 10000, probationary 3000: `completion_helpers.rs:311-317`,
+- Reputation 0–100 per SOL completion from fee-backed gain, cap 10000, probationary 3000: `completion_helpers.rs`,
   `constants.rs:39,42`, `register_agent.rs:52,144`.
 - Fee/reputation discount tiers: `utils/compute_budget.rs` (`FEE_TIER_THRESHOLDS`,
   `REPUTATION_FEE_TIERS`).

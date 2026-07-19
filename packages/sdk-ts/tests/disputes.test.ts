@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { address, createNoopSigner } from "@solana/kit";
+import { AccountRole, address, createNoopSigner } from "@solana/kit";
 import {
   // generated sync builders (used as the structural ground truth for account order)
   getInitiateDisputeInstructionDataDecoder,
@@ -17,6 +17,9 @@ import {
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
   findDisputeResolverPda,
+  findTaskSubmissionPda,
+  findHireRecordPda,
+  findBidBookPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../src/index.js";
 // Import the facade module directly: the orchestrator wires re-exports into
@@ -44,6 +47,11 @@ const CLAIM = a("SysvarS1otHashes111111111111111111111111111");
 const DISPUTE = a("SysvarStakeHistory1111111111111111111111111");
 const AUTHORITY_ADDR = a("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const AUTHORITY = createNoopSigner(AUTHORITY_ADDR);
+const PEER_CLAIM = a("SysvarRecentB1ockHashes11111111111111111111");
+const PEER_WORKER = a("AddressLookupTab1e1111111111111111111111111");
+const PARENT_TASK = a("Config1111111111111111111111111111111111111");
+const ACCEPTED_BID = a("ComputeBudget111111111111111111111111111111");
+const BIDDER_STATE = a("Ed25519SigVerify111111111111111111111111111");
 
 const programOf = (ix: { programAddress: string }) => ix.programAddress;
 const order = (ix: { accounts: readonly { address: string }[] }) =>
@@ -99,9 +107,16 @@ describe("disputes facade (structural)", () => {
       rationaleHash,
       rationaleUri,
       creator: CREATOR,
+      workerClaim: CLAIM,
       worker: WORKER_AGENT,
       workerWallet: WORKER_WALLET,
       bondTreasury: TREASURY,
+      dependencyParent: PARENT_TASK,
+      peerWorkers: [{ claim: PEER_CLAIM, worker: PEER_WORKER }],
+      bidSettlement: {
+        acceptedBid: ACCEPTED_BID,
+        bidderMarketState: BIDDER_STATE,
+      },
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -119,14 +134,22 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       workerAuthority: WORKER_WALLET,
     });
-    // creatorCompletionBond, workerCompletionBond, bondTreasury precede the two
-    // optional F-9 sweep accounts (taskSubmission, taskValidationConfig).
-    expect(accs[accs.length - 5]).toBe(creatorBond);
-    expect(accs[accs.length - 4]).toBe(workerBond);
-    expect(accs[accs.length - 3]).toBe(TREASURY);
-    // And they are genuinely included (the hint: callers cannot omit them).
     expect(accs).toContain(creatorBond);
     expect(accs).toContain(workerBond);
+    expect(accs).toContain(TREASURY);
+    const [submission] = await findTaskSubmissionPda({ claim: CLAIM });
+    expect(accs).toContain(submission);
+    const [peerSubmission] = await findTaskSubmissionPda({ claim: PEER_CLAIM });
+    const [bidBook] = await findBidBookPda({ task: TASK });
+    expect(accs.slice(-7)).toEqual([
+      PARENT_TASK,
+      PEER_CLAIM,
+      PEER_WORKER,
+      peerSubmission,
+      bidBook,
+      ACCEPTED_BID,
+      BIDDER_STATE,
+    ]);
 
     // P6.4: the reasoned ruling (approve + rationaleHash + rationaleUri) round-trips.
     const decoded = getResolveDisputeInstructionDataDecoder().decode(ix.data);
@@ -141,8 +164,15 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       creator: CREATOR,
       authority: AUTHORITY,
+      workerClaim: CLAIM,
       worker: WORKER_AGENT,
       workerWallet: WORKER_WALLET,
+      dependencyParent: PARENT_TASK,
+      peerWorkers: [{ claim: PEER_CLAIM, worker: PEER_WORKER }],
+      bidSettlement: {
+        acceptedBid: ACCEPTED_BID,
+        bidderMarketState: BIDDER_STATE,
+      },
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -159,33 +189,34 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       workerAuthority: WORKER_WALLET,
     });
-    // creatorCompletionBond, workerCompletionBond precede the two optional F-9
-    // sweep accounts (taskSubmission, taskValidationConfig).
-    expect(accs[accs.length - 4]).toBe(creatorBond);
-    expect(accs[accs.length - 3]).toBe(workerBond);
     expect(accs).toContain(creatorBond);
     expect(accs).toContain(workerBond);
+    const [submission] = await findTaskSubmissionPda({ claim: CLAIM });
+    expect(accs).toContain(submission);
+    const [peerSubmission] = await findTaskSubmissionPda({ claim: PEER_CLAIM });
+    const [bidBook] = await findBidBookPda({ task: TASK });
+    expect(accs.slice(-7)).toEqual([
+      PARENT_TASK,
+      PEER_CLAIM,
+      PEER_WORKER,
+      peerSubmission,
+      bidBook,
+      ACCEPTED_BID,
+      BIDDER_STATE,
+    ]);
+    expect(ix.accounts.slice(-7).map((account) => account.role)).toEqual([
+      AccountRole.READONLY,
+      AccountRole.WRITABLE,
+      AccountRole.WRITABLE,
+      AccountRole.WRITABLE,
+      AccountRole.WRITABLE,
+      AccountRole.WRITABLE,
+      AccountRole.WRITABLE,
+    ]);
 
     expect(() =>
       getExpireDisputeInstructionDataDecoder().decode(ix.data),
     ).not.toThrow();
-  });
-
-  it("resolveDispute: throws when worker bond authority cannot be inferred", async () => {
-    await expect(
-      facade.resolveDispute({
-        dispute: DISPUTE,
-        task: TASK,
-        authority: AUTHORITY,
-        approve: true,
-        // P6.4 rationale args are required by the type even though the facade
-        // throws on the missing worker authority before it reaches the builder.
-        rationaleHash: new Uint8Array(32).fill(5),
-        rationaleUri: "agenc://ruling/sha256/approve",
-        creator: CREATOR,
-        bondTreasury: TREASURY,
-      }),
-    ).rejects.toThrow(/workerBondAuthority/);
   });
 
   it("cancelDispute: program, account order, data round-trip", async () => {
@@ -193,6 +224,8 @@ describe("disputes facade (structural)", () => {
       dispute: DISPUTE,
       task: TASK,
       authority: AUTHORITY,
+      defendant: WORKER_AGENT,
+      taskValidationConfig: CLAIM,
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -201,6 +234,10 @@ describe("disputes facade (structural)", () => {
     expect(accs[1]).toBe(DISPUTE);
     expect(accs[2]).toBe(TASK);
     expect(accs[3]).toBe(AUTHORITY_ADDR);
+    expect(accs[4]).toBe(WORKER_AGENT);
+    expect(ix.accounts[4]?.role).toBe(AccountRole.WRITABLE);
+    expect(accs[5]).toBe(CLAIM);
+    expect(ix.accounts[5]?.role).toBe(AccountRole.READONLY);
 
     expect(() =>
       getCancelDisputeInstructionDataDecoder().decode(ix.data),
@@ -228,11 +265,55 @@ describe("disputes facade (structural)", () => {
     expect(accs[4]).toBe(CREATOR);
     expect(accs[6]).toBe(TREASURY);
     expect(accs[7]).toBe(AUTHORITY_ADDR);
-    expect(accs).toContain(TOKEN_PROGRAM);
+    // No token settlement requested: the optional token-program slot MUST be
+    // Anchor's None placeholder, not Codama's SPL default (which would make the
+    // on-chain handler think a partial settlement was requested).
+    expect(accs[12]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
 
     expect(() =>
       getApplyDisputeSlashInstructionDataDecoder().decode(ix.data),
     ).not.toThrow();
+  });
+
+  it("applyDisputeSlash: requires + appends creator on the complete token path", async () => {
+    const ix = await facade.applyDisputeSlash({
+      dispute: DISPUTE,
+      task: TASK,
+      workerClaim: CLAIM,
+      workerAgent: WORKER_AGENT,
+      workerAuthority: WORKER_WALLET,
+      treasury: TREASURY,
+      authority: AUTHORITY,
+      escrow: AGENT,
+      tokenEscrowAta: CREATOR,
+      treasuryTokenAccount: TREASURY,
+      rewardMint: TASK,
+      creator: AUTHORITY_ADDR,
+    });
+    const accs = order(ix);
+    expect(accs[8]).toBe(AGENT);
+    expect(accs[9]).toBe(CREATOR);
+    expect(accs[10]).toBe(TREASURY);
+    expect(accs[11]).toBe(TASK);
+    expect(accs[12]).toBe(TOKEN_PROGRAM);
+    expect(accs[13]).toBe(AUTHORITY_ADDR);
+    expect(ix.accounts[13]?.role).toBe(AccountRole.WRITABLE);
+  });
+
+  it("applyDisputeSlash: fails before construction on a partial token account set", async () => {
+    await expect(
+      facade.applyDisputeSlash({
+        dispute: DISPUTE,
+        task: TASK,
+        workerClaim: CLAIM,
+        workerAgent: WORKER_AGENT,
+        workerAuthority: WORKER_WALLET,
+        treasury: TREASURY,
+        authority: AUTHORITY,
+        escrow: AGENT,
+        tokenEscrowAta: CREATOR,
+      } as never),
+    ).rejects.toThrow(/token settlement requires/);
   });
 
   it("applyInitiatorSlash: program, account order, data round-trip", async () => {
@@ -268,13 +349,21 @@ describe("disputes facade (structural)", () => {
       workerAuthority: WORKER_WALLET,
       authority: AUTHORITY,
       approveCompletion: true,
+      operator: AGENT,
+      referrer: DISPUTE,
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
 
     const accs = order(ix);
+    expect(accs).toHaveLength(16);
     expect(accs[0]).toBe(TASK);
     expect(accs[1]).toBe(CLAIM);
+    const [hireRecord] = await findHireRecordPda({ task: TASK });
+    expect(accs[9]).toBe(hireRecord);
+    expect(accs[10]).toBe(AGENT);
+    expect(accs[11]).toBe(DISPUTE);
+    expect(accs[12]).toBe(AUTHORITY_ADDR);
 
     // Generated builder auto-derives the bonds; assert they made it in (positions
     // [-3], [-2] before systemProgram at [-1]).
@@ -308,8 +397,14 @@ describe("disputes facade (structural)", () => {
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
 
     const accs = order(ix);
+    expect(accs).toHaveLength(16);
     expect(accs[0]).toBe(TASK);
     expect(accs[1]).toBe(CLAIM);
+    const [hireRecord] = await findHireRecordPda({ task: TASK });
+    expect(accs[9]).toBe(hireRecord);
+    expect(accs[10]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(accs[11]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(accs[12]).toBe(AUTHORITY_ADDR);
 
     const [creatorBond] = await findCreatorCompletionBondPda({
       task: TASK,

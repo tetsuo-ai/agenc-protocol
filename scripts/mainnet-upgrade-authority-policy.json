@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "network": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "programId": "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+  "loaderProgramId": "BPFLoaderUpgradeab1e11111111111111111111111",
+  "expectedProgramData": "E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw",
+  "requiredState": "mutable",
+  "allowedUpgradeAuthorities": [
+    {
+      "address": "Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf",
+      "custody": {
+        "kind": "squads-v4-vault",
+        "programId": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+        "multisig": "7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY",
+        "vaultIndex": 0,
+        "threshold": 2,
+        "memberCount": 3,
+        "timeLockSeconds": 0,
+        "rentCollector": null,
+        "autonomous": true,
+        "members": [
+          {
+            "address": "3HvRz5tYADe92Va435ds2nxgUSWZhv8bHxm1wNfSNznx",
+            "permissionsMask": 7
+          },
+          {
+            "address": "6CpyZBmBDymdp56dg1KsNnK1vYqWwz2vemdp9m7a6ufw",
+            "permissionsMask": 7
+          },
+          {
+            "address": "HcecpKXMwkZuaBByA1drmW2t2xxu18iRL6HHTJTLGLqh",
+            "permissionsMask": 7
+          }
+        ],
+        "residualRisk": "All three member keys are currently co-located software files; replace at least one with independently held hardware custody."
+      }
+    }
+  ]
+}

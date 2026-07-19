@@ -191,13 +191,16 @@ export type InitiateDisputeAsyncInput<
   /** Wallet-scoped task/dispute rate limit state shared across all agents */
   authorityRateLimit?: Address<TAccountAuthorityRateLimit>;
   protocolConfig?: Address<TAccountProtocolConfig>;
-  /** Optional: Initiator's claim if they are a worker (not the creator) */
+  /** Initiator's live claim; required when the initiator is a worker. */
   initiatorClaim?: Address<TAccountInitiatorClaim>;
-  /** Optional: Worker agent to be disputed (required when initiator is task creator) */
+  /** Worker agent to be disputed; required when initiator is task creator. */
   workerAgent?: Address<TAccountWorkerAgent>;
-  /** Optional: Worker's claim (required when worker_agent is provided) */
+  /** Defendant's live claim; required when the initiator is task creator. */
   workerClaim?: Address<TAccountWorkerClaim>;
-  /** Optional durable submission record used once the claim slot has been released. */
+  /**
+   * Submitted delivery record; required for worker-initiated disputes. A
+   * submission never substitutes for the live claim required by both exits.
+   */
   taskSubmission?: Address<TAccountTaskSubmission>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -372,13 +375,16 @@ export type InitiateDisputeInput<
   /** Wallet-scoped task/dispute rate limit state shared across all agents */
   authorityRateLimit: Address<TAccountAuthorityRateLimit>;
   protocolConfig: Address<TAccountProtocolConfig>;
-  /** Optional: Initiator's claim if they are a worker (not the creator) */
+  /** Initiator's live claim; required when the initiator is a worker. */
   initiatorClaim?: Address<TAccountInitiatorClaim>;
-  /** Optional: Worker agent to be disputed (required when initiator is task creator) */
+  /** Worker agent to be disputed; required when initiator is task creator. */
   workerAgent?: Address<TAccountWorkerAgent>;
-  /** Optional: Worker's claim (required when worker_agent is provided) */
+  /** Defendant's live claim; required when the initiator is task creator. */
   workerClaim?: Address<TAccountWorkerClaim>;
-  /** Optional durable submission record used once the claim slot has been released. */
+  /**
+   * Submitted delivery record; required for worker-initiated disputes. A
+   * submission never substitutes for the live claim required by both exits.
+   */
   taskSubmission?: Address<TAccountTaskSubmission>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -513,13 +519,16 @@ export type ParsedInitiateDisputeInstruction<
     /** Wallet-scoped task/dispute rate limit state shared across all agents */
     authorityRateLimit: TAccountMetas[3];
     protocolConfig: TAccountMetas[4];
-    /** Optional: Initiator's claim if they are a worker (not the creator) */
+    /** Initiator's live claim; required when the initiator is a worker. */
     initiatorClaim?: TAccountMetas[5] | undefined;
-    /** Optional: Worker agent to be disputed (required when initiator is task creator) */
+    /** Worker agent to be disputed; required when initiator is task creator. */
     workerAgent?: TAccountMetas[6] | undefined;
-    /** Optional: Worker's claim (required when worker_agent is provided) */
+    /** Defendant's live claim; required when the initiator is task creator. */
     workerClaim?: TAccountMetas[7] | undefined;
-    /** Optional durable submission record used once the claim slot has been released. */
+    /**
+     * Submitted delivery record; required for worker-initiated disputes. A
+     * submission never substitutes for the live claim required by both exits.
+     */
     taskSubmission?: TAccountMetas[8] | undefined;
     authority: TAccountMetas[9];
     systemProgram: TAccountMetas[10];

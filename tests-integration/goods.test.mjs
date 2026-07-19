@@ -75,10 +75,18 @@ async function createGood(w, { price = MIN_GOOD_PRICE, totalSupply = 5, priceMin
 }
 
 // Purchase one unit (SOL) at `serial`. Returns { receipt, res }.
-async function buyGood(w, { good, buyer, serial, expectedPrice, metaHash, operatorWallet = null }) {
+async function buyGood(w, {
+  good,
+  buyer,
+  serial,
+  expectedPrice,
+  metaHash,
+  expectedMetadataHash = metaHash,
+  operatorWallet = null,
+}) {
   const [receipt] = pda([enc("goods_sale"), good.toBuffer(), new BN(serial).toArrayLike(Buffer, "le", 8)]);
   const res = send(w.svm, await buyer.prog.methods
-    .purchaseGood(new BN(serial), new BN(expectedPrice))
+    .purchaseGood(new BN(serial), new BN(expectedPrice), arr(expectedMetadataHash))
     .accounts({
       good, saleReceipt: receipt, sellerAgent: w.sellerAgent, sellerWallet: w.seller.publicKey,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
@@ -181,6 +189,48 @@ test("slippage guard rejects a stale higher price", async () => {
   const buyer = freshBuyer(w);
   expectFail((await buyGood(w, { good, buyer, serial: 0, expectedPrice: 1_000_000, metaHash })).res,
     "GoodsPriceChanged", "expected_price below current price rejected");
+});
+
+test("metadata commitment rejects a same-price listing swap", async () => {
+  const w = await goodsWorld();
+  const price = 1_000_000;
+  const originalHash = Buffer.alloc(32, 0x31);
+  const replacementHash = Buffer.alloc(32, 0x32);
+  const { good } = await createGood(w, { price, metaHash: originalHash });
+
+  // The buyer previews the original payload. The seller then swaps only the
+  // off-chain pointer while preserving the exact price and active state.
+  expectOk(send(w.svm, await w.sellerProg.methods
+    .updateGoodsListing(
+      null,
+      null,
+      arr(replacementHash),
+      "https://mmo.agenc.ag/goods/replacement.json",
+      null,
+      null,
+      null,
+      null,
+    )
+    .accounts({
+      good,
+      seller: w.sellerAgent,
+      protocolConfig: w.protocolPda,
+      authority: w.seller.publicKey,
+    })
+    .instruction(), [w.seller]), "same-price metadata swap");
+
+  const buyer = freshBuyer(w);
+  expectFail((await buyGood(w, {
+    good,
+    buyer,
+    serial: 0,
+    expectedPrice: price,
+    metaHash: replacementHash,
+    expectedMetadataHash: originalHash,
+  })).res, "GoodsMetadataChanged", "stale metadata commitment rejected");
+
+  assert.equal(Number(decode(w.svm, "GoodsListing", good).sold_count), 0,
+    "failed stale purchase must not burn supply");
 });
 
 test("stale serial (not sold_count) is rejected", async () => {
@@ -317,7 +367,7 @@ test("SPL rail: three-way token split", async () => {
   const { good } = await createGood(w, { price, priceMint: mint.publicKey, operator: operator.publicKey, operatorFeeBps: 300 });
   const [receipt] = pda([enc("goods_sale"), good.toBuffer(), new BN(0).toArrayLike(Buffer, "le", 8)]);
   expectOk(send(w.svm, await buyer.prog.methods
-    .purchaseGood(new BN(0), new BN(price))
+    .purchaseGood(new BN(0), new BN(price), arr(Buffer.alloc(32, 9)))
     .accounts({
       good, saleReceipt: receipt, sellerAgent: w.sellerAgent, sellerWallet: w.seller.publicKey,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
@@ -361,7 +411,8 @@ test("AC-2: payout follows the snapshotted seller_authority, not the live agent 
   // seller_wallet constraint pins to good.seller_authority (the snapshot).
   const buyer = freshBuyer(w);
   const [receipt] = pda([enc("goods_sale"), good.toBuffer(), new BN(0).toArrayLike(Buffer, "le", 8)]);
-  const attackerRes = send(w.svm, await buyer.prog.methods.purchaseGood(new BN(0), new BN(price))
+  const attackerRes = send(w.svm, await buyer.prog.methods
+    .purchaseGood(new BN(0), new BN(price), arr(metaHash))
     .accounts({ good, saleReceipt: receipt, sellerAgent: w.sellerAgent, sellerWallet: attacker.publicKey,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey, moderationBlock: moderationBlockPda(metaHash)[0],
       authority: buyer.kp.publicKey, systemProgram: SystemProgram.programId, operatorWallet: null,
@@ -383,7 +434,7 @@ test("AC-1: a suspended seller cannot sell (revert-sensitive)", async () => {
   mutateAgent(w, w.sellerAgent, { status: 3 });
   const buyer = freshBuyer(w);
   expectFail((await buyGood(w, { good, buyer, serial: 0, expectedPrice: MIN_GOOD_PRICE, metaHash })).res,
-    "AgentSuspended", "suspended seller's good cannot be purchased");
+    "AgentNotActive", "suspended seller's good cannot be purchased");
   // Restore to Active -> the sale goes through (proves the gate is the cause).
   // A fresh buyer keeps the tx distinct from the failed suspended attempt
   // (litesvm dedupes byte-identical transactions).

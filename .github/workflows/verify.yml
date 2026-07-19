@@ -7,40 +7,36 @@ name: Verifiable Build
 # `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` was produced from a specific
 # source tag — it is the "money path" supply-chain control (PLAN.md P8.3).
 #
-# WHAT THIS DOES TODAY (works while the repo is PRIVATE):
+# WHAT THIS DOES TODAY:
 #   - Builds the program inside the pinned `solana-verify` Docker image so the
 #     `.so` is deterministic (same input source -> same output bytes).
 #   - Emits the SHA-256 executable hash for BOTH program surfaces:
-#       * the full default-feature surface — LIVE on mainnet since the
-#         2026-06-11 full-surface upgrade (this is the hash that should match
-#         `get-program-hash` against mainnet),
+#       * the production default-feature surface — a release candidate until an
+#         independently approved upgrade is confirmed (only then should its hash
+#         match `get-program-hash` against mainnet),
 #       * the mainnet-canary 25-instruction surface — the historical/alternate
 #         restricted build, no longer what is deployed.
-#   - Attaches `verifiable-build-hashes.txt` to the GitHub Release for the tag,
-#     so every release permanently records the hash an integrator can reproduce.
+#   - Uploads `verifiable-build-hashes.txt` as a workflow artifact. The required
+#     caller in `release.yml` attaches it before a protocol release is published.
 #
-# WHAT THIS DOES *NOT* DO YET (BLOCKED on PLAN.md P0.6 — repo going PUBLIC):
-#   - `solana-verify verify-from-repo` / the OtterSec (osec.io) on-chain
-#     verification PDA require a PUBLIC git URL the OtterSec builder can clone.
-#     While the repo is private, third parties cannot independently verify the
-#     source. This workflow therefore stops at the reproducible hash and does
-#     NOT submit a remote verification job. See docs/VERIFIABLE_BUILDS.md.
+# WHAT THIS DOES *NOT* DO:
+#   - It does not mutate the on-chain OtterSec verification PDA or submit a
+#     remote verification job. The public repo makes that possible, but the
+#     Squads-controlled uploader requires a separately approved ceremony; see
+#     docs/VERIFIABLE_BUILDS.md and the rollout runbook.
 #
 # Targets solana-verify v0.5.x (Solana Foundation fork). The build image's
 # Solana CLI version is read from programs/agenc-coordination/Cargo.toml
 # [workspace.metadata.cli].solana = "3.0.13" (kept in sync with Anchor.toml).
 
 on:
-  # Fire on the program-source release tags. SDK-only tags (sdk-v*) do not
-  # change the on-chain program, so they do not need a verifiable build.
-  push:
-    tags:
-      - "protocol-v*"
+  # Required by release.yml for protocol tags.
+  workflow_call:
   # Manual reproducibility spot-check against any ref.
   workflow_dispatch:
 
 permissions:
-  contents: write # attach the hash artifact to the GitHub Release
+  contents: read
 
 # Pin the verifier so the build image and hashing logic are themselves
 # reproducible. Bump deliberately and re-record hashes when upgrading.
@@ -53,17 +49,27 @@ env:
 jobs:
   verifiable-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - name: Checkout (full history so the tag commit is reproducible)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a tagged release commit from main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main"; then
+            echo "Release tag ${GITHUB_REF_NAME} does not point to a commit on main" >&2
+            exit 1
+          fi
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -97,27 +103,39 @@ jobs:
         id: canary_hash
         run: |
           HASH=$(solana-verify get-executable-hash "/tmp/${LIBRARY_NAME}.canary.so")
+          if [[ ! "$HASH" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "solana-verify returned an invalid canary executable hash" >&2
+            exit 1
+          fi
           echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
           echo "mainnet-canary .so SHA-256: ${HASH}"
 
-      # --- FULL surface: default features — LIVE on mainnet (since 2026-06-11) ---
-      # This is the surface actually deployed at PROGRAM_ID, so THIS hash is the
-      # one that should match `get-program-hash` against mainnet.
-      - name: Reproducible build (full default-feature surface)
+      # --- PRODUCTION CANDIDATE: default features ---
+      # Do not describe this hash as live until a separately approved upgrade is
+      # confirmed on-chain. Revision 4 currently exposes 99 instructions while
+      # the revision-5 default build intentionally exposes 97.
+      - name: Reproducible build (production default-feature surface)
         working-directory: programs/agenc-coordination
         run: |
           solana-verify build --library-name "${LIBRARY_NAME}"
           mv "target/deploy/${LIBRARY_NAME}.so" \
              "/tmp/${LIBRARY_NAME}.full.so"
 
-      - name: Hash the full build
+      - name: Hash the production build
         id: full_hash
         run: |
           HASH=$(solana-verify get-executable-hash "/tmp/${LIBRARY_NAME}.full.so")
+          if [[ ! "$HASH" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "solana-verify returned an invalid production executable hash" >&2
+            exit 1
+          fi
           echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
           echo "full-surface .so SHA-256: ${HASH}"
 
       - name: Write hash manifest
+        env:
+          FULL_HASH: ${{ steps.full_hash.outputs.hash }}
+          CANARY_HASH: ${{ steps.canary_hash.outputs.hash }}
         run: |
           {
             echo "# AgenC verifiable build hashes"
@@ -130,40 +148,24 @@ jobs:
             echo "#"
             echo "# Reproduce locally: see docs/VERIFIABLE_BUILDS.md"
             echo ""
-            echo "full (default features) — LIVE surface on mainnet (matches get-program-hash):"
-            echo "  ${{ steps.full_hash.outputs.hash }}"
+            echo "production (default features) — candidate until an approved on-chain upgrade is confirmed:"
+            echo "  ${FULL_HASH}"
             echo ""
             echo "mainnet-canary (--no-default-features --features mainnet-canary) — historical/alternate build, not deployed:"
-            echo "  ${{ steps.canary_hash.outputs.hash }}"
+            echo "  ${CANARY_HASH}"
           } > verifiable-build-hashes.txt
           cat verifiable-build-hashes.txt
 
       - name: Upload hash manifest as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verifiable-build-hashes
           path: verifiable-build-hashes.txt
 
-      # Attach to the GitHub Release the release.yml workflow created for this
-      # tag. Best-effort: if the release does not exist yet (race with
-      # release.yml), the workflow artifact above still preserves the hashes.
-      - name: Attach hash manifest to the GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" verifiable-build-hashes.txt --clobber
-          else
-            echo "Release ${GITHUB_REF_NAME} not found yet — hash preserved as a workflow artifact only."
-          fi
-
-      # PUBLIC-REPO-GATED (PLAN.md P0.6). Intentionally NOT run while private:
-      # solana-verify verify-from-repo clones the git URL inside the OtterSec
-      # builder, which cannot reach a private repo, and the on-chain
-      # verification PDA / `remote submit-job` would advertise an unverifiable
-      # source. Activate this step only after the repo is public AND the
-      # full-surface hash above matches `get-program-hash` against mainnet.
+      # Intentionally manual: the public repo is cloneable, but the on-chain
+      # verification PDA is controlled by the Squads vault. Activate this only
+      # as part of an approved post-deploy ceremony AND after the production
+      # hash above matches `get-program-hash` against mainnet.
       #
       # - name: Verify deployed program matches this repo (PUBLIC REPO ONLY)
       #   run: |
@@ -174,4 +176,4 @@ jobs:
       #       --mount-path "${MOUNT_PATH}" \
       #       --commit-hash "${GITHUB_SHA}" \
       #       https://github.com/tetsuo-ai/agenc-protocol
-      #       # (full/default surface — the live mainnet build)
+      #       # (production/default surface — only after it is live on mainnet)

@@ -9,16 +9,18 @@ use crate::events::{
 };
 use crate::instructions::constants::{
     BASIS_POINTS_DIVISOR, MAX_COMBINED_FEE_BPS, MAX_OPERATOR_FEE_BPS, MAX_REFERRER_FEE_BPS,
-    MAX_REPUTATION, REPUTATION_PER_COMPLETION, WORKER_FLOOR_BPS,
+    MAX_REPUTATION, REPUTATION_FEE_LAMPORTS_PER_POINT, REPUTATION_PER_COMPLETION, WORKER_FLOOR_BPS,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
+use crate::instructions::program_account_helpers::deserialize_program_account;
+use crate::instructions::task_parent_helpers::load_canonical_parent_task;
 #[cfg(feature = "spl-token-rewards")]
 use crate::instructions::token_helpers::{
     close_token_escrow_account_info, transfer_tokens_from_escrow,
 };
 use crate::state::{
-    AgentRegistration, DependencyType, ProtocolConfig, Task, TaskClaim, TaskEscrow, TaskStatus,
-    TaskType, RESULT_DATA_SIZE,
+    AgentRegistration, DependencyType, HireRecord, ProtocolConfig, Task, TaskClaim, TaskEscrow,
+    TaskStatus, TaskType, RESULT_DATA_SIZE,
 };
 use crate::utils::compute_budget::{calculate_reputation_fee_discount, calculate_tiered_fee};
 use anchor_lang::prelude::*;
@@ -59,6 +61,25 @@ pub(crate) fn calculate_reward_split_for_amount(
 pub fn calculate_reward_split(task: &Task, protocol_fee_bps: u16) -> Result<(u64, u64)> {
     let reward_per_worker = calculate_reward_per_worker(task)?;
     calculate_reward_split_for_amount(reward_per_worker, protocol_fee_bps)
+}
+
+/// Validate the creation-time funding floor implied by the collaborative share
+/// formula below. Each required completion must have at least one gross reward
+/// unit; otherwise the first `reward_amount` workers consume the remainder and a
+/// later worker deterministically reaches `RewardTooSmall`, making successful
+/// completion impossible.
+pub(crate) fn validate_reward_covers_required_completions(
+    task_type: TaskType,
+    reward_amount: u64,
+    required_completions: u8,
+) -> Result<()> {
+    if task_type == TaskType::Collaborative {
+        require!(
+            required_completions > 0 && reward_amount >= u64::from(required_completions),
+            CoordinationError::RewardTooSmall
+        );
+    }
+    Ok(())
 }
 
 /// Calculate worker reward and protocol fee with volume-based tiered discounts (issue #40).
@@ -140,22 +161,17 @@ pub struct TokenPaymentAccounts<'a, 'info> {
 ///
 /// Anchor account deserialization returns `AccountNotInitialized` when a closed claim PDA is
 /// passed in. For negative completion paths we want the protocol error instead.
-pub fn load_task_claim_or_not_claimed<'info>(
-    claim_info: &UncheckedAccount<'info>,
+pub fn load_task_claim_or_not_claimed(
+    claim_info: &UncheckedAccount<'_>,
     task_key: &Pubkey,
-) -> Result<Account<'info, TaskClaim>> {
+) -> Result<TaskClaim> {
     if claim_info.owner == &anchor_lang::solana_program::system_program::ID
         && claim_info.lamports() == 0
     {
         return err!(CoordinationError::NotClaimed);
     }
 
-    // SAFETY: `UncheckedAccount<'info>` stores an `&'info AccountInfo<'info>`.
-    // The wrapper borrow can be shorter than `'info`, but the wrapped account
-    // reference itself is valid for the full instruction lifetime.
-    let claim_info_ref: &'info AccountInfo<'info> =
-        unsafe { std::mem::transmute(claim_info.as_ref()) };
-    let claim = Account::<TaskClaim>::try_from(claim_info_ref)?;
+    let claim = deserialize_program_account::<TaskClaim>(claim_info.as_ref())?;
     require!(claim.task == *task_key, CoordinationError::NotClaimed);
     Ok(claim)
 }
@@ -237,7 +253,7 @@ pub fn transfer_rewards<'info>(
 /// accurately reflect total funds withdrawn. This prevents remaining_funds
 /// from being overestimated during dispute resolution.
 pub fn update_claim_state(
-    claim: &mut Account<TaskClaim>,
+    claim: &mut TaskClaim,
     escrow: &mut Account<TaskEscrow>,
     worker_reward: u64,
     protocol_fee: u64,
@@ -292,47 +308,79 @@ pub fn update_task_state(
     Ok(completed)
 }
 
+/// Denomination of a completed task's reward.
+///
+/// Protocol-wide value and agent earnings counters are SOL-denominated. Keeping the
+/// denomination explicit prevents arbitrary SPL-token base units from poisoning those
+/// counters or being mistaken for economic reputation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RewardDenomination {
+    Sol,
+    SplToken,
+}
+
+/// Calculate reputation earned from an economically settled completion.
+///
+/// Only irrecoverable SOL protocol fees count. The award is proportional and capped,
+/// so dust tasks cannot wash reputation while large legitimate tasks cannot mint more
+/// than the established per-completion maximum.
+pub fn completion_reputation_gain(protocol_fee: u64, denomination: RewardDenomination) -> u16 {
+    if denomination != RewardDenomination::Sol {
+        return 0;
+    }
+
+    protocol_fee
+        .checked_div(REPUTATION_FEE_LAMPORTS_PER_POINT)
+        .unwrap_or(0)
+        .min(REPUTATION_PER_COMPLETION as u64) as u16
+}
+
 /// Update worker statistics after task completion.
-/// Returns `(old_reputation, new_reputation)` for event emission.
+///
+/// `total_earned` is explicitly SOL-denominated and therefore excludes SPL-token
+/// rewards. Telemetry counters saturate instead of blocking a real settlement if a
+/// legacy value is already at its integer ceiling. Returns `(old_reputation,
+/// new_reputation)` for event emission.
 pub fn update_worker_state(
-    worker: &mut Account<AgentRegistration>,
+    worker: &mut AgentRegistration,
     reward: u64,
+    protocol_fee: u64,
+    denomination: RewardDenomination,
     timestamp: i64,
 ) -> Result<(u16, u16)> {
-    worker.tasks_completed = worker
-        .tasks_completed
-        .checked_add(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    worker.total_earned = worker
-        .total_earned
-        .checked_add(reward)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    worker.tasks_completed = worker.tasks_completed.saturating_add(1);
+    if denomination == RewardDenomination::Sol {
+        worker.total_earned = worker.total_earned.saturating_add(reward);
+    }
     worker.active_tasks = worker
         .active_tasks
         .checked_sub(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     worker.last_active = timestamp;
-    // Reputation uses saturating_add intentionally - reputation overflow to MAX_REPUTATION
-    // is the intended behavior (capped at 10000), not an error condition
+    // Reputation uses saturating_add intentionally: reaching MAX_REPUTATION is an
+    // expected cap, not an error that should revert settlement.
     let old_rep = worker.reputation;
+    let reputation_gain = completion_reputation_gain(protocol_fee, denomination);
     worker.reputation = worker
         .reputation
-        .saturating_add(REPUTATION_PER_COMPLETION)
+        .saturating_add(reputation_gain)
         .min(MAX_REPUTATION);
     Ok((old_rep, worker.reputation))
 }
 
 /// Update protocol statistics after task completion.
-pub fn update_protocol_stats(config: &mut Account<ProtocolConfig>, reward: u64) -> Result<()> {
-    config.completed_tasks = config
-        .completed_tasks
-        .checked_add(1)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    config.total_value_distributed = config
-        .total_value_distributed
-        .checked_add(reward)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    Ok(())
+///
+/// `total_value_distributed` is SOL-denominated and excludes unpriced SPL-token
+/// units. Both values are telemetry: saturation must never freeze task settlement.
+pub fn update_protocol_stats(
+    config: &mut ProtocolConfig,
+    reward: u64,
+    denomination: RewardDenomination,
+) {
+    config.completed_tasks = config.completed_tasks.saturating_add(1);
+    if denomination == RewardDenomination::Sol {
+        config.total_value_distributed = config.total_value_distributed.saturating_add(reward);
+    }
 }
 
 /// Validate that a task is ready for completion.
@@ -382,18 +430,14 @@ pub fn validate_completion_prereqs(task: &Task, claim: &TaskClaim, clock: &Clock
     Ok(())
 }
 
-/// Validate that a task's dependency requirements are met before completion.
-///
-/// If the task has a `DependencyType::Proof` dependency, the parent task must be
-/// provided in `remaining_accounts[0]` and must have `TaskStatus::Completed`.
-///
-/// Shared by `complete_task` (public) and `complete_task_private` (ZK).
+/// Validate that a task's dependency requirements are met before settlement.
+/// Every dependency type requires the canonical parent to be Completed.
 pub fn validate_task_dependency(
     task: &Task,
     remaining_accounts: &[AccountInfo],
     program_id: &Pubkey,
 ) -> Result<()> {
-    if task.dependency_type == DependencyType::Proof {
+    if task.dependency_type != DependencyType::None {
         // Parent task account must be provided in remaining_accounts
         let parent_task_key = task
             .depends_on
@@ -412,33 +456,7 @@ pub fn validate_task_dependency(
             CoordinationError::InvalidInput
         );
 
-        // Validate owner is this program
-        require!(
-            parent_task_info.owner == program_id,
-            CoordinationError::InvalidAccountOwner
-        );
-
-        // Deserialize and check parent task status.
-        // BRICK-SAFE: the 149 live parents are at OLD_TASK_SIZE(382) until migrated,
-        // but the Task type is now SIZE(466). Borsh tolerates trailing bytes
-        // but NOT missing ones, so a raw `Task::try_deserialize` of a 382B parent would
-        // FAIL and brick create_dependent_task against every un-migrated parent. Since
-        // the new fields are append-only, zero-pad a short legacy account up to SIZE
-        // (operator=default/fee=0/_reserved=0) before deserializing; we only read
-        // `status`, which lives entirely within the unchanged 374-byte prefix.
-        let parent_data = parent_task_info.try_borrow_data()?;
-        let parent_task = if parent_data.len() >= Task::SIZE {
-            Task::try_deserialize(&mut &parent_data[..])
-                .map_err(|_| CoordinationError::InvalidInput)?
-        } else {
-            require!(
-                parent_data.len() >= Task::OLD_TASK_SIZE,
-                CoordinationError::InvalidInput
-            );
-            let mut buf = parent_data.to_vec();
-            buf.resize(Task::SIZE, 0);
-            Task::try_deserialize(&mut &buf[..]).map_err(|_| CoordinationError::InvalidInput)?
-        };
+        let parent_task = load_canonical_parent_task(parent_task_info, program_id)?;
 
         require!(
             parent_task.status == TaskStatus::Completed,
@@ -449,11 +467,29 @@ pub fn validate_task_dependency(
     Ok(())
 }
 
+/// Assignment-time dependency gate. Every dependency type requires a completed
+/// parent before a worker or bidder can take on an obligation. Allowing Data or
+/// Ordering work to be assigned speculatively lets a malicious creator cancel the
+/// parent, make the child impossible to complete, and later seize a worker's
+/// no-show bond. Speculation may happen off-chain, but on-chain assignment cannot
+/// create that asymmetric principal risk.
+pub fn validate_task_dependency_for_assignment(
+    task: &Task,
+    remaining_accounts: &[AccountInfo],
+    program_id: &Pubkey,
+) -> Result<()> {
+    validate_task_dependency(task, remaining_accounts, program_id)
+}
+
 /// Calculate protocol fee with reputation-based discount.
 ///
 /// Uses the task-locked fee (not current protocol config) per PR #479.
-/// Floors at 1 bps to prevent zero-fee completion.
+/// Preserves an explicitly snapshotted zero-fee policy. Positive fees retain a
+/// 1-bps floor so a reputation discount cannot erase them accidentally.
 pub fn calculate_fee_with_reputation(task_protocol_fee_bps: u16, worker_reputation: u16) -> u16 {
+    if task_protocol_fee_bps == 0 {
+        return 0;
+    }
     let rep_discount = calculate_reputation_fee_discount(worker_reputation);
     task_protocol_fee_bps.saturating_sub(rep_discount).max(1)
 }
@@ -613,6 +649,122 @@ pub fn build_referrer_leg<'info>(
     }))
 }
 
+/// Resolve the immutable marketplace fee snapshot and build its payout legs.
+///
+/// Newer hires stamp the terms directly on `Task`; legacy hires retain them only
+/// in the canonical `HireRecord`. Callers must seeds-pin `hire_record` to
+/// `["hire", task]` in their `Accounts` struct before using this helper. An absent
+/// record is accepted only as an empty system-owned account, preventing a caller
+/// from substituting arbitrary data to suppress or redirect a fee leg.
+pub fn build_marketplace_fee_legs<'info>(
+    task: &Task,
+    task_key: Pubkey,
+    hire_record: &AccountInfo<'info>,
+    operator_account: Option<&AccountInfo<'info>>,
+    referrer_account: Option<&AccountInfo<'info>>,
+) -> Result<(Option<OperatorLeg<'info>>, Option<ReferrerLeg<'info>>)> {
+    let legacy_hire = if hire_record.owner == &crate::ID {
+        let data = hire_record.try_borrow_data()?;
+        let hire = HireRecord::try_deserialize(&mut &data[..])?;
+        require!(hire.task == task_key, CoordinationError::InvalidHireRecord);
+        Some(hire)
+    } else {
+        require!(
+            hire_record.owner == &anchor_lang::system_program::ID && hire_record.data_is_empty(),
+            CoordinationError::InvalidHireRecord
+        );
+        None
+    };
+
+    let (operator, operator_fee_bps, referrer, referrer_fee_bps) =
+        if task.operator != Pubkey::default() || task.referrer != Pubkey::default() {
+            (
+                task.operator,
+                task.operator_fee_bps,
+                task.referrer,
+                task.referrer_fee_bps,
+            )
+        } else if let Some(hire) = legacy_hire.as_ref() {
+            (
+                hire.operator,
+                hire.operator_fee_bps,
+                hire.referrer,
+                hire.referrer_fee_bps,
+            )
+        } else {
+            (Pubkey::default(), 0, Pubkey::default(), 0)
+        };
+
+    validate_marketplace_payee_destinations(
+        task_key,
+        task.escrow,
+        task.creator,
+        operator,
+        operator_fee_bps,
+        referrer,
+        referrer_fee_bps,
+    )?;
+
+    let operator_leg = if operator_fee_bps > 0 && operator != Pubkey::default() {
+        let account = operator_account.ok_or(CoordinationError::MissingOperatorAccount)?;
+        require!(
+            account.key() == operator,
+            CoordinationError::InvalidOperatorAccount
+        );
+        Some(OperatorLeg {
+            payee: account.clone(),
+            fee_bps: operator_fee_bps,
+        })
+    } else {
+        None
+    };
+    let referrer_leg = build_referrer_leg(referrer, referrer_fee_bps, referrer_account)?;
+
+    Ok((operator_leg, referrer_leg))
+}
+
+/// Bind active marketplace payees away from task-owned lifecycle accounts.
+///
+/// A payee equal to the escrow makes a direct lamport transfer a net-zero while
+/// settlement accounting records it as paid; closing escrow then returns the
+/// retained fee to the creator. A payee equal to the Task similarly parks the fee
+/// in a creator-closed lifecycle account. Creation paths call this before funding,
+/// and settlement calls it again through `build_marketplace_fee_legs` for defense
+/// in depth and legacy-state fail-closed behavior.
+pub(crate) fn validate_marketplace_payee_destinations(
+    task_key: Pubkey,
+    escrow_key: Pubkey,
+    creator: Pubkey,
+    operator: Pubkey,
+    operator_fee_bps: u16,
+    referrer: Pubkey,
+    referrer_fee_bps: u16,
+) -> Result<()> {
+    if operator_fee_bps > 0 {
+        require!(
+            operator != Pubkey::default(),
+            CoordinationError::ListingOperatorRequired
+        );
+        require!(operator != creator, CoordinationError::OperatorIsCreator);
+        require!(
+            operator != task_key && operator != escrow_key,
+            CoordinationError::MarketplacePayeeAccountAlias
+        );
+    }
+    if referrer_fee_bps > 0 {
+        require!(
+            referrer != Pubkey::default(),
+            CoordinationError::MissingReferrerAccount
+        );
+        require!(referrer != creator, CoordinationError::ReferrerIsCreator);
+        require!(
+            referrer != task_key && referrer != escrow_key,
+            CoordinationError::MarketplacePayeeAccountAlias
+        );
+    }
+    Ok(())
+}
+
 /// Execute reward transfer, state updates, event emissions, and conditional escrow closure.
 ///
 /// Shared by both `complete_task` (public) and `complete_task_private` (ZK) handlers.
@@ -634,7 +786,7 @@ pub fn build_referrer_leg<'info>(
 /// The `TaskCompleted` event reads `proof_hash` and `result_data` from the claim.
 pub fn execute_completion_rewards<'a, 'info>(
     task: &mut Account<'info, Task>,
-    claim: &mut Account<'info, TaskClaim>,
+    claim: &mut TaskClaim,
     escrow: &mut Account<'info, TaskEscrow>,
     worker: &mut Account<'info, AgentRegistration>,
     protocol_config: &mut Account<'info, ProtocolConfig>,
@@ -738,7 +890,18 @@ pub fn execute_completion_rewards<'a, 'info>(
     }
     let task_completed =
         update_task_state(task, clock.unix_timestamp, escrow, result_data_for_task)?;
-    let (old_rep, new_rep) = update_worker_state(worker, worker_reward, clock.unix_timestamp)?;
+    let denomination = if task.reward_mint.is_none() {
+        RewardDenomination::Sol
+    } else {
+        RewardDenomination::SplToken
+    };
+    let (old_rep, new_rep) = update_worker_state(
+        worker,
+        worker_reward,
+        protocol_fee,
+        denomination,
+        clock.unix_timestamp,
+    )?;
 
     if old_rep != new_rep {
         emit!(ReputationChanged {
@@ -751,7 +914,7 @@ pub fn execute_completion_rewards<'a, 'info>(
     }
 
     if task_completed {
-        update_protocol_stats(protocol_config, settlement_amount)?;
+        update_protocol_stats(protocol_config, settlement_amount, denomination);
     }
 
     emit!(TaskCompleted {
@@ -895,6 +1058,197 @@ fn close_escrow_to_creator<'info>(
 mod tests {
     use super::*;
     use crate::state::{DependencyType, TaskStatus};
+
+    #[test]
+    fn reputation_discount_preserves_explicit_free_protocol_policy() {
+        for reputation in [0, 8_000, 9_000, 9_500, 10_000] {
+            assert_eq!(calculate_fee_with_reputation(0, reputation), 0);
+        }
+        // A positive task snapshot remains positive even when the configured
+        // reputation discount is larger than the snapshot.
+        assert_eq!(calculate_fee_with_reputation(1, 10_000), 1);
+        assert_eq!(calculate_fee_with_reputation(10, 10_000), 1);
+    }
+
+    #[test]
+    fn reputation_requires_irrecoverable_sol_protocol_fees() {
+        assert_eq!(completion_reputation_gain(0, RewardDenomination::Sol), 0);
+        assert_eq!(
+            completion_reputation_gain(
+                REPUTATION_FEE_LAMPORTS_PER_POINT - 1,
+                RewardDenomination::Sol,
+            ),
+            0
+        );
+        assert_eq!(
+            completion_reputation_gain(REPUTATION_FEE_LAMPORTS_PER_POINT, RewardDenomination::Sol,),
+            1
+        );
+        assert_eq!(
+            completion_reputation_gain(
+                REPUTATION_FEE_LAMPORTS_PER_POINT * REPUTATION_PER_COMPLETION as u64,
+                RewardDenomination::Sol,
+            ),
+            REPUTATION_PER_COMPLETION
+        );
+        assert_eq!(
+            completion_reputation_gain(u64::MAX, RewardDenomination::Sol),
+            REPUTATION_PER_COMPLETION,
+            "one settlement can never exceed the established completion cap"
+        );
+        assert_eq!(
+            completion_reputation_gain(u64::MAX, RewardDenomination::SplToken),
+            0,
+            "arbitrary token base units have no trusted SOL valuation"
+        );
+    }
+
+    #[test]
+    fn token_completion_cannot_poison_sol_earnings_or_reputation() {
+        let mut worker = AgentRegistration {
+            tasks_completed: u64::MAX,
+            total_earned: 42,
+            reputation: 3_000,
+            active_tasks: 1,
+            ..AgentRegistration::default()
+        };
+
+        let (old_rep, new_rep) = update_worker_state(
+            &mut worker,
+            u64::MAX,
+            u64::MAX,
+            RewardDenomination::SplToken,
+            123,
+        )
+        .unwrap();
+
+        assert_eq!(worker.tasks_completed, u64::MAX);
+        assert_eq!(worker.total_earned, 42);
+        assert_eq!(worker.active_tasks, 0);
+        assert_eq!(worker.last_active, 123);
+        assert_eq!((old_rep, new_rep), (3_000, 3_000));
+    }
+
+    #[test]
+    fn saturated_telemetry_never_blocks_a_completion() {
+        let mut worker = AgentRegistration {
+            tasks_completed: u64::MAX,
+            total_earned: u64::MAX,
+            reputation: MAX_REPUTATION - 1,
+            active_tasks: 1,
+            ..AgentRegistration::default()
+        };
+        update_worker_state(
+            &mut worker,
+            1,
+            REPUTATION_FEE_LAMPORTS_PER_POINT,
+            RewardDenomination::Sol,
+            456,
+        )
+        .unwrap();
+        assert_eq!(worker.tasks_completed, u64::MAX);
+        assert_eq!(worker.total_earned, u64::MAX);
+        assert_eq!(worker.reputation, MAX_REPUTATION);
+
+        let mut config = ProtocolConfig {
+            completed_tasks: u64::MAX,
+            total_value_distributed: u64::MAX,
+            ..ProtocolConfig::default()
+        };
+        update_protocol_stats(&mut config, u64::MAX, RewardDenomination::SplToken);
+        update_protocol_stats(&mut config, 1, RewardDenomination::Sol);
+        assert_eq!(config.completed_tasks, u64::MAX);
+        assert_eq!(config.total_value_distributed, u64::MAX);
+    }
+
+    #[test]
+    fn token_value_is_excluded_from_global_sol_aggregate() {
+        let mut config = ProtocolConfig {
+            completed_tasks: 7,
+            total_value_distributed: 99,
+            ..ProtocolConfig::default()
+        };
+
+        update_protocol_stats(&mut config, u64::MAX, RewardDenomination::SplToken);
+        assert_eq!(config.completed_tasks, 8);
+        assert_eq!(config.total_value_distributed, 99);
+
+        update_protocol_stats(&mut config, 1, RewardDenomination::Sol);
+        assert_eq!(config.completed_tasks, 9);
+        assert_eq!(config.total_value_distributed, 100);
+    }
+
+    #[test]
+    fn collaborative_reward_funding_enforces_the_exact_completion_boundary() {
+        assert!(
+            validate_reward_covers_required_completions(TaskType::Collaborative, 3, 4,).is_err()
+        );
+        assert!(
+            validate_reward_covers_required_completions(TaskType::Collaborative, 4, 4,).is_ok()
+        );
+        assert!(
+            validate_reward_covers_required_completions(TaskType::Collaborative, 5, 4,).is_ok()
+        );
+        assert!(validate_reward_covers_required_completions(TaskType::Exclusive, 1, 4,).is_ok());
+    }
+
+    #[test]
+    fn collaborative_boundary_gives_every_required_completion_one_unit() {
+        let mut task = build_test_task_fixture(TaskType::Collaborative, 4, 4, 0);
+        for completion in 0..4 {
+            task.completions = completion;
+            assert_eq!(calculate_reward_per_worker(&task).unwrap(), 1);
+            assert_eq!(calculate_reward_split(&task, 0).unwrap(), (1, 0));
+        }
+
+        task.reward_amount = 3;
+        task.completions = 3;
+        assert_eq!(calculate_reward_per_worker(&task).unwrap(), 0);
+        assert!(calculate_reward_split(&task, 0).is_err());
+    }
+
+    #[test]
+    fn active_marketplace_payees_cannot_alias_creator_task_or_escrow() {
+        let task = Pubkey::new_unique();
+        let escrow = Pubkey::new_unique();
+        let creator = Pubkey::new_unique();
+        let operator = Pubkey::new_unique();
+        let referrer = Pubkey::new_unique();
+
+        assert!(validate_marketplace_payee_destinations(
+            task, escrow, creator, operator, 100, referrer, 100,
+        )
+        .is_ok());
+        for alias in [creator, task, escrow] {
+            assert!(validate_marketplace_payee_destinations(
+                task, escrow, creator, alias, 100, referrer, 100,
+            )
+            .is_err());
+            assert!(validate_marketplace_payee_destinations(
+                task, escrow, creator, operator, 100, alias, 100,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn inactive_marketplace_payee_values_do_not_create_a_fee_leg() {
+        let task = Pubkey::new_unique();
+        let escrow = Pubkey::new_unique();
+        let creator = Pubkey::new_unique();
+        // Legacy listings may carry a non-default operator with zero fee. Since
+        // no money moves, retaining this shape is backward-compatible and safe.
+        assert!(validate_marketplace_payee_destinations(
+            task,
+            escrow,
+            creator,
+            escrow,
+            0,
+            Pubkey::default(),
+            0,
+        )
+        .is_ok());
+    }
 
     // ---- §4 4-way combined operator + referrer split (P6.2) ----
     // (`calculate_combined_fees` subsumes the retired `calculate_operator_fee`:
@@ -1088,6 +1442,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn assignment_requires_parent_for_every_dependency_type() {
+        for dependency_type in [
+            DependencyType::Data,
+            DependencyType::Ordering,
+            DependencyType::Proof,
+        ] {
+            let mut task = build_test_task_fixture(TaskType::Exclusive, 10_000, 1, 0);
+            task.depends_on = Some(Pubkey::new_unique());
+            task.dependency_type = dependency_type;
+
+            assert_anchor_error_code(
+                validate_task_dependency_for_assignment(&task, &[], &crate::ID),
+                CoordinationError::ParentTaskAccountRequired,
+            );
+        }
+    }
+
+    #[test]
+    fn assignment_without_dependency_needs_no_parent_account() {
+        let task = build_test_task_fixture(TaskType::Exclusive, 10_000, 1, 0);
+        validate_task_dependency_for_assignment(&task, &[], &crate::ID).unwrap();
+    }
+
     fn leak_pubkey(key: Pubkey) -> &'static Pubkey {
         Box::leak(Box::new(key))
     }
@@ -1153,6 +1531,106 @@ mod tests {
             Err(other) => {
                 panic!("expected AnchorError code {expected_code}, got {other:?}");
             }
+        }
+    }
+
+    mod marketplace_fee_leg_tests {
+        use super::*;
+        use anchor_lang::solana_program::system_program;
+
+        #[test]
+        fn task_snapshot_requires_and_binds_both_payees() {
+            let task_key = Pubkey::new_unique();
+            let operator = Pubkey::new_unique();
+            let referrer = Pubkey::new_unique();
+            let mut task = build_test_task_fixture(TaskType::Exclusive, 10_000, 1, 0);
+            task.operator = operator;
+            task.operator_fee_bps = 500;
+            task.referrer = referrer;
+            task.referrer_fee_bps = 250;
+
+            let hire =
+                build_unchecked_account(Pubkey::new_unique(), system_program::ID, 0, Vec::new());
+            let operator_account =
+                build_unchecked_account(operator, system_program::ID, 1, Vec::new());
+            let referrer_account =
+                build_unchecked_account(referrer, system_program::ID, 1, Vec::new());
+            let hire_info = hire.to_account_info();
+            let operator_info = operator_account.to_account_info();
+            let referrer_info = referrer_account.to_account_info();
+
+            let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+                &task,
+                task_key,
+                &hire_info,
+                Some(&operator_info),
+                Some(&referrer_info),
+            )
+            .unwrap();
+
+            let operator_leg = operator_leg.unwrap();
+            let referrer_leg = referrer_leg.unwrap();
+            assert_eq!(operator_leg.payee.key(), operator);
+            assert_eq!(operator_leg.fee_bps, 500);
+            assert_eq!(referrer_leg.payee.key(), referrer);
+            assert_eq!(referrer_leg.fee_bps, 250);
+        }
+
+        #[test]
+        fn legacy_hire_record_is_the_fallback_fee_source() {
+            let task_key = Pubkey::new_unique();
+            let operator = Pubkey::new_unique();
+            let referrer = Pubkey::new_unique();
+            let task = build_test_task_fixture(TaskType::Exclusive, 10_000, 1, 0);
+            let hire_state = HireRecord {
+                task: task_key,
+                listing: Pubkey::new_unique(),
+                operator,
+                operator_fee_bps: 400,
+                bump: 1,
+                designated_provider: Pubkey::default(),
+                referrer,
+                referrer_fee_bps: 200,
+            };
+            let hire = build_unchecked_account(
+                Pubkey::new_unique(),
+                crate::ID,
+                1,
+                serialize_account(&hire_state),
+            );
+            let operator_account =
+                build_unchecked_account(operator, system_program::ID, 1, Vec::new());
+            let referrer_account =
+                build_unchecked_account(referrer, system_program::ID, 1, Vec::new());
+            let hire_info = hire.to_account_info();
+            let operator_info = operator_account.to_account_info();
+            let referrer_info = referrer_account.to_account_info();
+
+            let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+                &task,
+                task_key,
+                &hire_info,
+                Some(&operator_info),
+                Some(&referrer_info),
+            )
+            .unwrap();
+
+            assert_eq!(operator_leg.unwrap().fee_bps, 400);
+            assert_eq!(referrer_leg.unwrap().fee_bps, 200);
+        }
+
+        #[test]
+        fn substituted_nonempty_absent_hire_account_fails_closed() {
+            let task_key = Pubkey::new_unique();
+            let task = build_test_task_fixture(TaskType::Exclusive, 10_000, 1, 0);
+            let forged =
+                build_unchecked_account(Pubkey::new_unique(), system_program::ID, 1, vec![1]);
+            let forged_info = forged.to_account_info();
+
+            assert_anchor_error_code(
+                build_marketplace_fee_legs(&task, task_key, &forged_info, None, None),
+                CoordinationError::InvalidHireRecord,
+            );
         }
     }
 
@@ -1487,6 +1965,16 @@ mod tests {
 
     mod tiered_fee_tests {
         use super::*;
+
+        #[test]
+        fn test_tiered_split_preserves_free_protocol_policy() {
+            let task = build_test_task_fixture(TaskType::Exclusive, 10_000, 1, 0);
+            let (worker, fee, effective_bps) =
+                calculate_reward_split_tiered(&task, 0, 10_000).unwrap();
+            assert_eq!(effective_bps, 0);
+            assert_eq!(fee, 0);
+            assert_eq!(worker, 10_000);
+        }
 
         #[test]
         fn test_tiered_split_base_tier() {

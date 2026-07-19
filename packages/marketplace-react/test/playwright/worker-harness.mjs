@@ -142,6 +142,7 @@ export async function completeWorkerSide(params) {
     task: kit.address(String(taskPda)),
     worker: kit.address(String(workerAgentPda)),
     authority: seeder,
+    jobSpecHash,
   });
 
   // 4) worker submits a result -> PendingValidation.

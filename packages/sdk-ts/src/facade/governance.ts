@@ -3,11 +3,13 @@
 // client already resolves PDAs and encodes data; the facade adds friendly
 // signatures and defaults (preferring the Async builders so PDAs auto-derive).
 //
-// Several of these instructions are multisig-gated on-chain (the program checks
-// additional co-signers via remaining_accounts). The facade only builds the
-// instruction; the caller attaches the extra signer accounts as needed.
+// Multisig-gated builders accept `multisigSigners` and append those system-wallet
+// approvals after the generated named accounts, matching Rust remaining_accounts.
+// A named authority that is also an owner must be repeated in this suffix so
+// Rust counts that owner's approval.
 //
 // Never import from generated/ internals other than its public exports.
+import type { TransactionSigner } from "@solana/kit";
 import {
   // proposals
   getCreateProposalInstructionAsync,
@@ -24,9 +26,6 @@ import {
   getUpdateStateInstructionAsync,
   getUpdateLaunchControlsInstructionAsync,
   getInitializeProtocolInstructionAsync,
-  // zk config
-  getInitializeZkConfigInstructionAsync,
-  getUpdateZkImageIdInstructionAsync,
   // migrations
   getMigrateTaskInstruction,
   getMigrateProtocolInstruction,
@@ -35,7 +34,6 @@ import {
   findVoteProposalVotePda,
   findGovernanceConfigPda,
   findProtocolConfigPda,
-  findZkConfigPda,
   findStatePda,
   type CreateProposalAsyncInput,
   type VoteProposalAsyncInput,
@@ -50,19 +48,34 @@ import {
   type UpdateStateAsyncInput,
   type UpdateLaunchControlsAsyncInput,
   type InitializeProtocolAsyncInput,
-  type InitializeZkConfigAsyncInput,
-  type UpdateZkImageIdAsyncInput,
-  type MigrateTaskInput,
-  type MigrateProtocolInput,
+  type MigrateTaskInput as GeneratedMigrateTaskInput,
+  type MigrateProtocolInput as GeneratedMigrateProtocolInput,
 } from "../generated/index.js";
+import { appendMultisigSignerMetas } from "./wire.js";
 
 export {
   findProposalPda,
   findVoteProposalVotePda,
   findGovernanceConfigPda,
   findProtocolConfigPda,
-  findZkConfigPda,
   findStatePda,
+};
+
+/** System-wallet approvals checked against ProtocolConfig's current M-of-N set. */
+export type MultisigSignersInput = {
+  readonly multisigSigners: readonly TransactionSigner[];
+};
+
+type WithRequiredMultisigSigners<T> = Omit<T, "multisigSigners"> &
+  MultisigSignersInput;
+
+type WithOptionalMultisigSigners<T> = Omit<T, "multisigSigners"> & {
+  /**
+   * Required by Rust only when executing FeeChange or RateLimitChange. The
+   * builder cannot infer a proposal account's on-chain type, so the caller must
+   * supply the current threshold signers for those proposal kinds.
+   */
+  readonly multisigSigners?: readonly TransactionSigner[];
 };
 
 // ---------------------------------------------------------------------------
@@ -98,9 +111,17 @@ export function cancelProposal(input: CancelProposalInput) {
  * Build an execute_proposal instruction (permissionless after voting ends).
  * protocolConfig and governanceConfig default to their PDAs. `treasury` and
  * `recipient` are optional and only required for treasury-spend proposals.
+ * FeeChange and RateLimitChange additionally require the current ProtocolConfig
+ * threshold in `multisigSigners`; other proposal kinds may omit it.
  */
-export async function executeProposal(input: ExecuteProposalAsyncInput) {
-  return getExecuteProposalInstructionAsync(input);
+export type ExecuteProposalInput = WithOptionalMultisigSigners<
+  ExecuteProposalAsyncInput
+>;
+
+export async function executeProposal(input: ExecuteProposalInput) {
+  const { multisigSigners = [], ...generatedInput } = input;
+  const instruction = await getExecuteProposalInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,29 +138,67 @@ export async function initializeGovernance(
   return getInitializeGovernanceInstructionAsync(input);
 }
 
-/** Build an update_multisig instruction. protocolConfig defaults to its PDA. */
-export async function updateMultisig(input: UpdateMultisigAsyncInput) {
-  return getUpdateMultisigInstructionAsync(input);
+/**
+ * Build update_multisig with current-set approval. Rust also requires enough of
+ * the proposed new owner set to sign, so include both approval sets (deduplicated)
+ * in `multisigSigners` when rotating keys.
+ */
+export type UpdateMultisigInput = WithRequiredMultisigSigners<
+  UpdateMultisigAsyncInput
+>;
+
+export async function updateMultisig(input: UpdateMultisigInput) {
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction = await getUpdateMultisigInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
-/** Build an update_treasury instruction. protocolConfig defaults to its PDA. */
-export async function updateTreasury(input: UpdateTreasuryAsyncInput) {
-  return getUpdateTreasuryInstructionAsync(input);
+export type UpdateTreasuryInput = Omit<
+  UpdateTreasuryAsyncInput,
+  "newTreasury" | "multisigSigners"
+> & {
+  /** The new treasury must sign to prove control of the destination wallet. */
+  newTreasury: TransactionSigner;
+} & MultisigSignersInput;
+
+/** Build update_treasury with custody consent plus current M-of-N approval. */
+export async function updateTreasury(input: UpdateTreasuryInput) {
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction = await getUpdateTreasuryInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /** Build an update_protocol_fee instruction. protocolConfig defaults to its PDA. */
-export async function updateProtocolFee(input: UpdateProtocolFeeAsyncInput) {
-  return getUpdateProtocolFeeInstructionAsync(input);
+export type UpdateProtocolFeeInput = WithRequiredMultisigSigners<
+  UpdateProtocolFeeAsyncInput
+>;
+
+export async function updateProtocolFee(input: UpdateProtocolFeeInput) {
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction = await getUpdateProtocolFeeInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /** Build an update_rate_limits instruction. protocolConfig defaults to its PDA. */
-export async function updateRateLimits(input: UpdateRateLimitsAsyncInput) {
-  return getUpdateRateLimitsInstructionAsync(input);
+export type UpdateRateLimitsInput = WithRequiredMultisigSigners<
+  UpdateRateLimitsAsyncInput
+>;
+
+export async function updateRateLimits(input: UpdateRateLimitsInput) {
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction = await getUpdateRateLimitsInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /** Build an update_min_version instruction. protocolConfig defaults to its PDA. */
-export async function updateMinVersion(input: UpdateMinVersionAsyncInput) {
-  return getUpdateMinVersionInstructionAsync(input);
+export type UpdateMinVersionInput = WithRequiredMultisigSigners<
+  UpdateMinVersionAsyncInput
+>;
+
+export async function updateMinVersion(input: UpdateMinVersionInput) {
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction = await getUpdateMinVersionInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**
@@ -151,11 +210,18 @@ export async function updateState(input: UpdateStateAsyncInput) {
   return getUpdateStateInstructionAsync(input);
 }
 
-/** Build an update_launch_controls instruction. protocolConfig defaults to its PDA. */
+/** Build update_launch_controls with current ProtocolConfig M-of-N approval. */
+export type UpdateLaunchControlsInput = WithRequiredMultisigSigners<
+  UpdateLaunchControlsAsyncInput
+>;
+
 export async function updateLaunchControls(
-  input: UpdateLaunchControlsAsyncInput,
+  input: UpdateLaunchControlsInput,
 ) {
-  return getUpdateLaunchControlsInstructionAsync(input);
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction =
+    await getUpdateLaunchControlsInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**
@@ -164,26 +230,6 @@ export async function updateLaunchControls(
  */
 export async function initializeProtocol(input: InitializeProtocolAsyncInput) {
   return getInitializeProtocolInstructionAsync(input);
-}
-
-// ---------------------------------------------------------------------------
-// ZK config
-// ---------------------------------------------------------------------------
-
-/**
- * Build an initialize_zk_config instruction. protocolConfig and zkConfig default
- * to their PDAs.
- */
-export async function initializeZkConfig(input: InitializeZkConfigAsyncInput) {
-  return getInitializeZkConfigInstructionAsync(input);
-}
-
-/**
- * Build an update_zk_image_id instruction. protocolConfig and zkConfig default
- * to their PDAs.
- */
-export async function updateZkImageId(input: UpdateZkImageIdAsyncInput) {
-  return getUpdateZkImageIdInstructionAsync(input);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,10 +243,17 @@ export async function updateZkImageId(input: UpdateZkImageIdAsyncInput) {
  * config before the handler runs, so the account is an `UncheckedAccount` and the
  * generated client no longer auto-resolves its PDA). `task` is the raw
  * (pre-migration) task account; `payer` funds the rent top-up. This makes
- * `migrate_task` order-independent vs `migrate_protocol`.
+ * `migrate_task` order-independent vs `migrate_protocol`. Rust gates both
+ * migrations with the current ProtocolConfig M-of-N.
  */
+export type MigrateTaskInput = WithRequiredMultisigSigners<
+  GeneratedMigrateTaskInput
+>;
+
 export function migrateTask(input: MigrateTaskInput) {
-  return getMigrateTaskInstruction(input);
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction = getMigrateTaskInstruction(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**
@@ -210,8 +263,15 @@ export function migrateTask(input: MigrateTaskInput) {
  * reject the 349B pre-migration layout before the handler runs — so the caller
  * supplies `protocolConfig` (use {@link findProtocolConfigPda}); `payer` funds the
  * +2-byte rent top-up. The appended `surface_revision` is zero-initialized by the
- * handler, not passed as an arg.
+ * handler, not passed as an arg. `multisigSigners` supplies the required current
+ * ProtocolConfig threshold.
  */
+export type MigrateProtocolInput = WithRequiredMultisigSigners<
+  GeneratedMigrateProtocolInput
+>;
+
 export function migrateProtocol(input: MigrateProtocolInput) {
-  return getMigrateProtocolInstruction(input);
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction = getMigrateProtocolInstruction(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }

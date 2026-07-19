@@ -10,11 +10,24 @@ import assert from "node:assert/strict";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode,
-  freshWorld,
-  BN, Keypair, PublicKey, SystemProgram,
+  freshWorld, deregisterRemaining, setProtocolPaused,
+  BN, Keypair, PublicKey, SystemProgram, FailedTransactionMetadata,
 } from "./harness.mjs";
 
 const MIN_SKILL_PRICE = 1_000;
+
+function decodeSkillPurchased(logs) {
+  for (const line of logs ?? []) {
+    if (!line.startsWith("Program data: ")) continue;
+    try {
+      const decoded = coder.events.decode(line.slice("Program data: ".length));
+      if (decoded?.name === "SkillPurchased") return decoded.data;
+    } catch {
+      // Other programs can emit unrelated data in the same transaction.
+    }
+  }
+  return null;
+}
 
 // Register a brand-new agent under a fresh wallet (active, probationary reputation 3000 — P6.7).
 // Returns { kp, agentPda, agentId, prog }.
@@ -38,9 +51,108 @@ async function registerExtraAgent(w, { capabilities = 1, endpoint = "http://extr
   return { kp, agentPda, agentId, prog };
 }
 
+// Register another durable agent identity controlled by an existing wallet.
+// This is the important self-dealing shape: distinct agent PDAs do not imply
+// distinct economic actors.
+async function registerAgentForWallet(w, { kp, prog, endpoint = "http://same-wallet.test" }) {
+  const agentId = id32();
+  const [agentPda] = pda([enc("agent"), agentId]);
+  expectOk(send(w.svm, await prog.methods
+    .registerAgent(arr(agentId), new BN(1), endpoint, null, new BN(0))
+    .accounts({
+      agent: agentPda,
+      protocolConfig: w.protocolPda,
+      authority: kp.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction(), [kp]), "register second same-wallet agent");
+  return { kp, agentPda, agentId, prog };
+}
+
+test("agent identity: deregistration cannot transfer a persistent skill to an agent_id squatter", async () => {
+  const w = await freshWorld();
+  const original = await registerExtraAgent(w);
+  const { skill, res: registerSkillResult } = await registerSkill(w, {
+    authorWallet: original.kp,
+    authorAgent: original.agentPda,
+    authorProg: original.prog,
+    price: 1_000_000,
+  });
+  expectOk(registerSkillResult, "register persistent skill");
+
+  expectOk(
+    send(
+      w.svm,
+      await original.prog.methods
+        .deregisterAgent()
+        .accounts({
+          agent: original.agentPda,
+          protocolConfig: w.protocolPda,
+          reputationStake: pda([
+            enc("reputation_stake"),
+            original.agentPda.toBuffer(),
+          ])[0],
+          authority: original.kp.publicKey,
+        })
+        .remainingAccounts(deregisterRemaining(original.agentPda))
+        .instruction(),
+      [original.kp],
+    ),
+    "retire skill author's agent",
+  );
+
+  const attacker = Keypair.generate();
+  w.svm.airdrop(attacker.publicKey, BigInt(100e9));
+  const attackerProg = makeProgram(attacker);
+  w.svm.expireBlockhash();
+  const takeover = send(
+    w.svm,
+    await attackerProg.methods
+      .registerAgent(
+        arr(original.agentId),
+        new BN(1),
+        "http://squatter.test",
+        null,
+        new BN(0),
+      )
+      .accounts({
+        agent: original.agentPda,
+        protocolConfig: w.protocolPda,
+        authority: attacker.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction(),
+    [attacker],
+  );
+  assert.ok(
+    takeover instanceof FailedTransactionMetadata,
+    "a retired agent_id must never be re-registerable by a new authority",
+  );
+
+  const skillAfter = decode(w.svm, "SkillRegistration", skill);
+  assert.equal(
+    skillAfter.author.toBase58(),
+    original.agentPda.toBase58(),
+    "persistent skill remains bound to the original permanent identity PDA",
+  );
+  const retiredAgent = decode(w.svm, "AgentRegistration", original.agentPda);
+  assert.equal(
+    retiredAgent.authority.toBase58(),
+    original.kp.publicKey.toBase58(),
+    "retired identity preserves the immutable payout authority",
+  );
+});
+
 // Build (and send) a register_skill ix. authorWallet signs; authorAgent is the
 // PDA owned by authorWallet. Returns { skill, skillId } on success.
-async function registerSkill(w, { authorWallet, authorAgent, authorProg, price = MIN_SKILL_PRICE, priceMint = null }) {
+async function registerSkill(w, {
+  authorWallet,
+  authorAgent,
+  authorProg,
+  price = MIN_SKILL_PRICE,
+  priceMint = null,
+  contentHash = Buffer.alloc(32, 9),
+}) {
   const skillId = id32();
   const [skill] = pda([enc("skill"), authorAgent.toBuffer(), Buffer.from(skillId)]);
   const res = send(
@@ -49,7 +161,7 @@ async function registerSkill(w, { authorWallet, authorAgent, authorProg, price =
       .registerSkill(
         arr(skillId),
         arr(Buffer.alloc(32, 7)), // name (non-zero)
-        arr(Buffer.alloc(32, 9)), // content_hash (non-zero)
+        arr(contentHash), // content_hash (non-zero)
         new BN(price),
         priceMint,
         arr(Buffer.alloc(64, 3)), // tags
@@ -61,13 +173,28 @@ async function registerSkill(w, { authorWallet, authorAgent, authorProg, price =
   return { skill, skillId, res };
 }
 
-// Purchase `skill` (SOL path) as `buyer`. Returns { purchaseRecord, res }.
-async function purchaseSkillSol(w, { skill, buyerWallet, buyerAgent, buyerProg, authorAgent, authorWallet, expectedPrice }) {
+// Purchase `skill` (SOL path) as `buyer`. The expected version/hash are the
+// buyer's exact content commitment, independent of the price ceiling.
+async function purchaseSkillSol(w, {
+  skill,
+  buyerWallet,
+  buyerAgent,
+  buyerProg,
+  authorAgent,
+  authorWallet,
+  expectedPrice,
+  expectedVersion = 1,
+  expectedContentHash = Buffer.alloc(32, 9),
+}) {
   const [purchaseRecord] = pda([enc("skill_purchase"), skill.toBuffer(), buyerAgent.toBuffer()]);
   const res = send(
     w.svm,
     await buyerProg.methods
-      .purchaseSkill(new BN(expectedPrice))
+      .purchaseSkill(
+        new BN(expectedPrice),
+        expectedVersion,
+        arr(expectedContentHash),
+      )
       .accounts({
         skill,
         purchaseRecord,
@@ -239,6 +366,13 @@ test("purchase_skill: SOL path pays author + treasury and records the purchase",
   assert.equal(pr.skill.toBase58(), skill.toBase58());
   assert.equal(pr.buyer.toBase58(), w.buyerAgent.toBase58());
   assert.equal(pr.price_paid.toString(), String(price));
+  assert.equal(pr._reserved[0], 1, "purchase record snapshots content version");
+
+  const event = decodeSkillPurchased(res.logs());
+  assert.ok(event, "SkillPurchased event should decode");
+  assert.equal(event.content_version, 1, "event snapshots content version");
+  assert.deepEqual(arr(Buffer.from(event.content_hash)), arr(Buffer.alloc(32, 9)),
+    "event snapshots the exact purchased content hash");
 
   const s = decode(w.svm, "SkillRegistration", skill);
   assert.equal(s.download_count, 1, "download_count incremented");
@@ -259,6 +393,75 @@ test("purchase_skill: rejects when on-chain price exceeds expected_price (SkillP
   expectFail(res, "SkillPriceChanged", "purchase_skill stale price");
 });
 
+test("purchase_skill: same-price content replacement invalidates version and hash commitments", async () => {
+  const w = await freshWorld();
+  const price = 1_000_000;
+  const originalHash = Buffer.alloc(32, 0x41);
+  const replacementHash = Buffer.alloc(32, 0x42);
+  const { skill } = await registerSkill(w, {
+    authorWallet: w.provider,
+    authorAgent: w.providerAgent,
+    authorProg: w.providerProg,
+    price,
+    contentHash: originalHash,
+  });
+
+  // Preserve price and active status while replacing the payload. update_skill
+  // increments the content version as part of the same atomic mutation.
+  expectOk(send(w.svm, await w.providerProg.methods
+    .updateSkill(arr(replacementHash), new BN(price), null, null)
+    .accounts({
+      skill,
+      author: w.providerAgent,
+      protocolConfig: w.protocolPda,
+      authority: w.provider.publicKey,
+    })
+    .instruction(), [w.provider]), "same-price skill content replacement");
+
+  let attempt = await purchaseSkillSol(w, {
+    skill,
+    buyerWallet: w.buyer,
+    buyerAgent: w.buyerAgent,
+    buyerProg: w.buyerProg,
+    authorAgent: w.providerAgent,
+    authorWallet: w.provider.publicKey,
+    expectedPrice: price,
+    expectedVersion: 1,
+    expectedContentHash: originalHash,
+  });
+  expectFail(attempt.res, "SkillVersionChanged", "stale content version rejected");
+
+  w.svm.expireBlockhash();
+  attempt = await purchaseSkillSol(w, {
+    skill,
+    buyerWallet: w.buyer,
+    buyerAgent: w.buyerAgent,
+    buyerProg: w.buyerProg,
+    authorAgent: w.providerAgent,
+    authorWallet: w.provider.publicKey,
+    expectedPrice: price,
+    expectedVersion: 2,
+    expectedContentHash: originalHash,
+  });
+  expectFail(attempt.res, "SkillContentChanged", "stale content hash rejected");
+
+  w.svm.expireBlockhash();
+  const current = await purchaseSkillSol(w, {
+    skill,
+    buyerWallet: w.buyer,
+    buyerAgent: w.buyerAgent,
+    buyerProg: w.buyerProg,
+    authorAgent: w.providerAgent,
+    authorWallet: w.provider.publicKey,
+    expectedPrice: price,
+    expectedVersion: 2,
+    expectedContentHash: replacementHash,
+  });
+  expectOk(current.res, "current version/hash commitment accepted");
+  assert.equal(decode(w.svm, "PurchaseRecord", current.purchaseRecord)._reserved[0], 2,
+    "purchase record snapshots the accepted replacement version");
+});
+
 test("purchase_skill: rejects author buying own skill (SkillSelfPurchase)", async () => {
   const w = await freshWorld();
   const { skill } = await registerSkill(w, {
@@ -270,7 +473,7 @@ test("purchase_skill: rejects author buying own skill (SkillSelfPurchase)", asyn
   const res = send(
     w.svm,
     await w.providerProg.methods
-      .purchaseSkill(new BN(1_000_000))
+      .purchaseSkill(new BN(1_000_000), 1, arr(Buffer.alloc(32, 9)))
       .accounts({
         skill, purchaseRecord,
         buyer: w.providerAgent, authorAgent: w.providerAgent, authorWallet: w.provider.publicKey,
@@ -284,9 +487,144 @@ test("purchase_skill: rejects author buying own skill (SkillSelfPurchase)", asyn
   expectFail(res, "SkillSelfPurchase", "purchase_skill self-purchase");
 });
 
+test("purchase_skill: rejects author wallet buying through a second agent", async () => {
+  const w = await freshWorld();
+  const price = 1_000_000;
+  const { skill } = await registerSkill(w, {
+    authorWallet: w.provider,
+    authorAgent: w.providerAgent,
+    authorProg: w.providerProg,
+    price,
+  });
+  const secondIdentity = await registerAgentForWallet(w, {
+    kp: w.provider,
+    prog: w.providerProg,
+  });
+
+  const { res } = await purchaseSkillSol(w, {
+    skill,
+    buyerWallet: w.provider,
+    buyerAgent: secondIdentity.agentPda,
+    buyerProg: w.providerProg,
+    authorAgent: w.providerAgent,
+    authorWallet: w.provider.publicKey,
+    expectedPrice: price,
+  });
+  expectFail(res, "SkillSelfPurchase", "same wallet cannot self-buy through another agent");
+  assert.equal(decode(w.svm, "SkillRegistration", skill).download_count, 0,
+    "blocked self-dealing must not increment downloads");
+});
+
 // ---------------------------------------------------------------------------
 // rate_skill (requires a paid purchase record by a distinct rater agent)
 // ---------------------------------------------------------------------------
+
+test("paused cutover freezes legacy skill creation, purchase, and rating", async () => {
+  const w = await freshWorld();
+  const price = 1_000_000;
+  const { skill } = await registerSkill(w, {
+    authorWallet: w.provider,
+    authorAgent: w.providerAgent,
+    authorProg: w.providerProg,
+    price,
+  });
+  await setProtocolPaused(w.svm, true);
+
+  const blockedRegistration = await registerSkill(w, {
+    authorWallet: w.provider,
+    authorAgent: w.providerAgent,
+    authorProg: w.providerProg,
+    price,
+  });
+  expectFail(
+    blockedRegistration.res,
+    "ProtocolPaused",
+    "paused cutover blocks a new SkillRegistration",
+  );
+
+  const blockedPurchase = await purchaseSkillSol(w, {
+    skill,
+    buyerWallet: w.buyer,
+    buyerAgent: w.buyerAgent,
+    buyerProg: w.buyerProg,
+    authorAgent: w.providerAgent,
+    authorWallet: w.provider.publicKey,
+    expectedPrice: price,
+  });
+  expectFail(
+    blockedPurchase.res,
+    "ProtocolPaused",
+    "paused cutover blocks a new PurchaseRecord",
+  );
+  assert.equal(
+    Boolean(w.svm.getAccount(blockedPurchase.purchaseRecord)),
+    false,
+    "failed purchase must leave the zero-purchase cutover invariant intact",
+  );
+
+  // Model a pre-cutover paid purchase to prove rate_skill is also frozen while
+  // paused. The deployment rail rejects this state rather than relying on the
+  // missing author's unverifiable wallet identity.
+  const [, purchaseBump] = pda([
+    enc("skill_purchase"),
+    skill.toBuffer(),
+    w.buyerAgent.toBuffer(),
+  ]);
+  const purchaseData = await coder.accounts.encode("PurchaseRecord", {
+    skill,
+    buyer: w.buyerAgent,
+    price_paid: new BN(price),
+    timestamp: new BN(1_700_000_000),
+    bump: purchaseBump,
+    _reserved: [1, 0, 0, 0],
+  });
+  w.svm.setAccount(blockedPurchase.purchaseRecord, {
+    lamports: Number(
+      w.svm.minimumBalanceForRentExemption(BigInt(purchaseData.length)),
+    ),
+    data: purchaseData,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+  const [ratingAccount] = pda([
+    enc("skill_rating"),
+    skill.toBuffer(),
+    w.buyerAgent.toBuffer(),
+  ]);
+  const blockedRating = send(
+    w.svm,
+    await w.buyerProg.methods
+      .rateSkill(5, null)
+      .accounts({
+        skill,
+        ratingAccount,
+        rater: w.buyerAgent,
+        purchaseRecord: blockedPurchase.purchaseRecord,
+        authorAgent: w.providerAgent,
+        protocolConfig: w.protocolPda,
+        authority: w.buyer.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction(),
+    [w.buyer],
+  );
+  expectFail(
+    blockedRating,
+    "ProtocolPaused",
+    "paused cutover blocks a new SkillRating",
+  );
+  assert.equal(
+    Boolean(w.svm.getAccount(ratingAccount)),
+    false,
+    "failed rating must roll back its init account and aggregate mutation",
+  );
+  assert.equal(
+    decode(w.svm, "SkillRegistration", skill).rating_count,
+    0,
+    "failed rating must not mutate rating aggregates",
+  );
+});
 
 test("rate_skill: a paying buyer rates the skill (reputation-weighted)", async () => {
   const w = await freshWorld();
@@ -313,6 +651,7 @@ test("rate_skill: a paying buyer rates the skill (reputation-weighted)", async (
       .rateSkill(rating, null)
       .accounts({
         skill, ratingAccount, rater: w.buyerAgent, purchaseRecord,
+        authorAgent: w.providerAgent,
         protocolConfig: w.protocolPda, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -356,6 +695,7 @@ test("rate_skill: rejects an out-of-range rating value (SkillInvalidRating)", as
       .rateSkill(6, null) // out of 1..=5
       .accounts({
         skill, ratingAccount, rater: w.buyerAgent, purchaseRecord,
+        authorAgent: w.providerAgent,
         protocolConfig: w.protocolPda, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -389,6 +729,7 @@ test("rate_skill: a distinct rater agent (not the buyer) also works after purcha
       .rateSkill(5, null)
       .accounts({
         skill, ratingAccount, rater: rater.agentPda, purchaseRecord,
+        authorAgent: w.providerAgent,
         protocolConfig: w.protocolPda, authority: rater.kp.publicKey, systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -398,4 +739,116 @@ test("rate_skill: a distinct rater agent (not the buyer) also works after purcha
 
   const s = decode(w.svm, "SkillRegistration", skill);
   assert.equal(s.rating_count, 1, "rating_count incremented by distinct rater");
+});
+
+test("rate_skill: paid buyer may rate after the author deactivates the skill", async () => {
+  const w = await freshWorld();
+  const price = 1_000_000;
+  const contentHash = Buffer.alloc(32, 9);
+  const { skill } = await registerSkill(w, {
+    authorWallet: w.provider,
+    authorAgent: w.providerAgent,
+    authorProg: w.providerProg,
+    price,
+    contentHash,
+  });
+  const { purchaseRecord, res: purchaseResult } = await purchaseSkillSol(w, {
+    skill,
+    buyerWallet: w.buyer,
+    buyerAgent: w.buyerAgent,
+    buyerProg: w.buyerProg,
+    authorAgent: w.providerAgent,
+    authorWallet: w.provider.publicKey,
+    expectedPrice: price,
+    expectedContentHash: contentHash,
+  });
+  expectOk(purchaseResult, "purchase before delisting");
+
+  expectOk(send(w.svm, await w.providerProg.methods
+    .updateSkill(arr(contentHash), new BN(price), null, false)
+    .accounts({
+      skill,
+      author: w.providerAgent,
+      protocolConfig: w.protocolPda,
+      authority: w.provider.publicKey,
+    })
+    .instruction(), [w.provider]), "deactivate purchased skill");
+  assert.equal(decode(w.svm, "SkillRegistration", skill).is_active, false);
+
+  const [ratingAccount] = pda([enc("skill_rating"), skill.toBuffer(), w.buyerAgent.toBuffer()]);
+  const ratingResult = send(w.svm, await w.buyerProg.methods
+    .rateSkill(5, null)
+    .accounts({
+      skill,
+      ratingAccount,
+      rater: w.buyerAgent,
+      purchaseRecord,
+      authorAgent: w.providerAgent,
+      protocolConfig: w.protocolPda,
+      authority: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction(), [w.buyer]);
+  expectOk(ratingResult, "rating remains available after delisting");
+});
+
+test("rate_skill: same author wallet cannot self-rate through a legacy second-agent purchase", async () => {
+  const w = await freshWorld();
+  const price = 1_000_000;
+  const { skill } = await registerSkill(w, {
+    authorWallet: w.provider,
+    authorAgent: w.providerAgent,
+    authorProg: w.providerProg,
+    price,
+  });
+  const secondIdentity = await registerAgentForWallet(w, {
+    kp: w.provider,
+    prog: w.providerProg,
+  });
+
+  // Inject a paid record in the old on-chain layout to model a self-purchase
+  // that pre-dates the wallet-level purchase guard. rate_skill must protect
+  // this historical state as well as newly created records.
+  const [purchaseRecord, purchaseBump] = pda([
+    enc("skill_purchase"),
+    skill.toBuffer(),
+    secondIdentity.agentPda.toBuffer(),
+  ]);
+  const purchaseData = await coder.accounts.encode("PurchaseRecord", {
+    skill,
+    buyer: secondIdentity.agentPda,
+    price_paid: new BN(price),
+    timestamp: new BN(1_700_000_000),
+    bump: purchaseBump,
+    _reserved: [1, 0, 0, 0],
+  });
+  w.svm.setAccount(purchaseRecord, {
+    lamports: Number(w.svm.minimumBalanceForRentExemption(BigInt(purchaseData.length))),
+    data: purchaseData,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+
+  const [ratingAccount] = pda([
+    enc("skill_rating"),
+    skill.toBuffer(),
+    secondIdentity.agentPda.toBuffer(),
+  ]);
+  const result = send(w.svm, await w.providerProg.methods
+    .rateSkill(5, null)
+    .accounts({
+      skill,
+      ratingAccount,
+      rater: secondIdentity.agentPda,
+      purchaseRecord,
+      authorAgent: w.providerAgent,
+      protocolConfig: w.protocolPda,
+      authority: w.provider.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction(), [w.provider]);
+  expectFail(result, "SkillSelfRating", "same wallet legacy self-rating rejected");
+  assert.equal(decode(w.svm, "SkillRegistration", skill).rating_count, 0,
+    "blocked self-rating must not affect aggregates");
 });

@@ -14,7 +14,8 @@ import assert from "node:assert/strict";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode,
-  setMinArbiterStake, injectAgentStake,
+  setMinArbiterStake, setMinAgentStake, injectAgentStake,
+  injectAgentReputation, setMultisig, warpSeconds,
   freshWorld,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
@@ -23,8 +24,11 @@ import {
 // Local helpers (marketplace.test.mjs helpers are NOT exported — inlined here).
 // ---------------------------------------------------------------------------
 
-const ZERO32 = arr(Buffer.alloc(32, 0));
+const TITLE32 = arr(Buffer.alloc(32, 1));
+const DESCRIPTION32 = arr(Buffer.alloc(32, 2));
 const ZERO64 = arr(Buffer.alloc(64, 0));
+const MIN_GOVERNANCE_STAKE = 10_000_000;
+const MATURE_REPUTATION = 5_000;
 
 // Initialize the GovernanceConfig PDA via the real instruction (protocol
 // authority = w.admin). Returns the governance PDA.
@@ -33,11 +37,13 @@ async function initGovernance(
   {
     votingPeriod = 86_400,
     executionDelay = 0,
-    quorumBps = 5000,
+    quorumBps = 300,
     approvalThresholdBps = 5000,
-    minProposalStake = 1_000,
+    minProposalStake = MIN_GOVERNANCE_STAKE,
+    minArbiterStake = MIN_GOVERNANCE_STAKE,
   } = {},
 ) {
+  await setMinArbiterStake(w.svm, minArbiterStake);
   const [governance] = pda([enc("governance")]);
   const adminProg = makeProgram(w.admin);
   const res = send(
@@ -64,7 +70,10 @@ async function initGovernance(
 
 // Register a fresh marketplace agent (new wallet) and return its keypair, PDA,
 // program handle. Mirrors freshWorld()'s register_agent calls.
-async function registerAgent(w, { capabilities = 1 } = {}) {
+async function registerAgent(
+  w,
+  { capabilities = 1, reputation = MATURE_REPUTATION } = {},
+) {
   const kp = Keypair.generate();
   w.svm.airdrop(kp.publicKey, BigInt(100e9));
   const prog = makeProgram(kp);
@@ -86,6 +95,9 @@ async function registerAgent(w, { capabilities = 1 } = {}) {
     ),
     "register governance agent",
   );
+  if (reputation !== null) {
+    await injectAgentReputation(w.svm, agent, reputation);
+  }
   return { kp, agent, prog, agentId };
 }
 
@@ -98,8 +110,8 @@ async function createProposal(
   {
     nonce = 1,
     proposalType = 1, // 1 = FeeChange
-    titleHash = ZERO32,
-    descriptionHash = ZERO32,
+    titleHash = TITLE32,
+    descriptionHash = DESCRIPTION32,
     payload = null,
     votingPeriod = 0,
   } = {},
@@ -163,6 +175,30 @@ async function voteProposal(w, proposal, { kp, agent, prog }, approve) {
     [kp],
   );
   return { vote, res };
+}
+
+async function executeProposal(
+  w,
+  governance,
+  proposal,
+  authority,
+  { remainingAccounts = [], additionalSigners = [] } = {},
+) {
+  const program = makeProgram(authority);
+  const instruction = await program.methods
+    .executeProposal()
+    .accounts({
+      proposal,
+      protocolConfig: w.protocolPda,
+      governanceConfig: governance,
+      authority: authority.publicKey,
+      treasury: null,
+      recipient: null,
+      systemProgram: SystemProgram.programId,
+    })
+    .remainingAccounts(remainingAccounts)
+    .instruction();
+  return send(w.svm, instruction, [authority, ...additionalSigners]);
 }
 
 // ===========================================================================
@@ -237,7 +273,7 @@ test("create_proposal: mints an Active proposal + bumps governance counter", asy
   const w = await freshWorld({});
   const { governance } = await initGovernance(w, { minProposalStake: 1_000 });
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000); // >= min_proposal_stake
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
 
   const { proposal, res } = await createProposal(w, governance, proposer, { nonce: 7 });
   expectOk(res, "create_proposal");
@@ -250,7 +286,8 @@ test("create_proposal: mints an Active proposal + bumps governance counter", asy
   assert.ok(p.status.Active !== undefined, "proposal starts Active");
   assert.equal(p.votes_for.toString(), "0", "no votes yet");
   assert.equal(p.total_voters, 0, "no voters yet");
-  assert.ok(p.quorum.toString() !== "0", "quorum computed (> 0)");
+  assert.equal(p.quorum.toString(), "100000000", "hard 100M quorum snapshotted");
+  assert.equal(p._reserved[0], 1, "governance rules schema v1 stamped");
 
   const g = decode(w.svm, "GovernanceConfig", governance);
   assert.equal(g.total_proposals.toString(), "1", "governance.total_proposals incremented");
@@ -269,7 +306,7 @@ test("create_proposal: invalid proposal_type is rejected (InvalidProposalType)",
   const w = await freshWorld({});
   const { governance } = await initGovernance(w, { minProposalStake: 1_000 });
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
   const { res } = await createProposal(w, governance, proposer, {
     nonce: 13,
     proposalType: 9, // not a valid ProposalType variant (0..3)
@@ -283,7 +320,7 @@ test("create_proposal: a custom voting period is floored at the governance defau
   // Governance default = 86_400 (1 day); the program's MAX_VOTING_PERIOD = 604_800.
   const { governance } = await initGovernance(w, { votingPeriod: 86_400, minProposalStake: 1_000 });
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
 
   // votingPeriod = 1s — a snap vote that closes before the electorate can react
   // (a mainnet proposal already ran at 600s). Revert-sensitive: pre-fix the
@@ -315,16 +352,15 @@ test("create_proposal: a custom voting period is floored at the governance defau
 test("vote_proposal: records a weighted vote + updates proposal tallies", async () => {
   const w = await freshWorld({});
   // Give arbiter/voter stake real weight (max_vote_weight = min_arbiter_stake * 10).
-  await setMinArbiterStake(w.svm, 1_000_000);
   const { governance } = await initGovernance(w, { minProposalStake: 1_000 });
 
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
   const { proposal } = await createProposal(w, governance, proposer, { nonce: 21 });
 
   // A separate voter with stake casts an approval vote.
   const voter = await registerAgent(w);
-  await injectAgentStake(w.svm, voter.agent, 2_000_000);
+  await injectAgentStake(w.svm, voter.agent, 20_000_000);
   const { vote, res } = await voteProposal(w, proposal, voter, true);
   expectOk(res, "vote_proposal");
 
@@ -342,11 +378,10 @@ test("vote_proposal: records a weighted vote + updates proposal tallies", async 
 
 test("vote_proposal: voting after the deadline is rejected (ProposalVotingEnded)", async () => {
   const w = await freshWorld({});
-  await setMinArbiterStake(w.svm, 1_000_000);
   const { governance } = await initGovernance(w, { votingPeriod: 86_400, minProposalStake: 1_000 });
 
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
   const { proposal } = await createProposal(w, governance, proposer, { nonce: 31 });
 
   // Warp past the voting deadline.
@@ -355,9 +390,268 @@ test("vote_proposal: voting after the deadline is rejected (ProposalVotingEnded)
   w.svm.setClock(clk);
 
   const voter = await registerAgent(w);
-  await injectAgentStake(w.svm, voter.agent, 2_000_000);
+  await injectAgentStake(w.svm, voter.agent, 20_000_000);
   const { res } = await voteProposal(w, proposal, voter, true);
   expectFail(res, "ProposalVotingEnded", "vote after deadline rejected");
+});
+
+test("vote_proposal: mutable protocol stake settings cannot rewrite an existing election", async () => {
+  const w = await freshWorld({});
+  const { governance } = await initGovernance(w);
+  const proposer = await registerAgent(w);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
+  const { proposal, res } = await createProposal(w, governance, proposer, {
+    nonce: 90,
+  });
+  expectOk(res, "create snapshotted proposal");
+
+  // If vote_proposal incorrectly re-read this mutable global value, the cap
+  // would collapse from 100M to 10 and the recorded weight would be 5.
+  await setMinArbiterStake(w.svm, 1);
+  const voter = await registerAgent(w);
+  await injectAgentStake(w.svm, voter.agent, 100_000_000);
+  const { vote, res: voteRes } = await voteProposal(w, proposal, voter, true);
+  expectOk(voteRes, "vote under immutable proposal snapshot");
+  assert.equal(
+    decode(w.svm, "GovernanceVote", vote).vote_weight.toString(),
+    "50000000",
+    "vote used the proposal's original 100M cap",
+  );
+});
+
+// ===========================================================================
+// adversarial execution and capture resistance
+// ===========================================================================
+
+test("governance capture: two fresh rep-3000 wallets cannot create proposals", async () => {
+  const w = await freshWorld({});
+  const { governance } = await initGovernance(w);
+
+  for (const [index, fresh] of (await Promise.all([
+    registerAgent(w, { reputation: 3_000 }),
+    registerAgent(w, { reputation: 3_000 }),
+  ])).entries()) {
+    await injectAgentStake(w.svm, fresh.agent, 33_333_334);
+    const { res } = await createProposal(w, governance, fresh, {
+      nonce: 100 + index,
+    });
+    expectFail(res, "InsufficientReputation", `fresh proposer ${index} rejected`);
+  }
+});
+
+test("governance capture: two mature max-stake voters meet weight but fail the three-wallet floor", async () => {
+  const w = await freshWorld({});
+  const { governance } = await initGovernance(w, { votingPeriod: 1 });
+  const voters = await Promise.all([registerAgent(w), registerAgent(w)]);
+  for (const voter of voters) {
+    await injectAgentStake(w.svm, voter.agent, 100_000_000);
+  }
+
+  const feePayload = Buffer.alloc(64);
+  feePayload.writeUInt16LE(250, 0);
+  const { proposal, res } = await createProposal(w, governance, voters[0], {
+    nonce: 110,
+    payload: arr(feePayload),
+  });
+  expectOk(res, "create two-voter capture proposal");
+  for (const voter of voters) {
+    expectOk((await voteProposal(w, proposal, voter, true)).res, "cast capture vote");
+  }
+  assert.equal(
+    decode(w.svm, "Proposal", proposal).votes_for.toString(),
+    "100000000",
+    "two voters meet the hard weight quorum",
+  );
+
+  warpSeconds(w.svm, 2);
+  const executor = Keypair.generate();
+  w.svm.airdrop(executor.publicKey, BigInt(10e9));
+  expectOk(
+    await executeProposal(w, governance, proposal, executor),
+    "permissionless defeat of two-voter proposal",
+  );
+  assert.ok(
+    decode(w.svm, "Proposal", proposal).status.Defeated !== undefined,
+    "two-voter proposal is terminally Defeated",
+  );
+  assert.equal(
+    decode(w.svm, "ProtocolConfig", w.protocolPda).protocol_fee_bps,
+    100,
+    "failed election cannot mutate protocol fee",
+  );
+});
+
+test("governance dual control: passed FeeChange needs two unique current multisig owners", async () => {
+  const w = await freshWorld({});
+  const { governance } = await initGovernance(w, { votingPeriod: 1 });
+  const voters = await Promise.all([
+    registerAgent(w),
+    registerAgent(w),
+    registerAgent(w),
+  ]);
+  for (const voter of voters) {
+    await injectAgentStake(w.svm, voter.agent, 100_000_000);
+  }
+
+  const feePayload = Buffer.alloc(64);
+  feePayload.writeUInt16LE(250, 0);
+  const { proposal, res } = await createProposal(w, governance, voters[0], {
+    nonce: 120,
+    payload: arr(feePayload),
+  });
+  expectOk(res, "create passed fee proposal");
+  for (const voter of voters) {
+    expectOk((await voteProposal(w, proposal, voter, true)).res, "cast mature vote");
+  }
+
+  const owner2 = Keypair.generate();
+  const owner3 = Keypair.generate();
+  w.svm.airdrop(owner2.publicKey, BigInt(10e9));
+  w.svm.airdrop(owner3.publicKey, BigInt(10e9));
+  await setMultisig(
+    w.svm,
+    [w.admin.publicKey, owner2.publicKey, owner3.publicKey],
+    2,
+  );
+  warpSeconds(w.svm, 2);
+
+  expectFail(
+    await executeProposal(w, governance, proposal, w.admin),
+    "MultisigNotEnoughSigners",
+    "passed proposal without custody co-signers",
+  );
+  assert.equal(
+    decode(w.svm, "ProtocolConfig", w.protocolPda).protocol_fee_bps,
+    100,
+    "failed dual-control check is atomic",
+  );
+
+  w.svm.expireBlockhash();
+  const duplicateOwnerMetas = [0, 1].map(() => ({
+    pubkey: owner2.publicKey,
+    isSigner: true,
+    isWritable: false,
+  }));
+  expectFail(
+    await executeProposal(w, governance, proposal, w.admin, {
+      remainingAccounts: duplicateOwnerMetas,
+      additionalSigners: [owner2],
+    }),
+    "MultisigNotEnoughSigners",
+    "duplicate owner metas do not count twice",
+  );
+
+  w.svm.expireBlockhash();
+  const validOwnerMetas = [w.admin.publicKey, owner2.publicKey].map((pubkey) => ({
+    pubkey,
+    isSigner: true,
+    isWritable: false,
+  }));
+  expectOk(
+    await executeProposal(w, governance, proposal, w.admin, {
+      remainingAccounts: validOwnerMetas,
+      additionalSigners: [owner2],
+    }),
+    "passed proposal with unique 2-of-3 custody consent",
+  );
+  assert.ok(
+    decode(w.svm, "Proposal", proposal).status.Executed !== undefined,
+    "proposal executed after both controls passed",
+  );
+  assert.equal(
+    decode(w.svm, "ProtocolConfig", w.protocolPda).protocol_fee_bps,
+    250,
+    "fee changed only after election and multisig consent",
+  );
+});
+
+test("RateLimitChange rejects a dispute stake that could freeze dispute creation", async () => {
+  const w = await freshWorld({});
+  const { governance } = await initGovernance(w);
+  const proposer = await registerAgent(w);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
+  await setMinAgentStake(w.svm, MIN_GOVERNANCE_STAKE);
+
+  const payload = Buffer.alloc(64);
+  payload.writeBigInt64LE(1n, 0);
+  payload[8] = 1;
+  payload.writeBigInt64LE(1n, 9);
+  payload[17] = 1;
+  payload.writeBigUInt64LE((1n << 64n) - 1n, 18);
+  const { res } = await createProposal(w, governance, proposer, {
+    nonce: 130,
+    proposalType: 3,
+    payload: arr(payload),
+  });
+  expectFail(res, "InvalidProposalPayload", "freezing dispute stake rejected");
+});
+
+test("legacy schema-0 Active proposals become Defeated permissionlessly", async () => {
+  const w = await freshWorld({});
+  const { governance } = await initGovernance(w, { votingPeriod: 1 });
+  const proposer = await registerAgent(w);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
+  const { proposal, res } = await createProposal(w, governance, proposer, {
+    nonce: 140,
+  });
+  expectOk(res, "create proposal before legacy simulation");
+
+  const account = w.svm.getAccount(proposal);
+  const legacyData = Buffer.from(account.data);
+  legacyData.fill(0, legacyData.length - 64);
+  w.svm.setAccount(proposal, {
+    lamports: Number(account.lamports),
+    data: legacyData,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+  warpSeconds(w.svm, 2);
+
+  const executor = Keypair.generate();
+  w.svm.airdrop(executor.publicKey, BigInt(10e9));
+  expectOk(
+    await executeProposal(w, governance, proposal, executor),
+    "permissionless legacy terminalization",
+  );
+  assert.ok(
+    decode(w.svm, "Proposal", proposal).status.Defeated !== undefined,
+    "legacy election can never execute old rules",
+  );
+});
+
+test("corrupt schema-1 Active proposals become Defeated permissionlessly", async () => {
+  const w = await freshWorld({});
+  const { governance } = await initGovernance(w, { votingPeriod: 1 });
+  const proposer = await registerAgent(w);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
+  const { proposal, res } = await createProposal(w, governance, proposer, {
+    nonce: 141,
+  });
+  expectOk(res, "create proposal before corruption simulation");
+
+  const account = w.svm.getAccount(proposal);
+  const corruptData = Buffer.from(account.data);
+  corruptData[corruptData.length - 1] = 1;
+  w.svm.setAccount(proposal, {
+    lamports: Number(account.lamports),
+    data: corruptData,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+  warpSeconds(w.svm, 2);
+
+  const executor = Keypair.generate();
+  w.svm.airdrop(executor.publicKey, BigInt(10e9));
+  expectOk(
+    await executeProposal(w, governance, proposal, executor),
+    "permissionless corrupt snapshot terminalization",
+  );
+  assert.ok(
+    decode(w.svm, "Proposal", proposal).status.Defeated !== undefined,
+    "corrupt snapshot can never execute",
+  );
 });
 
 // ===========================================================================
@@ -368,7 +662,7 @@ test("cancel_proposal: proposer cancels an un-voted proposal -> Cancelled", asyn
   const w = await freshWorld({});
   const { governance } = await initGovernance(w, { minProposalStake: 1_000 });
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
   const { proposal } = await createProposal(w, governance, proposer, { nonce: 41 });
 
   const res = send(
@@ -390,7 +684,7 @@ test("cancel_proposal: non-proposer cannot cancel (ProposalUnauthorizedCancel)",
   const w = await freshWorld({});
   const { governance } = await initGovernance(w, { minProposalStake: 1_000 });
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
   const { proposal } = await createProposal(w, governance, proposer, { nonce: 51 });
 
   // A stranger wallet (not the proposer authority) attempts to cancel.
@@ -409,15 +703,14 @@ test("cancel_proposal: non-proposer cannot cancel (ProposalUnauthorizedCancel)",
 
 test("cancel_proposal: cannot cancel after a vote is cast (ProposalVotingEnded)", async () => {
   const w = await freshWorld({});
-  await setMinArbiterStake(w.svm, 1_000_000);
   const { governance } = await initGovernance(w, { minProposalStake: 1_000 });
   const proposer = await registerAgent(w);
-  await injectAgentStake(w.svm, proposer.agent, 10_000);
+  await injectAgentStake(w.svm, proposer.agent, MIN_GOVERNANCE_STAKE);
   const { proposal } = await createProposal(w, governance, proposer, { nonce: 61 });
 
   // Cast one vote so total_voters > 0.
   const voter = await registerAgent(w);
-  await injectAgentStake(w.svm, voter.agent, 2_000_000);
+  await injectAgentStake(w.svm, voter.agent, 20_000_000);
   expectOk((await voteProposal(w, proposal, voter, true)).res, "vote before cancel");
 
   const res = send(

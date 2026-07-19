@@ -8,7 +8,8 @@
 //   (src/instructions/completion_helpers.rs:377-436): for the Proof variant it
 //   requires the parent passed in `remaining_accounts[0]` (matching `depends_on`,
 //   program-owned) to be `status == Completed`, else `ParentTaskNotCompleted`.
-//   The gate fires at COMPLETION (complete_task.rs:194) — NOT at claim/submit.
+//   The gate fires before assignment and again at completion, so a creator cannot
+//   cancel the parent after trapping a worker in an impossible child task.
 //
 // Executes the COMPILED program (target/deploy/agenc_coordination.so) end-to-end.
 //
@@ -72,7 +73,7 @@ async function createDependentTask(w, parentTask, { dependencyType = 3, reward =
 /// Moderate (CLEAN) + publish a job spec for `task`, then have the provider agent
 /// claim it. Returns the claim PDA. Requires a moderation-enabled world. The task
 /// is left InProgress (claimed, no submit) so an Auto-mode complete_task can settle.
-async function moderatePublishClaim(w, task, tag) {
+async function moderatePublishClaim(w, task, tag, { parentTask = null, claimError = null } = {}) {
   const modProg = makeProgram(w.modAuth);
   const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
@@ -86,10 +87,24 @@ async function moderatePublishClaim(w, task, tag) {
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), `${tag}:job-spec`);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  let claimBuilder = w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), `${tag}:claim`);
+    .accounts({ task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId });
+  if (parentTask) {
+    claimBuilder = claimBuilder.remainingAccounts([
+      { pubkey: parentTask, isSigner: false, isWritable: false },
+    ]);
+  }
+  const claimResult = send(w.svm, await claimBuilder.instruction(), [w.provider]);
+  if (claimError) {
+    expectFail(claimResult, claimError, `${tag}:claim`);
+  } else {
+    expectOk(claimResult, `${tag}:claim`);
+  }
   return { claim, jobSpec };
 }
 
@@ -123,10 +138,10 @@ async function settleToCompleted(w, t, tag) {
 }
 
 // ===========================================================================
-// 1) NEGATIVE — Proof gate blocks completion while the parent is NOT completed.
+// 1) NEGATIVE — Proof gate blocks assignment while the parent is NOT completed.
 // ===========================================================================
 
-test("Proof dependency: completing the dependent is rejected while the parent is not Completed (ParentTaskNotCompleted)", async () => {
+test("Proof dependency: claiming the dependent is rejected while the parent is not Completed", async () => {
   const w = await freshWorld({ moderationEnabled: true });
 
   // Parent left Open/InProgress (NOT completed).
@@ -138,19 +153,15 @@ test("Proof dependency: completing the dependent is rejected while the parent is
   assert.ok(depTask.dependency_type?.Proof !== undefined, `dependent dependency_type == Proof (got ${JSON.stringify(depTask.dependency_type)})`);
   assert.equal(depTask.depends_on.toBase58(), parent.task.toBase58(), "depends_on points at the parent");
 
-  // The gate is checked at COMPLETION, not at claim: the claim itself succeeds.
-  const { claim } = await moderatePublishClaim(w, dep.task, "dep-neg");
-  assert.ok(!isClaimMissing(w, claim), "claim PDA exists (gate is NOT enforced at claim time)");
-
-  // Attempt to complete the dependent, passing the (still-Open) parent in
-  // remaining_accounts -> the Proof gate rejects with ParentTaskNotCompleted.
-  expectFail(
-    send(w.svm, await completeIx(w, { task: dep.task, claim, escrow: dep.escrow }, { parentTask: parent.task }), [w.provider]),
-    "ParentTaskNotCompleted", "complete Proof-dependent while parent open",
+  const { claim } = await moderatePublishClaim(w, dep.task, "dep-neg", {
+    parentTask: parent.task,
+    claimError: "ParentTaskNotCompleted",
+  });
+  assert.ok(isClaimMissing(w, claim), "failed assignment creates no claim");
+  assert.ok(
+    decode(w.svm, "Task", dep.task).status.Open !== undefined,
+    "dependent remains Open after rejected assignment",
   );
-
-  // The dependent was NOT settled (still InProgress).
-  assert.ok(decode(w.svm, "Task", dep.task).status.InProgress !== undefined, "dependent stays InProgress after the rejected complete");
 });
 
 // ===========================================================================
@@ -163,11 +174,13 @@ test("Proof dependency: once the parent is Completed the dependent completes suc
   const parent = await createParentTask(w);
   const dep = await createDependentTask(w, parent.task, { dependencyType: 3 });
 
-  // Claim the dependent BEFORE the parent is done (allowed — gate is completion-time).
-  const { claim } = await moderatePublishClaim(w, dep.task, "dep-pos");
-
   // Drive the parent to TaskStatus::Completed via the normal claim->complete flow.
   await settleToCompleted(w, parent, "parent");
+
+  // Assignment now succeeds because the completed parent is passed and verified.
+  const { claim } = await moderatePublishClaim(w, dep.task, "dep-pos", {
+    parentTask: parent.task,
+  });
 
   // Now completing the dependent, passing the now-Completed parent, SUCCEEDS.
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));

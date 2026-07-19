@@ -22,7 +22,9 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{ServiceListingHired, TaskCreated};
-use crate::instructions::completion_helpers::resolve_referrer_snapshot;
+use crate::instructions::completion_helpers::{
+    resolve_referrer_snapshot, validate_marketplace_payee_destinations,
+};
 use crate::instructions::constants::MIN_SKILL_PRICE;
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::moderation_gate_helpers::{
@@ -33,9 +35,9 @@ use crate::instructions::task_init_helpers::{
     increment_total_tasks, init_escrow_fields, init_task_fields, validate_deadline,
 };
 use crate::state::{
-    is_publishable_task_moderation_status, AgentRegistration, AuthorityRateLimit, HireRecord,
-    ListingModeration, ListingState, ModerationAttestor, ModerationConfig, ProtocolConfig,
-    ServiceListing, Task, TaskEscrow, TaskType, TASK_MODERATION_RISK_SCORE_MAX,
+    is_publishable_task_moderation_status, AgentRegistration, AgentStatus, AuthorityRateLimit,
+    HireRecord, ListingModeration, ListingState, ModerationAttestor, ModerationConfig,
+    ProtocolConfig, ServiceListing, Task, TaskEscrow, TaskType, TASK_MODERATION_RISK_SCORE_MAX,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -213,7 +215,10 @@ pub(crate) fn resolve_listing_attestor(
                 &[b"moderation_attestor", moderator.as_ref()],
                 &crate::ID,
             );
-            require!(pda == expected, CoordinationError::ModerationAttestorMismatch);
+            require!(
+                pda == expected,
+                CoordinationError::ModerationAttestorMismatch
+            );
             Ok(Some(wallet))
         }
         _ => Ok(None),
@@ -260,6 +265,16 @@ pub struct HireFromListing<'info> {
         bump = listing.bump
     )]
     pub listing: Box<Account<'info, ServiceListing>>,
+
+    /// Provider identity behind the standing listing. A listing is durable,
+    /// but a suspended or permanently retired provider must not receive new
+    /// hires. Existing hires settle independently through their Task/HireRecord.
+    #[account(
+        seeds = [b"agent", provider_agent.agent_id.as_ref()],
+        bump = provider_agent.bump,
+        constraint = provider_agent.key() == listing.provider_agent @ CoordinationError::InvalidInput
+    )]
+    pub provider_agent: Box<Account<'info, AgentRegistration>>,
 
     #[account(
         mut,
@@ -359,6 +374,16 @@ pub fn handler(
     check_version_compatible(config)?;
     // Hires mint an Exclusive one-shot task; respect the per-type kill switch.
     require_task_type_index_enabled(config, TaskType::Exclusive as u8)?;
+    require!(
+        ctx.accounts.provider_agent.status == AgentStatus::Active
+            && !ctx.accounts.provider_agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
+    require!(
+        ctx.accounts.creator_agent.status == AgentStatus::Active
+            && !ctx.accounts.creator_agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
 
     // Snapshot every listing field we need BEFORE taking any mutable borrow.
     let listing = ctx.accounts.listing.as_ref();
@@ -409,7 +434,10 @@ pub fn handler(
     // instantly re-arms the strict path.
     let mut unlocking_attestor: Option<Pubkey> = None;
     if ctx.accounts.moderation_config.enabled
-        && !moderation_gate_relaxed(ctx.accounts.moderation_config.as_ref(), clock.unix_timestamp)
+        && !moderation_gate_relaxed(
+            ctx.accounts.moderation_config.as_ref(),
+            clock.unix_timestamp,
+        )
     {
         let record_info = ctx
             .accounts
@@ -417,7 +445,10 @@ pub fn handler(
             .as_ref()
             .ok_or(CoordinationError::TaskModerationRequired)?;
         unlocking_attestor = resolve_listing_attestor(
-            ctx.accounts.moderation_attestor.as_ref().map(|a| a.attestor),
+            ctx.accounts
+                .moderation_attestor
+                .as_ref()
+                .map(|a| a.attestor),
             ctx.accounts.moderation_attestor.as_ref().map(|a| a.key()),
             moderator,
         )?;
@@ -521,6 +552,15 @@ pub fn handler(
     task.referrer = referrer_key;
     task.referrer_fee_bps = referrer_bps;
     let task_key = task.key();
+    validate_marketplace_payee_destinations(
+        task_key,
+        escrow_key,
+        creator_key,
+        task.operator,
+        task.operator_fee_bps,
+        referrer_key,
+        referrer_bps,
+    )?;
 
     let escrow = ctx.accounts.escrow.as_mut();
     init_escrow_fields(escrow, task_key, reward_amount, ctx.bumps.escrow);
@@ -565,7 +605,7 @@ pub fn handler(
     hire_record.operator = listing_operator;
     hire_record.operator_fee_bps = listing_operator_fee_bps;
     hire_record.bump = ctx.bumps.hire_record;
-    hire_record._reserved = [0u8; 32];
+    hire_record.designated_provider = provider_agent;
     hire_record.referrer = referrer_key;
     hire_record.referrer_fee_bps = referrer_bps;
 
@@ -748,15 +788,10 @@ mod tests {
     #[test]
     fn moderation_rejects_listing_mismatch() {
         let (c, m, _l, h) = mod_case(0, 0);
-        assert!(validate_listing_moderation_for_hire(
-            &c,
-            &m,
-            Pubkey::new_unique(),
-            &h,
-            100,
-            false
-        )
-        .is_err());
+        assert!(
+            validate_listing_moderation_for_hire(&c, &m, Pubkey::new_unique(), &h, 100, false)
+                .is_err()
+        );
     }
 
     #[test]
@@ -815,10 +850,8 @@ mod tests {
     #[test]
     fn resolve_listing_attestor_accepts_canonical_entry() {
         let moderator = Pubkey::new_unique();
-        let (pda, _bump) = Pubkey::find_program_address(
-            &[b"moderation_attestor", moderator.as_ref()],
-            &crate::ID,
-        );
+        let (pda, _bump) =
+            Pubkey::find_program_address(&[b"moderation_attestor", moderator.as_ref()], &crate::ID);
         // Roster entry for `moderator`, canonical PDA -> unlocks, returns the attestor wallet.
         assert_eq!(
             resolve_listing_attestor(Some(moderator), Some(pda), moderator).unwrap(),

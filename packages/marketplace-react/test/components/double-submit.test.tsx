@@ -75,6 +75,7 @@ function ConnectedHarness({ client }: { client: MarketplaceClient }): ReactNode 
         listing={listing}
         buildHireInput={(l) => ({
           listing: l.address,
+          providerAgent: l.account.providerAgent,
           creatorAgent: FIXTURE_AGENT,
           taskId: new Uint8Array(32).fill(7),
           expectedPrice: l.account.price,

@@ -220,6 +220,7 @@ function CheckoutFlow({
     const result = await hire.hire({
       humanless: true,
       listing: config.listing as Address,
+      providerAgent: config.workerAgent as Address,
       taskId: crypto.getRandomValues(new Uint8Array(32)),
       expectedPrice: BigInt(config.expectedPriceLamports),
       expectedVersion: BigInt(config.expectedVersion),

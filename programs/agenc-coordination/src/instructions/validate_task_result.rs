@@ -12,29 +12,25 @@ use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, validate_task_dependency,
 };
+use crate::instructions::program_account_helpers::remaining_account_at;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, is_manual_validation_task,
     note_submission_left_review, release_claim_slot, sync_task_validation_status,
-    validate_completing_accept_sole_submission,
+    validate_completing_accept_sole_submission, validate_contest_accept_window,
 };
-use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
+use crate::instructions::token_helpers::{
+    validate_token_account, validate_token_escrow_account, validate_unchecked_token_mint,
+};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::CompletionBond;
 use crate::state::{
     capability, AgentRegistration, AgentStatus, ProtocolConfig, SubmissionStatus, Task,
     TaskAttestorConfig, TaskClaim, TaskEscrow, TaskStatus, TaskSubmission, TaskValidationConfig,
     TaskValidationVote, ValidationMode,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::CompletionBond;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
-
-fn remaining_account_info<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    index: usize,
-) -> &'info AccountInfo<'info> {
-    unsafe { std::mem::transmute(&remaining_accounts[index]) }
-}
 
 #[derive(Accounts)]
 pub struct ValidateTaskResult<'info> {
@@ -108,6 +104,9 @@ pub struct ValidateTaskResult<'info> {
     pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
     /// Optional validator agent for validator-quorum mode, validated in handler.
+    /// Writable because a quorum vote must lock the registration stake against
+    /// immediate identity recycling (see `last_vote_timestamp` in the handler).
+    #[account(mut)]
     pub validator_agent: Option<Box<Account<'info, AgentRegistration>>>,
 
     /// CHECK: Protocol treasury account, validated against protocol config.
@@ -204,12 +203,14 @@ pub fn handler<'info>(
         CoordinationError::SubmissionNotPending
     );
 
+    let external_attestation =
+        ctx.accounts.task_validation_config.mode == ValidationMode::ExternalAttestation;
     let (reviewer_agent_key, quorum) = match ctx.accounts.task_validation_config.mode {
         ValidationMode::ValidatorQuorum => {
             let validator_agent = ctx
                 .accounts
                 .validator_agent
-                .as_ref()
+                .as_mut()
                 .ok_or(CoordinationError::ValidatorAgentRequired)?;
             let validator_agent_key = validator_agent.key();
             let validator_authority = validator_agent.authority;
@@ -244,6 +245,16 @@ pub fn handler<'info>(
                     && validator_agent_key != ctx.accounts.worker.key(),
                 CoordinationError::UnauthorizedTaskValidator
             );
+
+            // A validator's registration stake is the only capital backing this
+            // self-asserted role. Persist the vote time before returning so the
+            // deregistration cooldown cannot be bypassed by voting, withdrawing
+            // the same stake, and registering a fresh wallet for the next quorum
+            // slot. `max` preserves a longer governance lock stored in this
+            // layout-stable legacy field.
+            validator_agent.last_vote_timestamp = validator_agent
+                .last_vote_timestamp
+                .max(clock.unix_timestamp);
             (
                 validator_agent_key,
                 ctx.accounts.task_validation_config.validator_quorum(),
@@ -342,13 +353,13 @@ pub fn handler<'info>(
     }
 
     if reached_acceptance {
-        // Audit F-3: a COMPLETING quorum/attestation accept must be the sole live
-        // submission — identical to the CreatorReview accept paths
-        // (accept_task_result.rs / auto_accept_task_result.rs). Otherwise the flip to
-        // Completed orphans a peer submission still under review with no exit
-        // (validate/reject/expire all require a non-terminal task). Runs BEFORE the
-        // counter decrements, while live_submissions() still counts this submission;
-        // schema-gated no-op for schema-0 tasks, like the sibling guards.
+        // A historical quorum/attestation config can still be attached to a
+        // contest-aware Competitive task even though new configuration is disabled.
+        // Apply the contest time/sole-submission partition explicitly: the generic
+        // completing guard deliberately defers contest enforcement to this helper.
+        validate_contest_accept_window(&ctx.accounts.task, clock.unix_timestamp)?;
+        // Every other completing non-collaborative accept must likewise be sole-live.
+        // Both checks run before counter mutation while this submission is counted.
         validate_completing_accept_sole_submission(&ctx.accounts.task)?;
 
         validate_task_dependency(
@@ -408,7 +419,11 @@ pub fn handler<'info>(
                 mint.key() == expected_mint,
                 CoordinationError::InvalidTokenMint
             );
-            validate_token_account(token_escrow, &mint.key(), &ctx.accounts.escrow.key())?;
+            validate_token_escrow_account(
+                &token_escrow.to_account_info(),
+                &mint.key(),
+                &ctx.accounts.escrow.key(),
+            )?;
             validate_token_account(
                 treasury_ta,
                 &mint.key(),
@@ -538,6 +553,15 @@ pub fn handler<'info>(
                 BondDisposition::Refund,
             )?;
         }
+        // External attestation is a one-reviewer quorum, so reaching this branch
+        // resolves the round immediately. Return the reviewer's vote-account rent
+        // instead of leaving one permanent PDA per attestation. Validator-quorum
+        // votes remain durable until that legacy round reaches its own cleanup rail.
+        if external_attestation {
+            ctx.accounts
+                .task_validation_vote
+                .close(ctx.accounts.reviewer.to_account_info())?;
+        }
         return Ok(());
     }
 
@@ -567,19 +591,32 @@ pub fn handler<'info>(
         // Audit F-14: honor the Proof-dependency offset exactly like the accept paths.
         let offset = bid_settlement_offset(&ctx.accounts.task);
         require!(
-            ctx.remaining_accounts.len() >= offset.checked_add(3).ok_or(CoordinationError::ArithmeticOverflow)?,
+            ctx.remaining_accounts.len()
+                >= offset
+                    .checked_add(3)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?,
             CoordinationError::BidSettlementAccountsRequired
         );
 
-        let bid_book_info = remaining_account_info(ctx.remaining_accounts, offset);
-        let accepted_bid_info = remaining_account_info(
+        let bid_book_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(1).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
-        let bidder_market_state_info = remaining_account_info(
+            offset,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
+        let accepted_bid_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(2).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
+            offset
+                .checked_add(1)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
+        let bidder_market_state_info = remaining_account_at(
+            ctx.remaining_accounts,
+            offset
+                .checked_add(2)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
 
         settle_accepted_bid(
             &ctx.accounts.task.key(),
@@ -606,9 +643,78 @@ pub fn handler<'info>(
         rejected_at: clock.unix_timestamp,
     });
 
+    // Rejection releases and closes the worker claim. Refund its completion
+    // bond at that same boundary so a later task cancel/close never needs to
+    // discover a bond belonging to a worker no longer recorded on the Task.
+    #[cfg(not(feature = "mainnet-canary"))]
+    settle_completion_bond(
+        &ctx.accounts.worker_completion_bond.to_account_info(),
+        &ctx.accounts.worker_authority.to_account_info(),
+        &ctx.accounts.task.key(),
+        CompletionBond::ROLE_WORKER,
+        BondDisposition::Refund,
+    )?;
+
     ctx.accounts
         .claim
         .close(ctx.accounts.worker_authority.to_account_info())?;
 
+    // A rejected external attestation also resolves its one-vote round. Closing
+    // the vote permits a later resubmission to initialize a fresh round while
+    // refunding the attestor who paid this PDA's rent.
+    if external_attestation {
+        ctx.accounts
+            .task_validation_vote
+            .close(ctx.accounts.reviewer.to_account_info())?;
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use anchor_lang::prelude::Pubkey;
+    use anchor_lang::ToAccountMetas;
+
+    #[test]
+    fn validator_agent_is_writable_so_votes_lock_registration_stake() {
+        let validator_agent = Pubkey::new_unique();
+        let accounts = crate::__client_accounts_validate_task_result::ValidateTaskResult {
+            task: Pubkey::new_unique(),
+            claim: Pubkey::new_unique(),
+            escrow: Pubkey::new_unique(),
+            task_validation_config: Pubkey::new_unique(),
+            task_attestor_config: None,
+            task_submission: Pubkey::new_unique(),
+            task_validation_vote: Pubkey::new_unique(),
+            worker: Pubkey::new_unique(),
+            protocol_config: Pubkey::new_unique(),
+            validator_agent: Some(validator_agent),
+            treasury: Pubkey::new_unique(),
+            creator: Pubkey::new_unique(),
+            worker_authority: Pubkey::new_unique(),
+            reviewer: Pubkey::new_unique(),
+            token_escrow_ata: None,
+            worker_token_account: None,
+            treasury_token_account: None,
+            reward_mint: None,
+            token_program: None,
+            system_program: Pubkey::new_unique(),
+            #[cfg(not(feature = "mainnet-canary"))]
+            creator_completion_bond: Pubkey::new_unique(),
+            #[cfg(not(feature = "mainnet-canary"))]
+            worker_completion_bond: Pubkey::new_unique(),
+        };
+
+        let validator_meta = accounts
+            .to_account_metas(None)
+            .into_iter()
+            .find(|meta| meta.pubkey == validator_agent)
+            .expect("validator agent meta should be present");
+
+        assert!(
+            validator_meta.is_writable,
+            "validator votes must persist the deregistration stake lock"
+        );
+    }
 }

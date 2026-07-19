@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**363 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**388 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -117,7 +117,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6103 | 0x17d7 | `DisputeAlreadyResolved` | Dispute has already been resolved |
 | 6104 | 0x17d8 | `UnauthorizedResolver` | Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator |
 | 6105 | 0x17d9 | `InvalidDisputeResolver` | Invalid dispute resolver: pubkey must be non-zero |
-| 6106 | 0x17da | `ActiveDisputeVotes` | Agent has active dispute votes pending resolution |
+| 6106 | 0x17da | `ActiveDisputeVotes` | Agent has initiated dispute outcomes pending finalization |
 | 6107 | 0x17db | `RecentVoteActivity` | Agent must wait 24 hours after voting before deregistering |
 | 6108 | 0x17dc | `AuthorityAlreadyVoted` | Authority has already voted on this dispute |
 | 6109 | 0x17dd | `InsufficientEvidence` | Insufficient dispute evidence provided |
@@ -147,7 +147,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6133 | 0x17f5 | `InvalidProtocolFee` | Invalid protocol fee (must be <= 1000 bps) |
 | 6134 | 0x17f6 | `InvalidTreasury` | Invalid treasury: treasury account cannot be default pubkey |
 | 6135 | 0x17f7 | `InvalidDisputeThreshold` | Invalid dispute threshold: must be 1-100 (percentage of votes required) |
-| 6136 | 0x17f8 | `InsufficientStake` | Insufficient stake for arbiter registration |
+| 6136 | 0x17f8 | `InsufficientStake` | Insufficient registration stake |
 | 6137 | 0x17f9 | `MultisigInvalidThreshold` | Invalid multisig threshold |
 | 6138 | 0x17fa | `MultisigInvalidSigners` | Invalid multisig signer configuration |
 | 6139 | 0x17fb | `MultisigNotEnoughSigners` | Not enough multisig signers |
@@ -222,7 +222,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6208 | 0x1840 | `TimelockNotElapsed` | Execution timelock has not elapsed |
 | 6209 | 0x1841 | `InvalidGovernanceParam` | Invalid governance configuration parameter |
 | 6210 | 0x1842 | `TreasuryNotProgramOwned` | Treasury must be a program-owned PDA |
-| 6211 | 0x1843 | `TreasuryNotSpendable` | Treasury must be program-owned, or a signer system account for governance spends |
+| 6211 | 0x1843 | `TreasuryNotSpendable` | Treasury must be a system-owned signer account |
 | 6212 | 0x1844 | `SkillInvalidId` | Skill ID cannot be all zeros |
 | 6213 | 0x1845 | `SkillInvalidName` | Skill name cannot be all zeros |
 | 6214 | 0x1846 | `SkillInvalidContentHash` | Skill content hash cannot be all zeros |
@@ -365,7 +365,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6351 | 0x18cf | `GoodsSelfPurchase` | A seller cannot purchase their own good |
 | 6352 | 0x18d0 | `GoodsUnauthorizedUpdate` | Only the seller can update a goods listing |
 | 6353 | 0x18d1 | `GoodsInvalidOperatorTerms` | Operator and operator_fee_bps must be set together, and the operator may not be the seller |
-| 6354 | 0x18d2 | `ResolverConflictOfInterest` | A dispute party (the task creator or the defendant worker) cannot resolve their own dispute |
+| 6354 | 0x18d2 | `ResolverConflictOfInterest` | A dispute party or snapshotted settlement beneficiary cannot resolve the dispute |
 | 6355 | 0x18d3 | `CompletingAcceptRequiresSoleLiveSubmission` | An accept that completes the task requires it to be the sole live submission (peer submissions would otherwise be orphaned) |
 | 6356 | 0x18d4 | `BondNotTiedToNoShowWorker` | A forfeited worker completion bond must belong to a live no-show claimant of this task |
 | 6357 | 0x18d5 | `ClaimSlashPending` | This claim's dispute was resolved but its slash has not been applied yet |
@@ -374,3 +374,28 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6360 | 0x18d8 | `ReputationDelegationIdentityMismatch` | The delegator agent is not the same registration that created this delegation |
 | 6361 | 0x18d9 | `AgentHasActiveBids` | An agent with live bids cannot deregister (their withdrawal paths load this registration) |
 | 6362 | 0x18da | `ReputationDelegationTooSoon` | A freshly registered agent must wait at least one slot before delegating reputation |
+| 6363 | 0x18db | `DisputeResolutionWindowExpired` | The dispute resolution window has expired; use expire_dispute |
+| 6364 | 0x18dc | `ReputationDelegationDisabled` | New reputation delegations are disabled; existing delegations may still be revoked |
+| 6365 | 0x18dd | `TaskChildRequiresDedicatedCleanup` | Task child has live submission state and requires its dedicated cleanup path |
+| 6366 | 0x18de | `TaskChildRentRecipientRequired` | The stored task-child rent recipient must be supplied as a writable account |
+| 6367 | 0x18df | `InvalidSlashPercentage` | Slash percentage must be between 0 and 100 |
+| 6368 | 0x18e0 | `TaskNotRentExempt` | Task must be rent exempt before terminal cleanup can preserve it |
+| 6369 | 0x18e1 | `InvalidRationaleHash` | Dispute resolution requires a non-zero rationale content hash |
+| 6370 | 0x18e2 | `TokenMintFreezeAuthorityEnabled` | Token reward mints must have no freeze authority |
+| 6371 | 0x18e3 | `TokenEscrowFrozen` | SPL token account must be initialized and not frozen |
+| 6372 | 0x18e4 | `OrphanTaskParentStillLive` | The referenced parent Task still exists; use its normal cleanup path |
+| 6373 | 0x18e5 | `OrphanTaskChildUnsupported` | This account type may carry principal or live state and cannot use orphan rent recovery |
+| 6374 | 0x18e6 | `BidJobSpecMismatch` | Bid job-spec commitment does not match the current task job specification |
+| 6375 | 0x18e7 | `TaskJobSpecBidLocked` | Task job specification is permanently locked because its creator opened bidding |
+| 6376 | 0x18e8 | `BidJobSpecBindingRequired` | Legacy unbound bid must be refreshed against the locked job specification before acceptance |
+| 6377 | 0x18e9 | `StaleBidAcceptance` | Selected bid terms changed since the creator signed acceptance |
+| 6378 | 0x18ea | `GoodsMetadataChanged` | Good metadata changed since preview; re-read the listing and retry |
+| 6379 | 0x18eb | `SkillVersionChanged` | Skill content version changed since preview; re-read the skill and retry |
+| 6380 | 0x18ec | `SkillContentChanged` | Skill content hash changed since preview; re-read the skill and retry |
+| 6381 | 0x18ed | `PrivateTaskCreationDisabled` | Private task creation is disabled until an audited ZK guest and mainnet verifier are activated |
+| 6382 | 0x18ee | `InvalidBidMarketplaceConfig` | Bid marketplace configuration exceeds protocol safety limits |
+| 6383 | 0x18ef | `BidBookEnumerationMismatch` | accept_bid must enumerate every other canonical open bid and matching bidder exactly once |
+| 6384 | 0x18f0 | `BidDoesNotSatisfyMatchingPolicy` | The selected bid does not win the bid book's declared matching policy |
+| 6385 | 0x18f1 | `MarketplacePayeeAccountAlias` | A marketplace fee payee cannot alias the task or its escrow account |
+| 6386 | 0x18f2 | `LamportTransferAccountAlias` | A positive lamport transfer requires distinct source and destination accounts |
+| 6387 | 0x18f3 | `ReputationDelegationRecoveryAccountsRequired` | Orphan delegation recovery requires the canonical protocol config and writable treasury |

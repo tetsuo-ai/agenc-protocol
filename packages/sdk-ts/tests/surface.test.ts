@@ -18,6 +18,8 @@ import {
   assertCapability,
   SurfaceNotDeployedError,
   SURFACE_REVISION_FULL,
+  SURFACE_REVISION_AUDIT_HARDENING,
+  SURFACE_REVISION_CURRENT,
   SURFACE_REVISION_OFFSET,
   OLD_PROTOCOL_CONFIG_SIZE,
   NEW_PROTOCOL_CONFIG_SIZE,
@@ -134,6 +136,15 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     // assertCapability throws below 4 and passes at/above.
     expect(() => assertCapability(capabilitiesForRevision(3), "goods")).toThrow();
     expect(() => assertCapability(capabilitiesForRevision(4), "goods")).not.toThrow();
+  });
+
+  it("maps the audit-hardening/current revision as a monotonic full surface", () => {
+    expect(SURFACE_REVISION_AUDIT_HARDENING).toBe(5);
+    expect(SURFACE_REVISION_CURRENT).toBe(SURFACE_REVISION_AUDIT_HARDENING);
+    const caps = capabilitiesForRevision(SURFACE_REVISION_CURRENT);
+    expect(caps.fullSurface).toBe(true);
+    expect(caps.goods).toBe(true);
+    expect(caps.surfaceRevision).toBe(5);
   });
 });
 

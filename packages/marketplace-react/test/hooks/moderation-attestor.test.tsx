@@ -298,6 +298,7 @@ describe("useHumanlessHireFlow — P1.2 moderation account resolution", () => {
     await result.current.hireAndActivate({
       hire: {
         listing: address(ROSTER_ATTESTOR),
+        providerAgent: address(ROSTER_ATTESTOR),
         taskId,
         expectedPrice: 1_000_000n,
         expectedVersion: 1n,

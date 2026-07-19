@@ -264,11 +264,24 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
   // ---- 3) buyer bot: hireAndActivate (WP-D6, the blessed hire path) with a
   // REFERRER so the settlement split is genuinely 4-way.
   const jobSpecInstructions = `agenc dev job spec for ${deps.listing.name}: run the demo deliverable`;
-  const jobSpecHash = await values.descriptionHash(jobSpecInstructions);
+  const jobSpecPayload = { instructions: jobSpecInstructions };
+  const jobSpecDigest = await values.canonicalJobSpecHash(jobSpecPayload);
+  const jobSpecHash = jobSpecDigest.bytes;
   const jobSpecUri = `agenc://job-spec/sha256/${values.bytesToHex(jobSpecHash)}`;
+  const jobSpecEnvelope = new TextEncoder().encode(
+    JSON.stringify({
+      integrity: {
+        algorithm: "sha256",
+        canonicalization: "json-stable-v1",
+        payloadHash: jobSpecDigest.hex,
+      },
+      payload: jobSpecPayload,
+    }),
+  );
   const hireResult = await hireAndActivate(deps.buyer.client, {
     hire: {
       listing,
+      providerAgent,
       taskId: values.randomId32(),
       expectedPrice: deps.listing.priceLamports,
       expectedVersion: 1n,
@@ -327,6 +340,7 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
       capabilities: 1n,
       minRewardLamports: 0n,
       maxRewardLamports: null,
+      allowUnboundedReward: true,
       // Stub executor: a real spawned process (node -e) that prints the
       // deliverable — the same seam a real coding-agent CLI plugs into.
       executor: [
@@ -335,8 +349,11 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
         'console.log("agenc dev stub deliverable: done")',
         "{prompt}",
       ],
+      executorMode: "unsafe",
+      executorEnvAllowlist: [],
       resultUploader: null,
       creatorAllowlist: [deps.buyer.signer.address], // only work for our buyer bot
+      allowAnyCreator: false,
       endpoint: "https://example.invalid/agenc-dev/worker-bot",
       executorTimeoutMs: 60_000,
       pollIntervalMs: 1_000,
@@ -345,6 +362,12 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
     signer: deps.provider.signer,
     gpa: deps.gpa,
     readAccount: deps.readAccount,
+    resolveAgencUri: async (uri) => {
+      if (uri !== jobSpecUri) {
+        throw new Error(`unknown sandbox job-spec URI: ${uri}`);
+      }
+      return jobSpecEnvelope;
+    },
     stateDir: deps.stateDir,
     log: workerLogLine(log),
   };

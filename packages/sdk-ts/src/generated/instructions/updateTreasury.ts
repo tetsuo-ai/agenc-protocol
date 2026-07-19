@@ -26,7 +26,6 @@ import {
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
-  type ReadonlyAccount,
   type ReadonlySignerAccount,
   type ReadonlyUint8Array,
   type TransactionSigner,
@@ -63,7 +62,8 @@ export type UpdateTreasuryInstruction<
         ? WritableAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
       TAccountNewTreasury extends string
-        ? ReadonlyAccount<TAccountNewTreasury>
+        ? ReadonlySignerAccount<TAccountNewTreasury> &
+            AccountSignerMeta<TAccountNewTreasury>
         : TAccountNewTreasury,
       TAccountAuthority extends string
         ? ReadonlySignerAccount<TAccountAuthority> &
@@ -109,11 +109,10 @@ export type UpdateTreasuryAsyncInput<
 > = {
   protocolConfig?: Address<TAccountProtocolConfig>;
   /**
-   * Must be either:
-   * - program-owned (preferred), or
-   * - a system-owned signer account (legacy compatibility).
+   * Must be a system-owned signer. Production clients request the new custody
+   * key's signature through this typed account in generated account metas.
    */
-  newTreasury: Address<TAccountNewTreasury>;
+  newTreasury: TransactionSigner<TAccountNewTreasury>;
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -181,11 +180,10 @@ export type UpdateTreasuryInput<
 > = {
   protocolConfig: Address<TAccountProtocolConfig>;
   /**
-   * Must be either:
-   * - program-owned (preferred), or
-   * - a system-owned signer account (legacy compatibility).
+   * Must be a system-owned signer. Production clients request the new custody
+   * key's signature through this typed account in generated account metas.
    */
-  newTreasury: Address<TAccountNewTreasury>;
+  newTreasury: TransactionSigner<TAccountNewTreasury>;
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -247,9 +245,8 @@ export type ParsedUpdateTreasuryInstruction<
   accounts: {
     protocolConfig: TAccountMetas[0];
     /**
-     * Must be either:
-     * - program-owned (preferred), or
-     * - a system-owned signer account (legacy compatibility).
+     * Must be a system-owned signer. Production clients request the new custody
+     * key's signature through this typed account in generated account metas.
      */
     newTreasury: TAccountMetas[1];
     authority: TAccountMetas[2];

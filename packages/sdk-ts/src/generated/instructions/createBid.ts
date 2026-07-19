@@ -51,6 +51,7 @@ import {
   findBidMarketplacePda,
   findBidPda,
   findProtocolConfigPda,
+  findTaskJobSpecPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -67,6 +68,7 @@ export type CreateBidInstruction<
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountBidMarketplace extends string | AccountMeta<string> = string,
   TAccountTask extends string | AccountMeta<string> = string,
+  TAccountTaskJobSpec extends string | AccountMeta<string> = string,
   TAccountBidBook extends string | AccountMeta<string> = string,
   TAccountBid extends string | AccountMeta<string> = string,
   TAccountBidderMarketState extends string | AccountMeta<string> = string,
@@ -88,6 +90,9 @@ export type CreateBidInstruction<
       TAccountTask extends string
         ? ReadonlyAccount<TAccountTask>
         : TAccountTask,
+      TAccountTaskJobSpec extends string
+        ? ReadonlyAccount<TAccountTaskJobSpec>
+        : TAccountTaskJobSpec,
       TAccountBidBook extends string
         ? WritableAccount<TAccountBidBook>
         : TAccountBidBook,
@@ -117,6 +122,8 @@ export type CreateBidInstructionData = {
   qualityGuaranteeHash: ReadonlyUint8Array;
   metadataHash: ReadonlyUint8Array;
   expiresAt: bigint;
+  expectedJobSpecHash: ReadonlyUint8Array;
+  expectedJobSpecUpdatedAt: bigint;
 };
 
 export type CreateBidInstructionDataArgs = {
@@ -126,6 +133,8 @@ export type CreateBidInstructionDataArgs = {
   qualityGuaranteeHash: ReadonlyUint8Array;
   metadataHash: ReadonlyUint8Array;
   expiresAt: number | bigint;
+  expectedJobSpecHash: ReadonlyUint8Array;
+  expectedJobSpecUpdatedAt: number | bigint;
 };
 
 export function getCreateBidInstructionDataEncoder(): FixedSizeEncoder<CreateBidInstructionDataArgs> {
@@ -138,6 +147,8 @@ export function getCreateBidInstructionDataEncoder(): FixedSizeEncoder<CreateBid
       ["qualityGuaranteeHash", fixEncoderSize(getBytesEncoder(), 32)],
       ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
       ["expiresAt", getI64Encoder()],
+      ["expectedJobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["expectedJobSpecUpdatedAt", getI64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: CREATE_BID_DISCRIMINATOR }),
   );
@@ -152,6 +163,8 @@ export function getCreateBidInstructionDataDecoder(): FixedSizeDecoder<CreateBid
     ["qualityGuaranteeHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["metadataHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["expiresAt", getI64Decoder()],
+    ["expectedJobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
+    ["expectedJobSpecUpdatedAt", getI64Decoder()],
   ]);
 }
 
@@ -169,6 +182,7 @@ export type CreateBidAsyncInput<
   TAccountProtocolConfig extends string = string,
   TAccountBidMarketplace extends string = string,
   TAccountTask extends string = string,
+  TAccountTaskJobSpec extends string = string,
   TAccountBidBook extends string = string,
   TAccountBid extends string = string,
   TAccountBidderMarketState extends string = string,
@@ -179,6 +193,8 @@ export type CreateBidAsyncInput<
   protocolConfig?: Address<TAccountProtocolConfig>;
   bidMarketplace?: Address<TAccountBidMarketplace>;
   task: Address<TAccountTask>;
+  /** The exact creator-locked content-addressed job contract the bidder signs. */
+  taskJobSpec?: Address<TAccountTaskJobSpec>;
   bidBook?: Address<TAccountBidBook>;
   bid?: Address<TAccountBid>;
   bidderMarketState?: Address<TAccountBidderMarketState>;
@@ -191,12 +207,15 @@ export type CreateBidAsyncInput<
   qualityGuaranteeHash: CreateBidInstructionDataArgs["qualityGuaranteeHash"];
   metadataHash: CreateBidInstructionDataArgs["metadataHash"];
   expiresAt: CreateBidInstructionDataArgs["expiresAt"];
+  expectedJobSpecHash: CreateBidInstructionDataArgs["expectedJobSpecHash"];
+  expectedJobSpecUpdatedAt: CreateBidInstructionDataArgs["expectedJobSpecUpdatedAt"];
 };
 
 export async function getCreateBidInstructionAsync<
   TAccountProtocolConfig extends string,
   TAccountBidMarketplace extends string,
   TAccountTask extends string,
+  TAccountTaskJobSpec extends string,
   TAccountBidBook extends string,
   TAccountBid extends string,
   TAccountBidderMarketState extends string,
@@ -209,6 +228,7 @@ export async function getCreateBidInstructionAsync<
     TAccountProtocolConfig,
     TAccountBidMarketplace,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidderMarketState,
@@ -223,6 +243,7 @@ export async function getCreateBidInstructionAsync<
     TAccountProtocolConfig,
     TAccountBidMarketplace,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidderMarketState,
@@ -240,6 +261,7 @@ export async function getCreateBidInstructionAsync<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     bidMarketplace: { value: input.bidMarketplace ?? null, isWritable: false },
     task: { value: input.task ?? null, isWritable: false },
+    taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
     bid: { value: input.bid ?? null, isWritable: true },
     bidderMarketState: {
@@ -264,6 +286,14 @@ export async function getCreateBidInstructionAsync<
   }
   if (!accounts.bidMarketplace.value) {
     accounts.bidMarketplace.value = await findBidMarketplacePda();
+  }
+  if (!accounts.taskJobSpec.value) {
+    accounts.taskJobSpec.value = await findTaskJobSpecPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
   }
   if (!accounts.bidBook.value) {
     accounts.bidBook.value = await findBidBookPda({
@@ -304,6 +334,7 @@ export async function getCreateBidInstructionAsync<
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("bidMarketplace", accounts.bidMarketplace),
       getAccountMeta("task", accounts.task),
+      getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("bid", accounts.bid),
       getAccountMeta("bidderMarketState", accounts.bidderMarketState),
@@ -320,6 +351,7 @@ export async function getCreateBidInstructionAsync<
     TAccountProtocolConfig,
     TAccountBidMarketplace,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidderMarketState,
@@ -333,6 +365,7 @@ export type CreateBidInput<
   TAccountProtocolConfig extends string = string,
   TAccountBidMarketplace extends string = string,
   TAccountTask extends string = string,
+  TAccountTaskJobSpec extends string = string,
   TAccountBidBook extends string = string,
   TAccountBid extends string = string,
   TAccountBidderMarketState extends string = string,
@@ -343,6 +376,8 @@ export type CreateBidInput<
   protocolConfig: Address<TAccountProtocolConfig>;
   bidMarketplace: Address<TAccountBidMarketplace>;
   task: Address<TAccountTask>;
+  /** The exact creator-locked content-addressed job contract the bidder signs. */
+  taskJobSpec: Address<TAccountTaskJobSpec>;
   bidBook: Address<TAccountBidBook>;
   bid: Address<TAccountBid>;
   bidderMarketState: Address<TAccountBidderMarketState>;
@@ -355,12 +390,15 @@ export type CreateBidInput<
   qualityGuaranteeHash: CreateBidInstructionDataArgs["qualityGuaranteeHash"];
   metadataHash: CreateBidInstructionDataArgs["metadataHash"];
   expiresAt: CreateBidInstructionDataArgs["expiresAt"];
+  expectedJobSpecHash: CreateBidInstructionDataArgs["expectedJobSpecHash"];
+  expectedJobSpecUpdatedAt: CreateBidInstructionDataArgs["expectedJobSpecUpdatedAt"];
 };
 
 export function getCreateBidInstruction<
   TAccountProtocolConfig extends string,
   TAccountBidMarketplace extends string,
   TAccountTask extends string,
+  TAccountTaskJobSpec extends string,
   TAccountBidBook extends string,
   TAccountBid extends string,
   TAccountBidderMarketState extends string,
@@ -373,6 +411,7 @@ export function getCreateBidInstruction<
     TAccountProtocolConfig,
     TAccountBidMarketplace,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidderMarketState,
@@ -386,6 +425,7 @@ export function getCreateBidInstruction<
   TAccountProtocolConfig,
   TAccountBidMarketplace,
   TAccountTask,
+  TAccountTaskJobSpec,
   TAccountBidBook,
   TAccountBid,
   TAccountBidderMarketState,
@@ -402,6 +442,7 @@ export function getCreateBidInstruction<
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     bidMarketplace: { value: input.bidMarketplace ?? null, isWritable: false },
     task: { value: input.task ?? null, isWritable: false },
+    taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
     bid: { value: input.bid ?? null, isWritable: true },
     bidderMarketState: {
@@ -432,6 +473,7 @@ export function getCreateBidInstruction<
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("bidMarketplace", accounts.bidMarketplace),
       getAccountMeta("task", accounts.task),
+      getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("bid", accounts.bid),
       getAccountMeta("bidderMarketState", accounts.bidderMarketState),
@@ -448,6 +490,7 @@ export function getCreateBidInstruction<
     TAccountProtocolConfig,
     TAccountBidMarketplace,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountBid,
     TAccountBidderMarketState,
@@ -466,12 +509,14 @@ export type ParsedCreateBidInstruction<
     protocolConfig: TAccountMetas[0];
     bidMarketplace: TAccountMetas[1];
     task: TAccountMetas[2];
-    bidBook: TAccountMetas[3];
-    bid: TAccountMetas[4];
-    bidderMarketState: TAccountMetas[5];
-    bidder: TAccountMetas[6];
-    authority: TAccountMetas[7];
-    systemProgram: TAccountMetas[8];
+    /** The exact creator-locked content-addressed job contract the bidder signs. */
+    taskJobSpec: TAccountMetas[3];
+    bidBook: TAccountMetas[4];
+    bid: TAccountMetas[5];
+    bidderMarketState: TAccountMetas[6];
+    bidder: TAccountMetas[7];
+    authority: TAccountMetas[8];
+    systemProgram: TAccountMetas[9];
   };
   data: CreateBidInstructionData;
 };
@@ -484,12 +529,12 @@ export function parseCreateBidInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedCreateBidInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 9) {
+  if (instruction.accounts.length < 10) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 9,
+        expectedAccountMetas: 10,
       },
     );
   }
@@ -505,6 +550,7 @@ export function parseCreateBidInstruction<
       protocolConfig: getNextAccount(),
       bidMarketplace: getNextAccount(),
       task: getNextAccount(),
+      taskJobSpec: getNextAccount(),
       bidBook: getNextAccount(),
       bid: getNextAccount(),
       bidderMarketState: getNextAccount(),

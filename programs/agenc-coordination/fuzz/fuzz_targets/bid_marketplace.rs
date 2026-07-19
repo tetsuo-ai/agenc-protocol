@@ -26,7 +26,12 @@ fn build_bid_task(
     }
 }
 
-fn build_bidder(agent_id: [u8; 32], capabilities: u64, active_tasks: u8, reputation: u16) -> SimulatedAgent {
+fn build_bidder(
+    agent_id: [u8; 32],
+    capabilities: u64,
+    active_tasks: u8,
+    reputation: u16,
+) -> SimulatedAgent {
     SimulatedAgent {
         agent_id,
         capabilities,
@@ -44,6 +49,10 @@ fn build_open_bid_book(task_id: [u8; 32], now: i64) -> SimulatedBidBook {
         task: task_id,
         state: bid_book_state::OPEN,
         policy: matching_policy::BEST_PRICE,
+        price_weight_bps: 0,
+        eta_weight_bps: 0,
+        confidence_weight_bps: 0,
+        reliability_weight_bps: 0,
         accepted_bid: None,
         version: 0,
         total_bids: 0,
@@ -79,7 +88,10 @@ proptest! {
         let updated_reward = updated_reward.min(task_reward);
         let bidder_capabilities = required_capabilities | extra_capabilities;
         let max_lifetime = expires_offset.max(updated_expires_offset).saturating_add(600);
-        let deadline = current_time.saturating_add(max_lifetime).saturating_add(600);
+        let deadline_offset = max_lifetime
+            .max(i64::from(eta_seconds))
+            .max(i64::from(updated_eta_seconds));
+        let deadline = current_time.saturating_add(deadline_offset).saturating_add(600);
         let expires_at = current_time.saturating_add(expires_offset);
         let updated_expires_at = current_time.saturating_add(updated_expires_offset);
 
@@ -179,7 +191,9 @@ proptest! {
         let requested_reward = requested_reward.min(task_reward);
         let bidder_capabilities = required_capabilities | extra_capabilities;
         let bidder_reputation = min_reputation.saturating_add(reputation_padding).min(10_000);
-        let deadline = current_time.saturating_add(expires_offset).saturating_add(600);
+        let deadline = current_time
+            .saturating_add(expires_offset.max(i64::from(eta_seconds)))
+            .saturating_add(600);
         let expires_at = current_time.saturating_add(expires_offset);
 
         let mut task = build_bid_task(task_id, task_reward, required_capabilities, deadline);
@@ -221,8 +235,11 @@ proptest! {
             &mut bid,
             &mut bidder,
             &mut bidder_state,
-            current_time,
-            min_reputation,
+            SimulatedBidAcceptanceContext {
+                other_bid_pairs: &[],
+                now: current_time,
+                min_reputation,
+            },
         );
 
         prop_assert!(accept_result.is_success(), "accept failed: {:?}", accept_result);
@@ -236,6 +253,113 @@ proptest! {
         prop_assert_eq!(bidder_state.total_bids_accepted, 1);
         prop_assert_eq!(bidder_state.active_bid_count, 1);
         prop_assert_eq!(bid_book.active_bids, 1);
+    }
+
+    #[test]
+    fn fuzz_declared_policy_rejects_a_better_bid_but_ignores_book_version_churn(
+        policy in 0u8..=2u8,
+        selected_price in 2u64..999_000_000u64,
+        selected_eta in 2u32..86_000u32,
+        book_version in any::<u64>(),
+        current_time in 1_700_000_000i64..1_800_000_000i64,
+    ) {
+        let task_reward = selected_price.saturating_add(1_000);
+        let deadline = current_time
+            .saturating_add(i64::from(selected_eta))
+            .saturating_add(1_000);
+        let task = build_bid_task([1u8; 32], task_reward, 1, deadline);
+        let mut bid_book = build_open_bid_book(task.task_id, current_time);
+        bid_book.policy = policy;
+        bid_book.version = book_version;
+        bid_book.total_bids = 2;
+        bid_book.active_bids = 2;
+        if policy == matching_policy::WEIGHTED_SCORE {
+            bid_book.price_weight_bps = 10_000;
+        }
+
+        let selected = SimulatedBid {
+            bid_id: [2u8; 32],
+            task: task.task_id,
+            bidder: [3u8; 32],
+            requested_reward_lamports: selected_price,
+            eta_seconds: selected_eta,
+            confidence_bps: 8_000,
+            reputation_snapshot_bps: 8_000,
+            expires_at: deadline,
+            state: bid_state::BOUND_ACTIVE,
+            bond_lamports: 100_000,
+            is_closed: false,
+        };
+        let mut competitor = selected.clone();
+        competitor.bid_id = [4u8; 32];
+        competitor.bidder = [5u8; 32];
+        if policy == matching_policy::BEST_ETA {
+            competitor.eta_seconds = selected_eta - 1;
+            competitor.requested_reward_lamports = selected_price.saturating_add(1);
+        } else {
+            competitor.requested_reward_lamports = selected_price - 1;
+            competitor.eta_seconds = selected_eta.saturating_add(1);
+        }
+
+        let mut competitor_pair = SimulatedCompetingBidPair {
+            bidder: build_bidder(
+                competitor.bidder,
+                task.required_capabilities,
+                0,
+                10_000,
+            ),
+            bid: competitor,
+        };
+        let losing_result = simulate_validate_bid_selection(
+            &task,
+            &bid_book,
+            &selected,
+            std::slice::from_ref(&competitor_pair),
+            current_time,
+            0,
+        );
+        prop_assert!(losing_result.is_error());
+
+        if policy == matching_policy::BEST_ETA {
+            competitor_pair.bid.eta_seconds = selected_eta.saturating_add(1);
+            competitor_pair.bid.requested_reward_lamports = selected_price.saturating_sub(1);
+        } else {
+            competitor_pair.bid.requested_reward_lamports = selected_price.saturating_add(1);
+            competitor_pair.bid.eta_seconds = selected_eta.saturating_sub(1);
+        }
+        let winning_result = simulate_validate_bid_selection(
+            &task,
+            &bid_book,
+            &selected,
+            std::slice::from_ref(&competitor_pair),
+            current_time,
+            0,
+        );
+        prop_assert!(winning_result.is_success(), "unexpected selection: {:?}", winning_result);
+
+        competitor_pair.bid.requested_reward_lamports = 1;
+        competitor_pair.bidder.status = agent_status::INACTIVE;
+        let inactive_better_result = simulate_validate_bid_selection(
+            &task,
+            &bid_book,
+            &selected,
+            std::slice::from_ref(&competitor_pair),
+            current_time,
+            0,
+        );
+        prop_assert!(inactive_better_result.is_success());
+
+        competitor_pair.bidder.status = agent_status::ACTIVE;
+        competitor_pair.bidder.stake = 999_999;
+        let under_staked_better_result = simulate_validate_bid_selection(
+            &task,
+            &bid_book,
+            &selected,
+            std::slice::from_ref(&competitor_pair),
+            current_time,
+            0,
+        );
+        prop_assert!(under_staked_better_result.is_success());
     }
 
     #[test]
@@ -256,7 +380,9 @@ proptest! {
     ) {
         let requested_reward = requested_reward.min(task_reward);
         let bidder_capabilities = required_capabilities | extra_capabilities;
-        let deadline = current_time.saturating_add(expires_offset).saturating_add(600);
+        let deadline = current_time
+            .saturating_add(expires_offset.max(i64::from(eta_seconds)))
+            .saturating_add(600);
         let expires_at = current_time.saturating_add(expires_offset);
 
         let task = build_bid_task(task_id, task_reward, required_capabilities, deadline);
@@ -481,6 +607,88 @@ mod edge_cases {
     }
 
     #[test]
+    fn test_bid_entry_and_acceptance_reject_under_staked_bidder() {
+        let current_time = 1_750_000_000;
+        let mut task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
+        let mut bidder = build_bidder([2u8; 32], 1, 0, 5_000);
+        bidder.stake = 999_999;
+        let mut bid_book = build_open_bid_book(task.task_id, current_time);
+        let mut bid = SimulatedBid::default();
+        let mut bidder_state = SimulatedBidderMarketState::default();
+
+        let result = simulate_create_bid(
+            &task,
+            &mut bid_book,
+            &mut bid,
+            &bidder,
+            &mut bidder_state,
+            &SimulatedBidMarketplaceConfig::default(),
+            current_time,
+            0,
+            [3u8; 32],
+            400_000,
+            600,
+            9_000,
+            plus_time(current_time, 600),
+        );
+        assert!(matches!(
+            result,
+            SimulationResult::Error(message) if message == "InsufficientStake"
+        ));
+
+        bidder.stake = 1_000_000;
+        assert!(simulate_create_bid(
+            &task,
+            &mut bid_book,
+            &mut bid,
+            &bidder,
+            &mut bidder_state,
+            &SimulatedBidMarketplaceConfig::default(),
+            current_time,
+            0,
+            [3u8; 32],
+            400_000,
+            600,
+            9_000,
+            plus_time(current_time, 600),
+        )
+        .is_success());
+        bidder.stake = 999_999;
+        let result = simulate_update_bid(
+            &task,
+            &mut bid_book,
+            &mut bid,
+            &bidder,
+            &SimulatedBidMarketplaceConfig::default(),
+            current_time,
+            350_000,
+            500,
+            9_000,
+            plus_time(current_time, 600),
+        );
+        assert!(matches!(
+            result,
+            SimulationResult::Error(message) if message == "InsufficientStake"
+        ));
+        let result = simulate_accept_bid(
+            &mut task,
+            &mut bid_book,
+            &mut bid,
+            &mut bidder,
+            &mut bidder_state,
+            SimulatedBidAcceptanceContext {
+                other_bid_pairs: &[],
+                now: current_time,
+                min_reputation: 0,
+            },
+        );
+        assert!(matches!(
+            result,
+            SimulationResult::Error(message) if message == "InsufficientStake"
+        ));
+    }
+
+    #[test]
     fn test_accept_expired_bid_fails() {
         let current_time = 1_750_000_000;
         let mut task = build_bid_task([1u8; 32], 500_000, 1, plus_time(current_time, 10_000));
@@ -513,8 +721,11 @@ mod edge_cases {
             &mut bid,
             &mut bidder,
             &mut bidder_state,
-            plus_time(current_time, 60),
-            0,
+            SimulatedBidAcceptanceContext {
+                other_bid_pairs: &[],
+                now: plus_time(current_time, 60),
+                min_reputation: 0,
+            },
         );
 
         assert!(result.is_error());
@@ -556,8 +767,11 @@ mod edge_cases {
             &mut bid,
             &mut bidder,
             &mut bidder_state,
-            current_time,
-            0,
+            SimulatedBidAcceptanceContext {
+                other_bid_pairs: &[],
+                now: current_time,
+                min_reputation: 0,
+            },
         );
 
         assert!(result.is_error());
@@ -599,8 +813,11 @@ mod edge_cases {
             &mut bid,
             &mut bidder,
             &mut bidder_state,
-            current_time,
-            0,
+            SimulatedBidAcceptanceContext {
+                other_bid_pairs: &[],
+                now: current_time,
+                min_reputation: 0,
+            },
         );
         assert!(accept_result.is_success());
 
@@ -656,8 +873,11 @@ mod edge_cases {
             &mut bid,
             &mut bidder,
             &mut bidder_state,
-            current_time,
-            0,
+            SimulatedBidAcceptanceContext {
+                other_bid_pairs: &[],
+                now: current_time,
+                min_reputation: 0,
+            },
         );
         assert!(accept_result.is_success());
 

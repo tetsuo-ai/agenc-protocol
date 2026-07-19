@@ -13,16 +13,15 @@ name: Release
 # Requires the NPM_TOKEN repo secret (npm automation token with publish rights
 # to the @tetsuo-ai scope). Provisioning that secret is a human-owned step.
 #
-# NOTE on provenance: `npm publish --provenance` requires a PUBLIC repository
-# (the attestation goes to a public transparency log). This repo is currently
-# private, so provenance is OFF. When the repo goes public (PLAN.md P0.6/P8.3),
-# add `--provenance` to both publish commands below.
+# npm provenance is mandatory for every publish. The repository is public and
+# this workflow has `id-token: write`, so npm can bind each tarball to this exact
+# GitHub Actions run in the public transparency log.
 #
-# NOTE on verifiable builds: `.github/workflows/verify.yml` runs on the same
-# `protocol-v*` tags and attaches the reproducible on-chain program build hash
-# (`verifiable-build-hashes.txt`) to the Release this workflow creates. Full
-# third-party source-verification (solana-verify verify-from-repo / osec.io) is
-# gated on the repo going public — see docs/VERIFIABLE_BUILDS.md.
+# NOTE on verifiable builds: protocol releases call `.github/workflows/verify.yml`
+# as a required job. Publication cannot begin unless its reproducible on-chain
+# build succeeds, and the resulting hash manifest is attached while the GitHub
+# Release is still a draft. Third-party on-chain source verification remains a
+# separately approved Squads ceremony — see docs/VERIFIABLE_BUILDS.md.
 
 on:
   push:
@@ -34,18 +33,52 @@ on:
       - "mcp-v*"
 
 permissions:
-  contents: write # create the GitHub Release
-  id-token: write # OIDC for npm provenance (no-op until provenance is enabled)
+  contents: read
+
+env:
+  AGAVE_VERSION: v3.0.13
+  AGAVE_INSTALL_INIT_SHA256: 1a4e96d884a4df7f204240ea8a0e2ce5a4ca71257bc5ce32ae140e1f6bc140d8
+
+# Package tags share dependency/order constraints and publish credentials.
+# Serialize them so two near-simultaneous tags cannot race npm publication.
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
 
 jobs:
+  protocol_verifiable_build:
+    if: startsWith(github.ref_name, 'protocol-v')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/verify.yml
+
   release:
+    needs: protocol_verifiable_build
+    if: ${{ always() && (needs.protocol_verifiable_build.result == 'success' || needs.protocol_verifiable_build.result == 'skipped') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: write # create/finalize the GitHub Release
+      id-token: write # OIDC for mandatory npm provenance
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # v6.0.2+ preserves annotated tag objects instead of converting them to
+        # lightweight tags; verify-release-tag-binding relies on that identity.
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a release commit from main
+        run: |
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main"; then
+            echo "Release tag ${GITHUB_REF_NAME} does not point to a commit on main" >&2
+            exit 1
+          fi
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -60,52 +93,68 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           case "$TAG" in
             protocol-v*)
-              echo "name=@tetsuo-ai/protocol" >> "$GITHUB_OUTPUT"
-              echo "dir=packages/protocol" >> "$GITHUB_OUTPUT"
-              echo "version=${TAG#protocol-v}" >> "$GITHUB_OUTPUT"
+              PACKAGE_NAME="@tetsuo-ai/protocol"
+              PACKAGE_DIR="packages/protocol"
+              PACKAGE_VERSION="${TAG#protocol-v}"
               ;;
             sdk-v*)
-              echo "name=@tetsuo-ai/marketplace-sdk" >> "$GITHUB_OUTPUT"
-              echo "dir=packages/sdk-ts" >> "$GITHUB_OUTPUT"
-              echo "version=${TAG#sdk-v}" >> "$GITHUB_OUTPUT"
+              PACKAGE_NAME="@tetsuo-ai/marketplace-sdk"
+              PACKAGE_DIR="packages/sdk-ts"
+              PACKAGE_VERSION="${TAG#sdk-v}"
               ;;
             react-v*)
-              echo "name=@tetsuo-ai/marketplace-react" >> "$GITHUB_OUTPUT"
-              echo "dir=packages/marketplace-react" >> "$GITHUB_OUTPUT"
-              echo "version=${TAG#react-v}" >> "$GITHUB_OUTPUT"
+              PACKAGE_NAME="@tetsuo-ai/marketplace-react"
+              PACKAGE_DIR="packages/marketplace-react"
+              PACKAGE_VERSION="${TAG#react-v}"
               ;;
             tools-v*)
-              echo "name=@tetsuo-ai/marketplace-tools" >> "$GITHUB_OUTPUT"
-              echo "dir=packages/marketplace-tools" >> "$GITHUB_OUTPUT"
-              echo "version=${TAG#tools-v}" >> "$GITHUB_OUTPUT"
+              PACKAGE_NAME="@tetsuo-ai/marketplace-tools"
+              PACKAGE_DIR="packages/marketplace-tools"
+              PACKAGE_VERSION="${TAG#tools-v}"
               ;;
             mcp-v*)
-              echo "name=@tetsuo-ai/marketplace-mcp" >> "$GITHUB_OUTPUT"
-              echo "dir=packages/marketplace-mcp" >> "$GITHUB_OUTPUT"
-              echo "version=${TAG#mcp-v}" >> "$GITHUB_OUTPUT"
+              PACKAGE_NAME="@tetsuo-ai/marketplace-mcp"
+              PACKAGE_DIR="packages/marketplace-mcp"
+              PACKAGE_VERSION="${TAG#mcp-v}"
               ;;
             *)
               echo "Unrecognized tag: $TAG" >&2; exit 1
               ;;
           esac
+          if [[ ! "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag contains an invalid semantic version: $TAG" >&2
+            exit 1
+          fi
+          printf '%s\n' \
+            "name=${PACKAGE_NAME}" \
+            "dir=${PACKAGE_DIR}" \
+            "version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Verify tag matches package.json version
+        env:
+          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+          TAG_VERSION: ${{ steps.pkg.outputs.version }}
         run: |
-          PKG_VERSION=$(node -p "require('./${{ steps.pkg.outputs.dir }}/package.json').version")
-          if [ "$PKG_VERSION" != "${{ steps.pkg.outputs.version }}" ]; then
-            echo "Tag version ${{ steps.pkg.outputs.version }} != package.json $PKG_VERSION" >&2
+          PKG_VERSION=$(node -p "require('./' + process.env.PACKAGE_DIR + '/package.json').version")
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag version $TAG_VERSION != package.json $PKG_VERSION" >&2
             exit 1
           fi
 
       # --- Gate: SDK / MCP / react (on-chain e2e needs the compiled program) ---
       - name: Setup Rust (e2e)
         if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Install Solana platform tools (e2e)
         if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Build program for e2e
@@ -170,12 +219,43 @@ jobs:
       # (--require-build) has real target/idl + target/types to compare.
       - name: Setup Rust (protocol gate)
         if: startsWith(github.ref_name, 'protocol-v')
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Protocol Rust release matrix
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: |
+          cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features validation-timings
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk
+          cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary -- -D warnings
+          cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary
+          cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml --all-targets
+          npm run test:deployment-scripts
+
+      - name: Reject mixed release surfaces
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: |
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --features mainnet-canary 2>&1); then
+            echo "default features + mainnet-canary unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary must be built with --no-default-features" <<<"${mixed_output}"
+          if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary,private-zk 2>&1); then
+            echo "mainnet-canary + private-zk unexpectedly compiled" >&2
+            exit 1
+          fi
+          grep -F "mainnet-canary and private-zk are mutually exclusive" <<<"${mixed_output}"
 
       - name: Cache anchor CLI binary (protocol gate)
         if: startsWith(github.ref_name, 'protocol-v')
         id: cache-anchor-protocol
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/anchor
           key: anchor-cli-0.32.1-${{ runner.os }}
@@ -187,12 +267,25 @@ jobs:
       - name: Install Solana platform tools (protocol gate)
         if: startsWith(github.ref_name, 'protocol-v')
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Anchor build (protocol gate — fresh IDL/types for the drift check)
         if: startsWith(github.ref_name, 'protocol-v')
         run: anchor build
+
+      - name: Reject SBF stack-frame overflows (protocol gate)
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: npm run check:stack
+
+      - name: Compiled-program integration suite (protocol gate)
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: node --test tests-integration/*.test.mjs
 
       - name: Protocol gate (artifacts check, build, typecheck, pack smoke)
         if: startsWith(github.ref_name, 'protocol-v')
@@ -202,8 +295,14 @@ jobs:
           npm run typecheck
           npm run pack:smoke
 
-      # Canary freeze gate (F-19): tag pushes bypass the PR checks, so the frozen
-      # 25-instruction canary wire-shape must be verified here too.
+      # Canary gates run only after every production build/artifact/package gate:
+      # `canary:build` intentionally overwrites the shared deploy `.so` path.
+      # Tag pushes bypass PR checks, so verify both the frozen wire shape and the
+      # compiled timeout-settlement behavior here.
+      - name: Build mainnet-canary SBF (protocol gate)
+        if: startsWith(github.ref_name, 'protocol-v')
+        run: npm run canary:build
+
       - name: Build mainnet-canary IDL (protocol gate)
         if: startsWith(github.ref_name, 'protocol-v')
         run: npm run canary:idl
@@ -212,27 +311,73 @@ jobs:
         if: startsWith(github.ref_name, 'protocol-v')
         run: npm run canary:check-idl
 
-      # Both publish steps are idempotent so a re-run after a partial failure
-      # converges instead of dying on the already-done half.
+      - name: Compiled mainnet-canary LiteSVM regression (protocol gate)
+        if: startsWith(github.ref_name, 'protocol-v')
+        env:
+          AGENC_CANARY_LITESVM: "1"
+        run: node --test tests-integration/canary-timeout-accept.test.mjs
+
+      - name: Audit runtime npm dependencies
+        run: npm audit --omit=dev --workspaces
+
+      - name: Download required verifiable-build hashes
+        if: startsWith(github.ref_name, 'protocol-v')
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verifiable-build-hashes
+
+      # Create a draft first. A failed hash attachment or npm publish therefore
+      # cannot expose a half-formed public GitHub Release.
+      - name: Prepare GitHub Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+        run: |
+          node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists — reusing it"
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --draft \
+              --title "${PACKAGE_NAME}@${PACKAGE_VERSION}" \
+              --notes "See ${PACKAGE_DIR}/CHANGELOG.md for details."
+          fi
+
+      - name: Attach required verifiable-build hashes
+        if: startsWith(github.ref_name, 'protocol-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
+          gh release upload "${GITHUB_REF_NAME}" verifiable-build-hashes.txt --clobber
+
+      # Never treat a pre-existing registry version as a successful rerun: without
+      # deterministic integrity + provenance verification it is an untrusted artifact.
       - name: Publish to npm
         working-directory: ${{ steps.pkg.outputs.dir }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
         run: |
-          if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version > /dev/null 2>&1; then
-            echo "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} already on npm — skipping publish"
-          else
-            npm publish --access public
+          node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version > /dev/null 2>&1; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} already exists on npm; refusing to endorse an unverified tarball" >&2
+            exit 1
           fi
+          npm publish --access public --provenance
 
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            echo "Release ${GITHUB_REF_NAME} already exists — skipping"
+          node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
+          IS_DRAFT=$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft)
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh release edit "${GITHUB_REF_NAME}" --draft=false
           else
-            gh release create "${GITHUB_REF_NAME}" \
-              --title "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" \
-              --notes "See ${{ steps.pkg.outputs.dir }}/CHANGELOG.md for details."
+            echo "Release ${GITHUB_REF_NAME} is already public"
           fi

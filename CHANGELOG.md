@@ -5,6 +5,96 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
+## 2026-07-18 — revision-5 release hardening candidate (not deployed)
+
+- **Bootstrap validation:** `initialize_protocol` now verifies the exact
+  upgradeable-loader `ProgramData` state tag before reading variant-specific
+  authority bytes. Compiled coverage exercises the canonical bootstrap, rejects
+  every other loader-state tag, binds the PDA/owner/upgrade authority, rejects
+  invalid custody and multisig shapes, and confirms replay protection.
+- **HIGH — token custody:** task creation and every token transfer/close path now
+  require the single canonical classic-SPL ATA for `(TaskEscrow PDA, reward mint)`.
+  This closes a preinitialized-account attack that could retain an attacker close
+  authority, strand funded custody, or substitute an escrow-owned token account at
+  settlement. A compiled-program regression reproduces the exact hostile account
+  transition and verifies atomic rejection; the mainnet scan found zero token tasks.
+- **Lifecycle/accounting:** dispute liabilities are provenance-tagged and finalized
+  exactly once; payout aliases and positive same-account lamport transfers fail
+  closed; collaborative rewards cannot produce zero-value shares; token units no
+  longer inflate SOL-denominated totals or reputation; canonical bid/job-spec terms,
+  live-stake claim gates, and orphan-child rent recovery are enforced on-chain.
+  Recovery now covers validator votes with exact submission/reviewer/PDA binding;
+  the read-only scanner mirrors those checks and treats a dust-funded empty system
+  PDA as absent, matching the program instead of reporting a false blocker. An
+  approved `Complete` dispute now records the worker's actual net SOL earnings (or
+  token-denominated completion without inflating SOL totals) while preserving the
+  dispute path's intentional no-reputation policy.
+- **Live-upgrade compatibility:** the revision-5 cutover now fails closed on open
+  bids/bid bonds, live completion-bond principal, any revision-4 bond-post-eligible
+  Task, malformed or under-backed reputation stakes, and every delegation record.
+  Because deployed revision 4 did not pause-gate delegation, the candidate's
+  wire-compatible retirement path is permissionless and immediate: it restores no
+  slash-sheltered reputation, returns rent only to an identity-continuous recorded
+  authority, and routes missing/re-registered identity rent only to the canonical
+  treasury. Historical revision-4 Refund/Split dispute states remain finalizable
+  without weakening the revision-5 ruling policy, and generic claim cleanup cannot
+  consume their finalizer evidence.
+- **Authority/release:** governance elections snapshot immutable safety parameters and
+  retain multisig dual control; deploy preflights validate upgrade authority, live
+  obligations, account layouts, payout bindings, and all supported build surfaces.
+  Production is 97 instructions, explicit development `private-zk` is 100, and the
+  frozen canary is 25; invalid mixed feature combinations now fail compilation.
+  The candidate is 73,880 bytes larger than the live ProgramData payload capacity,
+  so upgrade preflight now blocks until a separately reviewed Squads/loader
+  `ExtendProgramChecked` action expands it. The rail models the loader's distinct
+  45-byte ProgramData and 37-byte Buffer headers, mainnet's active minimum-extension
+  rule, and the loader maximum; it pins Solana CLI 3.0.13, reads rent from the
+  genesis-checked RPC, disables implicit auto-extension, and rejects concurrent
+  capacity drift. Execute-mode step selection also refuses to deploy a needed
+  binary while a migration is pending unless `sweep` immediately follows, so a
+  partial `--only deploy` run cannot leave legacy accounts in the typed-read
+  frozen window. The Squads-CPI extension and upgrade must execute in different
+  slots. No extension was authorized or executed here.
+- **Memory safety/maintainability:** all 11 production lifetime transmutes were
+  removed in favor of owned deserialization with explicit persist/close operations.
+  Non-test builds deny `unsafe_code`; the remaining two unsafe blocks are confined to
+  test fixtures that construct Anchor account headers.
+- **Off-chain consumers:** worker job specs use a canonical content-addressed envelope
+  with bounded, public-only DNS-pinned fetches; SDK, React, tools, MCP, CLI, starter,
+  and checkout consumers were updated to carry exact provider/job-spec bindings.
+  The SDK drift gate now hashes the generated path/byte tree immediately before and
+  after deterministic regeneration, so it detects stale output without treating a
+  reviewed uncommitted tree as drift. CI gates all four Rust profiles and every
+  downstream workspace.
+- **Release supply chain:** npm publishes require OIDC provenance; GitHub Actions are
+  pinned to full commit SHAs; the Agave bootstrap binary is version- and SHA-256-pinned;
+  Dependabot tracks action/npm/Cargo updates. Protocol publication now requires the
+  reusable verifiable-build job, validates both executable hashes as 64 hexadecimal
+  characters, creates a draft, attaches the hash manifest, publishes npm, and only then
+  makes the GitHub release public. Tag-derived values reach shell through environment
+  variables rather than direct expression interpolation. Every external release
+  mutation re-resolves the remote tag to the triggering commit and exact fetched tag
+  object (including annotated tags), and a pre-existing npm version fails closed instead
+  of being silently endorsed as a successful rerun.
+- **Unresolved security-operations blocker:** the advertised security mailbox is not
+  confirmed active and repository Private Vulnerability Reporting is disabled. The
+  misleading `security.txt` contacts were deactivated, including the explorer-visible
+  contact blob previously embedded in the candidate program; enable and test a real
+  private intake before release, then publish matching on-chain and RFC 9116 metadata.
+- **Final local evidence:** Rust 521 production / 521 `validation-timings` / 546
+  private-ZK / 319 canary; 76 model/property tests; 388 compiled-program integrations
+  (387 pass, one canary-only conditional skip), plus the separate canary compiled
+  test passing 1/1; SDK 545 pass + one skip; 1,012
+  workspace tests pass + one skip; 185 deployment/preflight tests pass. Strict Clippy,
+  formatting, artifact drift, package smoke, and SBF stack gates are green. The final
+  production SBF is 2,257,104 bytes with SHA-256
+  `c8d3b011a3c64b9dbdeef4ab097b9a48690a46a10daf4d8dfef72ace93b563d5`.
+  The canonical candidate IDL contains 97 instructions / 43 accounts / 98 events /
+  388 errors and has SHA-256
+  `c6920983a5f72396bea7dc6672f1b3a9017ab1097dfa9cf59f4b6bf2f33a0f53`.
+- This is a pending candidate. Mainnet remains the revision-4, 99-instruction binary
+  until an independently approved Squads upgrade and revision-5 stamp are complete.
+
 ## 2026-07-18 — adversarial-swarm wave complete (S-1–S-9, all items)
 
 - a 13-agent adversarial swarm re-audited the full program after the F-1–F-19

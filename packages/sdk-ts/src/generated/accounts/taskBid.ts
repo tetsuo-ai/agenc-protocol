@@ -77,6 +77,11 @@ export type TaskBid = {
   state: TaskBidState;
   bondLamports: bigint;
   bump: number;
+  /**
+   * Immutable no-show penalty agreed when the bidder funded this bid.
+   * Appended so all pre-existing field offsets remain stable.
+   */
+  acceptedNoShowSlashBps: number;
 };
 
 export type TaskBidArgs = {
@@ -96,6 +101,11 @@ export type TaskBidArgs = {
   state: TaskBidStateArgs;
   bondLamports: number | bigint;
   bump: number;
+  /**
+   * Immutable no-show penalty agreed when the bidder funded this bid.
+   * Appended so all pre-existing field offsets remain stable.
+   */
+  acceptedNoShowSlashBps: number;
 };
 
 /** Gets the encoder for {@link TaskBidArgs} account data. */
@@ -119,6 +129,7 @@ export function getTaskBidEncoder(): FixedSizeEncoder<TaskBidArgs> {
       ["state", getTaskBidStateEncoder()],
       ["bondLamports", getU64Encoder()],
       ["bump", getU8Encoder()],
+      ["acceptedNoShowSlashBps", getU16Encoder()],
     ]),
     (value) => ({ ...value, discriminator: TASK_BID_DISCRIMINATOR }),
   );
@@ -144,6 +155,7 @@ export function getTaskBidDecoder(): FixedSizeDecoder<TaskBid> {
     ["state", getTaskBidStateDecoder()],
     ["bondLamports", getU64Decoder()],
     ["bump", getU8Decoder()],
+    ["acceptedNoShowSlashBps", getU16Decoder()],
   ]);
 }
 
@@ -206,5 +218,5 @@ export async function fetchAllMaybeTaskBid(
 }
 
 export function getTaskBidSize(): number {
-  return 250;
+  return 252;
 }

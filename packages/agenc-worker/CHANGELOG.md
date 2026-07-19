@@ -5,6 +5,42 @@ All notable changes to `@tetsuo-ai/agenc-worker` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Security
+
+- Job-spec verification now follows the protocol's canonical envelope
+  contract: the `json-stable-v1` payload hash must match both
+  `integrity.payloadHash` and the on-chain commitment. `agenc://` no longer
+  bypasses fetching with empty content; it fails closed unless an embedder
+  injects a trusted resolver, and resolved envelopes receive the same checks.
+- The built-in job-spec downloader now permits public HTTP(S) destinations
+  only, validates every redirect, rejects private/loopback/link-local/metadata
+  and other non-global IPv4/IPv6 ranges, rejects mixed DNS answers, and pins
+  the validated address into the socket to prevent DNS rebinding between
+  lookup and connect.
+- The default Claude executor is now tool-less and customization-free
+  (`--bare`, `--safe-mode`, no skills, MCP, tools, or session persistence) and
+  runs in a one-use scratch cwd/HOME with a scrubbed environment. Custom
+  executors require an explicit `sandboxed` or `unsafe` mode.
+- Active workers now require a finite maximum reward and creator allowlist,
+  unless the operator uses named, explicit risk opt-outs.
+- Job specs are capped at 64 KiB and the fully framed executor prompt is
+  byte-capped before claim, preventing an oversized pinned spec from landing a
+  claim and then failing with `E2BIG`. Executor stderr is drained through a
+  256 KiB cap, and safe/sandboxed process groups are killed after normal exit
+  as well as on timeout/overflow.
+- Timer templates no longer run mutable `npx` installs. The systemd unit uses
+  an absolute preinstalled binary and adds host hardening directives.
+
+### Breaking Changes
+
+- Ambient Claude OAuth/keychain auth is intentionally unavailable in safe
+  mode; provide `ANTHROPIC_API_KEY`.
+- Existing custom executors must select `executorMode: "sandboxed"` or the
+  explicit legacy `"unsafe"` mode. Existing unrestricted creator/reward
+  policies must be replaced with limits or explicit opt-outs.
+
 ## 0.1.1
 
 ### Patch Changes

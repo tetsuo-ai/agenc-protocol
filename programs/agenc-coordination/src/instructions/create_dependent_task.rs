@@ -9,16 +9,20 @@ use crate::state::{
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
-use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use super::launch_controls::require_task_type_index_enabled;
 use super::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use super::task_init_helpers::{
-    increment_total_tasks, init_escrow_fields, init_task_fields, validate_bid_task_mode,
-    validate_deadline, validate_description_is_content_hash, validate_task_params,
+    increment_total_tasks, init_escrow_fields, init_task_fields,
+    require_private_task_creation_disabled, validate_bid_task_mode, validate_deadline,
+    validate_description_is_content_hash, validate_task_params,
 };
-use super::token_helpers::ensure_token_escrow_ata;
+use super::task_parent_helpers::load_canonical_parent_task;
+use super::token_helpers::{
+    ensure_token_escrow_ata, validate_token_account, validate_token_escrow_account,
+    validate_token_reward_custody, AssociatedToken,
+};
 
 #[derive(Accounts)]
 #[instruction(task_id: [u8; 32])]
@@ -129,37 +133,17 @@ pub fn handler(
         task_type,
         min_reputation,
     )?;
+    // Match direct task creation: dependent work must not become an obligation
+    // whose only settlement path calls verifier programs absent from mainnet.
+    require_private_task_creation_disabled(constraint_hash)?;
     // Zero-trust content gate (audit): description must be a 32-byte content commitment
     // with a zero tail — no readable un-moderated prose smuggled on-chain.
     validate_description_is_content_hash(&description)?;
     validate_bid_task_mode(task_type, max_workers, reward_mint)?;
-    // Legacy-safe parent load (audit): pre-migration parent tasks can be shorter
-    // than Task::SIZE (the live pre-batch-3 accounts are OLD_TASK_SIZE = 382B), and
-    // a typed Account<Task> load hard-fails on them — Borsh tolerates trailing
-    // bytes but not missing ones — bricking create_dependent_task against every
-    // un-migrated parent. Owner-check, then zero-pad a short legacy account up to
-    // SIZE before deserializing (new fields are append-only; everything read here
-    // — status, creator — lives within the unchanged prefix). Mirrors the
-    // parent-load pattern in completion_helpers::validate_task_dependency.
+    // One shared loader accepts only recognized append-only legacy layouts and
+    // proves the deserialized task's canonical PDA + stored bump.
     let parent_task_info = ctx.accounts.parent_task.to_account_info();
-    require!(
-        parent_task_info.owner == &crate::ID,
-        CoordinationError::InvalidAccountOwner
-    );
-    let parent_task = {
-        let parent_data = parent_task_info.try_borrow_data()?;
-        if parent_data.len() >= Task::SIZE {
-            Task::try_deserialize(&mut &parent_data[..]).map_err(|_| CoordinationError::InvalidInput)?
-        } else {
-            require!(
-                parent_data.len() >= Task::OLD_TASK_SIZE,
-                CoordinationError::InvalidInput
-            );
-            let mut buf = parent_data.to_vec();
-            buf.resize(Task::SIZE, 0);
-            Task::try_deserialize(&mut &buf[..]).map_err(|_| CoordinationError::InvalidInput)?
-        }
-    };
+    let parent_task = load_canonical_parent_task(&parent_task_info, ctx.program_id)?;
     require!(
         parent_task.status != TaskStatus::Cancelled,
         CoordinationError::ParentTaskCancelled
@@ -233,7 +217,6 @@ pub fn handler(
         min_reputation,
         reward_mint,
     )?;
-
     if let Some(expected_mint) = reward_mint {
         // Token path: validate required token accounts are provided
         require!(
@@ -275,6 +258,11 @@ pub fn handler(
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
         );
+        validate_token_account(
+            creator_ta.as_ref(),
+            &mint.key(),
+            &ctx.accounts.creator.key(),
+        )?;
 
         let token_escrow_info = token_escrow_ata.to_account_info();
         if token_escrow_info.owner == &system_program::ID {
@@ -287,34 +275,13 @@ pub fn handler(
                 token_program,
                 ata_program,
             )?;
-            let created_escrow_ata = ctx
-                .accounts
-                .token_escrow_ata
-                .as_ref()
-                .ok_or(CoordinationError::MissingTokenAccounts)?
-                .to_account_info();
-            require!(
-                created_escrow_ata.owner == token_program.key,
-                CoordinationError::InvalidTokenEscrow
-            );
-        } else {
-            require!(
-                token_escrow_info.owner == token_program.key,
-                CoordinationError::InvalidTokenEscrow
-            );
-            let escrow_ata_mint = token::accessor::mint(&token_escrow_info)
-                .map_err(|_| CoordinationError::InvalidTokenEscrow)?;
-            require!(
-                escrow_ata_mint == mint.key(),
-                CoordinationError::InvalidTokenMint
-            );
-            let escrow_ata_authority = token::accessor::authority(&token_escrow_info)
-                .map_err(|_| CoordinationError::InvalidTokenEscrow)?;
-            require!(
-                escrow_ata_authority == ctx.accounts.escrow.key(),
-                CoordinationError::InvalidTokenEscrow
-            );
         }
+
+        // One centralized check covers both a freshly created ATA and a supplied
+        // existing account: classic Token owner, canonical ATA address, mint,
+        // escrow authority, and initialized state.
+        validate_token_escrow_account(&token_escrow_info, &mint.key(), &ctx.accounts.escrow.key())?;
+        validate_token_reward_custody(mint.as_ref(), &token_escrow_info)?;
 
         // Transfer tokens from creator ATA to escrow ATA
         token::transfer(

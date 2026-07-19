@@ -542,6 +542,7 @@ pub struct TreasuryUpdated {
 }
 
 /// Emitted when the trusted ZK image ID config is initialized.
+#[cfg(feature = "private-zk")]
 #[event]
 pub struct ZkConfigInitialized {
     pub image_id: [u8; HASH_SIZE],
@@ -550,6 +551,7 @@ pub struct ZkConfigInitialized {
 }
 
 /// Emitted when the trusted ZK image ID is rotated.
+#[cfg(feature = "private-zk")]
 #[event]
 pub struct ZkImageIdUpdated {
     pub old_image_id: [u8; HASH_SIZE],
@@ -718,53 +720,6 @@ pub struct ProtocolVersionUpdated {
     pub old_version: u8,
     pub new_version: u8,
     pub min_supported_version: u8,
-    pub timestamp: i64,
-}
-
-/// Emitted when bond is deposited to speculation bond account
-#[event]
-pub struct BondDeposited {
-    pub agent: Pubkey,
-    pub amount: u64,
-    pub new_total: u64,
-    pub timestamp: i64,
-}
-
-/// Emitted when bond is locked for a commitment
-#[event]
-pub struct BondLocked {
-    pub agent: Pubkey,
-    pub commitment: Pubkey,
-    pub amount: u64,
-    pub timestamp: i64,
-}
-
-#[event]
-pub struct SpeculativeCommitmentCreated {
-    pub task: Pubkey,
-    pub producer: Pubkey,
-    pub result_hash: [u8; 32],
-    pub bonded_stake: u64,
-    pub expires_at: i64,
-    pub timestamp: i64,
-}
-
-/// Emitted when an agent's bond is slashed due to failed speculation
-#[event]
-pub struct BondSlashed {
-    pub agent: Pubkey,
-    pub commitment: Pubkey,
-    pub amount: u64,
-    pub reason: u8,
-    pub timestamp: i64,
-}
-
-/// Emitted when bond is released back to agent after successful proof
-#[event]
-pub struct BondReleased {
-    pub agent: Pubkey,
-    pub commitment: Pubkey,
-    pub amount: u64,
     pub timestamp: i64,
 }
 
@@ -983,6 +938,8 @@ pub struct SkillPurchased {
     pub skill: Pubkey,
     pub buyer: Pubkey,
     pub author: Pubkey,
+    pub content_hash: [u8; 32],
+    pub content_version: u8,
     pub price_paid: u64,
     pub protocol_fee: u64,
     pub timestamp: i64,
@@ -1035,22 +992,28 @@ pub struct ReputationStakeWithdrawn {
     pub timestamp: i64,
 }
 
-/// Emitted when an agent delegates reputation to a peer
-#[event]
-pub struct ReputationDelegated {
-    pub delegator: Pubkey,
-    pub delegatee: Pubkey,
-    pub amount: u16,
-    pub expires_at: i64,
-    pub timestamp: i64,
-}
-
 /// Emitted when a reputation delegation is revoked
 #[event]
 pub struct ReputationDelegationRevoked {
     pub delegator: Pubkey,
     pub delegatee: Pubkey,
     pub amount: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted when revision 5 permanently retires a legacy delegation. Reputation
+/// is never restored because doing so after a slash would recreate the retired
+/// shelter primitive. Rent goes to the recorded authority only for an
+/// identity-continuous registration; otherwise it goes to the canonical treasury.
+#[event]
+pub struct ReputationDelegationRetired {
+    pub delegation: Pubkey,
+    pub delegator: Pubkey,
+    pub delegatee: Pubkey,
+    pub discarded_reputation: u16,
+    pub recovered_rent: u64,
+    pub rent_recipient: Pubkey,
+    pub identity_continuous: bool,
     pub timestamp: i64,
 }
 
@@ -1278,5 +1241,18 @@ pub struct GoodsListingUpdated {
     pub total_supply: u64,
     pub sold_count: u64,
     pub restock_count: u16,
+    pub timestamp: i64,
+}
+
+/// Emitted when the recovery rail returns rent from a historical auxiliary
+/// child whose parent Task was destroyed by an older close_task implementation.
+#[event]
+pub struct OrphanTaskChildReclaimed {
+    pub child: Pubkey,
+    pub task: Pubkey,
+    pub recipient: Pubkey,
+    pub cranker: Pubkey,
+    pub child_kind: u8,
+    pub reclaimed_lamports: u64,
     pub timestamp: i64,
 }

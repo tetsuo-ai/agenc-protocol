@@ -8,18 +8,19 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    build_referrer_leg, calculate_fee_with_reputation, execute_completion_rewards,
+    build_marketplace_fee_legs, calculate_fee_with_reputation, execute_completion_rewards,
     load_task_claim_or_not_claimed, validate_completion_prereqs, validate_task_dependency,
-    OperatorLeg,
 };
+use crate::instructions::program_account_helpers::close_program_account;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
-use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
+use crate::instructions::token_helpers::{
+    validate_token_account, validate_token_escrow_account, validate_unchecked_token_mint,
+};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::CompletionBond;
 use crate::state::{
-    AgentRegistration, HireRecord, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
+    AgentRegistration, ProtocolConfig, Task, TaskEscrow, HASH_SIZE, RESULT_DATA_SIZE,
 };
-use crate::utils::compute_budget::log_compute_units;
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
@@ -180,7 +181,6 @@ fn handle_complete_task<'info>(
     proof_hash: [u8; HASH_SIZE],
     result_data: Option<[u8; RESULT_DATA_SIZE]>,
 ) -> Result<()> {
-    log_compute_units("complete_task_start");
     require!(
         accounts.authority.is_signer,
         CoordinationError::UnauthorizedAgent
@@ -272,7 +272,7 @@ fn handle_complete_task<'info>(
             CoordinationError::InvalidTokenMint
         );
 
-        validate_token_account(token_escrow, &mint.key(), &escrow.key())?;
+        validate_token_escrow_account(&token_escrow.to_account_info(), &mint.key(), &escrow.key())?;
         validate_token_account(treasury_ta, &mint.key(), &accounts.protocol_config.treasury)?;
         let token_escrow_starting_amount =
             anchor_spl::token::accessor::amount(&token_escrow.to_account_info())
@@ -309,64 +309,12 @@ fn handle_complete_task<'info>(
     claim.is_completed = true;
     claim.completed_at = clock.unix_timestamp;
 
-    log_compute_units("complete_task_validated");
-
-    // §4 3-way split (Batch 2: Task-first, HireRecord fallback).
-    // A Batch-2 hire stamps the operator terms onto the Task itself, so settlement
-    // reads them straight from the (trusted, program-owned) Task account. The 149
-    // pre-Batch-2 tasks (and any hire created before the redeploy) carry
-    // `task.operator == default`, so we FALL BACK to the live ["hire", task]
-    // HireRecord — never drop this fallback or those operators go unpaid. A worker
-    // still cannot dodge the leg: the operator terms come from program-owned state,
-    // and the seeds-fixed hire_record account stays required by the struct.
-    // Resolve BOTH the operator (supply-side) and referrer (P6.2 demand-side) legs
-    // from program-owned state: Task-first (stamped at hire/create), HireRecord
-    // fallback for pre-stamp tasks. Neither leg can be dodged — the terms come from
-    // trusted on-chain snapshots, and a present leg makes its payee account required.
-    let (operator_pubkey, operator_fee_bps_resolved, referrer_pubkey, referrer_fee_bps_resolved) =
-        if task.operator != Pubkey::default() || task.referrer != Pubkey::default() {
-            (
-                task.operator,
-                task.operator_fee_bps,
-                task.referrer,
-                task.referrer_fee_bps,
-            )
-        } else if accounts.hire_record.owner == &crate::ID {
-            let hire_info = accounts.hire_record.to_account_info();
-            let hire = {
-                let data = hire_info.try_borrow_data()?;
-                HireRecord::try_deserialize(&mut &data[..])?
-            };
-            require!(hire.task == task_key, CoordinationError::InvalidHireRecord);
-            (
-                hire.operator,
-                hire.operator_fee_bps,
-                hire.referrer,
-                hire.referrer_fee_bps,
-            )
-        } else {
-            (Pubkey::default(), 0, Pubkey::default(), 0)
-        };
-    let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
-        let op = accounts
-            .operator
-            .as_ref()
-            .ok_or(CoordinationError::MissingOperatorAccount)?;
-        require!(
-            op.key() == operator_pubkey,
-            CoordinationError::InvalidOperatorAccount
-        );
-        Some(OperatorLeg {
-            payee: op.to_account_info(),
-            fee_bps: operator_fee_bps_resolved,
-        })
-    } else {
-        None
-    };
-    let referrer_leg = build_referrer_leg(
-        referrer_pubkey,
-        referrer_fee_bps_resolved,
-        accounts.referrer.as_ref().map(|r| r.as_ref()),
+    let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+        task,
+        task_key,
+        &accounts.hire_record.to_account_info(),
+        accounts.operator.as_ref().map(|account| account.as_ref()),
+        accounts.referrer.as_ref().map(|account| account.as_ref()),
     )?;
 
     // Execute reward transfer, state updates, event emissions, and conditional escrow closure
@@ -398,7 +346,8 @@ fn handle_complete_task<'info>(
         )?;
     }
 
-    claim.close(accounts.authority.to_account_info())?;
+    let authority_info = accounts.authority.to_account_info();
+    close_program_account(accounts.claim.as_ref(), &authority_info)?;
 
     // Batch 3 §8: a clean completion means nobody lost — refund BOTH completion bonds to
     // their posters. Required + seeds-pinned accounts (audit F12): always runs, so no live
@@ -421,8 +370,6 @@ fn handle_complete_task<'info>(
             BondDisposition::Refund,
         )?;
     }
-
-    log_compute_units("complete_task_done");
 
     Ok(())
 }

@@ -10,6 +10,7 @@ import {
   findAgentPda,
   findHireRecordPda,
   findModerationAttestorPda,
+  findModerationBlockPda,
   findTaskJobSpecPda,
   getTaskDecoder,
   hireAndActivate,
@@ -25,6 +26,10 @@ import {
   seedProtocolConfig,
   send,
 } from "./harness.js";
+
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
 
 const CLEAN = {
   status: 0,
@@ -119,6 +124,7 @@ describe("e2e: hireAndActivate — the open-SDK hire orchestration", () => {
     const result = await hireAndActivate(buyerClient, {
       hire: {
         listing,
+        providerAgent,
         taskId,
         expectedPrice: price,
         expectedVersion: 1n,
@@ -178,6 +184,8 @@ describe("e2e: hireAndActivate — the open-SDK hire orchestration", () => {
       task: result.taskPda,
       worker: providerAgent,
       authority: provider,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
     expect(
       getTaskDecoder().decode(accountData(svm, result.taskPda)!).status,
@@ -227,6 +235,7 @@ describe("e2e: hireAndActivate — the open-SDK hire orchestration", () => {
     const result = await hireAndActivate(buyerClient, {
       hire: {
         listing,
+        providerAgent,
         taskId,
         expectedPrice: price,
         expectedVersion: 1n,
@@ -267,6 +276,8 @@ describe("e2e: hireAndActivate — the open-SDK hire orchestration", () => {
       task: result.taskPda,
       worker: providerAgent,
       authority: provider,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
     expect(
       getTaskDecoder().decode(accountData(svm, result.taskPda)!).status,
@@ -282,7 +293,7 @@ describe("e2e: hireAndActivate — the open-SDK hire orchestration", () => {
     await seedProtocolConfig(svm, admin.address);
     await seedModerationConfig(svm, admin.address, moderator.address, true);
 
-    const { listing, listingSpecHash, price } = await listedService({
+    const { providerAgent, listing, listingSpecHash, price } = await listedService({
       svm,
       provider,
       moderatorSign: async (listingPda, specHash) => {
@@ -305,6 +316,7 @@ describe("e2e: hireAndActivate — the open-SDK hire orchestration", () => {
       hireAndActivate(buyerClient, {
         hire: {
           listing,
+          providerAgent,
           taskId,
           expectedPrice: price,
           expectedVersion: 1n,

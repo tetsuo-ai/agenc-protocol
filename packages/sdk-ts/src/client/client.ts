@@ -246,7 +246,11 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.setTaskJobSpec>,
     options?: SendOptions,
   ): Promise<SendResult>;
-  /** Build (facade.claimTaskWithJobSpec) and send a claim_task_with_job_spec transaction. */
+  /**
+   * Build and send claim_task_with_job_spec. Pass the verified `jobSpecHash`
+   * for the assignment-time moderation BLOCK check. Dependent tasks also pass
+   * `parentTask` as canonical completion evidence.
+   */
   claimTaskWithJobSpec(
     input: FacadeInput<typeof facade.claimTaskWithJobSpec>,
     options?: SendOptions,

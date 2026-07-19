@@ -39,7 +39,7 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findReputationStakePda } from "../pdas";
+import { findProtocolConfigPda, findReputationStakePda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const STAKE_REPUTATION_DISCRIMINATOR: ReadonlyUint8Array =
@@ -56,6 +56,7 @@ export type StakeReputationInstruction<
   TAccountAuthority extends string | AccountMeta<string> = string,
   TAccountAgent extends string | AccountMeta<string> = string,
   TAccountReputationStake extends string | AccountMeta<string> = string,
+  TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -73,6 +74,9 @@ export type StakeReputationInstruction<
       TAccountReputationStake extends string
         ? WritableAccount<TAccountReputationStake>
         : TAccountReputationStake,
+      TAccountProtocolConfig extends string
+        ? ReadonlyAccount<TAccountProtocolConfig>
+        : TAccountProtocolConfig,
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
@@ -118,11 +122,13 @@ export type StakeReputationAsyncInput<
   TAccountAuthority extends string = string,
   TAccountAgent extends string = string,
   TAccountReputationStake extends string = string,
+  TAccountProtocolConfig extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   authority: TransactionSigner<TAccountAuthority>;
   agent: Address<TAccountAgent>;
   reputationStake?: Address<TAccountReputationStake>;
+  protocolConfig?: Address<TAccountProtocolConfig>;
   systemProgram?: Address<TAccountSystemProgram>;
   amount: StakeReputationInstructionDataArgs["amount"];
 };
@@ -131,6 +137,7 @@ export async function getStakeReputationInstructionAsync<
   TAccountAuthority extends string,
   TAccountAgent extends string,
   TAccountReputationStake extends string,
+  TAccountProtocolConfig extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -138,6 +145,7 @@ export async function getStakeReputationInstructionAsync<
     TAccountAuthority,
     TAccountAgent,
     TAccountReputationStake,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -147,6 +155,7 @@ export async function getStakeReputationInstructionAsync<
     TAccountAuthority,
     TAccountAgent,
     TAccountReputationStake,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >
 > {
@@ -159,6 +168,7 @@ export async function getStakeReputationInstructionAsync<
     authority: { value: input.authority ?? null, isWritable: true },
     agent: { value: input.agent ?? null, isWritable: false },
     reputationStake: { value: input.reputationStake ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -178,6 +188,9 @@ export async function getStakeReputationInstructionAsync<
       ),
     });
   }
+  if (!accounts.protocolConfig.value) {
+    accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
@@ -189,6 +202,7 @@ export async function getStakeReputationInstructionAsync<
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("agent", accounts.agent),
       getAccountMeta("reputationStake", accounts.reputationStake),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getStakeReputationInstructionDataEncoder().encode(
@@ -200,6 +214,7 @@ export async function getStakeReputationInstructionAsync<
     TAccountAuthority,
     TAccountAgent,
     TAccountReputationStake,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >);
 }
@@ -208,11 +223,13 @@ export type StakeReputationInput<
   TAccountAuthority extends string = string,
   TAccountAgent extends string = string,
   TAccountReputationStake extends string = string,
+  TAccountProtocolConfig extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   authority: TransactionSigner<TAccountAuthority>;
   agent: Address<TAccountAgent>;
   reputationStake: Address<TAccountReputationStake>;
+  protocolConfig: Address<TAccountProtocolConfig>;
   systemProgram?: Address<TAccountSystemProgram>;
   amount: StakeReputationInstructionDataArgs["amount"];
 };
@@ -221,6 +238,7 @@ export function getStakeReputationInstruction<
   TAccountAuthority extends string,
   TAccountAgent extends string,
   TAccountReputationStake extends string,
+  TAccountProtocolConfig extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
@@ -228,6 +246,7 @@ export function getStakeReputationInstruction<
     TAccountAuthority,
     TAccountAgent,
     TAccountReputationStake,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -236,6 +255,7 @@ export function getStakeReputationInstruction<
   TAccountAuthority,
   TAccountAgent,
   TAccountReputationStake,
+  TAccountProtocolConfig,
   TAccountSystemProgram
 > {
   // Program address.
@@ -247,6 +267,7 @@ export function getStakeReputationInstruction<
     authority: { value: input.authority ?? null, isWritable: true },
     agent: { value: input.agent ?? null, isWritable: false },
     reputationStake: { value: input.reputationStake ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -269,6 +290,7 @@ export function getStakeReputationInstruction<
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("agent", accounts.agent),
       getAccountMeta("reputationStake", accounts.reputationStake),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getStakeReputationInstructionDataEncoder().encode(
@@ -280,6 +302,7 @@ export function getStakeReputationInstruction<
     TAccountAuthority,
     TAccountAgent,
     TAccountReputationStake,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >);
 }
@@ -293,7 +316,8 @@ export type ParsedStakeReputationInstruction<
     authority: TAccountMetas[0];
     agent: TAccountMetas[1];
     reputationStake: TAccountMetas[2];
-    systemProgram: TAccountMetas[3];
+    protocolConfig: TAccountMetas[3];
+    systemProgram: TAccountMetas[4];
   };
   data: StakeReputationInstructionData;
 };
@@ -306,12 +330,12 @@ export function parseStakeReputationInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedStakeReputationInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 4) {
+  if (instruction.accounts.length < 5) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 4,
+        expectedAccountMetas: 5,
       },
     );
   }
@@ -327,6 +351,7 @@ export function parseStakeReputationInstruction<
       authority: getNextAccount(),
       agent: getNextAccount(),
       reputationStake: getNextAccount(),
+      protocolConfig: getNextAccount(),
       systemProgram: getNextAccount(),
     },
     data: getStakeReputationInstructionDataDecoder().decode(instruction.data),

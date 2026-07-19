@@ -76,7 +76,8 @@ export type InitializeProtocolInstruction<
         ? WritableAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
       TAccountTreasury extends string
-        ? ReadonlyAccount<TAccountTreasury>
+        ? ReadonlySignerAccount<TAccountTreasury> &
+            AccountSignerMeta<TAccountTreasury>
         : TAccountTreasury,
       TAccountAuthority extends string
         ? WritableSignerAccount<TAccountAuthority> &
@@ -157,7 +158,11 @@ export type InitializeProtocolAsyncInput<
   TAccountSystemProgram extends string = string,
 > = {
   protocolConfig?: Address<TAccountProtocolConfig>;
-  treasury: Address<TAccountTreasury>;
+  /**
+   * Treasury account to receive protocol fees. Production clients must request
+   * the custody key's signature in generated account metas.
+   */
+  treasury: TransactionSigner<TAccountTreasury>;
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Second multisig signer required at initialization to prevent single-party setup.
@@ -260,7 +265,11 @@ export type InitializeProtocolInput<
   TAccountSystemProgram extends string = string,
 > = {
   protocolConfig: Address<TAccountProtocolConfig>;
-  treasury: Address<TAccountTreasury>;
+  /**
+   * Treasury account to receive protocol fees. Production clients must request
+   * the custody key's signature in generated account metas.
+   */
+  treasury: TransactionSigner<TAccountTreasury>;
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Second multisig signer required at initialization to prevent single-party setup.
@@ -357,6 +366,10 @@ export type ParsedInitializeProtocolInstruction<
   programAddress: Address<TProgram>;
   accounts: {
     protocolConfig: TAccountMetas[0];
+    /**
+     * Treasury account to receive protocol fees. Production clients must request
+     * the custody key's signature in generated account metas.
+     */
     treasury: TAccountMetas[1];
     authority: TAccountMetas[2];
     /**

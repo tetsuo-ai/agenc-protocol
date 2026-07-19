@@ -5,38 +5,53 @@
 //   for account validation and instruction data; this is inherent to the framework pattern
 #![allow(unexpected_cfgs)]
 #![allow(clippy::too_many_arguments)]
+#![cfg_attr(not(test), deny(unsafe_code))]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::unreachable,
+        clippy::unwrap_used
+    )
+)]
 //! AgenC Coordination Protocol
 //!
 //! A decentralized multi-agent coordination layer for the AgenC framework.
 //! Enables trustless task distribution, state synchronization, and resource
 //! allocation across edge computing agents.
 
+// The canary is a frozen, deliberately reduced wire surface. Combining it with
+// production or private-development features would silently compile a different
+// ABI under the same program id, so reject those release-footgun combinations.
+#[cfg(all(feature = "mainnet-canary", feature = "spl-token-rewards"))]
+compile_error!(
+    "mainnet-canary must be built with --no-default-features and cannot enable spl-token-rewards"
+);
+#[cfg(all(feature = "mainnet-canary", feature = "private-zk"))]
+compile_error!("mainnet-canary and private-zk are mutually exclusive build surfaces");
+
 use anchor_lang::prelude::*;
 
 declare_id!("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
 
-// Embedded security.txt (solana-security-txt): the structured security-contact
-// blob explorers surface on the program page. Ships inside the binary, so it
-// takes effect at the NEXT deploy. Keep contacts/policy in sync with
-// SECURITY.md.
-#[cfg(not(feature = "no-entrypoint"))]
-solana_security_txt::security_txt! {
-    name: "AgenC Coordination",
-    project_url: "https://agenc.ag",
-    contacts: "email:tetsuo@agenc.ag,link:https://github.com/tetsuo-ai/agenc-protocol/security",
-    policy: "https://github.com/tetsuo-ai/agenc-protocol/blob/main/SECURITY.md",
-    source_code: "https://github.com/tetsuo-ai/agenc-protocol",
-    auditors: "Internal adversarial review (see SECURITY.md)"
-}
-
 pub mod errors;
 pub mod events;
 pub mod instructions;
+// Keep the private wire DTO out of the production build. The feature-gated
+// program entry uses flattened fields because Anchor 0.32 otherwise hoists a
+// defined argument type into the production IDL even when its cfg is false.
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
+mod private_completion_payload;
 pub mod state;
 pub mod utils;
 
 use crate::errors::CoordinationError;
 use instructions::*;
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
+pub use private_completion_payload::PrivateCompletionPayload;
 
 #[cfg(not(feature = "mainnet-canary"))]
 #[program]
@@ -324,6 +339,8 @@ pub mod agenc_coordination {
         quality_guarantee_hash: [u8; 32],
         metadata_hash: [u8; 32],
         expires_at: i64,
+        expected_job_spec_hash: [u8; 32],
+        expected_job_spec_updated_at: i64,
     ) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
@@ -337,6 +354,8 @@ pub mod agenc_coordination {
             quality_guarantee_hash,
             metadata_hash,
             expires_at,
+            expected_job_spec_hash,
+            expected_job_spec_updated_at,
         )
     }
 
@@ -351,6 +370,8 @@ pub mod agenc_coordination {
         quality_guarantee_hash: [u8; 32],
         metadata_hash: [u8; 32],
         expires_at: i64,
+        expected_job_spec_hash: [u8; 32],
+        expected_job_spec_updated_at: i64,
     ) -> Result<()> {
         instructions::bid_marketplace::update_bid_handler(
             ctx,
@@ -360,6 +381,8 @@ pub mod agenc_coordination {
             quality_guarantee_hash,
             metadata_hash,
             expires_at,
+            expected_job_spec_hash,
+            expected_job_spec_updated_at,
         )
     }
 
@@ -371,12 +394,12 @@ pub mod agenc_coordination {
 
     /// Accept a Marketplace V2 bid and convert it into a normal task claim.
     #[cfg(not(feature = "mainnet-canary"))]
-    pub fn accept_bid(ctx: Context<AcceptBid>) -> Result<()> {
+    pub fn accept_bid(ctx: Context<AcceptBid>, expected_bid_terms_hash: [u8; 32]) -> Result<()> {
         require!(
             ctx.accounts.creator.is_signer,
             CoordinationError::UnauthorizedTaskAction
         );
-        instructions::bid_marketplace::accept_bid_handler(ctx)
+        instructions::bid_marketplace::accept_bid_handler(ctx, expected_bid_terms_hash)
     }
 
     /// Expire an unaccepted Marketplace V2 bid.
@@ -482,21 +505,35 @@ pub mod agenc_coordination {
     }
 
     /// Complete a task with private proof verification.
-    #[cfg(not(feature = "mainnet-canary"))]
+    #[cfg(feature = "private-zk")]
     pub fn complete_task_private<'info>(
         ctx: Context<'_, '_, '_, 'info, CompleteTaskPrivate<'info>>,
         task_id: u64,
-        proof: PrivateCompletionPayload,
+        // Keep these fields in PrivateCompletionPayload declaration order.
+        // Borsh encodes the flattened fields byte-for-byte like the prior DTO
+        // argument, preserving the private instruction's dormant wire format.
+        seal_bytes: Vec<u8>,
+        journal: Vec<u8>,
+        image_id: [u8; 32],
+        binding_seed: [u8; 32],
+        nullifier_seed: [u8; 32],
     ) -> Result<()> {
         require!(
             ctx.accounts.authority.is_signer,
             CoordinationError::UnauthorizedAgent
         );
+        let proof = PrivateCompletionPayload {
+            seal_bytes,
+            journal,
+            image_id,
+            binding_seed,
+            nullifier_seed,
+        };
         instructions::complete_task_private::complete_task_private(ctx, task_id, proof)
     }
 
     /// Initialize the trusted ZK image ID config.
-    #[cfg(not(feature = "mainnet-canary"))]
+    #[cfg(feature = "private-zk")]
     pub fn initialize_zk_config(
         ctx: Context<InitializeZkConfig>,
         active_image_id: [u8; 32],
@@ -509,7 +546,7 @@ pub mod agenc_coordination {
     }
 
     /// Rotate the trusted ZK image ID.
-    #[cfg(not(feature = "mainnet-canary"))]
+    #[cfg(feature = "private-zk")]
     pub fn update_zk_image_id(ctx: Context<UpdateZkImageId>, new_image_id: [u8; 32]) -> Result<()> {
         instructions::update_zk_image_id::handler(ctx, new_image_id)
     }
@@ -624,9 +661,7 @@ pub mod agenc_coordination {
     /// own roster PDA; `assigned_by = self` marks the entry self-registered. The bond is
     /// an identity deposit — never confiscatable, refunded in full at exit-finalize.
     #[cfg(not(feature = "mainnet-canary"))]
-    pub fn register_moderation_attestor(
-        ctx: Context<RegisterModerationAttestor>,
-    ) -> Result<()> {
+    pub fn register_moderation_attestor(ctx: Context<RegisterModerationAttestor>) -> Result<()> {
         instructions::register_moderation_attestor::handler(ctx)
     }
 
@@ -657,7 +692,12 @@ pub mod agenc_coordination {
         rationale_hash: [u8; 32],
         rationale_uri: String,
     ) -> Result<()> {
-        instructions::moderation_block::handler_set(ctx, content_hash, rationale_hash, rationale_uri)
+        instructions::moderation_block::handler_set(
+            ctx,
+            content_hash,
+            rationale_hash,
+            rationale_uri,
+        )
     }
 
     /// Clear a takedown block (P1.2 §5.2, multisig-gated). The block account stays
@@ -1063,7 +1103,10 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Pause / reactivate / retire a service listing (provider-only).
+    /// Pause / reactivate / retire a service listing (provider-only). Reactivating
+    /// to `Active` requires exactly one readonly remaining account: the listing's
+    /// canonical provider `AgentRegistration`. Pausing or retiring requires no
+    /// remaining accounts, so a closed provider identity cannot block safe exits.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn set_service_listing_state(
         ctx: Context<SetServiceListingState>,
@@ -1204,11 +1247,21 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Reclaim a terminal task's account rent (and optional leftover job-spec
-    /// pointer). Allowed only when the task is Completed or Cancelled.
+    /// Clean supplied children of a terminal task while retaining the rent-exempt
+    /// Task as a durable liveness anchor for any children not supplied.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn close_task<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Result<()> {
         instructions::close_task::handler(ctx)
+    }
+
+    /// Return rent from a historical rent-only task child whose parent was
+    /// destroyed by an older close_task implementation. The destination is
+    /// derived from stored program state; the permissionless cranker cannot pick it.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn reclaim_orphan_task_child<'info>(
+        ctx: Context<'_, '_, '_, 'info, ReclaimOrphanTaskChild<'info>>,
+    ) -> Result<()> {
+        instructions::reclaim_orphan_task_child::handler(ctx)
     }
 
     /// Post a symmetric 25% completion bond (Batch 3 §8). `role`: 0 = creator,
@@ -1299,8 +1352,18 @@ pub mod agenc_coordination {
     /// Protocol fee is deducted and sent to treasury.
     /// expected_price provides slippage protection against front-running.
     #[cfg(not(feature = "mainnet-canary"))]
-    pub fn purchase_skill(ctx: Context<PurchaseSkill>, expected_price: u64) -> Result<()> {
-        instructions::purchase_skill::handler(ctx, expected_price)
+    pub fn purchase_skill(
+        ctx: Context<PurchaseSkill>,
+        expected_price: u64,
+        expected_version: u8,
+        expected_content_hash: [u8; 32],
+    ) -> Result<()> {
+        instructions::purchase_skill::handler(
+            ctx,
+            expected_price,
+            expected_version,
+            expected_content_hash,
+        )
     }
 
     /// Batch 4 (docs/design/batch-4-goods.md): list a FINITE, transferable good.
@@ -1347,8 +1410,14 @@ pub mod agenc_coordination {
         ctx: Context<PurchaseGood>,
         expected_serial: u64,
         expected_price: u64,
+        expected_metadata_hash: [u8; 32],
     ) -> Result<()> {
-        instructions::purchase_good::handler(ctx, expected_serial, expected_price)
+        instructions::purchase_good::handler(
+            ctx,
+            expected_serial,
+            expected_price,
+            expected_metadata_hash,
+        )
     }
 
     /// Batch 4: update a goods listing (seller only): price / active flag /
@@ -1428,10 +1497,15 @@ pub mod agenc_coordination {
         instructions::delegate_reputation::handler(ctx, amount, expires_at)
     }
 
-    /// Revoke a reputation delegation and close the account.
-    /// Rent is returned to the delegator's authority.
+    /// Permissionlessly retire a legacy reputation delegation without restoring
+    /// slash-sheltered reputation. An identity-continuous record returns rent to
+    /// its recorded authority; an orphan sends rent only to the canonical treasury.
+    /// Orphan recovery appends exactly two accounts after the three fixed metas:
+    /// `[canonical ProtocolConfig readonly, configured treasury writable]`.
     #[cfg(not(feature = "mainnet-canary"))]
-    pub fn revoke_delegation(ctx: Context<RevokeDelegation>) -> Result<()> {
+    pub fn revoke_delegation<'info>(
+        ctx: Context<'_, '_, '_, 'info, RevokeDelegation<'info>>,
+    ) -> Result<()> {
         instructions::revoke_delegation::handler(ctx)
     }
 

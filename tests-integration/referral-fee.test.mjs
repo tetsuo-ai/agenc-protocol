@@ -63,7 +63,11 @@ async function hireDriveComplete(w, { referrer = null, referrerFeeBps = 0 } = {}
 
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "claim");
 
   // Resolve the snapshotted referrer to decide whether the leg account is required.
@@ -244,7 +248,11 @@ test("REFERRER PROTECTION: a referred task cannot be completed without paying th
     .instruction(), [w.buyer]), "publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "claim");
 
   const completeAccounts = (referrer) => ({

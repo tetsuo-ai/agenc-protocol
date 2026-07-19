@@ -4,49 +4,34 @@ use crate::errors::CoordinationError;
 use crate::events::{dispute_outcome, DisputeResolved};
 use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 use crate::instructions::bid_settlement_helpers::{
-    settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
+    load_accepted_bid_contract_price, settle_accepted_bid, AcceptedBidBondDisposition,
+    AcceptedBidBookDisposition,
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
-use crate::instructions::completion_helpers::update_protocol_stats;
+use crate::instructions::completion_helpers::{
+    update_protocol_stats, validate_marketplace_payee_destinations, validate_task_dependency,
+    RewardDenomination,
+};
 use crate::instructions::constants::PERCENT_BASE;
 use crate::instructions::dispute_helpers::{
-    check_duplicate_workers, defendant_claim_required, expected_worker_pairs,
-    pay_dispute_marketplace_legs, process_worker_claim_pair, resolve_task_marketplace_terms,
-    sweep_dispute_submission, validate_remaining_accounts_structure,
+    pay_dispute_marketplace_legs, process_dispute_peer_bundles, resolve_task_marketplace_terms,
+    settle_dispute_submission_evidence, validate_dispute_worker_accounts, MarketplaceTerms,
 };
 use crate::instructions::lamport_transfer::{credit_lamports, debit_lamports, transfer_lamports};
-use crate::instructions::slash_helpers::calculate_slash_amount;
+use crate::instructions::program_account_helpers::{remaining_account_at, remaining_account_range};
+use crate::instructions::slash_helpers::worker_lost_dispute;
 use crate::instructions::token_helpers::{
-    close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
+    close_token_escrow, transfer_tokens_from_escrow, validate_token_escrow_account,
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, AgentStats, CompletionBond, Dispute, DisputeResolver, DisputeStatus,
-    ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus, TaskType,
-    TaskValidationConfig,
+    AgentRegistration, AgentStats, CompletionBond, DependencyType, Dispute, DisputeResolver,
+    DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus,
+    TaskType, TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
-
-fn remaining_account_info<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    index: usize,
-) -> &'info AccountInfo<'info> {
-    // SAFETY: `remaining_accounts` already stores `AccountInfo<'info>` values.
-    // We only widen the reference itself back to `'info` for downstream helpers.
-    unsafe { std::mem::transmute(&remaining_accounts[index]) }
-}
-
-fn remaining_account_slice<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    start: usize,
-    end: usize,
-) -> &'info [AccountInfo<'info>] {
-    // SAFETY: same rationale as `remaining_account_info`; the slice elements
-    // already carry `'info`, so only the slice reference needs rebinding.
-    unsafe { std::mem::transmute(&remaining_accounts[start..end]) }
-}
 
 /// Pure bound check on the ruling `rationale_uri` (P6.4). Empty is allowed (the
 /// 32-byte `rationale_hash` may carry the rationale on its own); anything longer than
@@ -58,6 +43,14 @@ pub(crate) fn validate_rationale_uri(rationale_uri: &str) -> Result<()> {
         CoordinationError::RationaleUriTooLong
     );
     Ok(())
+}
+
+pub(crate) fn validate_rationale(rationale_hash: &[u8; 32], rationale_uri: &str) -> Result<()> {
+    require!(
+        rationale_hash.iter().any(|byte| *byte != 0),
+        CoordinationError::InvalidRationaleHash
+    );
+    validate_rationale_uri(rationale_uri)
 }
 
 /// Pure (P6.3): encode the resolver's binary ruling into the `(votes_for, votes_against)`
@@ -72,6 +65,88 @@ pub(crate) fn ruling_vote_bits(approved: bool) -> (u64, u64) {
         (1, 0)
     } else {
         (0, 1)
+    }
+}
+
+/// Select the economic base of a dispute payout. A BidExclusive escrow may be
+/// funded up to the creator's task budget, but acceptance contracts only the
+/// bidder's requested reward. The difference is creator money that was never
+/// committed and must never be included in worker payout, fee, or volume math.
+fn contractual_settlement_amount(
+    remaining_funds: u64,
+    accepted_bid_price: Option<u64>,
+) -> Result<(u64, u64)> {
+    let Some(contract_amount) = accepted_bid_price else {
+        return Ok((remaining_funds, 0));
+    };
+    require!(contract_amount > 0, CoordinationError::InvalidReward);
+    require!(
+        contract_amount <= remaining_funds,
+        CoordinationError::InsufficientEscrowBalance
+    );
+    let uncommitted_budget = remaining_funds
+        .checked_sub(contract_amount)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    Ok((contract_amount, uncommitted_budget))
+}
+
+/// Only rulings that actually pay a worker depend on parent completion. Creator
+/// refunds must remain available even if a parent is missing, cancelled, or still
+/// in progress so dependency state can never lock escrow exits.
+fn resolution_requires_completed_parent(approved: bool, resolution: ResolutionType) -> bool {
+    approved && matches!(resolution, ResolutionType::Complete | ResolutionType::Split)
+}
+
+/// Completion-bond fault follows the economic ruling, not merely whether the
+/// initiator was approved. Complete assigns creator fault, Refund assigns worker
+/// fault, and Split/rejection are neutral.
+fn completion_bond_forfeit_sides(approved: bool, resolution: ResolutionType) -> (bool, bool) {
+    if !approved {
+        return (false, false);
+    }
+    match resolution {
+        ResolutionType::Complete => (true, false),
+        ResolutionType::Refund => (false, true),
+        ResolutionType::Split => (false, false),
+    }
+}
+
+/// Split is deliberately neutral in worker track-record telemetry. Recording it
+/// as either a win or a loss would distort the same reputation signal whose
+/// principal consequences are neutralized below.
+fn worker_track_record_outcome(approved: bool, resolution: ResolutionType) -> Option<Counter> {
+    if worker_lost_dispute(approved, resolution) {
+        Some(Counter::DisputesLost)
+    } else if approved && resolution == ResolutionType::Split {
+        None
+    } else {
+        Some(Counter::DisputesWon)
+    }
+}
+
+fn accepted_bid_dispute_bond_disposition(
+    approved: bool,
+    resolution: ResolutionType,
+) -> AcceptedBidBondDisposition {
+    if worker_lost_dispute(approved, resolution) {
+        AcceptedBidBondDisposition::FullSlashToCreator
+    } else {
+        AcceptedBidBondDisposition::Refund
+    }
+}
+
+/// Record the success-side telemetry for a dispute ruling that terminally completes
+/// the task. Dispute completions intentionally charge no protocol fee, so they must
+/// not mint completion reputation; this helper also leaves lifecycle/dispute counters
+/// untouched because the handler settles those separately.
+fn record_dispute_completion_telemetry(
+    worker: &mut AgentRegistration,
+    worker_payout: u64,
+    denomination: RewardDenomination,
+) {
+    worker.tasks_completed = worker.tasks_completed.saturating_add(1);
+    if denomination == RewardDenomination::Sol {
+        worker.total_earned = worker.total_earned.saturating_add(worker_payout);
     }
 }
 
@@ -253,17 +328,21 @@ pub struct ResolveDispute<'info> {
     #[account(mut)]
     pub bond_treasury: UncheckedAccount<'info>,
 
-    /// OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-    /// decrements the review counters when still live and returns its rent to the
-    /// worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
-    /// CHECK: seeds-pinned to the defendant claim; inspected in the handler.
+    /// REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+    /// canonical TaskSubmission PDA for the defendant claim. A live record is
+    /// swept before claim close; the exact system-owned empty PDA proves absence.
+    /// `Option` preserves the deployed account list, but `None` fails closed.
+    /// CHECK: seeds-pinned to the defendant claim and inspected in the handler.
     #[account(mut)]
     pub task_submission: Option<UncheckedAccount<'info>>,
 
-    /// OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-    /// swept submission is still live on a manual-validation task (pending-counter
-    /// hygiene). Bound to the task in the handler.
-    #[account(mut)]
+    /// OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+    /// submission is still Submitted and therefore carries counter debt.
+    #[account(
+        mut,
+        seeds = [b"task_validation", task.key().as_ref()],
+        bump = task_validation_config.bump
+    )]
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 }
 
@@ -274,10 +353,10 @@ pub fn handler<'info>(
     rationale_uri: String,
 ) -> Result<()> {
     // P6.4 accountable rulings: a reasoned ruling is REQUIRED. The 32-byte
-    // `rationale_hash` is mandatory by type (always present); the bounded
-    // `rationale_uri` is length-checked here. Both are persisted on the dispute and the
-    // hash + deciding resolver are emitted in `DisputeResolved`.
-    validate_rationale_uri(&rationale_uri)?;
+    // `rationale_hash` is the mandatory content commitment; an all-zero array is
+    // not evidence. The URI may be empty when the content is distributed out of
+    // band, but remains length-bounded when supplied.
+    validate_rationale(&rationale_hash, &rationale_uri)?;
 
     // Authorization: the protocol authority OR an assigned dispute resolver may resolve.
     // This replaced the open staked-arbiter vote + quorum model: a single assigned
@@ -322,21 +401,54 @@ pub fn handler<'info>(
         CoordinationError::DisputeNotActive
     );
 
+    // An Active dispute cannot be resolved after its permissionless expiry
+    // boundary. Previously a resolver could rule arbitrarily late, after the
+    // initiator's deregistration/slash guard had elapsed, and recreate a slash
+    // finalizer whose target identity no longer existed. Once this deadline
+    // passes, expire_dispute is the sole deterministic unwind.
+    require!(
+        dispute.resolution_window_open(clock.unix_timestamp),
+        CoordinationError::DisputeResolutionWindowExpired
+    );
+
     // No voting-period wait: an assigned resolver decides directly. (The legacy
     // voting_deadline field is retained on the account but no longer gates resolution.)
 
     // Validate and bind defendant worker accounts (fix #842)
-    validate_worker_accounts(
+    validate_dispute_worker_accounts(
         dispute.as_ref(),
         &ctx.accounts.worker,
         &ctx.accounts.worker_claim,
         &ctx.accounts.worker_wallet,
         &task.key(),
-        task.current_workers,
     )?;
 
-    // Audit H-2: a resolver who is a PARTY to the dispute — the task creator or the
-    // defendant worker — must never rule on it, even when seated on the resolver roster.
+    // Resolve immutable economic beneficiaries before authorizing the ruling.
+    // Task fields are authoritative for current tasks; the canonical HireRecord
+    // supplies the legacy fallback. A resolver must not choose a payout that can
+    // transfer an operator/referrer leg to themselves.
+    let task_key = task.key();
+    let dispute_terms = resolve_task_marketplace_terms(
+        task.operator,
+        task.operator_fee_bps,
+        task.referrer,
+        task.referrer_fee_bps,
+        &ctx.accounts.hire_record.to_account_info(),
+        &task_key,
+    )?;
+    validate_marketplace_payee_destinations(
+        task_key,
+        escrow.key(),
+        task.creator,
+        dispute_terms.operator,
+        dispute_terms.operator_fee_bps,
+        dispute_terms.referrer,
+        dispute_terms.referrer_fee_bps,
+    )?;
+
+    // Audit H-2 follow-up: a resolver who is a PARTY to the dispute or a
+    // snapshotted settlement beneficiary must never rule on it, even when seated
+    // on the resolver roster.
     // The initiator guard above only covers whichever party filed; without this, a
     // roster-seated DEFENDANT could rule `approve:false` to dodge a slash and drive the
     // permissionless finalizers against the honest initiator, and a roster-seated CREATOR
@@ -349,7 +461,7 @@ pub fn handler<'info>(
         .ok_or(CoordinationError::IncompleteWorkerAccounts)?
         .key();
     require!(
-        !resolver_is_dispute_party(&signer, &task.creator, &worker_wallet_key),
+        !resolver_has_conflict(&signer, &task.creator, &worker_wallet_key, &dispute_terms,),
         CoordinationError::ResolverConflictOfInterest
     );
 
@@ -371,11 +483,27 @@ pub fn handler<'info>(
                 .checked_add(2)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
             (
-                remaining_account_slice(ctx.remaining_accounts, 0, split_at),
+                remaining_account_range(
+                    ctx.remaining_accounts,
+                    0..split_at,
+                    CoordinationError::BidSettlementAccountsRequired,
+                )?,
                 Some((
-                    remaining_account_info(ctx.remaining_accounts, split_at),
-                    remaining_account_info(ctx.remaining_accounts, accepted_bid_index),
-                    remaining_account_info(ctx.remaining_accounts, bidder_state_index),
+                    remaining_account_at(
+                        ctx.remaining_accounts,
+                        split_at,
+                        CoordinationError::BidSettlementAccountsRequired,
+                    )?,
+                    remaining_account_at(
+                        ctx.remaining_accounts,
+                        accepted_bid_index,
+                        CoordinationError::BidSettlementAccountsRequired,
+                    )?,
+                    remaining_account_at(
+                        ctx.remaining_accounts,
+                        bidder_state_index,
+                        CoordinationError::BidSettlementAccountsRequired,
+                    )?,
                 )),
             )
         } else {
@@ -410,25 +538,56 @@ pub fn handler<'info>(
 
     // Prepare token context if this is a token-denominated task
     let is_token_task = task.reward_mint.is_some();
-    let task_key = task.key();
+
+    // Complete and Split both pay a worker. Every dependency type must prove its
+    // canonical parent is Completed before either payout can occur. Refund and
+    // rejected rulings deliberately remain parent-independent exit paths.
+    let is_payout_outcome = resolution_requires_completed_parent(approved, dispute.resolution_type);
+    if is_payout_outcome {
+        validate_task_dependency(task.as_ref(), dispute_remaining_accounts, ctx.program_id)?;
+    }
+    let dependency_parent_prefix =
+        usize::from(is_payout_outcome && task.dependency_type != DependencyType::None);
+    let dispute_worker_accounts = remaining_account_range(
+        dispute_remaining_accounts,
+        dependency_parent_prefix..dispute_remaining_accounts.len(),
+        CoordinationError::InvalidInput,
+    )?;
+
+    // Bind the accepted bid and read its contractual price BEFORE moving any
+    // escrow. Non-payout outcomes do not need the price, preserving a maximally
+    // permissive refund/unwind path for legacy state.
+    let accepted_bid_price = if is_payout_outcome && task.task_type == TaskType::BidExclusive {
+        let (bid_book_info, accepted_bid_info, bidder_market_state_info) =
+            accepted_bid_accounts.ok_or(CoordinationError::BidSettlementAccountsRequired)?;
+        let worker_claim = ctx
+            .accounts
+            .worker_claim
+            .as_ref()
+            .ok_or(CoordinationError::WorkerClaimRequired)?;
+        let worker_wallet = ctx
+            .accounts
+            .worker_wallet
+            .as_ref()
+            .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
+        let bidder_authority_info = worker_wallet.to_account_info();
+        Some(load_accepted_bid_contract_price(
+            &task_key,
+            worker_claim.as_ref(),
+            bid_book_info,
+            accepted_bid_info,
+            bidder_market_state_info,
+            &bidder_authority_info,
+        )?)
+    } else {
+        None
+    };
+    let (contract_amount, uncommitted_budget) =
+        contractual_settlement_amount(remaining_funds, accepted_bid_price)?;
+
     // §4 marketplace legs (operator + referrer; Task-first, HireRecord fallback)
     // resolved once for the SOL Complete/Split branches below; hires are SOL-only
     // so token paths take no leg.
-    let dispute_terms = resolve_task_marketplace_terms(
-        task.operator,
-        task.operator_fee_bps,
-        task.referrer,
-        task.referrer_fee_bps,
-        &ctx.accounts.hire_record.to_account_info(),
-        &task_key,
-    )?;
-    let worker_stake_now = ctx
-        .accounts
-        .worker
-        .as_ref()
-        .ok_or(CoordinationError::WorkerAgentRequired)?
-        .stake;
-
     if is_token_task {
         require!(
             ctx.accounts.token_escrow_ata.is_some()
@@ -453,7 +612,7 @@ pub fn handler<'info>(
             .token_escrow_ata
             .as_ref()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
-        validate_token_account(token_escrow, &mint.key(), &escrow.key())?;
+        validate_token_escrow_account(&token_escrow.to_account_info(), &mint.key(), &escrow.key())?;
     }
     let token_escrow_starting_amount = if is_token_task {
         let token_escrow = ctx
@@ -467,28 +626,21 @@ pub fn handler<'info>(
         0
     };
 
-    // A worker "loses" when dispute is approved and resolution is not Complete.
-    // This matches apply_dispute_slash semantics.
-    let worker_lost = approved && dispute.resolution_type != ResolutionType::Complete;
-    let slash_amount = if worker_lost {
-        calculate_slash_amount(
-            dispute.worker_stake_at_dispute,
-            worker_stake_now,
-            config.slash_percentage,
-        )?
-    } else {
-        0
-    };
+    // Only an approved full Refund establishes worker fault. Split is a
+    // partial/no-fault ruling: it pays both sides and must not reserve tokens,
+    // defer the claim, or create a stake/reputation slash obligation.
+    let worker_lost = worker_lost_dispute(approved, dispute.resolution_type);
     let token_slash_reserve = if is_token_task && worker_lost {
-        remaining_funds
-            .checked_mul(config.slash_percentage as u64)
-            .ok_or(CoordinationError::ArithmeticOverflow)?
-            .checked_div(PERCENT_BASE)
-            .ok_or(CoordinationError::ArithmeticOverflow)?
+        percentage_amount(remaining_funds, config.slash_percentage)?
     } else {
         0
     };
-    let worker_slash_pending = worker_lost && (slash_amount > 0 || token_slash_reserve > 0);
+    // A losing worker ALWAYS goes through apply_dispute_slash, even when the
+    // current lamport stake and token reserve are both zero. The finalizer is
+    // also where the fixed reputation penalty and defendant bookkeeping are
+    // applied. Basing deferral only on monetary amounts let an effectively
+    // zero-stake loser skip the reputation penalty entirely.
+    let worker_slash_pending = worker_lost;
     let defer_token_escrow_close = is_token_task && token_slash_reserve > 0;
     let defer_worker_claim_close = worker_slash_pending;
 
@@ -496,6 +648,12 @@ pub fn handler<'info>(
     let task_key_bytes = task_key.to_bytes();
     let bump_slice = [escrow.bump];
     let escrow_seeds: &[&[u8]] = &[b"escrow", task_key_bytes.as_ref(), &bump_slice];
+
+    // Captures the amount that actually reached the worker on a terminal Complete
+    // ruling. For SOL this is net of immutable operator/referrer legs; SPL-token base
+    // units are carried only to make the denomination explicit and are never folded
+    // into the SOL-denominated `total_earned` counter.
+    let mut completed_worker_payout: Option<(u64, RewardDenomination)> = None;
 
     // Execute resolution based on type and approval
     if approved {
@@ -621,6 +779,7 @@ pub fn handler<'info>(
                         escrow_seeds,
                         token_program,
                     )?;
+                    completed_worker_payout = Some((remaining_funds, RewardDenomination::SplToken));
                 } else {
                     // §4 split: pay the marketplace legs (operator + referrer) first so
                     // dispute resolution can't bypass them. No-op for a non-hired,
@@ -636,11 +795,11 @@ pub fn handler<'info>(
                             .as_ref()
                             .map(|a| a.to_account_info()),
                         &escrow.to_account_info(),
-                        remaining_funds,
+                        contract_amount,
                         task.task_id,
                         clock.unix_timestamp,
                     )?;
-                    let worker_net = remaining_funds
+                    let worker_net = contract_amount
                         .checked_sub(legs_fee)
                         .ok_or(CoordinationError::ArithmeticOverflow)?;
                     transfer_lamports(
@@ -648,16 +807,37 @@ pub fn handler<'info>(
                         &worker_wallet.to_account_info(),
                         worker_net,
                     )?;
+                    completed_worker_payout = Some((worker_net, RewardDenomination::Sol));
+                    if uncommitted_budget > 0 {
+                        transfer_lamports(
+                            &escrow.to_account_info(),
+                            &ctx.accounts.creator.to_account_info(),
+                            uncommitted_budget,
+                        )?;
+                    }
                 }
                 task.status = TaskStatus::Completed;
                 task.completed_at = clock.unix_timestamp;
-                update_protocol_stats(&mut ctx.accounts.protocol_config, remaining_funds)?;
+                let denomination = if is_token_task {
+                    RewardDenomination::SplToken
+                } else {
+                    RewardDenomination::Sol
+                };
+                update_protocol_stats(
+                    &mut ctx.accounts.protocol_config,
+                    contract_amount,
+                    denomination,
+                );
             }
             ResolutionType::Split => {
                 if remaining_funds > 0 {
-                    let distributable = remaining_funds
-                        .checked_sub(token_slash_reserve)
-                        .ok_or(CoordinationError::ArithmeticOverflow)?;
+                    let distributable = if is_token_task {
+                        remaining_funds
+                            .checked_sub(token_slash_reserve)
+                            .ok_or(CoordinationError::ArithmeticOverflow)?
+                    } else {
+                        contract_amount
+                    };
                     let worker_share = distributable
                         .checked_div(2)
                         .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -767,6 +947,9 @@ pub fn handler<'info>(
                         let worker_net = worker_share
                             .checked_sub(legs_fee)
                             .ok_or(CoordinationError::ArithmeticOverflow)?;
+                        let creator_payout = creator_share
+                            .checked_add(uncommitted_budget)
+                            .ok_or(CoordinationError::ArithmeticOverflow)?;
                         // The marketplace legs were already debited from escrow by the helper.
                         debit_lamports(
                             &escrow.to_account_info(),
@@ -775,7 +958,7 @@ pub fn handler<'info>(
                                 .ok_or(CoordinationError::ArithmeticOverflow)?,
                         )?;
                         let creator_info = ctx.accounts.creator.to_account_info();
-                        credit_lamports(&creator_info, creator_share)?;
+                        credit_lamports(&creator_info, creator_payout)?;
                         credit_lamports(&worker_wallet.to_account_info(), worker_net)?;
                     }
                 }
@@ -847,11 +1030,8 @@ pub fn handler<'info>(
     if let Some((bid_book_info, accepted_bid_info, bidder_market_state_info)) =
         accepted_bid_accounts
     {
-        let bond_disposition = if approved && dispute.resolution_type != ResolutionType::Complete {
-            AcceptedBidBondDisposition::FullSlashToCreator
-        } else {
-            AcceptedBidBondDisposition::Refund
-        };
+        let bond_disposition =
+            accepted_bid_dispute_bond_disposition(approved, dispute.resolution_type);
         let worker_claim = ctx
             .accounts
             .worker_claim
@@ -885,6 +1065,9 @@ pub fn handler<'info>(
         .worker
         .as_mut()
         .ok_or(CoordinationError::WorkerAgentRequired)?;
+    if let Some((worker_payout, denomination)) = completed_worker_payout {
+        record_dispute_completion_telemetry(worker.as_mut(), worker_payout, denomination);
+    }
     // Audit F-2 (adversarial-review follow-up): when the claim close is DEFERRED
     // (slash pending), the claim is still open — so active_tasks must stay
     // incremented, mirroring current_workers (which likewise stays 1). The slash
@@ -903,65 +1086,35 @@ pub fn handler<'info>(
     }
     let defendant_worker_key = worker.key();
 
-    // P6.6: record the dispute OUTCOME for the defendant worker's track record. A
-    // resolution where the worker is slashed (`worker_lost`) is a loss (the SDK
-    // slash-history signal); any other resolution is a win for the defendant. No-op when
-    // the optional `agent_stats` account is absent. Telemetry only — never gates the
-    // settlement above. `defendant_worker_key == dispute.defendant`, so it matches the
-    // PDA seed bound on `agent_stats`.
-    let dispute_outcome_counter = if worker_lost {
-        Counter::DisputesLost
-    } else {
-        Counter::DisputesWon
-    };
-    apply_track_record(
-        &mut ctx.accounts.agent_stats,
-        defendant_worker_key,
-        ctx.bumps.agent_stats,
-        dispute_outcome_counter,
-        clock.unix_timestamp,
-    )?;
-
-    // P6.3: the arbiter vote/quorum model is retired, so there are no (vote, arbiter)
-    // pairs to clean up — `remaining_accounts` carry ONLY the optional collaborative
-    // (claim, worker) pairs. `validate_remaining_accounts_structure` now asserts
-    // `total_voters == 0` and that the remaining accounts come in pairs.
-    let arbiter_accounts =
-        validate_remaining_accounts_structure(dispute_remaining_accounts, dispute.total_voters)?;
-
-    let remaining_worker_accounts = dispute_remaining_accounts
-        .len()
-        .checked_sub(arbiter_accounts)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let worker_pairs = remaining_worker_accounts
-        .checked_div(2)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    // saturating_sub (not checked_sub): 0 workers -> 0 expected pairs, never an underflow
-    // that would lock the disputed escrow (#72). Identical to checked_sub for all N >= 1.
-    let expected_worker_pairs = expected_worker_pairs(task.current_workers);
-    require!(
-        worker_pairs == expected_worker_pairs,
-        CoordinationError::IncompleteWorkerAccounts
-    );
-
-    // Check for duplicate workers before processing (fix #826)
-    check_duplicate_workers(
-        dispute_remaining_accounts,
-        arbiter_accounts,
-        Some(defendant_worker_key),
-    )?;
-
-    for i in (arbiter_accounts..dispute_remaining_accounts.len()).step_by(2) {
-        let worker_index = i
-            .checked_add(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        process_worker_claim_pair(
-            &dispute_remaining_accounts[i],
-            &dispute_remaining_accounts[worker_index],
-            &task.key(),
-            &crate::ID,
+    // P6.6: record only an explicit worker win/loss. Split is neutral and leaves
+    // both counters untouched; turning it into a synthetic loss would recreate a
+    // reputation penalty after principal slashing was removed.
+    if let Some(dispute_outcome_counter) =
+        worker_track_record_outcome(approved, dispute.resolution_type)
+    {
+        apply_track_record(
+            &mut ctx.accounts.agent_stats,
+            defendant_worker_key,
+            ctx.bumps.agent_stats,
+            dispute_outcome_counter,
+            clock.unix_timestamp,
         )?;
     }
+
+    // P6.3: the arbiter vote/quorum model is retired, so there are no (vote, arbiter)
+    // pairs to clean up. Each additional collaborative worker now supplies a
+    // canonical `(claim, worker, task_submission)` bundle. The submission meta is
+    // non-skippable evidence: live records are swept before claim close; the exact
+    // empty PDA proves absence.
+    process_dispute_peer_bundles(
+        task.as_mut(),
+        &task_key,
+        dispute_worker_accounts,
+        dispute.total_voters,
+        defendant_worker_key,
+        ctx.accounts.task_validation_config.as_deref_mut(),
+        ctx.program_id,
+    )?;
 
     dispute.status = DisputeStatus::Resolved;
     dispute.resolved_at = clock.unix_timestamp;
@@ -999,59 +1152,53 @@ pub fn handler<'info>(
     // creator race the permissionless finalizer). The initiator side no longer needs
     // this protection: apply_initiator_slash does not load the Task at all.
     task.current_workers = if defer_worker_claim_close { 1 } else { 0 };
+    task.set_worker_slash_pending(worker_slash_pending);
 
     // Audit M-3 (follow-up): a token task's escrow PDA stays OPEN even when nothing was
     // deferred (drained, is_closed = true). apply_dispute_slash derives "deferred token
     // reserve" from this account's liveness (open + !is_closed), so it must be able to
     // read it to distinguish "reserve pending" from "settled at resolve" — without that
     // signal a caller could omit the token accounts, take the stake-slash-only path, close
-    // the worker_claim and strand a live reserve forever. The drained PDA's rent is
-    // reclaimed by close_task (the same pattern expire_dispute already uses). SOL tasks
-    // close here as before.
+    // the worker_claim and strand a live reserve forever. close_task reclaims a drained,
+    // already-settled token PDA; apply_dispute_slash closes one that held a deferred
+    // reserve. SOL tasks close here as before.
     if !defer_token_escrow_close && !is_token_task {
         escrow.close(ctx.accounts.creator.to_account_info())?;
     }
 
-    // Close worker_claim account and return rent lamports to worker wallet (fix #838)
-    // The claim rent was paid by worker wallet at creation, so return it there
-    if !defer_worker_claim_close {
-        let claim = ctx
-            .accounts
-            .worker_claim
-            .as_ref()
-            .ok_or(CoordinationError::WorkerClaimRequired)?;
-        let worker_wallet = ctx
-            .accounts
-            .worker_wallet
-            .as_ref()
-            .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
-        claim.close(worker_wallet.to_account_info())?;
-    }
+    let claim = ctx
+        .accounts
+        .worker_claim
+        .as_ref()
+        .ok_or(CoordinationError::WorkerClaimRequired)?;
+    let worker_wallet = ctx
+        .accounts
+        .worker_wallet
+        .as_ref()
+        .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
+    let worker_wallet_info = worker_wallet.to_account_info();
 
-    // Audit F-9: sweep the defendant's TaskSubmission when the caller supplies it —
-    // decrement the review counters if it is still live and return its rent to the
-    // worker authority, so neither the counters nor the rent strand on the terminal
-    // task. Optional: when omitted, close_task remains the fallback sweep.
-    if let Some(submission_info) = ctx.accounts.task_submission.as_ref() {
-        let worker_claim = ctx
-            .accounts
-            .worker_claim
-            .as_ref()
-            .ok_or(CoordinationError::WorkerClaimRequired)?;
-        let worker_wallet = ctx
-            .accounts
-            .worker_wallet
-            .as_ref()
-            .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
-        sweep_dispute_submission(
-            task,
-            &task_key,
-            &worker_claim.key(),
-            &defendant_worker_key,
-            &worker_wallet.to_account_info(),
-            &submission_info.to_account_info(),
-            ctx.accounts.task_validation_config.as_deref_mut(),
-        )?;
+    // Audit F-9 follow-up: submission evidence is NON-SKIPPABLE. A live
+    // TaskSubmission is settled (including both review counters) and its rent is
+    // returned before the claim can close; the exact empty PDA proves absence.
+    // Treating `None` as absence let a resolver terminalize the task and strand a
+    // Submitted record forever — close_task deliberately refuses that state.
+    settle_dispute_submission_evidence(
+        task,
+        &task_key,
+        &claim.key(),
+        &defendant_worker_key,
+        &worker_wallet_info,
+        ctx.accounts.task_submission.as_ref().map(AsRef::as_ref),
+        ctx.accounts.task_validation_config.as_deref_mut(),
+        ctx.program_id,
+    )?;
+
+    // The claim rent was paid by the worker wallet. Cleanup above MUST precede
+    // this close because the submission PDA is derived from the claim key and a
+    // terminal live submission has no later dedicated settlement path.
+    if !defer_worker_claim_close {
+        claim.close(worker_wallet_info)?;
     }
 
     // Batch 3 §8: completion bond disposition follows the dispute outcome — the loser
@@ -1065,17 +1212,8 @@ pub fn handler<'info>(
     // validates the canonical derivation and no-ops when no live bond was posted
     // (mirrors resolve_reject_frozen).
     {
-        let bond_resolution = dispute.resolution_type;
-        // (creator_forfeit, worker_forfeit)
-        let (creator_forfeit, worker_forfeit) = if approved {
-            match bond_resolution {
-                ResolutionType::Complete => (true, false), // worker wins
-                ResolutionType::Refund => (false, true),   // worker loses
-                ResolutionType::Split => (false, false),
-            }
-        } else {
-            (false, false) // rejected: no fault, refund both
-        };
+        let (creator_forfeit, worker_forfeit) =
+            completion_bond_forfeit_sides(approved, dispute.resolution_type);
 
         // Validate + bind the treasury (forfeit recipient).
         require!(
@@ -1203,87 +1341,238 @@ pub fn handler<'info>(
 }
 
 /// Validates worker account consistency and defendant binding.
-/// Audit H-2 conflict-of-interest predicate: a resolver who is a PARTY to the dispute —
-/// the task creator or the defendant worker's validated authority wallet — must never
-/// rule on it, not only the initiator. Returns true when `signer` is conflicted. Compare
-/// against `worker_wallet` (the on-chain-validated worker authority, see
-/// `validate_worker_accounts`), NOT `dispute.defendant`, which is an agent PDA and would
-/// make the check a no-op.
-fn resolver_is_dispute_party(signer: &Pubkey, creator: &Pubkey, worker_wallet: &Pubkey) -> bool {
-    signer == creator || signer == worker_wallet
+/// Audit H-2 conflict-of-interest predicate. Compare against the validated
+/// worker authority (not the defendant Agent PDA) and every active immutable
+/// marketplace leg. A zero-bps/default leg is not an economic interest.
+fn resolver_has_conflict(
+    signer: &Pubkey,
+    creator: &Pubkey,
+    worker_wallet: &Pubkey,
+    terms: &MarketplaceTerms,
+) -> bool {
+    signer == creator
+        || signer == worker_wallet
+        || (terms.operator_fee_bps > 0 && *signer == terms.operator)
+        || (terms.referrer_fee_bps > 0 && *signer == terms.referrer)
 }
 
-fn validate_worker_accounts(
-    dispute: &Dispute,
-    worker: &Option<Box<Account<AgentRegistration>>>,
-    worker_claim: &Option<Box<Account<TaskClaim>>>,
-    worker_wallet: &Option<UncheckedAccount>,
-    task_key: &Pubkey,
-    current_workers: u8,
-) -> Result<()> {
-    // #72 tripwire: the defendant claim is required for EVERY worker count, including 0.
-    // Do NOT relax this to `current_workers != 0` — see defendant_claim_required: it unlocks
-    // no reachable escrow and adds fund-routing risk.
+/// Compute a whole-percent share without overflowing at valid SPL-token u64
+/// balances. The quotient is always <= `amount` for a canonical percentage.
+fn percentage_amount(amount: u64, percentage: u8) -> Result<u64> {
     require!(
-        defendant_claim_required(current_workers),
-        CoordinationError::WorkerClaimRequired
+        u64::from(percentage) <= PERCENT_BASE,
+        CoordinationError::InvalidSlashPercentage
     );
-    let worker = worker
-        .as_ref()
-        .ok_or(CoordinationError::WorkerAgentRequired)?;
-    let worker_claim = worker_claim
-        .as_ref()
-        .ok_or(CoordinationError::WorkerClaimRequired)?;
-    let worker_wallet = worker_wallet
-        .as_ref()
-        .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
-
-    // Worker must be the dispute defendant.
-    require!(
-        worker.key() == dispute.defendant,
-        CoordinationError::WorkerNotInDispute
-    );
-
-    // Verify worker matches claim
-    require!(
-        worker.key() == worker_claim.worker,
-        CoordinationError::UnauthorizedAgent
-    );
-
-    // Verify claim is for this task
-    require!(
-        worker_claim.task == *task_key,
-        CoordinationError::NotClaimed
-    );
-
-    // Verify worker wallet binding.
-    require!(
-        worker_wallet.key() == worker.authority,
-        CoordinationError::UnauthorizedAgent
-    );
-
-    Ok(())
+    let value = (amount as u128)
+        .checked_mul(percentage as u128)
+        .ok_or(CoordinationError::ArithmeticOverflow)?
+        .checked_div(PERCENT_BASE as u128)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    u64::try_from(value).map_err(|_| CoordinationError::ArithmeticOverflow.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Audit H-2 (revert-sensitive on the predicate): a resolver equal to the task creator
-    // or the defendant worker's validated wallet is conflicted; an unrelated resolver is
-    // not. Narrowing `resolver_is_dispute_party` back to a single party turns this red.
     #[test]
-    fn resolver_dispute_party_conflict_is_detected() {
+    fn token_slash_percentage_handles_max_u64_balance() {
+        assert_eq!(percentage_amount(u64::MAX, 0).unwrap(), 0);
+        assert_eq!(percentage_amount(u64::MAX, 25).unwrap(), u64::MAX / 4);
+        assert_eq!(percentage_amount(u64::MAX, 100).unwrap(), u64::MAX);
+        assert!(percentage_amount(u64::MAX, 101).is_err());
+    }
+
+    #[test]
+    fn accepted_bid_caps_dispute_settlement_and_refunds_uncommitted_budget() {
+        assert_eq!(
+            contractual_settlement_amount(100, Some(1)).unwrap(),
+            (1, 99)
+        );
+        assert_eq!(
+            contractual_settlement_amount(100, Some(100)).unwrap(),
+            (100, 0)
+        );
+        assert_eq!(contractual_settlement_amount(100, None).unwrap(), (100, 0));
+        assert!(contractual_settlement_amount(100, Some(0)).is_err());
+        assert!(contractual_settlement_amount(100, Some(101)).is_err());
+    }
+
+    #[test]
+    fn complete_ruling_records_only_success_telemetry_for_the_actual_denomination() {
+        let mut worker = AgentRegistration {
+            tasks_completed: 7,
+            total_earned: 100,
+            reputation: 3_000,
+            active_tasks: 2,
+            disputes_as_defendant: 1,
+            ..AgentRegistration::default()
+        };
+
+        record_dispute_completion_telemetry(&mut worker, 27, RewardDenomination::Sol);
+        assert_eq!(worker.tasks_completed, 8);
+        assert_eq!(worker.total_earned, 127);
+        assert_eq!(worker.reputation, 3_000);
+        assert_eq!(worker.active_tasks, 2);
+        assert_eq!(worker.disputes_as_defendant, 1);
+
+        record_dispute_completion_telemetry(&mut worker, u64::MAX, RewardDenomination::SplToken);
+        assert_eq!(worker.tasks_completed, 9);
+        assert_eq!(worker.total_earned, 127);
+        assert_eq!(worker.reputation, 3_000);
+        assert_eq!(worker.active_tasks, 2);
+        assert_eq!(worker.disputes_as_defendant, 1);
+
+        worker.tasks_completed = u64::MAX;
+        worker.total_earned = u64::MAX;
+        record_dispute_completion_telemetry(&mut worker, 1, RewardDenomination::Sol);
+        assert_eq!(worker.tasks_completed, u64::MAX);
+        assert_eq!(worker.total_earned, u64::MAX);
+    }
+
+    #[test]
+    fn only_worker_payout_rulings_require_a_completed_parent() {
+        assert!(resolution_requires_completed_parent(
+            true,
+            ResolutionType::Complete
+        ));
+        assert!(resolution_requires_completed_parent(
+            true,
+            ResolutionType::Split
+        ));
+        assert!(!resolution_requires_completed_parent(
+            true,
+            ResolutionType::Refund
+        ));
+        for resolution in [
+            ResolutionType::Complete,
+            ResolutionType::Split,
+            ResolutionType::Refund,
+        ] {
+            assert!(!resolution_requires_completed_parent(false, resolution));
+        }
+    }
+
+    #[test]
+    fn complete_and_refund_penalize_only_the_explicit_bond_loser() {
+        assert_eq!(
+            completion_bond_forfeit_sides(true, ResolutionType::Complete),
+            (true, false),
+        );
+        assert_eq!(
+            completion_bond_forfeit_sides(true, ResolutionType::Refund),
+            (false, true),
+        );
+        assert_eq!(
+            accepted_bid_dispute_bond_disposition(true, ResolutionType::Complete),
+            AcceptedBidBondDisposition::Refund,
+        );
+        assert_eq!(
+            worker_track_record_outcome(true, ResolutionType::Complete),
+            Some(Counter::DisputesWon),
+        );
+        assert_eq!(
+            completion_bond_forfeit_sides(false, ResolutionType::Complete),
+            (false, false),
+        );
+        assert_eq!(
+            completion_bond_forfeit_sides(false, ResolutionType::Refund),
+            (false, false),
+        );
+    }
+
+    #[test]
+    fn split_is_neutral_for_every_worker_bond_and_reputation_signal() {
+        assert_eq!(
+            completion_bond_forfeit_sides(true, ResolutionType::Split),
+            (false, false),
+        );
+        assert_eq!(
+            accepted_bid_dispute_bond_disposition(true, ResolutionType::Split),
+            AcceptedBidBondDisposition::Refund,
+        );
+        assert_eq!(
+            worker_track_record_outcome(true, ResolutionType::Split),
+            None,
+        );
+        assert!(!worker_lost_dispute(true, ResolutionType::Split));
+    }
+
+    #[test]
+    fn refund_still_slashes_accepted_bid_and_worker_reputation() {
+        assert_eq!(
+            accepted_bid_dispute_bond_disposition(true, ResolutionType::Refund),
+            AcceptedBidBondDisposition::FullSlashToCreator,
+        );
+        assert_eq!(
+            worker_track_record_outcome(true, ResolutionType::Refund),
+            Some(Counter::DisputesLost),
+        );
+        assert!(worker_lost_dispute(true, ResolutionType::Refund));
+        assert_eq!(
+            worker_track_record_outcome(false, ResolutionType::Refund),
+            Some(Counter::DisputesWon),
+        );
+    }
+
+    // Audit H-2 (revert-sensitive on the predicate): a resolver equal to a
+    // dispute party or an active settlement beneficiary is conflicted.
+    #[test]
+    fn resolver_party_and_beneficiary_conflicts_are_detected() {
         let creator = Pubkey::new_unique();
         let worker_wallet = Pubkey::new_unique();
+        let operator = Pubkey::new_unique();
+        let referrer = Pubkey::new_unique();
         let outsider = Pubkey::new_unique();
-        assert!(resolver_is_dispute_party(&creator, &creator, &worker_wallet));
-        assert!(resolver_is_dispute_party(
+        let terms = MarketplaceTerms {
+            operator,
+            operator_fee_bps: 1_000,
+            referrer,
+            referrer_fee_bps: 500,
+        };
+        assert!(resolver_has_conflict(
+            &creator,
+            &creator,
+            &worker_wallet,
+            &terms,
+        ));
+        assert!(resolver_has_conflict(
             &worker_wallet,
             &creator,
-            &worker_wallet
+            &worker_wallet,
+            &terms,
         ));
-        assert!(!resolver_is_dispute_party(&outsider, &creator, &worker_wallet));
+        assert!(resolver_has_conflict(
+            &operator,
+            &creator,
+            &worker_wallet,
+            &terms,
+        ));
+        assert!(resolver_has_conflict(
+            &referrer,
+            &creator,
+            &worker_wallet,
+            &terms,
+        ));
+        assert!(!resolver_has_conflict(
+            &outsider,
+            &creator,
+            &worker_wallet,
+            &terms,
+        ));
+
+        let inactive_terms = MarketplaceTerms {
+            operator,
+            operator_fee_bps: 0,
+            referrer,
+            referrer_fee_bps: 0,
+        };
+        assert!(!resolver_has_conflict(
+            &operator,
+            &creator,
+            &worker_wallet,
+            &inactive_terms,
+        ));
     }
 
     // === P6.4 (1): rationale_uri bound (positive + negative) ===
@@ -1307,12 +1596,19 @@ mod tests {
         assert!(validate_rationale_uri(&over).is_err());
     }
 
+    #[test]
+    fn rationale_requires_a_nonzero_content_hash() {
+        assert!(validate_rationale(&[0u8; 32], "").is_err());
+        assert!(validate_rationale(&[1u8; 32], "").is_ok());
+    }
+
     // === P6.4 (2): resolver case counters ===
 
     fn fresh_resolver() -> DisputeResolver {
-        let mut r = DisputeResolver::default();
-        r.resolver = Pubkey::new_unique();
-        r
+        DisputeResolver {
+            resolver: Pubkey::new_unique(),
+            ..DisputeResolver::default()
+        }
     }
 
     // One resolution bumps `resolved_count` by exactly one and stamps `last_resolved_at`.

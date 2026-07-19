@@ -239,6 +239,22 @@ export async function setMinArbiterStake(svm, amount) {
   svm.setAccount(protocolPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
 }
 
+/// Set min_agent_stake on the live ProtocolConfig in place.
+export async function setMinAgentStake(svm, amount) {
+  const [protocolPda] = pda([enc("protocol")]);
+  const acct = svm.getAccount(protocolPda);
+  const cfg = coder.accounts.decode("ProtocolConfig", Buffer.from(acct.data));
+  cfg.min_agent_stake = new BN(amount);
+  const data = await coder.accounts.encode("ProtocolConfig", cfg);
+  svm.setAccount(protocolPda, {
+    lamports: Number(acct.lamports),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+}
+
 /// Set an AgentRegistration's `stake` in place (no real staking instruction needed
 /// for tests). Used to give arbiters vote weight and the worker a slashable stake.
 export async function injectAgentStake(svm, agentPda, stake) {
@@ -247,6 +263,23 @@ export async function injectAgentStake(svm, agentPda, stake) {
   agent.stake = new BN(stake);
   const data = await coder.accounts.encode("AgentRegistration", agent);
   svm.setAccount(agentPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
+/// Set an AgentRegistration's reputation in place. Governance integration tests
+/// use this to model mature mainnet voters without weakening the production
+/// reputation floor or constructing unrelated task-history fixtures.
+export async function injectAgentReputation(svm, agentPda, reputation) {
+  const acct = svm.getAccount(agentPda);
+  const agent = coder.accounts.decode("AgentRegistration", Buffer.from(acct.data));
+  agent.reputation = reputation;
+  const data = await coder.accounts.encode("AgentRegistration", agent);
+  svm.setAccount(agentPda, {
+    lamports: Number(acct.lamports),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
 }
 
 /// Configure the on-chain multisig in place (owners + threshold) so multisig-gated
@@ -442,7 +475,8 @@ export async function hireIx(w, { taskId, expectedPrice, expectedVersion, asProv
   const ix = await prog.methods
     .hireFromListing(arr(tid), new BN(expectedPrice ?? w.price), new BN(expectedVersion ?? 1), referrer, referrerFeeBps, moderator ?? w.modAuth.publicKey)
     .accounts({
-      task, escrow, hireRecord, listing: w.listing, protocolConfig: w.protocolPda,
+      task, escrow, hireRecord, listing: w.listing, providerAgent: w.providerAgent,
+      protocolConfig: w.protocolPda,
       moderationConfig: w.modCfg, listingModeration, moderationAttestor, moderationBlock,
       creatorAgent: agent, authorityRateLimit, authority: signer.publicKey,
       creator: signer.publicKey, systemProgram: SystemProgram.programId,

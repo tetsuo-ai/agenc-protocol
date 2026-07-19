@@ -10,9 +10,29 @@ use crate::instructions::constants::MIN_SKILL_PRICE;
 use crate::instructions::create_service_listing::{
     validate_listing_deadline, validate_operator_fee_invariant,
 };
-use crate::state::{ListingState, ProtocolConfig, ServiceListing};
+use crate::state::{AgentRegistration, AgentStatus, ListingState, ProtocolConfig, ServiceListing};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
+
+fn validate_listing_spec_update(
+    spec_hash: Option<[u8; 32]>,
+    spec_uri: Option<String>,
+) -> Result<Option<([u8; 32], String)>> {
+    match (spec_hash, spec_uri) {
+        (Some(hash), Some(uri)) => {
+            require!(hash != [0u8; 32], CoordinationError::ListingInvalidSpec);
+            require!(
+                !uri.trim().is_empty() && uri.len() <= 256,
+                CoordinationError::ListingInvalidSpec
+            );
+            Ok(Some((hash, uri)))
+        }
+        (None, None) => Ok(None),
+        // The URI names the bytes committed by the hash. Updating just one side
+        // would publish an internally inconsistent contract to buyers/workers.
+        _ => err!(CoordinationError::ListingInvalidSpec),
+    }
+}
 
 #[derive(Accounts)]
 pub struct UpdateServiceListing<'info> {
@@ -23,6 +43,14 @@ pub struct UpdateServiceListing<'info> {
         has_one = authority @ CoordinationError::UnauthorizedAgent
     )]
     pub listing: Account<'info, ServiceListing>,
+
+    #[account(
+        seeds = [b"agent", provider_agent.agent_id.as_ref()],
+        bump = provider_agent.bump,
+        constraint = provider_agent.key() == listing.provider_agent @ CoordinationError::InvalidInput,
+        constraint = provider_agent.authority == authority.key() @ CoordinationError::UnauthorizedAgent
+    )]
+    pub provider_agent: Account<'info, AgentRegistration>,
 
     #[account(
         seeds = [b"protocol"],
@@ -51,6 +79,12 @@ pub fn handler(
     let listing = &mut ctx.accounts.listing;
 
     require!(
+        ctx.accounts.provider_agent.status == AgentStatus::Active
+            && !ctx.accounts.provider_agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
+
+    require!(
         listing.state != ListingState::Retired,
         CoordinationError::ListingRetired
     );
@@ -59,16 +93,9 @@ pub fn handler(
         require!(p >= MIN_SKILL_PRICE, CoordinationError::ListingPriceTooLow);
         listing.price = p;
     }
-    if let Some(h) = spec_hash {
-        require!(h != [0u8; 32], CoordinationError::ListingInvalidSpec);
-        listing.spec_hash = h;
-    }
-    if let Some(u) = spec_uri {
-        require!(
-            !u.trim().is_empty() && u.len() <= 256,
-            CoordinationError::ListingInvalidSpec
-        );
-        listing.spec_uri = u;
+    if let Some((hash, uri)) = validate_listing_spec_update(spec_hash, spec_uri)? {
+        listing.spec_hash = hash;
+        listing.spec_uri = uri;
     }
     if let Some(t) = tags {
         listing.tags = t;
@@ -94,7 +121,13 @@ pub fn handler(
     // Re-validate the operator/fee invariant (cap + payee) on the final values.
     validate_operator_fee_invariant(listing.operator, listing.operator_fee_bps)?;
 
-    listing.version = listing.version.saturating_add(1);
+    // `hire_from_listing` uses this value as a compare-and-swap guard. Reusing
+    // u64::MAX after saturation would let terms change without invalidating a
+    // stale signed hire. Preserve strict monotonicity and fail on exhaustion.
+    listing.version = listing
+        .version
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
     listing.updated_at = clock.unix_timestamp;
 
     emit!(ServiceListingUpdated {
@@ -107,4 +140,22 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_spec_hash_and_uri_update_atomically() {
+        let hash = [7u8; 32];
+        let uri = "agenc://job-spec/sha256/07".to_string();
+        assert!(validate_listing_spec_update(Some(hash), Some(uri)).is_ok());
+        assert!(validate_listing_spec_update(None, None).is_ok());
+        assert!(validate_listing_spec_update(Some(hash), None).is_err());
+        assert!(
+            validate_listing_spec_update(None, Some("https://example.test/spec".into())).is_err()
+        );
+        assert!(validate_listing_spec_update(Some([0u8; 32]), Some("x".into())).is_err());
+    }
 }

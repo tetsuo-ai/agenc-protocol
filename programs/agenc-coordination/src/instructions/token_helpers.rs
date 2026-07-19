@@ -7,8 +7,48 @@ use crate::errors::CoordinationError;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_lang::system_program;
-use anchor_spl::associated_token::{self, AssociatedToken};
-use anchor_spl::token::{self, Token, TokenAccount};
+use anchor_spl::token::{self, Mint, Token, TokenAccount};
+use spl_associated_token_account_client::{
+    address::get_associated_token_address_with_program_id,
+    instruction::create_associated_token_account, program::ID as ASSOCIATED_TOKEN_PROGRAM_ID,
+};
+
+/// Lightweight typed marker for the canonical Associated Token Account program.
+///
+/// Keeping this as `Program<AssociatedToken>` preserves Anchor's program-ID and
+/// executable checks, plus the existing IDL/account wire contract, without
+/// linking the full ATA + Token-2022 implementation into the classic-SPL build.
+#[derive(Clone)]
+pub struct AssociatedToken;
+
+impl anchor_lang::Id for AssociatedToken {
+    fn id() -> Pubkey {
+        ASSOCIATED_TOKEN_PROGRAM_ID
+    }
+}
+
+/// Reject token rewards whose custody can be frozen after a worker accepts the
+/// job. A mint with any live freeze authority lets the creator freeze the escrow
+/// ATA after performance and permanently block every payout/refund/close path.
+/// An already-frozen ATA remains unsafe even if the authority was later revoked.
+pub fn validate_token_reward_custody(mint: &Mint, escrow_ata: &AccountInfo) -> Result<()> {
+    require!(
+        mint.freeze_authority.is_none(),
+        CoordinationError::TokenMintFreezeAuthorityEnabled
+    );
+    require!(
+        escrow_ata.owner == &anchor_spl::token::ID,
+        CoordinationError::InvalidTokenEscrow
+    );
+    let data = escrow_ata.try_borrow_data()?;
+    let account = TokenAccount::try_deserialize_unchecked(&mut data.as_ref())
+        .map_err(|_| error!(CoordinationError::InvalidTokenEscrow))?;
+    require!(
+        account.state == anchor_spl::token::spl_token::state::AccountState::Initialized,
+        CoordinationError::TokenEscrowFrozen
+    );
+    Ok(())
+}
 
 fn require_token_program(program: &AccountInfo<'_>) -> Result<()> {
     require!(
@@ -21,10 +61,36 @@ fn require_token_program(program: &AccountInfo<'_>) -> Result<()> {
 
 fn require_associated_token_program(program: &Program<'_, AssociatedToken>) -> Result<()> {
     require!(
-        program.key() == associated_token::ID,
+        program.key() == ASSOCIATED_TOKEN_PROGRAM_ID,
         CoordinationError::InvalidInput
     );
     Ok(())
+}
+
+/// Validate the single canonical classic-SPL escrow account for a task.
+///
+/// Mint + token-authority checks are not sufficient: anyone can pre-initialize an
+/// arbitrary token account whose token authority is the escrow PDA. If task ingress
+/// or a terminal settlement accepts that account, clients deriving the canonical ATA
+/// can no longer find the funded custody account, and a substituted account can leave
+/// the real reward account stranded after the task becomes terminal. Every task-token
+/// path therefore binds custody to the classic Token Program ATA derived from
+/// `(escrow_authority, mint)`.
+pub fn validate_token_escrow_account(
+    account: &AccountInfo<'_>,
+    expected_mint: &Pubkey,
+    escrow_authority: &Pubkey,
+) -> Result<()> {
+    let expected_address = get_associated_token_address_with_program_id(
+        escrow_authority,
+        expected_mint,
+        &anchor_spl::token::ID,
+    );
+    require!(
+        account.key() == expected_address,
+        CoordinationError::InvalidTokenEscrow
+    );
+    validate_unchecked_token_mint(account, expected_mint, escrow_authority)
 }
 
 fn transfer_tokens_from_escrow_account_info<'info>(
@@ -39,6 +105,9 @@ fn transfer_tokens_from_escrow_account_info<'info>(
         return Ok(());
     }
     require_token_program(token_program)?;
+    let escrow_mint =
+        token::accessor::mint(token_escrow).map_err(|_| CoordinationError::InvalidTokenEscrow)?;
+    validate_token_escrow_account(token_escrow, &escrow_mint, escrow_authority.key)?;
 
     let transfer_ix = anchor_spl::token::spl_token::instruction::transfer(
         token_program.key,
@@ -72,6 +141,9 @@ fn close_token_account_account_info<'info>(
     token_program: &AccountInfo<'info>,
 ) -> Result<()> {
     require_token_program(token_program)?;
+    let escrow_mint =
+        token::accessor::mint(token_escrow).map_err(|_| CoordinationError::InvalidTokenEscrow)?;
+    validate_token_escrow_account(token_escrow, &escrow_mint, escrow_authority.key)?;
 
     let close_ix = anchor_spl::token::spl_token::instruction::close_account(
         token_program.key,
@@ -221,8 +293,15 @@ pub fn ensure_token_escrow_ata<'info>(
     if token_escrow_ata.owner != &system_program::ID {
         return Ok(());
     }
+    // A system-owned account is only an uninitialized ATA placeholder when it
+    // has no allocated data.  Never pass an arbitrary system account with data
+    // into the ATA program as though it were absent.
+    require!(
+        token_escrow_ata.data_is_empty(),
+        CoordinationError::InvalidTokenEscrow
+    );
 
-    let create_ix = associated_token::spl_associated_token_account::instruction::create_associated_token_account(
+    let create_ix = create_associated_token_account(
         payer.key,
         escrow_authority.key,
         mint.key,
@@ -258,6 +337,10 @@ pub fn validate_token_account(
         token_account.owner == *expected_owner,
         CoordinationError::InvalidTokenEscrow
     );
+    require!(
+        token_account.state == anchor_spl::token::spl_token::state::AccountState::Initialized,
+        CoordinationError::TokenEscrowFrozen
+    );
     Ok(())
 }
 
@@ -268,10 +351,6 @@ pub fn validate_token_account(
 /// destination, but must still be a valid token account with the correct mint
 /// and must be owned by the expected authority to prevent reward theft.
 ///
-/// SPL TokenAccount layout (first 72 bytes):
-/// - bytes  0..32: mint pubkey
-/// - bytes 32..64: owner (authority) pubkey
-/// - bytes 64..72: amount (u64 LE)
 pub fn validate_unchecked_token_mint(
     account: &AccountInfo,
     expected_mint: &Pubkey,
@@ -282,24 +361,134 @@ pub fn validate_unchecked_token_mint(
         CoordinationError::InvalidTokenEscrow
     );
     let data = account.try_borrow_data()?;
-    require!(data.len() >= 72, CoordinationError::InvalidTokenEscrow);
-
-    // Validate mint (bytes 0..32)
-    let mint_bytes: [u8; 32] = data[0..32]
-        .try_into()
+    let token_account = TokenAccount::try_deserialize_unchecked(&mut data.as_ref())
         .map_err(|_| error!(CoordinationError::InvalidTokenEscrow))?;
-    let mint = Pubkey::new_from_array(mint_bytes);
-    require!(mint == *expected_mint, CoordinationError::InvalidTokenMint);
-
-    // Validate token account authority (bytes 32..64)
-    let owner_bytes: [u8; 32] = data[32..64]
-        .try_into()
-        .map_err(|_| error!(CoordinationError::InvalidTokenEscrow))?;
-    let owner = Pubkey::new_from_array(owner_bytes);
     require!(
-        owner == *expected_owner,
+        token_account.mint == *expected_mint,
+        CoordinationError::InvalidTokenMint
+    );
+    require!(
+        token_account.owner == *expected_owner,
         CoordinationError::InvalidTokenAccountOwner
+    );
+    require!(
+        token_account.state == anchor_spl::token::spl_token::state::AccountState::Initialized,
+        CoordinationError::TokenEscrowFrozen
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_lang::solana_program::program_pack::Pack;
+    use anchor_spl::token::spl_token::state::{Account as SplTokenAccount, AccountState};
+
+    fn packed_token_account(mint: Pubkey, authority: Pubkey, state: AccountState) -> Vec<u8> {
+        let account = SplTokenAccount {
+            mint,
+            owner: authority,
+            state,
+            ..SplTokenAccount::default()
+        };
+        let mut data = vec![0u8; SplTokenAccount::LEN];
+        SplTokenAccount::pack(account, &mut data).unwrap();
+        data
+    }
+
+    fn validate_data(data: &mut [u8], mint: Pubkey, authority: Pubkey) -> Result<()> {
+        let key = Pubkey::new_unique();
+        let owner = anchor_spl::token::ID;
+        let mut lamports = 1;
+        let info = AccountInfo::new(&key, false, false, &mut lamports, data, &owner, false, 0);
+        validate_unchecked_token_mint(&info, &mint, &authority)
+    }
+
+    fn validate_escrow_data_at(
+        data: &mut [u8],
+        account_key: Pubkey,
+        mint: Pubkey,
+        escrow_authority: Pubkey,
+    ) -> Result<()> {
+        let owner = anchor_spl::token::ID;
+        let mut lamports = 1;
+        let info = AccountInfo::new(
+            &account_key,
+            false,
+            true,
+            &mut lamports,
+            data,
+            &owner,
+            false,
+            0,
+        );
+        validate_token_escrow_account(&info, &mint, &escrow_authority)
+    }
+
+    #[test]
+    fn unchecked_destination_requires_a_complete_initialized_token_account() {
+        let mint = Pubkey::new_unique();
+        let authority = Pubkey::new_unique();
+        let mut valid = packed_token_account(mint, authority, AccountState::Initialized);
+        assert!(validate_data(&mut valid, mint, authority).is_ok());
+
+        // The previous prefix-only parser accepted this 72-byte byte string.
+        let mut truncated = vec![0u8; 72];
+        truncated[..32].copy_from_slice(mint.as_ref());
+        truncated[32..64].copy_from_slice(authority.as_ref());
+        assert!(validate_data(&mut truncated, mint, authority).is_err());
+    }
+
+    #[test]
+    fn unchecked_destination_rejects_frozen_accounts() {
+        let mint = Pubkey::new_unique();
+        let authority = Pubkey::new_unique();
+        let mut frozen = packed_token_account(mint, authority, AccountState::Frozen);
+        assert!(validate_data(&mut frozen, mint, authority).is_err());
+    }
+
+    #[test]
+    fn preinitialized_noncanonical_task_escrow_is_rejected_at_ingress() {
+        let mint = Pubkey::new_unique();
+        let escrow_authority = Pubkey::new_unique();
+        let noncanonical = Pubkey::new_unique();
+        let mut account = packed_token_account(mint, escrow_authority, AccountState::Initialized);
+
+        // The token contents are otherwise perfect. The address alone must make
+        // the preinitialized-account branch fail closed.
+        assert!(validate_data(&mut account.clone(), mint, escrow_authority).is_ok());
+        assert!(
+            validate_escrow_data_at(&mut account, noncanonical, mint, escrow_authority,).is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_settlement_cannot_substitute_another_escrow_owned_account() {
+        let mint = Pubkey::new_unique();
+        let escrow_authority = Pubkey::new_unique();
+        let canonical = get_associated_token_address_with_program_id(
+            &escrow_authority,
+            &mint,
+            &anchor_spl::token::ID,
+        );
+        let substituted = Pubkey::new_unique();
+
+        let mut canonical_data =
+            packed_token_account(mint, escrow_authority, AccountState::Initialized);
+        assert!(
+            validate_escrow_data_at(&mut canonical_data, canonical, mint, escrow_authority,)
+                .is_ok()
+        );
+
+        let mut substituted_data =
+            packed_token_account(mint, escrow_authority, AccountState::Initialized);
+        assert!(validate_escrow_data_at(
+            &mut substituted_data,
+            substituted,
+            mint,
+            escrow_authority,
+        )
+        .is_err());
+    }
 }

@@ -1,273 +1,109 @@
-//! Fuzz target for resolve_dispute instruction
+//! Property tests for the direct `resolve_dispute` model.
 //!
-//! Tests invariants:
-//! - D1: Dispute state machine (Active -> Resolved)
-//! - D3: Resolution requires voting deadline passed
-//! - D4: Threshold-based resolution
-//! - E3: Distribution bounded by deposit
-//! - E4: Single closure
-//! - T1: Valid task state transitions
-//!
-//! Run with: cargo test --release -p agenc-coordination-fuzz resolve_dispute
+//! A protocol authority or assigned resolver may rule immediately while the
+//! resolution window is open. The initiator, creator, and worker are always
+//! conflicted. A successful ruling requires a nonzero rationale commitment and
+//! records exactly one approve/reject bit while retaining the counter-provenance
+//! sentinel in the retired voter byte.
 
 use crate::*;
 use proptest::prelude::*;
 
+fn modeled_attempt(
+    input: &ResolveDisputeInput,
+) -> (SimulatedDispute, SimulatedTask, SimulatedEscrow) {
+    let dispute = SimulatedDispute {
+        dispute_id: input.dispute_id,
+        status: if input.dispute_active {
+            dispute_status::ACTIVE
+        } else {
+            dispute_status::RESOLVED
+        },
+        resolution_type: input.resolution_type,
+        votes_for: 0,
+        votes_against: 0,
+        total_voters: INITIATOR_OUTCOME_COUNTER_MARKER,
+        voting_deadline: input.voting_deadline,
+        expires_at: input.expires_at,
+        initiator_authority: DISPUTE_INITIATOR,
+    };
+    let task = SimulatedTask {
+        task_id: [9; 32],
+        status: if input.task_disputed {
+            task_status::DISPUTED
+        } else {
+            task_status::IN_PROGRESS
+        },
+        reward_amount: input.escrow_amount,
+        max_workers: 1,
+        current_workers: 1,
+        required_completions: 1,
+        ..Default::default()
+    };
+    let escrow = SimulatedEscrow {
+        amount: input.escrow_amount,
+        distributed: input.escrow_distributed.min(input.escrow_amount),
+        is_closed: false,
+    };
+    (dispute, task, escrow)
+}
+
+fn role_can_resolve(role: ResolverRole) -> bool {
+    matches!(
+        role,
+        ResolverRole::ProtocolAuthority | ResolverRole::AssignedResolver
+    )
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1000))]
+    #![proptest_config(ProptestConfig::with_cases(2000))]
 
-    /// Fuzz resolve_dispute with arbitrary inputs
     #[test]
-    fn fuzz_resolve_dispute(input in any::<ResolveDisputeInput>()) {
-        // Ensure we have at least one vote
-        let votes_for = input.votes_for.max(1);
-        let escrow_distributed = input.escrow_distributed.min(input.escrow_amount);
+    fn fuzz_direct_resolution(input in any::<ResolveDisputeInput>()) {
+        let (mut dispute, mut task, mut escrow) = modeled_attempt(&input);
+        let before = (dispute.clone(), task.clone(), escrow.clone());
+        let ruling = direct_ruling(input.resolver_role, input.approve, input.has_rationale);
 
-        let mut dispute = SimulatedDispute {
-            dispute_id: input.dispute_id,
-            status: dispute_status::ACTIVE,
-            resolution_type: input.resolution_type.min(2),
-            votes_for,
-            votes_against: input.votes_against,
-            total_voters: votes_for.saturating_add(input.votes_against),
-            voting_deadline: input.voting_deadline,
-        };
-
-        let mut task = SimulatedTask {
-            task_id: [0u8; 32],
-            status: task_status::DISPUTED,
-            reward_amount: input.escrow_amount,
-            max_workers: 1,
-            current_workers: 1,
-            required_capabilities: 0,
-            deadline: 0,
-            completions: 0,
-            required_completions: 1,
-            task_type: 0,
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: input.escrow_amount,
-            distributed: escrow_distributed,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: input.dispute_threshold.max(1).min(100),
-            ..Default::default()
-        };
-
-        // Use timestamp after deadline
-        let current_time = input.voting_deadline.saturating_add(1);
-
-        // Store old status values for invariant verification logging
-        let _old_dispute_status = dispute.status;
-        let _old_task_status = task.status;
+        let should_succeed = input.dispute_active
+            && input.task_disputed
+            && dispute_resolution_window_open(&dispute, input.current_timestamp)
+            && role_can_resolve(input.resolver_role)
+            && input.has_rationale;
 
         let result = simulate_resolve_dispute(
             &mut dispute,
             &mut task,
             &mut escrow,
-            &config,
-            current_time,
+            &ruling,
+            input.current_timestamp,
         );
 
-        // Should never have invariant violations
-        prop_assert!(!result.is_invariant_violation(),
-            "Invariant violation: {:?}", result);
-
-        if result.is_success() {
-            // D1: Dispute should be resolved
-            prop_assert!(dispute.status == dispute_status::RESOLVED,
-                "D1 violated: dispute status is {} not RESOLVED",
-                dispute.status);
-
-            // T1: Task should be in terminal state
-            prop_assert!(
-                task.status == task_status::COMPLETED || task.status == task_status::CANCELLED,
-                "T1 violated: task status {} is not terminal",
-                task.status);
-
-            // E4: Escrow should be closed
-            prop_assert!(escrow.is_closed,
-                "E4 violated: escrow not closed after resolution");
-
-            // E3: Distribution bounded
-            prop_assert!(escrow.distributed <= escrow.amount,
-                "E3 violated: distributed {} > amount {}",
-                escrow.distributed, escrow.amount);
-        }
-    }
-
-    /// Test resolution timing enforcement
-    #[test]
-    fn fuzz_resolution_timing(
-        voting_deadline in 1i64..i64::MAX/2,
-        current_time in 0i64..i64::MAX,
-    ) {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            votes_for: 1,
-            votes_against: 0,
-            total_voters: 1,
-            voting_deadline,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig::default();
-
-        let result = simulate_resolve_dispute(
-            &mut dispute,
-            &mut task,
-            &mut escrow,
-            &config,
-            current_time,
+        prop_assert!(
+            !result.is_invariant_violation(),
+            "Invariant violation: {:?}\nInput: {:?}",
+            result,
+            input
         );
+        prop_assert_eq!(result.is_success(), should_succeed, "Unexpected result: {:?}\nInput: {:?}", result, input);
 
-        // D3: If before deadline, should fail
-        if current_time < voting_deadline {
-            prop_assert!(result.is_error(),
-                "D3 violated: resolution succeeded before deadline. time={}, deadline={}",
-                current_time, voting_deadline);
-        }
-    }
+        if should_succeed {
+            prop_assert_eq!(dispute.status, dispute_status::RESOLVED);
+            prop_assert_eq!(dispute.total_voters, INITIATOR_OUTCOME_COUNTER_MARKER);
+            prop_assert_eq!(
+                (dispute.votes_for, dispute.votes_against),
+                if input.approve { (1, 0) } else { (0, 1) }
+            );
+            prop_assert!(escrow.is_closed);
+            prop_assert_eq!(escrow.distributed, escrow.amount);
 
-    /// Test threshold-based approval
-    #[test]
-    fn fuzz_threshold_approval(
-        votes_for in 0u8..=100u8,
-        votes_against in 0u8..=100u8,
-        threshold in 1u8..=100u8,
-    ) {
-        // Need at least one vote
-        let votes_for = votes_for.max(1);
-
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            resolution_type: 1, // Complete
-            votes_for,
-            votes_against,
-            total_voters: votes_for.saturating_add(votes_against),
-            voting_deadline: 100,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: threshold,
-            ..Default::default()
-        };
-
-        let result = simulate_resolve_dispute(
-            &mut dispute,
-            &mut task,
-            &mut escrow,
-            &config,
-            200,
-        );
-
-        prop_assert!(!result.is_invariant_violation(),
-            "Invariant violation: {:?}", result);
-
-        if result.is_success() {
-            let total = votes_for.checked_add(votes_against)
-                .expect("Vote total overflow in test") as u64;
-            // Guard against division by zero (though total should always be > 0 here)
-            let approval_pct = if total > 0 {
-                (votes_for as u64 * 100) / total
+            let expected_task_status = if input.approve && input.resolution_type == 1 {
+                task_status::COMPLETED
             } else {
-                0
+                task_status::CANCELLED
             };
-            let should_approve = approval_pct >= threshold as u64;
-
-            // D4: Task status should match threshold result
-            if should_approve {
-                // Resolution type 1 = Complete
-                prop_assert!(task.status == task_status::COMPLETED,
-                    "D4 violated: approved but task not completed. pct={}, threshold={}",
-                    approval_pct, threshold);
-            } else {
-                prop_assert!(task.status == task_status::CANCELLED,
-                    "D4 violated: rejected but task not cancelled. pct={}, threshold={}",
-                    approval_pct, threshold);
-            }
-        }
-    }
-
-    /// Test all resolution types
-    #[test]
-    fn fuzz_resolution_types(
-        resolution_type in 0u8..=2u8,
-        amount in 1u64..u64::MAX/2,
-        distributed in 0u64..u64::MAX/2,
-    ) {
-        // Using saturating_sub intentionally - safe boundary calculation for tests
-        let distributed = distributed.min(amount.saturating_sub(1));
-
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            resolution_type,
-            votes_for: 10,
-            votes_against: 1,
-            total_voters: 11,
-            voting_deadline: 100,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount,
-            distributed,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: 50,
-            ..Default::default()
-        };
-
-        let result = simulate_resolve_dispute(
-            &mut dispute,
-            &mut task,
-            &mut escrow,
-            &config,
-            200,
-        );
-
-        prop_assert!(!result.is_invariant_violation(),
-            "Invariant violation with resolution_type={}: {:?}",
-            resolution_type, result);
-
-        if result.is_success() {
-            // E3: All funds should be accounted for
-            prop_assert!(escrow.distributed <= escrow.amount,
-                "E3 violated: distributed {} > amount {}",
-                escrow.distributed, escrow.amount);
+            prop_assert_eq!(task.status, expected_task_status);
+        } else {
+            prop_assert_eq!((&dispute, &task, &escrow), (&before.0, &before.1, &before.2));
         }
     }
 }
@@ -276,222 +112,107 @@ proptest! {
 mod edge_cases {
     use super::*;
 
-    #[test]
-    fn test_resolve_refund() {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            resolution_type: 0, // Refund
-            votes_for: 10,
-            votes_against: 1,
-            total_voters: 11,
-            voting_deadline: 100,
-            ..Default::default()
+    fn valid_attempt(
+        approve: bool,
+    ) -> (
+        SimulatedDispute,
+        SimulatedTask,
+        SimulatedEscrow,
+        SimulatedRuling,
+    ) {
+        let input = ResolveDisputeInput {
+            dispute_id: [8; 32],
+            resolution_type: 1,
+            approve,
+            resolver_role: ResolverRole::AssignedResolver,
+            has_rationale: true,
+            dispute_active: true,
+            task_disputed: true,
+            escrow_amount: 1_000_000,
+            escrow_distributed: 0,
+            voting_deadline: 1_000,
+            expires_at: 2_000,
+            current_timestamp: 100,
         };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: 50,
-            ..Default::default()
-        };
-
-        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, 200);
-        assert!(result.is_success());
-        assert_eq!(task.status, task_status::CANCELLED);
-        assert!(escrow.is_closed);
+        let (dispute, task, escrow) = modeled_attempt(&input);
+        let ruling = direct_ruling(input.resolver_role, input.approve, input.has_rationale);
+        (dispute, task, escrow, ruling)
     }
 
     #[test]
-    fn test_resolve_complete() {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            resolution_type: 1, // Complete
-            votes_for: 10,
-            votes_against: 1,
-            total_voters: 11,
-            voting_deadline: 100,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: 50,
-            ..Default::default()
-        };
-
-        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, 200);
+    fn assigned_resolver_can_rule_immediately_before_legacy_deadline() {
+        let (mut dispute, mut task, mut escrow, ruling) = valid_attempt(true);
+        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_success());
         assert_eq!(task.status, task_status::COMPLETED);
+        assert_eq!(
+            (
+                dispute.votes_for,
+                dispute.votes_against,
+                dispute.total_voters
+            ),
+            (1, 0, INITIATOR_OUTCOME_COUNTER_MARKER)
+        );
     }
 
     #[test]
-    fn test_resolve_split() {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            resolution_type: 2, // Split
-            votes_for: 10,
-            votes_against: 1,
-            total_voters: 11,
-            voting_deadline: 100,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: 50,
-            ..Default::default()
-        };
-
-        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, 200);
+    fn protocol_authority_can_rule_without_assignment() {
+        let (mut dispute, mut task, mut escrow, _) = valid_attempt(false);
+        let ruling = direct_ruling(ResolverRole::ProtocolAuthority, false, true);
+        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_success());
-        assert_eq!(task.status, task_status::CANCELLED);
+        assert_eq!(
+            (
+                dispute.votes_for,
+                dispute.votes_against,
+                dispute.total_voters
+            ),
+            (0, 1, INITIATOR_OUTCOME_COUNTER_MARKER)
+        );
     }
 
     #[test]
-    fn test_resolve_rejected() {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            resolution_type: 1, // Complete (but will be rejected)
-            votes_for: 1,
-            votes_against: 10, // Majority against
-            total_voters: 11,
-            voting_deadline: 100,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig {
-            dispute_threshold: 50,
-            ..Default::default()
-        };
-
-        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, 200);
-        assert!(result.is_success());
-        // Rejected = refund to creator
-        assert_eq!(task.status, task_status::CANCELLED);
+    fn unauthorized_and_conflicted_resolvers_are_rejected() {
+        for role in [
+            ResolverRole::UnassignedResolver,
+            ResolverRole::Initiator,
+            ResolverRole::Creator,
+            ResolverRole::Worker,
+        ] {
+            let (mut dispute, mut task, mut escrow, _) = valid_attempt(true);
+            let ruling = direct_ruling(role, true, true);
+            let before = (dispute.clone(), task.clone(), escrow.clone());
+            let result =
+                simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
+            assert!(result.is_error(), "role {role:?} unexpectedly resolved");
+            assert_eq!((dispute, task, escrow), before);
+        }
     }
 
     #[test]
-    fn test_resolve_no_votes_fails() {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            resolution_type: 0,
-            votes_for: 0,
-            votes_against: 0,
-            total_voters: 0,
-            voting_deadline: 100,
-            ..Default::default()
-        };
+    fn party_conflict_applies_even_to_protocol_authority() {
+        let (mut dispute, mut task, mut escrow, mut ruling) = valid_attempt(true);
+        ruling.resolver = TASK_CREATOR;
+        ruling.protocol_authority = TASK_CREATOR;
+        ruling.resolver_assigned = false;
+        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
+        assert!(result.is_error());
 
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig::default();
-
-        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, 200);
+        let (mut dispute, mut task, mut escrow, mut ruling) = valid_attempt(true);
+        ruling.resolver = DISPUTE_INITIATOR;
+        ruling.protocol_authority = DISPUTE_INITIATOR;
+        ruling.resolver_assigned = false;
+        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_error());
     }
 
     #[test]
-    fn test_resolve_before_deadline_fails() {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::ACTIVE,
-            votes_for: 10,
-            votes_against: 1,
-            total_voters: 11,
-            voting_deadline: 1000,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig::default();
-
-        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, 500);
+    fn zero_rationale_hash_is_rejected_without_mutation() {
+        let (mut dispute, mut task, mut escrow, _) = valid_attempt(true);
+        let ruling = direct_ruling(ResolverRole::AssignedResolver, true, false);
+        let before = (dispute.clone(), task.clone(), escrow.clone());
+        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_error());
-    }
-
-    #[test]
-    fn test_resolve_already_resolved_fails() {
-        let mut dispute = SimulatedDispute {
-            status: dispute_status::RESOLVED,
-            votes_for: 10,
-            votes_against: 1,
-            total_voters: 11,
-            voting_deadline: 100,
-            ..Default::default()
-        };
-
-        let mut task = SimulatedTask {
-            status: task_status::DISPUTED,
-            ..Default::default()
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let config = SimulatedConfig::default();
-
-        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &config, 200);
-        assert!(result.is_error());
+        assert_eq!((dispute, task, escrow), before);
     }
 }

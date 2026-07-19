@@ -2,11 +2,14 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{reputation_reason, ReputationChanged, TaskClaimed};
+use crate::instructions::completion_helpers::validate_task_dependency_for_assignment;
 use crate::instructions::constants::{
-    CONTEST_ENTRY_DEPOSIT_LAMPORTS, MAX_REPUTATION, REPUTATION_DECAY_MIN, REPUTATION_DECAY_PERIOD,
-    REPUTATION_DECAY_RATE,
+    CONTEST_ENTRY_DEPOSIT_LAMPORTS, DISPUTE_SAFE_MAX_WORKERS, MAX_REPUTATION, REPUTATION_DECAY_MIN,
+    REPUTATION_DECAY_PERIOD, REPUTATION_DECAY_RATE,
 };
 use crate::instructions::launch_controls::require_task_type_enabled;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::moderation_gate_helpers::require_content_not_blocked;
 use crate::instructions::task_validation_helpers::{
     is_contest_configured_task, is_manual_validation_task,
 };
@@ -14,6 +17,8 @@ use crate::state::{
     AgentRegistration, AgentStatus, ProtocolConfig, Task, TaskClaim, TaskJobSpec, TaskStatus,
     TaskType,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::{HireRecord, ServiceListing};
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
@@ -73,6 +78,29 @@ pub struct ClaimTaskWithJobSpec<'info> {
     )]
     pub task_job_spec: Box<Account<'info, TaskJobSpec>>,
 
+    /// CHECK: canonical hire-link PDA is seeds-pinned here; the handler validates
+    /// owner, discriminator, task binding, and designated provider when live.
+    /// A live record designates the only
+    /// provider agent allowed to claim; a direct task supplies the empty system
+    /// account at the same PDA. Full surface only because listing hires are not
+    /// part of the canary program.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(seeds = [b"hire", task.key().as_ref()], bump)]
+    pub hire_record: UncheckedAccount<'info>,
+
+    /// Legacy fallback for pre-hardening HireRecords whose former reserved field
+    /// is zero. When needed, this must be the exact stored ServiceListing and the
+    /// handler derives the designated provider from its immutable provider_agent.
+    /// CHECK: optional; fully owner/discriminator/PDA/binding checked in handler.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub legacy_listing: Option<UncheckedAccount<'info>>,
+
+    /// Canonical content-hash BLOCK floor. Rechecked at assignment time so a
+    /// takedown recorded after publication actually stops new work.
+    /// CHECK: handler derives and validates the PDA from task_job_spec.job_spec_hash.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub moderation_block: UncheckedAccount<'info>,
+
     #[account(
         init_if_needed,
         payer = authority,
@@ -112,6 +140,33 @@ pub fn handler(_ctx: Context<ClaimTask>) -> Result<()> {
 pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
     validate_job_spec_pointer(ctx.accounts.task_job_spec.as_ref())?;
 
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        require_content_not_blocked(
+            &ctx.accounts.moderation_block.to_account_info(),
+            &ctx.accounts.task_job_spec.job_spec_hash,
+        )?;
+        validate_hired_provider(
+            &ctx.accounts.hire_record.to_account_info(),
+            ctx.accounts
+                .legacy_listing
+                .as_ref()
+                .map(|listing| listing.to_account_info()),
+            &ctx.accounts.task.key(),
+            &ctx.accounts.worker.key(),
+        )?;
+    }
+
+    // A Proof-dependent task is not safe to assign before its parent is
+    // Completed. Otherwise the creator can cancel the parent after assignment,
+    // make completion impossible, then forfeit the trapped worker's bond as a
+    // supposed no-show. Parent lives in remaining_accounts[0] for Proof tasks.
+    validate_task_dependency_for_assignment(
+        ctx.accounts.task.as_ref(),
+        ctx.remaining_accounts,
+        ctx.program_id,
+    )?;
+
     let task_key = ctx.accounts.task.key();
     let worker_key = ctx.accounts.worker.key();
 
@@ -150,6 +205,72 @@ pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
     Ok(())
 }
 
+/// Bind a listing hire to the provider the buyer selected. The canonical empty
+/// PDA is the explicit proof that a direct task has no hire restriction.
+#[cfg(not(feature = "mainnet-canary"))]
+fn validate_hired_provider(
+    hire_info: &AccountInfo,
+    legacy_listing_info: Option<AccountInfo>,
+    task: &Pubkey,
+    worker: &Pubkey,
+) -> Result<()> {
+    let (expected, expected_bump) =
+        Pubkey::find_program_address(&[b"hire", task.as_ref()], &crate::ID);
+    require!(
+        hire_info.key() == expected,
+        CoordinationError::InvalidHireRecord
+    );
+
+    if hire_info.owner == &crate::ID {
+        let data = hire_info.try_borrow_data()?;
+        let hire = HireRecord::try_deserialize(&mut &data[..])
+            .map_err(|_| error!(CoordinationError::InvalidHireRecord))?;
+        require!(
+            hire.task == *task && hire.bump == expected_bump,
+            CoordinationError::InvalidHireRecord
+        );
+        if hire.designated_provider == Pubkey::default() {
+            let listing_info = legacy_listing_info
+                .as_ref()
+                .ok_or(CoordinationError::InvalidHireRecord)?;
+            require!(
+                listing_info.key() == hire.listing && listing_info.owner == &crate::ID,
+                CoordinationError::InvalidHireRecord
+            );
+            let listing_data = listing_info.try_borrow_data()?;
+            let listing = ServiceListing::try_deserialize(&mut &listing_data[..])
+                .map_err(|_| error!(CoordinationError::InvalidHireRecord))?;
+            let (expected_listing, listing_bump) = Pubkey::find_program_address(
+                &[
+                    b"service_listing",
+                    listing.provider_agent.as_ref(),
+                    listing.listing_id.as_ref(),
+                ],
+                &crate::ID,
+            );
+            require!(
+                expected_listing == listing_info.key() && listing.bump == listing_bump,
+                CoordinationError::InvalidHireRecord
+            );
+            require!(
+                listing.provider_agent == *worker,
+                CoordinationError::UnauthorizedAgent
+            );
+        } else {
+            require!(
+                hire.designated_provider == *worker,
+                CoordinationError::UnauthorizedAgent
+            );
+        }
+    } else {
+        require!(
+            hire_info.owner == &anchor_lang::system_program::ID && hire_info.data_is_empty(),
+            CoordinationError::InvalidHireRecord
+        );
+    }
+    Ok(())
+}
+
 fn validate_job_spec_pointer(task_job_spec: &TaskJobSpec) -> Result<()> {
     require!(
         task_job_spec.job_spec_hash.iter().any(|byte| *byte != 0),
@@ -163,43 +284,8 @@ fn validate_job_spec_pointer(task_job_spec: &TaskJobSpec) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn task_job_spec(job_spec_hash: [u8; 32], job_spec_uri: &str) -> TaskJobSpec {
-        TaskJobSpec {
-            task: Pubkey::new_unique(),
-            creator: Pubkey::new_unique(),
-            job_spec_hash,
-            job_spec_uri: job_spec_uri.to_string(),
-            created_at: 1,
-            updated_at: 1,
-            bump: 255,
-            _reserved: [0; 7],
-        }
-    }
-
-    #[test]
-    fn validates_non_empty_job_spec_pointer() {
-        let pointer = task_job_spec([1; 32], "agenc://job-spec/sha256/test");
-
-        assert!(validate_job_spec_pointer(&pointer).is_ok());
-    }
-
-    #[test]
-    fn rejects_zero_hash_job_spec_pointer() {
-        let pointer = task_job_spec([0; 32], "agenc://job-spec/sha256/test");
-
-        assert!(validate_job_spec_pointer(&pointer).is_err());
-    }
-
-    #[test]
-    fn rejects_blank_uri_job_spec_pointer() {
-        let pointer = task_job_spec([1; 32], "   ");
-
-        assert!(validate_job_spec_pointer(&pointer).is_err());
-    }
+pub(crate) fn has_required_assignment_stake(stake: u64, minimum_stake: u64) -> bool {
+    stake >= minimum_stake
 }
 
 fn process_claim(
@@ -217,8 +303,8 @@ fn process_claim(
     require_task_type_enabled(config, task.task_type)?;
 
     // Prevent self-task claiming: worker authority must differ from task creator (fix #831)
-    // Without this check, the same wallet can create, claim, and complete its own task,
-    // farming +100 reputation per cycle at near-zero cost.
+    // Without this check, the same wallet can fabricate its own work history and, when
+    // paying a qualifying fee, buy reputation without an independent counterparty.
     require!(
         worker.authority != task.creator,
         CoordinationError::SelfTaskNotAllowed
@@ -269,9 +355,11 @@ fn process_claim(
         );
     }
 
-    // Check worker count
+    // Legacy tasks may advertise max_workers up to 100. Do not admit more live
+    // claims than the single-transaction dispute unwind can safely carry.
+    let effective_max_workers = task.max_workers.min(DISPUTE_SAFE_MAX_WORKERS);
     require!(
-        task.current_workers < task.max_workers,
+        task.current_workers < effective_max_workers,
         CoordinationError::TaskFullyClaimed
     );
 
@@ -279,6 +367,16 @@ fn process_claim(
     require!(
         worker.status == AgentStatus::Active,
         CoordinationError::AgentNotActive
+    );
+
+    // A worker whose registration stake was depleted by an earlier slash must
+    // replenish through the identity lifecycle before accepting more economic
+    // obligations. Otherwise the same zero-principal identity could repeatedly
+    // claim work while every later stake slash was necessarily zero. This is a
+    // current assignment gate only; existing claims retain all terminal exits.
+    require!(
+        has_required_assignment_stake(worker.stake, config.min_agent_stake),
+        CoordinationError::InsufficientStake
     );
 
     // Check worker has required capabilities
@@ -386,4 +484,51 @@ fn process_claim(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assignment_stake_floor_is_inclusive() {
+        assert!(!has_required_assignment_stake(0, 1));
+        assert!(!has_required_assignment_stake(9_999_999, 10_000_000));
+        assert!(has_required_assignment_stake(10_000_000, 10_000_000));
+        assert!(has_required_assignment_stake(10_000_001, 10_000_000));
+    }
+
+    fn task_job_spec(job_spec_hash: [u8; 32], job_spec_uri: &str) -> TaskJobSpec {
+        TaskJobSpec {
+            task: Pubkey::new_unique(),
+            creator: Pubkey::new_unique(),
+            job_spec_hash,
+            job_spec_uri: job_spec_uri.to_string(),
+            created_at: 1,
+            updated_at: 1,
+            bump: 255,
+            _reserved: [0; 7],
+        }
+    }
+
+    #[test]
+    fn validates_non_empty_job_spec_pointer() {
+        let pointer = task_job_spec([1; 32], "agenc://job-spec/sha256/test");
+
+        assert!(validate_job_spec_pointer(&pointer).is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_hash_job_spec_pointer() {
+        let pointer = task_job_spec([0; 32], "agenc://job-spec/sha256/test");
+
+        assert!(validate_job_spec_pointer(&pointer).is_err());
+    }
+
+    #[test]
+    fn rejects_blank_uri_job_spec_pointer() {
+        let pointer = task_job_spec([1; 32], "   ");
+
+        assert!(validate_job_spec_pointer(&pointer).is_err());
+    }
 }

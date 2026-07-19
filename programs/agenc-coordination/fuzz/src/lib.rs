@@ -34,10 +34,6 @@ mod claim_task_tests;
 mod complete_task_tests;
 
 #[cfg(test)]
-#[path = "../fuzz_targets/vote_dispute.rs"]
-mod vote_dispute_tests;
-
-#[cfg(test)]
 #[path = "../fuzz_targets/resolve_dispute.rs"]
 mod resolve_dispute_tests;
 

@@ -19,6 +19,7 @@ import {
 export enum TaskBidState {
   Active,
   Accepted,
+  BoundActive,
 }
 
 export type TaskBidStateArgs = TaskBidState;

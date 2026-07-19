@@ -4,6 +4,7 @@ use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
 use crate::events::RateLimitsUpdated;
+use crate::instructions::rate_limit_helpers::is_valid_dispute_stake_limit;
 use crate::state::ProtocolConfig;
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 
@@ -12,9 +13,6 @@ const MAX_RATE_LIMIT: u64 = 1000;
 
 /// Maximum cooldown value (1 week in seconds)
 const MAX_COOLDOWN: i64 = 604_800;
-
-/// Minimum dispute stake to prevent free dispute spam (1000 lamports)
-const MIN_DISPUTE_STAKE: u64 = 1000;
 
 #[derive(Accounts)]
 pub struct UpdateRateLimits<'info> {
@@ -75,9 +73,13 @@ pub fn handler(
         CoordinationError::RateLimitTooHigh
     );
 
-    // Enforce minimum dispute stake to prevent free dispute spam
+    // Shared absolute + registration-relative bound. This prevents both free
+    // dispute spam and a config value that freezes every minimum-stake worker.
     require!(
-        min_stake_for_dispute >= MIN_DISPUTE_STAKE,
+        is_valid_dispute_stake_limit(
+            min_stake_for_dispute,
+            ctx.accounts.protocol_config.min_agent_stake,
+        ),
         CoordinationError::InvalidInput
     );
 

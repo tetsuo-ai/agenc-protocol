@@ -59,13 +59,15 @@ export type HireRecord = {
   operatorFeeBps: number;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future hire metadata. */
-  reserved: ReadonlyUint8Array;
   /**
-   * Referrer (embedder) payee snapshot for the §4 4-way split
-   * (`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have
-   * NO live mainnet accounts (`hire_from_listing` is full-module only), so this is
-   * a fresh-init size bump — no realloc migration needed for HireRecord.
+   * The provider agent designated by the listing at hire time. Only this
+   * registration may claim the resulting one-shot task. This carves the
+   * original 32-byte reserved region without changing the account layout.
+   */
+  designatedProvider: Address;
+  /**
+   * Referrer (embedder) payee snapshot for the four-way split
+   * (`Pubkey::default()` = none).
    */
   referrer: Address;
   /** Referrer fee in basis points, snapshotted at hire time. */
@@ -83,13 +85,15 @@ export type HireRecordArgs = {
   operatorFeeBps: number;
   /** PDA bump. */
   bump: number;
-  /** Reserved for future hire metadata. */
-  reserved: ReadonlyUint8Array;
   /**
-   * Referrer (embedder) payee snapshot for the §4 4-way split
-   * (`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have
-   * NO live mainnet accounts (`hire_from_listing` is full-module only), so this is
-   * a fresh-init size bump — no realloc migration needed for HireRecord.
+   * The provider agent designated by the listing at hire time. Only this
+   * registration may claim the resulting one-shot task. This carves the
+   * original 32-byte reserved region without changing the account layout.
+   */
+  designatedProvider: Address;
+  /**
+   * Referrer (embedder) payee snapshot for the four-way split
+   * (`Pubkey::default()` = none).
    */
   referrer: Address;
   /** Referrer fee in basis points, snapshotted at hire time. */
@@ -106,7 +110,7 @@ export function getHireRecordEncoder(): FixedSizeEncoder<HireRecordArgs> {
       ["operator", getAddressEncoder()],
       ["operatorFeeBps", getU16Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["designatedProvider", getAddressEncoder()],
       ["referrer", getAddressEncoder()],
       ["referrerFeeBps", getU16Encoder()],
     ]),
@@ -123,7 +127,7 @@ export function getHireRecordDecoder(): FixedSizeDecoder<HireRecord> {
     ["operator", getAddressDecoder()],
     ["operatorFeeBps", getU16Decoder()],
     ["bump", getU8Decoder()],
-    ["reserved", fixDecoderSize(getBytesDecoder(), 32)],
+    ["designatedProvider", getAddressDecoder()],
     ["referrer", getAddressDecoder()],
     ["referrerFeeBps", getU16Decoder()],
   ]);

@@ -9,20 +9,22 @@ use crate::instructions::bid_settlement_helpers::{
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::TokenPaymentAccounts;
 use crate::instructions::completion_helpers::{
-    build_referrer_leg, calculate_fee_with_reputation, execute_completion_rewards,
-    validate_task_dependency, OperatorLeg,
+    build_marketplace_fee_legs, calculate_fee_with_reputation, execute_completion_rewards,
+    validate_task_dependency,
 };
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review, sync_task_validation_status,
     validate_completing_accept_sole_submission,
 };
-use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
+use crate::instructions::token_helpers::{
+    validate_token_account, validate_token_escrow_account, validate_unchecked_token_mint,
+};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::CompletionBond;
 use crate::state::{
-    AgentRegistration, HireRecord, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow,
-    TaskStatus, TaskSubmission, TaskValidationConfig, ValidationMode,
+    AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
+    TaskSubmission, TaskValidationConfig, ValidationMode,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
@@ -276,7 +278,11 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
         );
-        validate_token_account(token_escrow, &mint.key(), &ctx.accounts.escrow.key())?;
+        validate_token_escrow_account(
+            &token_escrow.to_account_info(),
+            &mint.key(),
+            &ctx.accounts.escrow.key(),
+        )?;
         validate_token_account(
             treasury_ta,
             &mint.key(),
@@ -322,67 +328,18 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
     ctx.accounts.claim.is_validated = true;
     ctx.accounts.claim.completed_at = clock.unix_timestamp;
 
-    // §4 3-way split on the timeout auto-accept path (Task-first, HireRecord fallback) — so a
-    // hired task whose human buyer ghosts past the review window still pays the operator leg.
-    // hire_record is always required + seeds-pinned (audit F-10); a non-hired task passes the
-    // empty system-owned PDA and settles with no legs, exactly as before.
-    let auto_accept_task_key = ctx.accounts.task.key();
-    let (operator_pubkey, operator_fee_bps_resolved, referrer_pubkey, referrer_fee_bps_resolved) =
-        if ctx.accounts.task.operator != Pubkey::default()
-            || ctx.accounts.task.referrer != Pubkey::default()
-        {
-            (
-                ctx.accounts.task.operator,
-                ctx.accounts.task.operator_fee_bps,
-                ctx.accounts.task.referrer,
-                ctx.accounts.task.referrer_fee_bps,
-            )
-        } else {
-            // Always-required + seeds-pinned (audit F-10): a live program-owned record
-            // supplies the marketplace terms; the empty system-owned PDA of a non-hired
-            // task resolves to no legs.
-            let hr = &ctx.accounts.hire_record;
-            if hr.owner == &crate::ID {
-                let hire_info = hr.to_account_info();
-                let hire = {
-                    let data = hire_info.try_borrow_data()?;
-                    HireRecord::try_deserialize(&mut &data[..])?
-                };
-                require!(
-                    hire.task == auto_accept_task_key,
-                    CoordinationError::InvalidHireRecord
-                );
-                (
-                    hire.operator,
-                    hire.operator_fee_bps,
-                    hire.referrer,
-                    hire.referrer_fee_bps,
-                )
-            } else {
-                (Pubkey::default(), 0, Pubkey::default(), 0)
-            }
-        };
-    let operator_leg = if operator_fee_bps_resolved > 0 && operator_pubkey != Pubkey::default() {
-        let op = ctx
-            .accounts
+    let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+        ctx.accounts.task.as_ref(),
+        ctx.accounts.task.key(),
+        &ctx.accounts.hire_record.to_account_info(),
+        ctx.accounts
             .operator
             .as_ref()
-            .ok_or(CoordinationError::MissingOperatorAccount)?;
-        require!(
-            op.key() == operator_pubkey,
-            CoordinationError::InvalidOperatorAccount
-        );
-        Some(OperatorLeg {
-            payee: op.to_account_info(),
-            fee_bps: operator_fee_bps_resolved,
-        })
-    } else {
-        None
-    };
-    let referrer_leg = build_referrer_leg(
-        referrer_pubkey,
-        referrer_fee_bps_resolved,
-        ctx.accounts.referrer.as_ref().map(|r| r.as_ref()),
+            .map(|account| account.as_ref()),
+        ctx.accounts
+            .referrer
+            .as_ref()
+            .map(|account| account.as_ref()),
     )?;
 
     execute_completion_rewards(

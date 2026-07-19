@@ -1,5 +1,9 @@
 use crate::errors::CoordinationError;
 use crate::instructions::lamport_transfer::transfer_lamports;
+use crate::instructions::program_account_helpers::{
+    close_program_account, deserialize_program_account, persist_program_account,
+    remaining_account_at,
+};
 use crate::state::{
     BidBookState, BidderMarketState, DependencyType, Task, TaskBid, TaskBidBook, TaskBidState,
     TaskClaim, TaskType,
@@ -21,7 +25,19 @@ pub(crate) enum AcceptedBidBookDisposition {
 pub(crate) enum AcceptedBidBondDisposition {
     Refund,
     FullSlashToCreator,
-    SlashByBpsToCreator(u16),
+    SnapshottedNoShowSlashToCreator,
+}
+
+/// Convert objective no-show eligibility into the common accepted-bid bond
+/// policy used by claim expiry, task cancellation, and dispute expiry.
+pub(crate) fn accepted_bid_no_show_bond_disposition(
+    no_show_penalty_allowed: bool,
+) -> AcceptedBidBondDisposition {
+    if no_show_penalty_allowed {
+        AcceptedBidBondDisposition::SnapshottedNoShowSlashToCreator
+    } else {
+        AcceptedBidBondDisposition::Refund
+    }
 }
 
 /// The number of non-bid leading entries in `remaining_accounts` for a
@@ -38,12 +54,25 @@ pub(crate) fn bid_settlement_offset(task: &Task) -> usize {
     }
 }
 
+/// Completion paths must present a parent for every dependency type. Exit/reject
+/// paths continue using `bid_settlement_offset`, which only preserves the legacy
+/// Proof slot and never makes a speculative Data/Ordering child depend on its
+/// parent merely to unwind.
+pub(crate) fn bid_completion_settlement_offset(task: &Task) -> usize {
+    match task.dependency_type {
+        DependencyType::None => 0,
+        DependencyType::Data | DependencyType::Ordering | DependencyType::Proof => 1,
+    }
+}
+
 fn validate_bid_settlement_accounts<'info>(
     task_key: &Pubkey,
     claim: &TaskClaim,
-    bid_book: &Account<'info, TaskBidBook>,
-    accepted_bid: &Account<'info, TaskBid>,
-    bidder_market_state: &Account<'info, BidderMarketState>,
+    bid_book_info: &AccountInfo<'info>,
+    accepted_bid_info: &AccountInfo<'info>,
+    bid_book: &TaskBidBook,
+    accepted_bid: &TaskBid,
+    bidder_market_state: &BidderMarketState,
     bidder_authority_info: &AccountInfo<'info>,
 ) -> Result<()> {
     require!(bid_book.task == *task_key, CoordinationError::InvalidInput);
@@ -56,7 +85,7 @@ fn validate_bid_settlement_accounts<'info>(
         CoordinationError::InvalidInput
     );
     require!(
-        accepted_bid.bid_book == bid_book.key(),
+        accepted_bid.bid_book == bid_book_info.key(),
         CoordinationError::InvalidInput
     );
     require!(
@@ -68,7 +97,7 @@ fn validate_bid_settlement_accounts<'info>(
         CoordinationError::BidBookNotAccepted
     );
     require!(
-        bid_book.accepted_bid == Some(accepted_bid.key()),
+        bid_book.accepted_bid == Some(accepted_bid_info.key()),
         CoordinationError::BidBookNotAccepted
     );
     require!(
@@ -85,15 +114,11 @@ fn validate_bid_settlement_accounts<'info>(
 fn load_accepted_bid_settlement_accounts<'info>(
     task_key: &Pubkey,
     claim: &TaskClaim,
-    bid_book_info: &'info AccountInfo<'info>,
-    accepted_bid_info: &'info AccountInfo<'info>,
-    bidder_market_state_info: &'info AccountInfo<'info>,
+    bid_book_info: &AccountInfo<'info>,
+    accepted_bid_info: &AccountInfo<'info>,
+    bidder_market_state_info: &AccountInfo<'info>,
     bidder_authority_info: &AccountInfo<'info>,
-) -> Result<(
-    Account<'info, TaskBidBook>,
-    Account<'info, TaskBid>,
-    Account<'info, BidderMarketState>,
-)> {
+) -> Result<(TaskBidBook, TaskBid, BidderMarketState)> {
     require!(
         bid_book_info.is_writable
             && accepted_bid_info.is_writable
@@ -108,13 +133,16 @@ fn load_accepted_bid_settlement_accounts<'info>(
         CoordinationError::InvalidAccountOwner
     );
 
-    let bid_book = Account::<TaskBidBook>::try_from(bid_book_info)?;
-    let accepted_bid = Account::<TaskBid>::try_from(accepted_bid_info)?;
-    let bidder_market_state = Account::<BidderMarketState>::try_from(bidder_market_state_info)?;
+    let bid_book = deserialize_program_account::<TaskBidBook>(bid_book_info)?;
+    let accepted_bid = deserialize_program_account::<TaskBid>(accepted_bid_info)?;
+    let bidder_market_state =
+        deserialize_program_account::<BidderMarketState>(bidder_market_state_info)?;
 
     validate_bid_settlement_accounts(
         task_key,
         claim,
+        bid_book_info,
+        accepted_bid_info,
         &bid_book,
         &accepted_bid,
         &bidder_market_state,
@@ -124,13 +152,37 @@ fn load_accepted_bid_settlement_accounts<'info>(
     Ok((bid_book, accepted_bid, bidder_market_state))
 }
 
+/// Load and fully bind an accepted bid before any escrow payout uses its price.
+/// Settlement callers must not deserialize only the `TaskBid`: the accepted book,
+/// claim worker, bidder state, and authority are all part of the authorization
+/// chain that makes `requested_reward_lamports` the actual contract amount.
+pub(crate) fn load_accepted_bid_contract_price<'info>(
+    task_key: &Pubkey,
+    claim: &TaskClaim,
+    bid_book_info: &AccountInfo<'info>,
+    accepted_bid_info: &AccountInfo<'info>,
+    bidder_market_state_info: &AccountInfo<'info>,
+    bidder_authority_info: &AccountInfo<'info>,
+) -> Result<u64> {
+    let (_, accepted_bid, _) = load_accepted_bid_settlement_accounts(
+        task_key,
+        claim,
+        bid_book_info,
+        accepted_bid_info,
+        bidder_market_state_info,
+        bidder_authority_info,
+    )?;
+    Ok(accepted_bid.requested_reward_lamports)
+}
+
 fn calculate_bid_bond_slash_amount(bond_lamports: u64, slash_bps: u16) -> Result<u64> {
-    let slash_amount = bond_lamports
-        .checked_mul(slash_bps as u64)
+    require!(slash_bps <= 10_000, CoordinationError::InvalidInput);
+    let slash_amount = (bond_lamports as u128)
+        .checked_mul(slash_bps as u128)
         .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(10_000)
+        .checked_div(10_000u128)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
-    Ok(slash_amount)
+    u64::try_from(slash_amount).map_err(|_| CoordinationError::ArithmeticOverflow.into())
 }
 
 fn apply_bid_book_disposition(
@@ -165,25 +217,6 @@ fn decrement_bidder_active_bid_count(bidder_market_state: &mut BidderMarketState
     Ok(())
 }
 
-fn persist_account_state<T: AnchorSerialize>(
-    account_info: &AccountInfo<'_>,
-    state: &T,
-) -> Result<()> {
-    let mut data = account_info.try_borrow_mut_data()?;
-    AnchorSerialize::serialize(state, &mut &mut data[8..])
-        .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotSerialize.into())
-}
-
-fn account_info_at<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    index: usize,
-) -> &'info AccountInfo<'info> {
-    // SAFETY: each entry in `remaining_accounts` is already an `AccountInfo<'info>`.
-    // We only need to rebind the reference itself to `'info` so Anchor account
-    // wrappers can deserialize from it, matching the existing claim/escrow helpers.
-    unsafe { std::mem::transmute(&remaining_accounts[index]) }
-}
-
 pub(crate) fn load_bid_task_completion_meta<'info>(
     task: &Task,
     task_key: &Pubkey,
@@ -194,7 +227,7 @@ pub(crate) fn load_bid_task_completion_meta<'info>(
         return Ok(None);
     }
 
-    let offset = bid_settlement_offset(task);
+    let offset = bid_completion_settlement_offset(task);
     let min_accounts = offset
         .checked_add(4)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -212,10 +245,26 @@ pub(crate) fn load_bid_task_completion_meta<'info>(
     let bidder_authority_index = offset
         .checked_add(3)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let bid_book_info = account_info_at(remaining_accounts, offset);
-    let accepted_bid_info = account_info_at(remaining_accounts, accepted_bid_index);
-    let bidder_market_state_info = account_info_at(remaining_accounts, bidder_state_index);
-    let bidder_authority_info = account_info_at(remaining_accounts, bidder_authority_index);
+    let bid_book_info = remaining_account_at(
+        remaining_accounts,
+        offset,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
+    let accepted_bid_info = remaining_account_at(
+        remaining_accounts,
+        accepted_bid_index,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
+    let bidder_market_state_info = remaining_account_at(
+        remaining_accounts,
+        bidder_state_index,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
+    let bidder_authority_info = remaining_account_at(
+        remaining_accounts,
+        bidder_authority_index,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
 
     let (_, accepted_bid, _) = load_accepted_bid_settlement_accounts(
         task_key,
@@ -251,10 +300,26 @@ pub(crate) fn finalize_bid_task_completion<'info>(
         .settlement_offset
         .checked_add(3)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let bid_book_info = account_info_at(remaining_accounts, meta.settlement_offset);
-    let accepted_bid_info = account_info_at(remaining_accounts, accepted_bid_index);
-    let bidder_market_state_info = account_info_at(remaining_accounts, bidder_state_index);
-    let bidder_authority_info = account_info_at(remaining_accounts, bidder_authority_index);
+    let bid_book_info = remaining_account_at(
+        remaining_accounts,
+        meta.settlement_offset,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
+    let accepted_bid_info = remaining_account_at(
+        remaining_accounts,
+        accepted_bid_index,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
+    let bidder_market_state_info = remaining_account_at(
+        remaining_accounts,
+        bidder_state_index,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
+    let bidder_authority_info = remaining_account_at(
+        remaining_accounts,
+        bidder_authority_index,
+        CoordinationError::BidSettlementAccountsRequired,
+    )?;
 
     settle_accepted_bid(
         task_key,
@@ -274,16 +339,33 @@ pub(crate) fn finalize_bid_task_completion<'info>(
 
 pub(crate) fn close_bid_book_without_accepted_bid<'info>(
     task_key: &Pubkey,
-    bid_book_info: &'info AccountInfo<'info>,
+    bid_book_info: &AccountInfo<'info>,
     now: i64,
 ) -> Result<()> {
+    let (expected_bid_book, _) =
+        Pubkey::find_program_address(&[b"bid_book", task_key.as_ref()], &crate::ID);
+    require!(
+        bid_book_info.key() == expected_bid_book,
+        CoordinationError::InvalidInput
+    );
+
+    // A BidExclusive task can exist before `initialize_bid_book` is ever called.
+    // Cancellation is an exit path and must not require creating new marketplace
+    // state first. Treat the canonical empty system-owned PDA as an absent book.
+    // Do not require zero lamports: anyone may pre-fund a PDA, and accepting an
+    // empty pre-funded system account avoids turning a 1-lamport donation into a
+    // permanent cancellation DoS.
+    if bid_book_info.owner == &anchor_lang::system_program::ID && bid_book_info.data_is_empty() {
+        return Ok(());
+    }
+
     require!(bid_book_info.is_writable, CoordinationError::InvalidInput);
     require!(
         bid_book_info.owner == &crate::ID,
         CoordinationError::InvalidAccountOwner
     );
 
-    let mut bid_book = Account::<TaskBidBook>::try_from(bid_book_info)?;
+    let mut bid_book = deserialize_program_account::<TaskBidBook>(bid_book_info)?;
     require!(bid_book.task == *task_key, CoordinationError::InvalidInput);
 
     bid_book.state = BidBookState::Closed;
@@ -293,7 +375,7 @@ pub(crate) fn close_bid_book_without_accepted_bid<'info>(
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
 
-    persist_account_state(bid_book_info, &*bid_book)?;
+    persist_program_account(bid_book_info, &bid_book)?;
 
     Ok(())
 }
@@ -301,16 +383,16 @@ pub(crate) fn close_bid_book_without_accepted_bid<'info>(
 pub(crate) fn settle_accepted_bid<'info>(
     task_key: &Pubkey,
     claim: &TaskClaim,
-    bid_book_info: &'info AccountInfo<'info>,
-    accepted_bid_info: &'info AccountInfo<'info>,
-    bidder_market_state_info: &'info AccountInfo<'info>,
+    bid_book_info: &AccountInfo<'info>,
+    accepted_bid_info: &AccountInfo<'info>,
+    bidder_market_state_info: &AccountInfo<'info>,
     bidder_authority_info: AccountInfo<'info>,
     creator_info: Option<AccountInfo<'info>>,
     now: i64,
     book_disposition: AcceptedBidBookDisposition,
     bond_disposition: AcceptedBidBondDisposition,
 ) -> Result<()> {
-    let (mut bid_book, mut accepted_bid, mut bidder_market_state) =
+    let (mut bid_book, accepted_bid, mut bidder_market_state) =
         load_accepted_bid_settlement_accounts(
             task_key,
             claim,
@@ -323,8 +405,11 @@ pub(crate) fn settle_accepted_bid<'info>(
     let slash_amount = match bond_disposition {
         AcceptedBidBondDisposition::Refund => 0,
         AcceptedBidBondDisposition::FullSlashToCreator => accepted_bid.bond_lamports,
-        AcceptedBidBondDisposition::SlashByBpsToCreator(slash_bps) => {
-            calculate_bid_bond_slash_amount(accepted_bid.bond_lamports, slash_bps)?
+        AcceptedBidBondDisposition::SnapshottedNoShowSlashToCreator => {
+            calculate_bid_bond_slash_amount(
+                accepted_bid.bond_lamports,
+                accepted_bid.accepted_no_show_slash_bps,
+            )?
         }
     };
 
@@ -336,11 +421,9 @@ pub(crate) fn settle_accepted_bid<'info>(
 
     apply_bid_book_disposition(&mut bid_book, now, book_disposition)?;
     decrement_bidder_active_bid_count(&mut bidder_market_state)?;
-    persist_account_state(bid_book_info, &*bid_book)?;
-    persist_account_state(bidder_market_state_info, &*bidder_market_state)?;
-
-    accepted_bid.updated_at = now;
-    accepted_bid.close(bidder_authority_info)?;
+    persist_program_account(bid_book_info, &bid_book)?;
+    persist_program_account(bidder_market_state_info, &bidder_market_state)?;
+    close_program_account(accepted_bid_info, &bidder_authority_info)?;
 
     Ok(())
 }
@@ -367,6 +450,20 @@ mod tests {
     }
 
     #[test]
+    fn bid_completion_offset_reserves_parent_for_every_dependency() {
+        let mut task = Task::default();
+        assert_eq!(bid_completion_settlement_offset(&task), 0);
+        for dependency_type in [
+            DependencyType::Data,
+            DependencyType::Ordering,
+            DependencyType::Proof,
+        ] {
+            task.dependency_type = dependency_type;
+            assert_eq!(bid_completion_settlement_offset(&task), 1);
+        }
+    }
+
+    #[test]
     fn test_calculate_bid_bond_slash_amount() {
         assert_eq!(
             calculate_bid_bond_slash_amount(1_000_000, 2_500).unwrap(),
@@ -377,6 +474,70 @@ mod tests {
             calculate_bid_bond_slash_amount(1_000_000, 10_000).unwrap(),
             1_000_000
         );
+        assert_eq!(
+            calculate_bid_bond_slash_amount(u64::MAX, 10_000).unwrap(),
+            u64::MAX
+        );
+        assert!(calculate_bid_bond_slash_amount(u64::MAX, 10_001).is_err());
+    }
+
+    #[test]
+    fn accepted_bid_no_show_policy_is_partial_and_evidence_gated() {
+        assert_eq!(
+            accepted_bid_no_show_bond_disposition(true),
+            AcceptedBidBondDisposition::SnapshottedNoShowSlashToCreator,
+        );
+        assert_eq!(
+            accepted_bid_no_show_bond_disposition(false),
+            AcceptedBidBondDisposition::Refund,
+        );
+        assert_ne!(
+            accepted_bid_no_show_bond_disposition(true),
+            AcceptedBidBondDisposition::FullSlashToCreator,
+        );
+    }
+
+    #[test]
+    fn cancel_accepts_a_never_initialized_canonical_bid_book() {
+        let task_key = Pubkey::new_unique();
+        let (book_key, _) =
+            Pubkey::find_program_address(&[b"bid_book", task_key.as_ref()], &crate::ID);
+        // Prefunding must not turn the absent-book proof into a cancellation DoS.
+        let mut lamports = 1u64;
+        let mut data: [u8; 0] = [];
+        let book_info = AccountInfo::new(
+            &book_key,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &anchor_lang::system_program::ID,
+            false,
+            0,
+        );
+
+        close_bid_book_without_accepted_bid(&task_key, &book_info, 100).unwrap();
+        assert_eq!(book_info.lamports(), 1);
+    }
+
+    #[test]
+    fn cancel_rejects_a_foreign_empty_account_as_the_bid_book() {
+        let task_key = Pubkey::new_unique();
+        let foreign_key = Pubkey::new_unique();
+        let mut lamports = 0u64;
+        let mut data: [u8; 0] = [];
+        let book_info = AccountInfo::new(
+            &foreign_key,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &anchor_lang::system_program::ID,
+            false,
+            0,
+        );
+
+        assert!(close_bid_book_without_accepted_bid(&task_key, &book_info, 100).is_err());
     }
 
     #[test]
@@ -418,5 +579,21 @@ mod tests {
         assert_eq!(bid_book.active_bids, 0);
         assert_eq!(bid_book.version, 10);
         assert_eq!(bid_book.updated_at, 77);
+    }
+
+    #[test]
+    fn accepted_bid_settlement_unlocks_exactly_one_bidder_slot() {
+        let mut bidder_state = BidderMarketState {
+            active_bid_count: 1,
+            ..BidderMarketState::default()
+        };
+        decrement_bidder_active_bid_count(&mut bidder_state).unwrap();
+        assert_eq!(bidder_state.active_bid_count, 0);
+
+        // A duplicate settle must fail instead of wrapping and manufacturing an
+        // enormous active-bid count. The bid account close in settle_accepted_bid
+        // independently prevents the real instruction from being replayed.
+        assert!(decrement_bidder_active_bid_count(&mut bidder_state).is_err());
+        assert_eq!(bidder_state.active_bid_count, 0);
     }
 }

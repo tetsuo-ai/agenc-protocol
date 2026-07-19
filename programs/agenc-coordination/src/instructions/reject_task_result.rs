@@ -9,27 +9,23 @@ use crate::instructions::bid_settlement_helpers::{
     bid_settlement_offset, settle_accepted_bid, AcceptedBidBondDisposition,
     AcceptedBidBookDisposition,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::program_account_helpers::remaining_account_at;
 use crate::instructions::task_validation_helpers::{
     decrement_pending_submission_count, ensure_validation_config, ensure_validation_mode,
     is_manual_validation_task, note_submission_left_review, release_claim_slot,
     sync_task_validation_status, validate_contest_reject_window,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::AgentStats;
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
     TaskSubmission, TaskValidationConfig, ValidationMode, HASH_SIZE, RESULT_DATA_SIZE,
 };
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::{AgentStats, CompletionBond};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
-
-#[cfg(not(feature = "mainnet-canary"))]
-fn remaining_account_info<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    index: usize,
-) -> &'info AccountInfo<'info> {
-    unsafe { std::mem::transmute(&remaining_accounts[index]) }
-}
 
 #[derive(Accounts)]
 pub struct RejectTaskResult<'info> {
@@ -106,6 +102,19 @@ pub struct RejectTaskResult<'info> {
     /// Required only when `agent_stats` is supplied (for `init_if_needed`).
     #[cfg(not(feature = "mainnet-canary"))]
     pub system_program: Option<Program<'info, System>>,
+
+    /// The rejected worker's completion bond is refunded at the same atomic
+    /// boundary that closes their claim. Leaving it alive after the worker
+    /// identity disappears from the Task made later cancel/close callers unable
+    /// to prove which worker bond still existed and allowed permanent stranding.
+    /// CHECK: canonical PDA, ownership/role/party validated by the helper.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[account(
+        mut,
+        seeds = [b"completion_bond", task.key().as_ref(), worker_authority.key().as_ref()],
+        bump
+    )]
+    pub worker_completion_bond: UncheckedAccount<'info>,
 }
 
 pub fn handler<'info>(
@@ -178,19 +187,32 @@ pub fn handler<'info>(
         // Audit F-14: honor the Proof-dependency offset exactly like the accept paths.
         let offset = bid_settlement_offset(task);
         require!(
-            ctx.remaining_accounts.len() >= offset.checked_add(3).ok_or(CoordinationError::ArithmeticOverflow)?,
+            ctx.remaining_accounts.len()
+                >= offset
+                    .checked_add(3)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?,
             CoordinationError::BidSettlementAccountsRequired
         );
 
-        let bid_book_info = remaining_account_info(ctx.remaining_accounts, offset);
-        let accepted_bid_info = remaining_account_info(
+        let bid_book_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(1).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
-        let bidder_market_state_info = remaining_account_info(
+            offset,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
+        let accepted_bid_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(2).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
+            offset
+                .checked_add(1)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
+        let bidder_market_state_info = remaining_account_at(
+            ctx.remaining_accounts,
+            offset
+                .checked_add(2)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
 
         settle_accepted_bid(
             &task.key(),
@@ -227,6 +249,17 @@ pub fn handler<'info>(
         ctx.bumps.agent_stats,
         Counter::TasksRejected,
         clock.unix_timestamp,
+    )?;
+
+    // The task reopens and this claim is about to be destroyed. Refund the
+    // worker bond now, while its canonical wallet binding is still present.
+    #[cfg(not(feature = "mainnet-canary"))]
+    settle_completion_bond(
+        &ctx.accounts.worker_completion_bond.to_account_info(),
+        &ctx.accounts.worker_authority.to_account_info(),
+        &ctx.accounts.task.key(),
+        CompletionBond::ROLE_WORKER,
+        BondDisposition::Refund,
     )?;
 
     ctx.accounts

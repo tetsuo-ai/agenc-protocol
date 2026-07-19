@@ -143,6 +143,7 @@ async function buildHumanlessHireIx(w, human, listingMod) {
   const ix = await makeProgram(human).methods
     .hireFromListingHumanless(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0, w.modAuth.publicKey)
     .accounts({ task, escrow, hireRecord, taskValidationConfig: validation, listing: w.listing,
+      providerAgent: w.providerAgent,
       protocolConfig: w.protocolPda, moderationConfig: w.modCfg, listingModeration: listingMod,
       moderationAttestor: null, moderationBlock: moderationBlockPda(w.specHash)[0],
       authorityRateLimit: rateLimit, creator: human.publicKey,

@@ -100,6 +100,15 @@ pub fn handler(
         parsed_mode != ValidationMode::Auto,
         CoordinationError::InvalidValidationMode
     );
+    // Validator identities are permissionless and the VALIDATOR capability is
+    // self-asserted, so a newly configured quorum cannot provide Byzantine or
+    // Sybil resistance. Fail closed for new configurations in the hardened
+    // binary. The validate_task_result branch remains available solely to settle
+    // any legacy quorum configuration proven by deployment preflight.
+    require!(
+        parsed_mode != ValidationMode::ValidatorQuorum,
+        CoordinationError::InvalidValidationMode
+    );
     validate_review_window_for_mode(parsed_mode, review_window_secs)?;
     validate_validator_quorum(parsed_mode, validator_quorum)?;
     validate_attestor(parsed_mode, attestor)?;

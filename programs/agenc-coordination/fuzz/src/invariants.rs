@@ -46,22 +46,28 @@ pub enum ReputationInvariantResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisputeInvariantResult {
     Valid,
-    InvalidStateTransition { from: u8, to: u8 },
-    VotingAfterDeadline { deadline: i64, voted_at: i64 },
-    ResolutionBeforeDeadline { deadline: i64, resolved_at: i64 },
-    DoubleVote { voter: [u8; 32] },
-    InsufficientVotes { total: u8, required: u8 },
+    InvalidStateTransition {
+        from: u8,
+        to: u8,
+    },
+    InvalidRulingRecord {
+        approved: bool,
+        votes_for: u64,
+        votes_against: u64,
+        total_voters: u8,
+    },
+    ResolutionExpiryOverlap,
+    ResolutionExpiryGap,
 }
 
-/// Authority invariant results
+/// Direct-resolver authorization result. The order mirrors `resolve_dispute`:
+/// roster/protocol authorization, initiator exclusion, then party exclusion.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AuthorityInvariantResult {
-    Valid,
-    UnauthorizedAgentModification,
-    UnauthorizedTaskCancellation,
-    UnauthorizedWorkerClaim,
-    InsufficientArbiterStake { stake: u64, required: u64 },
-    MissingArbiterCapability,
+pub enum ResolverAuthorizationResult {
+    Authorized,
+    Unauthorized,
+    InitiatorConflict,
+    PartyConflict,
 }
 
 // ============================================================================
@@ -176,6 +182,9 @@ pub fn check_task_state_transition(from: u8, to: u8) -> TaskInvariantResult {
             | (task_status::PENDING_VALIDATION, task_status::COMPLETED)
             | (task_status::PENDING_VALIDATION, task_status::DISPUTED)
             // From Disputed
+            | (task_status::DISPUTED, task_status::OPEN)
+            | (task_status::DISPUTED, task_status::IN_PROGRESS)
+            | (task_status::DISPUTED, task_status::PENDING_VALIDATION)
             | (task_status::DISPUTED, task_status::COMPLETED)
             | (task_status::DISPUTED, task_status::CANCELLED)
     );
@@ -255,9 +264,9 @@ pub fn check_reputation_bounds(reputation: u16) -> ReputationInvariantResult {
 
 /// R2: Initial reputation for newly created simulated agents.
 pub fn check_genesis_reputation(reputation: u16, is_new_agent: bool) -> ReputationInvariantResult {
-    if is_new_agent && reputation != 5000 {
+    if is_new_agent && reputation != 3000 {
         ReputationInvariantResult::InitialReputationWrong {
-            expected: 5000,
+            expected: 3000,
             actual: reputation,
         }
     } else {
@@ -266,11 +275,14 @@ pub fn check_genesis_reputation(reputation: u16, is_new_agent: bool) -> Reputati
 }
 
 /// R3: Reputation Increment Rules
-/// Reputation increases by 100 per completion, capped at 10000
-pub fn check_reputation_increment(before: u16, after: u16) -> ReputationInvariantResult {
-    // After should be min(before + 100, 10000)
-    let expected = before.saturating_add(100).min(10000);
-    if after != expected && after > before {
+/// Reputation increases by the fee-backed completion award, capped at 10000.
+pub fn check_reputation_increment(
+    before: u16,
+    after: u16,
+    earned_gain: u16,
+) -> ReputationInvariantResult {
+    let expected = before.saturating_add(earned_gain).min(10000);
+    if after != expected {
         ReputationInvariantResult::IncrementExceedsMax { before, after }
     } else {
         ReputationInvariantResult::Valid
@@ -286,19 +298,17 @@ pub mod dispute_status {
     pub const ACTIVE: u8 = 0;
     pub const RESOLVED: u8 = 1;
     pub const EXPIRED: u8 = 2;
+    pub const CANCELLED: u8 = 3;
 }
 
 /// D1: Dispute State Machine
 pub fn check_dispute_state_transition(from: u8, to: u8) -> DisputeInvariantResult {
-    let valid = match (from, to) {
-        // Active -> Resolved (resolve_dispute)
-        (dispute_status::ACTIVE, dispute_status::RESOLVED) => true,
-        // Active -> Expired (if deadline passed without resolution)
-        (dispute_status::ACTIVE, dispute_status::EXPIRED) => true,
-        // Same state is valid
-        (a, b) if a == b => true,
-        _ => false,
-    };
+    let valid = matches!(
+        (from, to),
+        (dispute_status::ACTIVE, dispute_status::RESOLVED)
+            | (dispute_status::ACTIVE, dispute_status::EXPIRED)
+            | (dispute_status::ACTIVE, dispute_status::CANCELLED)
+    ) || from == to;
 
     if valid {
         DisputeInvariantResult::Valid
@@ -307,104 +317,61 @@ pub fn check_dispute_state_transition(from: u8, to: u8) -> DisputeInvariantResul
     }
 }
 
-/// D3: Voting Window Enforcement
-pub fn check_voting_window(
-    voting_deadline: i64,
-    action_time: i64,
-    is_voting: bool,
-) -> DisputeInvariantResult {
-    if is_voting && action_time >= voting_deadline {
-        DisputeInvariantResult::VotingAfterDeadline {
-            deadline: voting_deadline,
-            voted_at: action_time,
-        }
-    } else {
-        DisputeInvariantResult::Valid
-    }
-}
-
-/// D3: Resolution requires deadline passed
-pub fn check_resolution_timing(
-    voting_deadline: i64,
-    resolution_time: i64,
-) -> DisputeInvariantResult {
-    if resolution_time < voting_deadline {
-        DisputeInvariantResult::ResolutionBeforeDeadline {
-            deadline: voting_deadline,
-            resolved_at: resolution_time,
-        }
-    } else {
-        DisputeInvariantResult::Valid
-    }
-}
-
-/// D4: Threshold-Based Resolution
-pub fn check_dispute_threshold(
-    votes_for: u8,
-    votes_against: u8,
-    threshold: u8,
+/// Direct rulings reuse the retired vote fields as one complementary bit. The
+/// retired voter byte is either historical zero or the current initiator-counter
+/// provenance sentinel; neither value represents a voter count.
+pub fn check_direct_ruling_record(
     approved: bool,
+    votes_for: u64,
+    votes_against: u64,
+    total_voters: u8,
 ) -> DisputeInvariantResult {
-    // Use checked_add to detect overflow in vote counting
-    let total = match votes_for.checked_add(votes_against) {
-        Some(t) => t,
-        None => {
-            // Overflow in vote counting - this is a serious invariant violation
-            return DisputeInvariantResult::InsufficientVotes {
-                total: u8::MAX,
-                required: 1,
-            };
-        }
-    };
-    if total == 0 {
-        return DisputeInvariantResult::InsufficientVotes {
-            total: 0,
-            required: 1,
-        };
-    }
-
-    let approval_pct = (votes_for as u64)
-        .checked_mul(100)
-        .and_then(|value| value.checked_div(total as u64))
-        .unwrap_or(0);
-    let should_approve = approval_pct >= threshold as u64;
-
-    // D4: The approved result must match the threshold calculation
-    // A mismatch indicates the resolution logic is incorrect
-    if approved != should_approve {
-        // This is a real invariant violation - threshold calculation doesn't match result
-        // For now return Valid since this function is checking inputs, not validating outputs
-        // The calling code should verify the resolution matches the threshold
+    let expected = if approved { (1, 0) } else { (0, 1) };
+    if (votes_for, votes_against) == expected
+        && (total_voters == 0 || total_voters == crate::INITIATOR_OUTCOME_COUNTER_MARKER)
+    {
         DisputeInvariantResult::Valid
     } else {
-        DisputeInvariantResult::Valid
+        DisputeInvariantResult::InvalidRulingRecord {
+            approved,
+            votes_for,
+            votes_against,
+            total_voters,
+        }
     }
 }
 
-// ============================================================================
-// Authority Invariants (A1-A5)
-// ============================================================================
-
-/// A4: Arbiter Capability Requirement
-pub fn check_arbiter_capability(capabilities: u64) -> AuthorityInvariantResult {
-    const ARBITER_CAPABILITY: u64 = 1 << 7;
-    if capabilities & ARBITER_CAPABILITY == 0 {
-        AuthorityInvariantResult::MissingArbiterCapability
-    } else {
-        AuthorityInvariantResult::Valid
+/// Resolution and permissionless expiry must form an exact partition at every
+/// timestamp: no race where both paths succeed and no liveness gap where neither does.
+pub fn check_dispute_window_partition(
+    resolution_open: bool,
+    expiry_open: bool,
+) -> DisputeInvariantResult {
+    match (resolution_open, expiry_open) {
+        (true, false) | (false, true) => DisputeInvariantResult::Valid,
+        (true, true) => DisputeInvariantResult::ResolutionExpiryOverlap,
+        (false, false) => DisputeInvariantResult::ResolutionExpiryGap,
     }
 }
 
-/// S1: Arbiter Stake Threshold
-pub fn check_arbiter_stake(stake: u64, min_stake: u64) -> AuthorityInvariantResult {
-    if stake < min_stake {
-        AuthorityInvariantResult::InsufficientArbiterStake {
-            stake,
-            required: min_stake,
-        }
-    } else {
-        AuthorityInvariantResult::Valid
+pub fn check_resolver_authorization(
+    resolver: &[u8; 32],
+    protocol_authority: &[u8; 32],
+    resolver_assigned: bool,
+    initiator_authority: &[u8; 32],
+    creator_authority: &[u8; 32],
+    worker_authority: &[u8; 32],
+) -> ResolverAuthorizationResult {
+    if resolver != protocol_authority && !resolver_assigned {
+        return ResolverAuthorizationResult::Unauthorized;
     }
+    if resolver == initiator_authority {
+        return ResolverAuthorizationResult::InitiatorConflict;
+    }
+    if resolver == creator_authority || resolver == worker_authority {
+        return ResolverAuthorizationResult::PartyConflict;
+    }
+    ResolverAuthorizationResult::Authorized
 }
 
 // ============================================================================

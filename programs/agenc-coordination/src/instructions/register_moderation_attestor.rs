@@ -16,7 +16,8 @@
 use crate::errors::CoordinationError;
 use crate::events::ModerationAttestorRegistered;
 use crate::instructions::constants::REGISTRATION_BOND_LAMPORTS;
-use crate::state::ModerationAttestor;
+use crate::state::{ModerationAttestor, ProtocolConfig};
+use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
@@ -39,10 +40,21 @@ pub struct RegisterModerationAttestor<'info> {
     #[account(mut)]
     pub attestor: Signer<'info>,
 
+    /// Emergency entry-control. A paused or version-incompatible protocol must
+    /// not accept a fresh seven-day moderation bond while ordinary marketplace
+    /// entry is disabled. Exit instructions intentionally do not carry this
+    /// pause gate, so existing attestors can always recover their bond.
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
     pub system_program: Program<'info, System>,
 }
 
 pub fn handler(ctx: Context<RegisterModerationAttestor>) -> Result<()> {
+    check_version_compatible(&ctx.accounts.protocol_config)?;
     let clock = Clock::get()?;
 
     // Deposit the bond via an in-handler CPI that cannot be skipped (spec §4.2 /
@@ -64,7 +76,11 @@ pub fn handler(ctx: Context<RegisterModerationAttestor>) -> Result<()> {
         .checked_add(REGISTRATION_BOND_LAMPORTS)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     require!(
-        ctx.accounts.moderation_attestor.to_account_info().lamports() >= required,
+        ctx.accounts
+            .moderation_attestor
+            .to_account_info()
+            .lamports()
+            >= required,
         CoordinationError::AttestorBondMissing
     );
 

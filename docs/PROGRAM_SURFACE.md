@@ -1,6 +1,7 @@
 # Program Surface
 
-This file summarizes the live on-chain surface owned by `programs/agenc-coordination/`.
+This file distinguishes the live on-chain surface from the current production
+candidate owned by `programs/agenc-coordination/`.
 
 Mainnet status (verified 2026-07-17): the program
 (`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, upgradeable; Squads v4 2-of-3
@@ -11,19 +12,31 @@ and `GovernanceConfig` are INITIALIZED (sane params); `ZkConfig` is NOT
 initialized, so `complete_task_private` is off and `initialize_zk_config` is
 multisig-gated (audit H-5).
 
+Candidate status (verified from `src/lib.rs`, Cargo features, and generated IDL on
+2026-07-18): default production is **97 instructions**, explicit `private-zk` is
+**100**, and `mainnet-canary` is **25**. `lib.rs` therefore contains 125 raw
+`pub fn` declarations across its mutually exclusive modules but 100 unique names;
+the canary repeats 25 full-module names. The candidate retires the three private-ZK
+entrypoints from production and adds `reclaim_orphan_task_child`; it is not live
+until an independently approved upgrade. The canonical candidate IDL contains
+**97 instructions / 43 accounts / 98 events / 388 errors**;
+`docs/reference/INSTRUCTIONS.md` is its generated instruction reference.
+
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (356 variants, codes 6000–6355)
+- `src/errors.rs` - program error codes (388 variants in the generated candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
 ## Instruction Families
 
-The union of the families below is the 99-instruction live surface; the
-batch-N subsections recall which milestone introduced instructions already
-listed under their primary family.
+The families below describe the 97-instruction production candidate. The three
+entries explicitly marked `private-zk development build only` are shown for
+context and are excluded from that count. The batch-N subsections recall which
+milestone introduced instructions already listed under their primary family.
+Live revision 4 remains 99 instructions as described above.
 
 ### Agent lifecycle
 
@@ -49,11 +62,13 @@ listed under their primary family.
 - auto accept task result
 - validate task result
 - complete task
-- complete task private
+- complete task private (**private-zk development build only; absent from production**)
 - cancel task
 - close task (reclaim terminal-task rent)
 - distribute ghost share (permissionless contest fallback after the selection window)
 - reclaim terminal claim (return residual claim rent after a contest/task terminates)
+- reclaim orphan task child (return rent for a canonically bound abandoned child,
+  including `TaskValidationVote`, to its stored payer only after the exact parent is absent)
 
 ### Completion bonds (Exclusive + SOL, v1)
 
@@ -181,10 +196,10 @@ they were signed instruction data.
 ### Protocol administration
 
 - initialize protocol
-- initialize zk config
+- initialize zk config (**private-zk development build only; absent from production**)
 - update protocol fee
 - update rate limits
-- update zk image id (M-of-N multisig gated)
+- update zk image id (M-of-N multisig gated; **private-zk development build only**)
 - update treasury
 - update multisig
 - update launch controls (pause / task-type disable kill switch)
@@ -209,7 +224,8 @@ they were signed instruction data.
 The complete model lives in `src/state.rs`. Important state families include:
 
 - protocol config (351B; `surface_revision` stamps the enabled surface — goods handlers enforce `surface_revision >= 4`)
-- zk config (absent on mainnet — `ZkConfig` was never initialized, so `complete_task_private` is unavailable)
+- zk config (private-ZK development build only; absent on mainnet and from the
+  production candidate IDL)
 - agent accounts
 - task and claim accounts (Task is 466B since the 2026-06-11 migration of 169 legacy tasks from 382B; batch-3 schema-1 carves `task_schema`/`live_submissions` from `Task._reserved[0..2]`, schema-0 is legacy)
 - task validation config, attestor config, submissions, and validation votes
@@ -230,8 +246,8 @@ The complete model lives in `src/state.rs`. Important state families include:
 
 - `initialize_bid_book` allocates a `TaskBidBook`; `create_bid` allocates a `TaskBid` and, on a bidder's first bid, a `BidderMarketState`.
 - `create_bid` also transfers the minimum bid bond into the `TaskBid` PDA, so rent + bond funding are both part of bidder-side cost.
-- Matching policy and weighted-score config are stored on-chain for indexers and auditability, but `accept_bid` stays creator-driven and O(1): the instruction does not scan or rank competing bids on-chain.
-- `max_active_bids_per_task`, bidder cooldown, and the 24-hour rate limit intentionally cap hot-task fanout and keep create/expire paths bounded in compute and account churn.
+- `accept_bid` enforces the stored matching policy by requiring every other canonical open bid as an exact repeating `[TaskBid, AgentRegistration]` pair; a dependency parent, when present, is the first remaining-account prefix. Omitted, duplicate, closed, foreign, identity-substituted, and non-canonical accounts fail closed. Only bidders that still pass the selected bidder's live status, registration-stake floor, capability, current-reputation, and active-task-cap checks participate in ranking.
+- `max_active_bids_per_task` is hard-capped at 20 so policy enforcement stays transaction-feasible. At that ceiling, an acceptance with a dependency uses 11 typed accounts + 1 parent + 19 bid/agent pairs = 50 instruction accounts (52 conservative transaction keys including program/compute-budget keys); clients should use a v0 transaction with an address lookup table when needed. Bond, cooldown, lifetime, and daily-bid configuration also have protocol ceilings; governance cannot configure unbounded or operationally bricking values.
 - Accepted-bid settlement happens later through `bid_settlement_helpers` in task completion/cancellation/dispute flows, using appended `remaining_accounts`; private proof-dependent completion shifts that settlement suffix by one parent-task account.
 - Closing an unaccepted bid returns its remaining lamports to the bidder authority by closing the bid account; accepted bids stay resident until settlement closes the accepted bid and either reopens or closes the bid book.
 

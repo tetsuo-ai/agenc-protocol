@@ -20,8 +20,9 @@
 //                               with stake >= min_proposal_stake; its wallet signs)
 //   2. vote_proposal            (each voting agent's wallet signs; weight =
 //                               min(stake, 10*min_arbiter_stake) * reputation / 10000)
-//   3. execute_proposal         (PERMISSIONLESS, after voting_deadline + execution_delay;
-//                               applies the fee if quorum + approval met)
+//   3. execute_proposal         (after voting_deadline + execution_delay; a passed
+//                               FeeChange also needs the CURRENT ProtocolConfig
+//                               M-of-N multisig in remaining accounts)
 //
 // Existing tasks keep the fee snapshotted at their creation; only NEW tasks pick
 // up the changed fee.
@@ -53,8 +54,10 @@
 //     RPC_URL=... VOTER_KEYPAIR=/path/voter.json PROPOSAL=<proposalPda> \
 //     node scripts/mainnet-fee-change.mjs --vote [--execute]
 //
-//   Step 3 — execute after deadlines (any wallet may sign):
-//     RPC_URL=... AUTHORITY_KEYPAIR=/path/any.json PROPOSAL=<proposalPda> \
+//   Step 3 — execute after deadlines (executor + current multisig owners sign):
+//     RPC_URL=... AUTHORITY_KEYPAIR=/path/executor.json \
+//     MULTISIG_OWNER_KEYPAIRS=/path/owner1.json,/path/owner2.json \
+//     PROPOSAL=<proposalPda> \
 //     node scripts/mainnet-fee-change.mjs --finalize [--execute]
 
 import { createRequire } from "module";
@@ -114,12 +117,115 @@ const [protocolPda] = PublicKey.findProgramAddressSync([Buffer.from("protocol")]
 const [governancePda] = PublicKey.findProgramAddressSync([Buffer.from("governance")], PROGRAM_ID);
 
 const MAX_REPUTATION = 10_000n;
+const U64_MAX = (1n << 64n) - 1n;
+const MIN_GOVERNANCE_VOTER_STAKE = 10_000_000n;
+const MIN_GOVERNANCE_VOTER_REPUTATION = 5_000;
+const MIN_GOVERNANCE_DISTINCT_VOTERS = 3n;
+const MIN_GOVERNANCE_QUORUM_WEIGHT = 100_000_000n;
+const GOVERNANCE_VOTE_WEIGHT_CAP_MULTIPLIER = 10n;
 
-function voteWeight(stake, reputation, minArbiterStake) {
-  const cap = BigInt(minArbiterStake) * 10n;
-  const stakeWeight = BigInt(stake) < cap ? BigInt(stake) : cap;
+const asBigInt = (value) => BigInt(value.toString());
+
+function voteWeight(stake, reputation, cap) {
+  const normalizedStake = asBigInt(stake);
+  const stakeWeight = normalizedStake < cap ? normalizedStake : cap;
   const weight = (stakeWeight * BigInt(reputation)) / MAX_REPUTATION;
   return stakeWeight > 0n && weight === 0n ? 1n : weight;
+}
+
+function freshProposalRequirements(
+  minProposalStake,
+  minArbiterStake,
+  quorumBps,
+  approvalThresholdBps,
+) {
+  if (!Number.isInteger(quorumBps) || quorumBps < 1 || quorumBps > 10_000) {
+    throw new Error(`quorum_bps=${quorumBps} must be in 1..10000`);
+  }
+  if (
+    !Number.isInteger(approvalThresholdBps) ||
+    approvalThresholdBps < 1 ||
+    approvalThresholdBps >= 10_000
+  ) {
+    throw new Error(
+      `approval_threshold_bps=${approvalThresholdBps} must be in 1..9999`,
+    );
+  }
+  const configuredMinimum = asBigInt(minProposalStake);
+  const minVoterStake = configuredMinimum > MIN_GOVERNANCE_VOTER_STAKE
+    ? configuredMinimum
+    : MIN_GOVERNANCE_VOTER_STAKE;
+  const maxVoteWeight = asBigInt(minArbiterStake) *
+    GOVERNANCE_VOTE_WEIGHT_CAP_MULTIPLIER;
+  if (maxVoteWeight > U64_MAX) {
+    throw new Error(`per-voter cap=${maxVoteWeight} exceeds u64`);
+  }
+  if (configuredMinimum < 1n || minVoterStake > maxVoteWeight) {
+    throw new Error(
+      `min_proposal_stake=${configuredMinimum} min_voter_stake=${minVoterStake} ` +
+        `exceeds per-voter cap=${maxVoteWeight}`,
+    );
+  }
+  const minimumElectorateCapacity = maxVoteWeight *
+    MIN_GOVERNANCE_DISTINCT_VOTERS;
+  if (minimumElectorateCapacity > U64_MAX) {
+    throw new Error(
+      `minimum electorate capacity=${minimumElectorateCapacity} exceeds u64`,
+    );
+  }
+  if (minimumElectorateCapacity < MIN_GOVERNANCE_QUORUM_WEIGHT) {
+    throw new Error(
+      `minimum electorate capacity=${minimumElectorateCapacity} cannot attain ` +
+        `hard quorum=${MIN_GOVERNANCE_QUORUM_WEIGHT}`,
+    );
+  }
+  const minimumStakeQuorum = minVoterStake * MIN_GOVERNANCE_DISTINCT_VOTERS;
+  const percentageQuorum =
+    (minimumElectorateCapacity * BigInt(quorumBps) + 9_999n) / 10_000n;
+  const quorum = [
+    MIN_GOVERNANCE_QUORUM_WEIGHT,
+    minimumStakeQuorum,
+    percentageQuorum,
+  ].reduce((maximum, value) => value > maximum ? value : maximum, 0n);
+  if (quorum > minimumElectorateCapacity) {
+    throw new Error(
+      `quorum=${quorum} exceeds minimum electorate capacity=` +
+        `${minimumElectorateCapacity}`,
+    );
+  }
+  return {
+    minVoterStake,
+    minVoterReputation: MIN_GOVERNANCE_VOTER_REPUTATION,
+    maxVoteWeight,
+    minDistinctVoters: Number(MIN_GOVERNANCE_DISTINCT_VOTERS),
+    approvalThresholdBps,
+    minimumElectorateCapacity,
+    minimumStakeQuorum,
+    percentageQuorum,
+    quorum,
+  };
+}
+
+function decodeProposalRules(proposal) {
+  const reserved = Buffer.from(proposal._reserved);
+  if (reserved.length !== 64 || reserved[0] !== 1) {
+    throw new Error("proposal has no revision-5 governance rules snapshot");
+  }
+  if (!reserved.subarray(23).equals(Buffer.alloc(41))) {
+    throw new Error("proposal governance rules snapshot has nonzero trailing bytes");
+  }
+  return {
+    minVoterStake: reserved.readBigUInt64LE(1),
+    minVoterReputation: reserved.readUInt16LE(9),
+    maxVoteWeight: reserved.readBigUInt64LE(11),
+    minDistinctVoters: reserved.readUInt16LE(19),
+    approvalThresholdBps: reserved.readUInt16LE(21),
+  };
+}
+
+function isActiveAgent(agent) {
+  const variant = Object.keys(agent.status ?? {})[0]?.toLowerCase();
+  return variant === "active" && agent.retired !== true;
 }
 
 async function agentsOwnedBy(authorityPk) {
@@ -170,12 +276,22 @@ async function main() {
     const approvalBps = envInt("APPROVAL_THRESHOLD_BPS", 5_000);
     const minProposalStake = envInt("MIN_PROPOSAL_STAKE_LAMPORTS", 10_000_000);
 
-    const quorumFactor = Math.max(Math.floor((Number(config.totalAgents) * quorumBps) / 10_000), 2);
+    const requirements = freshProposalRequirements(
+      minProposalStake,
+      config.minArbiterStake,
+      quorumBps,
+      approvalBps,
+    );
     console.log(`\nPLAN initialize_governance (PERMANENT):`);
     console.log(`  voting_period=${votingPeriod}s (${(votingPeriod / 3600).toFixed(1)}h)`);
     console.log(`  execution_delay=${executionDelay}s quorum_bps=${quorumBps} approval=${approvalBps}`);
     console.log(`  min_proposal_stake=${fmt(minProposalStake)} lamports`);
-    console.log(`  -> quorum at today's ${config.totalAgents} agents = ${fmt(minProposalStake * quorumFactor)} vote-weight`);
+    console.log(
+      `  -> hard quorum=${fmt(requirements.quorum)} ` +
+        `min_distinct_voters=${requirements.minDistinctVoters} ` +
+        `min_voter_stake=${fmt(requirements.minVoterStake)} ` +
+        `min_voter_reputation=${requirements.minVoterReputation}`,
+    );
 
     await sendIx(
       program.methods
@@ -203,9 +319,23 @@ async function main() {
     if (!Number.isFinite(newFeeBps) || newFeeBps < 0 || newFeeBps > 2000) die("NEW_FEE_BPS required (0..2000).");
 
     const agents = await agentsOwnedBy(signer.publicKey);
-    const proposerAgent = agents.find((a) => BigInt(a.account.stake) >= BigInt(governance.minProposalStake.toString()));
+    const requirements = freshProposalRequirements(
+      governance.minProposalStake,
+      config.minArbiterStake,
+      governance.quorumBps,
+      governance.approvalThresholdBps,
+    );
+    const proposerAgent = agents.find((a) =>
+      isActiveAgent(a.account) &&
+      asBigInt(a.account.stake) >= requirements.minVoterStake &&
+      a.account.reputation >= requirements.minVoterReputation
+    );
     if (!proposerAgent) {
-      die(`wallet ${signer.publicKey.toBase58()} owns no registered agent with stake >= ${governance.minProposalStake} (owned: ${agents.length})`);
+      die(
+        `wallet ${signer.publicKey.toBase58()} owns no Active agent with ` +
+          `stake >= ${requirements.minVoterStake} and reputation >= ` +
+          `${requirements.minVoterReputation} (owned: ${agents.length})`,
+      );
     }
     const nonce = new anchor.BN(Date.now());
     const [proposalPda] = PublicKey.findProgramAddressSync(
@@ -253,10 +383,28 @@ async function main() {
     if (!governance) die("governance not initialized.");
     const proposalPda = new PublicKey(process.env.PROPOSAL || die("PROPOSAL=<pda> required"));
     const proposal = await program.account.proposal.fetch(proposalPda);
+    const rules = decodeProposalRules(proposal);
     const agents = await agentsOwnedBy(signer.publicKey);
-    if (!agents.length) die(`wallet ${signer.publicKey.toBase58()} owns no registered agent.`);
-    const voter = agents.sort((a, b) => Number(BigInt(b.account.stake) - BigInt(a.account.stake)))[0];
-    const weight = voteWeight(voter.account.stake, voter.account.reputation, config.minArbiterStake);
+    const eligible = agents.filter((a) =>
+      isActiveAgent(a.account) &&
+      asBigInt(a.account.stake) >= rules.minVoterStake &&
+      a.account.reputation >= rules.minVoterReputation &&
+      a.account.reputation <= Number(MAX_REPUTATION)
+    );
+    if (!eligible.length) {
+      die(
+        `wallet ${signer.publicKey.toBase58()} owns no Active agent eligible ` +
+          `under this proposal's immutable rules`,
+      );
+    }
+    const voter = eligible.sort((a, b) =>
+      asBigInt(b.account.stake) > asBigInt(a.account.stake) ? 1 : -1
+    )[0];
+    const weight = voteWeight(
+      voter.account.stake,
+      voter.account.reputation,
+      rules.maxVoteWeight,
+    );
     const [votePda] = PublicKey.findProgramAddressSync(
       [Buffer.from("governance_vote"), proposalPda.toBuffer(), signer.publicKey.toBuffer()],
       PROGRAM_ID,
@@ -292,6 +440,39 @@ async function main() {
     console.log(`  voting ends ${new Date(deadline * 1000).toISOString()} | executable after ${new Date(execAfter * 1000).toISOString()}`);
     if (now < execAfter) console.log(`  NOT YET EXECUTABLE (${fmt(execAfter - now)}s remaining)`);
 
+    const configuredOwners = config.multisigOwners
+      .slice(0, config.multisigOwnersLen)
+      .map((owner) => owner.toBase58());
+    const ownerPaths = (process.env.MULTISIG_OWNER_KEYPAIRS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const ownerKeypairs = ownerPaths.map(loadKeypair);
+    const availableByKey = new Map(
+      [signer, ...ownerKeypairs]
+        .filter((keypair) => configuredOwners.includes(keypair.publicKey.toBase58()))
+        .map((keypair) => [keypair.publicKey.toBase58(), keypair]),
+    );
+    const availableOwners = [...availableByKey.values()];
+    console.log(
+      `  current multisig threshold=${config.multisigThreshold}/` +
+        `${config.multisigOwnersLen} supplied_unique_owners=${availableOwners.length}`,
+    );
+    if (EXECUTE && availableOwners.length < config.multisigThreshold) {
+      die(
+        `finalize needs ${config.multisigThreshold} unique current owner keys; ` +
+          `${availableOwners.length} supplied`,
+      );
+    }
+    const ownerMetas = availableOwners.map((keypair) => ({
+      pubkey: keypair.publicKey,
+      isSigner: true,
+      isWritable: false,
+    }));
+    const additionalSigners = availableOwners.filter(
+      (keypair) => !keypair.publicKey.equals(signer.publicKey),
+    );
+
     await sendIx(
       program.methods.executeProposal().accounts({
         proposal: proposalPda,
@@ -300,7 +481,9 @@ async function main() {
         authority: signer.publicKey,
         treasury: null,
         recipient: null,
-      }),
+      })
+        .remainingAccounts(ownerMetas)
+        .signers(additionalSigners),
       "execute_proposal",
     );
     if (EXECUTE) {
@@ -312,9 +495,16 @@ async function main() {
 
   /* ----------------------------------- plan ---------------------------------- */
   if (governance) {
-    const quorumFactor = Math.max(
-      Math.floor((Number(config.totalAgents) * governance.quorumBps) / 10_000), 2);
-    console.log(`\nQuorum today: ${fmt(Number(governance.minProposalStake) * quorumFactor)} vote-weight`);
+    const requirements = freshProposalRequirements(
+      governance.minProposalStake,
+      config.minArbiterStake,
+      governance.quorumBps,
+      governance.approvalThresholdBps,
+    );
+    console.log(
+      `\nNew-proposal quorum: ${fmt(requirements.quorum)} vote-weight ` +
+        `(hard floor, ${requirements.minDistinctVoters} distinct mature voters minimum)`,
+    );
   }
   console.log(`\nNext step: ${govInfo ? "--propose with PROPOSER_KEYPAIR + NEW_FEE_BPS=500" : "--init-governance with AUTHORITY_KEYPAIR"}`);
 }

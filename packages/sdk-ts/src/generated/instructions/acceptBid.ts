@@ -65,6 +65,7 @@ export type AcceptBidInstruction<
   TAccountBidderMarketState extends string | AccountMeta<string> = string,
   TAccountBidder extends string | AccountMeta<string> = string,
   TAccountTaskJobSpec extends string | AccountMeta<string> = string,
+  TAccountModerationBlock extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
@@ -95,6 +96,9 @@ export type AcceptBidInstruction<
       TAccountTaskJobSpec extends string
         ? ReadonlyAccount<TAccountTaskJobSpec>
         : TAccountTaskJobSpec,
+      TAccountModerationBlock extends string
+        ? ReadonlyAccount<TAccountModerationBlock>
+        : TAccountModerationBlock,
       TAccountCreator extends string
         ? WritableSignerAccount<TAccountCreator> &
             AccountSignerMeta<TAccountCreator>
@@ -106,13 +110,21 @@ export type AcceptBidInstruction<
     ]
   >;
 
-export type AcceptBidInstructionData = { discriminator: ReadonlyUint8Array };
+export type AcceptBidInstructionData = {
+  discriminator: ReadonlyUint8Array;
+  expectedBidTermsHash: ReadonlyUint8Array;
+};
 
-export type AcceptBidInstructionDataArgs = {};
+export type AcceptBidInstructionDataArgs = {
+  expectedBidTermsHash: ReadonlyUint8Array;
+};
 
 export function getAcceptBidInstructionDataEncoder(): FixedSizeEncoder<AcceptBidInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["expectedBidTermsHash", fixEncoderSize(getBytesEncoder(), 32)],
+    ]),
     (value) => ({ ...value, discriminator: ACCEPT_BID_DISCRIMINATOR }),
   );
 }
@@ -120,6 +132,7 @@ export function getAcceptBidInstructionDataEncoder(): FixedSizeEncoder<AcceptBid
 export function getAcceptBidInstructionDataDecoder(): FixedSizeDecoder<AcceptBidInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
+    ["expectedBidTermsHash", fixDecoderSize(getBytesDecoder(), 32)],
   ]);
 }
 
@@ -142,6 +155,7 @@ export type AcceptBidAsyncInput<
   TAccountBidderMarketState extends string = string,
   TAccountBidder extends string = string,
   TAccountTaskJobSpec extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
@@ -161,8 +175,14 @@ export type AcceptBidAsyncInput<
    * makes the legacy no-job-spec assignment path unreachable.
    */
   taskJobSpec?: Address<TAccountTaskJobSpec>;
+  /**
+   * Canonical content-hash BLOCK floor, rechecked at assignment time so a
+   * takedown recorded after the bid was created prevents acceptance.
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   creator: TransactionSigner<TAccountCreator>;
   systemProgram?: Address<TAccountSystemProgram>;
+  expectedBidTermsHash: AcceptBidInstructionDataArgs["expectedBidTermsHash"];
 };
 
 export async function getAcceptBidInstructionAsync<
@@ -174,6 +194,7 @@ export async function getAcceptBidInstructionAsync<
   TAccountBidderMarketState extends string,
   TAccountBidder extends string,
   TAccountTaskJobSpec extends string,
+  TAccountModerationBlock extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -187,6 +208,7 @@ export async function getAcceptBidInstructionAsync<
     TAccountBidderMarketState,
     TAccountBidder,
     TAccountTaskJobSpec,
+    TAccountModerationBlock,
     TAccountCreator,
     TAccountSystemProgram
   >,
@@ -202,6 +224,7 @@ export async function getAcceptBidInstructionAsync<
     TAccountBidderMarketState,
     TAccountBidder,
     TAccountTaskJobSpec,
+    TAccountModerationBlock,
     TAccountCreator,
     TAccountSystemProgram
   >
@@ -223,6 +246,10 @@ export async function getAcceptBidInstructionAsync<
     },
     bidder: { value: input.bidder ?? null, isWritable: true },
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
+      isWritable: false,
+    },
     creator: { value: input.creator ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
@@ -230,6 +257,9 @@ export async function getAcceptBidInstructionAsync<
     keyof typeof originalAccounts,
     ResolvedInstructionAccount
   >;
+
+  // Original args.
+  const args = { ...input };
 
   // Resolve default values.
   if (!accounts.claim.value) {
@@ -299,10 +329,13 @@ export async function getAcceptBidInstructionAsync<
       getAccountMeta("bidderMarketState", accounts.bidderMarketState),
       getAccountMeta("bidder", accounts.bidder),
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
-    data: getAcceptBidInstructionDataEncoder().encode({}),
+    data: getAcceptBidInstructionDataEncoder().encode(
+      args as AcceptBidInstructionDataArgs,
+    ),
     programAddress,
   } as AcceptBidInstruction<
     TProgramAddress,
@@ -314,6 +347,7 @@ export async function getAcceptBidInstructionAsync<
     TAccountBidderMarketState,
     TAccountBidder,
     TAccountTaskJobSpec,
+    TAccountModerationBlock,
     TAccountCreator,
     TAccountSystemProgram
   >);
@@ -328,6 +362,7 @@ export type AcceptBidInput<
   TAccountBidderMarketState extends string = string,
   TAccountBidder extends string = string,
   TAccountTaskJobSpec extends string = string,
+  TAccountModerationBlock extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
@@ -347,8 +382,14 @@ export type AcceptBidInput<
    * makes the legacy no-job-spec assignment path unreachable.
    */
   taskJobSpec: Address<TAccountTaskJobSpec>;
+  /**
+   * Canonical content-hash BLOCK floor, rechecked at assignment time so a
+   * takedown recorded after the bid was created prevents acceptance.
+   */
+  moderationBlock: Address<TAccountModerationBlock>;
   creator: TransactionSigner<TAccountCreator>;
   systemProgram?: Address<TAccountSystemProgram>;
+  expectedBidTermsHash: AcceptBidInstructionDataArgs["expectedBidTermsHash"];
 };
 
 export function getAcceptBidInstruction<
@@ -360,6 +401,7 @@ export function getAcceptBidInstruction<
   TAccountBidderMarketState extends string,
   TAccountBidder extends string,
   TAccountTaskJobSpec extends string,
+  TAccountModerationBlock extends string,
   TAccountCreator extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -373,6 +415,7 @@ export function getAcceptBidInstruction<
     TAccountBidderMarketState,
     TAccountBidder,
     TAccountTaskJobSpec,
+    TAccountModerationBlock,
     TAccountCreator,
     TAccountSystemProgram
   >,
@@ -387,6 +430,7 @@ export function getAcceptBidInstruction<
   TAccountBidderMarketState,
   TAccountBidder,
   TAccountTaskJobSpec,
+  TAccountModerationBlock,
   TAccountCreator,
   TAccountSystemProgram
 > {
@@ -407,6 +451,10 @@ export function getAcceptBidInstruction<
     },
     bidder: { value: input.bidder ?? null, isWritable: true },
     taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: false },
+    moderationBlock: {
+      value: input.moderationBlock ?? null,
+      isWritable: false,
+    },
     creator: { value: input.creator ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
@@ -414,6 +462,9 @@ export function getAcceptBidInstruction<
     keyof typeof originalAccounts,
     ResolvedInstructionAccount
   >;
+
+  // Original args.
+  const args = { ...input };
 
   // Resolve default values.
   if (!accounts.systemProgram.value) {
@@ -432,10 +483,13 @@ export function getAcceptBidInstruction<
       getAccountMeta("bidderMarketState", accounts.bidderMarketState),
       getAccountMeta("bidder", accounts.bidder),
       getAccountMeta("taskJobSpec", accounts.taskJobSpec),
+      getAccountMeta("moderationBlock", accounts.moderationBlock),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
-    data: getAcceptBidInstructionDataEncoder().encode({}),
+    data: getAcceptBidInstructionDataEncoder().encode(
+      args as AcceptBidInstructionDataArgs,
+    ),
     programAddress,
   } as AcceptBidInstruction<
     TProgramAddress,
@@ -447,6 +501,7 @@ export function getAcceptBidInstruction<
     TAccountBidderMarketState,
     TAccountBidder,
     TAccountTaskJobSpec,
+    TAccountModerationBlock,
     TAccountCreator,
     TAccountSystemProgram
   >);
@@ -474,8 +529,13 @@ export type ParsedAcceptBidInstruction<
      * makes the legacy no-job-spec assignment path unreachable.
      */
     taskJobSpec: TAccountMetas[7];
-    creator: TAccountMetas[8];
-    systemProgram: TAccountMetas[9];
+    /**
+     * Canonical content-hash BLOCK floor, rechecked at assignment time so a
+     * takedown recorded after the bid was created prevents acceptance.
+     */
+    moderationBlock: TAccountMetas[8];
+    creator: TAccountMetas[9];
+    systemProgram: TAccountMetas[10];
   };
   data: AcceptBidInstructionData;
 };
@@ -488,12 +548,12 @@ export function parseAcceptBidInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedAcceptBidInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 10) {
+  if (instruction.accounts.length < 11) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 10,
+        expectedAccountMetas: 11,
       },
     );
   }
@@ -514,6 +574,7 @@ export function parseAcceptBidInstruction<
       bidderMarketState: getNextAccount(),
       bidder: getNextAccount(),
       taskJobSpec: getNextAccount(),
+      moderationBlock: getNextAccount(),
       creator: getNextAccount(),
       systemProgram: getNextAccount(),
     },

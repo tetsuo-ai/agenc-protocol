@@ -31,6 +31,7 @@ import {
   findTaskJobSpecPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  findModerationBlockPda,
   getAgentRegistrationDecoder,
   getHireRecordDecoder,
   getHireRatingDecoder,
@@ -56,6 +57,10 @@ import {
   accountData,
 } from "./harness.js";
 import { createLiteSvmTransport } from "./litesvm-transport.js";
+
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
 
 const BPS_DIVISOR = 10_000n;
 
@@ -186,6 +191,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const taskId = new Uint8Array(32).fill(44);
     await buyerClient.hireFromListing({
       listing,
+      providerAgent,
       creatorAgent: buyerAgent,
       authority: buyer,
       creator: buyer,
@@ -227,6 +233,8 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       task,
       worker: providerAgent,
       authority: provider,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
     expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
       TaskStatus.InProgress,
@@ -234,7 +242,12 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
 
     // 7) both parties post 25% completion bonds (named convenience).
     await buyerClient.postCompletionBond({ authority: buyer, task, role: 0 });
-    await providerClient.postCompletionBond({ authority: provider, task, role: 1 });
+    await providerClient.postCompletionBond({
+      authority: provider,
+      task,
+      role: 1,
+      worker: providerAgent,
+    });
     const [creatorBond] = await findCompletionBondPda({
       task,
       party: buyer.address,
@@ -350,6 +363,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const taskId = new Uint8Array(32).fill(56);
     await buyerClient.hireFromListingHumanless({
       listing,
+      providerAgent,
       creator: buyer,
       taskId,
       expectedPrice: price,
@@ -405,6 +419,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const capacityBlocked = await buyerClient
       .hireFromListingHumanless({
         listing,
+        providerAgent,
         creator: buyer,
         taskId: new Uint8Array(32).fill(62),
         expectedPrice: price,
@@ -431,6 +446,10 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         task,
         worker: providerAgent,
         authority: provider,
+        moderationBlock: await moderationBlockFor(
+          new Uint8Array(32).fill(57),
+        ),
+        jobSpecHash: new Uint8Array(32).fill(57),
       })
       .catch((error: unknown) => error);
     expect(prematureClaim).toBeInstanceOf(AgencError);
@@ -482,6 +501,8 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       task,
       worker: providerAgent,
       authority: provider,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
     decodedTask = getTaskDecoder().decode(accountData(svm, task)!);
     expect(decodedTask.status).toBe(TaskStatus.InProgress);
@@ -641,10 +662,15 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(decodedListing.ratingCount).toBe(1);
     expect(accountData(svm, hireRecord)).toBeNull();
     expect(accountData(svm, taskJobSpec)).toBeNull();
-    expect(accountData(svm, task)).toBeNull();
+    // close_task deliberately retains the terminal Task as a durable liveness
+    // anchor for any auxiliary child account that was not enumerable here.
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.Completed,
+    );
 
     await buyerClient.hireFromListingHumanless({
       listing,
+      providerAgent,
       creator: buyer,
       taskId: new Uint8Array(32).fill(63),
       expectedPrice: price,
@@ -730,6 +756,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const taskId = new Uint8Array(32).fill(69);
     await buyerClient.hireFromListingHumanless({
       listing,
+      providerAgent,
       creator: buyer,
       taskId,
       expectedPrice: price,
@@ -783,6 +810,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const stillBlocked = await buyerClient
       .hireFromListingHumanless({
         listing,
+        providerAgent,
         creator: buyer,
         taskId: new Uint8Array(32).fill(70),
         expectedPrice: price,
@@ -803,7 +831,9 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       authority: buyer,
     });
 
-    expect(accountData(svm, task)).toBeNull();
+    expect(getTaskDecoder().decode(accountData(svm, task)!).status).toBe(
+      TaskStatus.Cancelled,
+    );
     expect(accountData(svm, hireRecord)).toBeNull();
     decodedListing = getServiceListingDecoder().decode(
       accountData(svm, listing)!,
@@ -813,6 +843,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
 
     await buyerClient.hireFromListingHumanless({
       listing,
+      providerAgent,
       creator: buyer,
       taskId: new Uint8Array(32).fill(71),
       expectedPrice: price,
@@ -928,6 +959,8 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       task,
       worker: workerAgent,
       authority: worker,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
 
     // submit (worker) -> PendingValidation, submission Submitted
@@ -1063,6 +1096,8 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       task,
       worker: workerAgent,
       authority: worker,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
     await workerClient.submitTaskResult({
       task,
@@ -1204,6 +1239,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const taskId = new Uint8Array(32).fill(126);
     await buyerClient.hireFromListingHumanless({
       listing,
+      providerAgent,
       creator: buyer,
       taskId,
       expectedPrice: price,
@@ -1244,6 +1280,8 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       task,
       worker: providerAgent,
       authority: provider,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
     await providerClient.submitTaskResult({
       task,

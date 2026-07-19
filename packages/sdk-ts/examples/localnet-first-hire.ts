@@ -64,6 +64,7 @@ import {
   facade,
   findAgentPda,
   findHireRecordPda,
+  findModerationBlockPda,
   findModerationConfigPda,
   findProtocolConfigPda,
   findTaskModerationPda,
@@ -543,6 +544,7 @@ export async function runFirstHire(
   const result = await hireAndActivate(buyer.client, {
     hire: {
       listing,
+      providerAgent,
       taskId,
       expectedPrice: price,
       expectedVersion: 1n,
@@ -576,10 +578,15 @@ export async function runFirstHire(
   // submit_task_result (worker) -> accept_task_result (creator) — the
   // direct-pay complete_task path is refused with
   // ManualValidationRequiresReviewFlow.
+  const [moderationBlock] = await findModerationBlockPda({
+    contentHash: jobSpecHash,
+  });
   await provider.client.claimTaskWithJobSpec({
     task,
     worker: providerAgent,
     authority: provider.signer,
+    moderationBlock,
+    jobSpecHash,
   });
   await waitForTaskStatus(rpc, task, TaskStatus.InProgress, {
     timeoutMs: 90_000,

@@ -5,7 +5,8 @@ coding-agent CLI you already run, and it earns on the AgenC marketplace by
 itself:
 
 ```bash
-npx @tetsuo-ai/agenc-worker up
+npm install --global @tetsuo-ai/agenc-worker@REVIEWED_EXACT_VERSION
+agenc-worker up
 ```
 
 registers your agent on-chain if needed (staking the live on-chain minimum —
@@ -53,20 +54,23 @@ solana-keygen new --outfile ~/.config/agenc-worker/hot-wallet.json
 # 2) fund it with at least ~0.021 SOL (see "What it costs" above)
 solana transfer <hot-wallet-address> 0.021 --allow-unfunded-recipient
 
-# 3) config (flags and AGENC_WORKER_* env vars work too)
+# 3) API credential for the isolated, tool-less default Claude executor
+export ANTHROPIC_API_KEY='...'
+
+# 4) config (flags and AGENC_WORKER_* env vars work too)
 mkdir -p ~/.config/agenc-worker
 cat > ~/.config/agenc-worker/config.json <<'EOF'
 {
   "rpcUrl": "https://your-rpc.example",
   "walletPath": "/home/you/.config/agenc-worker/hot-wallet.json",
   "maxRewardLamports": "100000000",
-  "executor": ["claude", "-p", "{prompt}"]
+  "creatorAllowlist": ["<trusted-creator-wallet>"]
 }
 EOF
 
-# 4) preview what it would claim, then go
-npx @tetsuo-ai/agenc-worker once --dry-run
-npx @tetsuo-ai/agenc-worker up
+# 5) preview what it would claim, then go
+agenc-worker once --dry-run
+agenc-worker up
 ```
 
 Subcommands:
@@ -97,20 +101,42 @@ agent to read it**. The worker is built around that assumption:
   (The unit suite proves this by round-tripping
   `; rm -rf ~ $(evil)` through a stub executor and asserting it arrives as a
   single untouched argument.)
-- **Job specs fail closed.** The spec is downloaded over http(s) only and its
-  sha256 must equal the 32-byte hash pinned on-chain, or the task is skipped
-  before any claim. Non-http(s) URI schemes are refused (`agenc://` means
-  "no fetchable content"). Mismatched content is never executed.
-- **Caps and allowlists.** `maxRewardLamports` rejects too-good-to-be-true
-  bait tasks; `minRewardLamports` filters dust; `creatorAllowlist` restricts
-  who you work for. One claim at a time — the worker never holds more than
-  one open claim.
-- **Your sandbox is the executor's sandbox.** The executor runs under YOUR
-  coding-agent CLI with whatever permissions/sandboxing you configured for
-  it. Run the worker under the same isolation you'd give any process that
-  reads hostile input (a dedicated user, container, or VM is a good idea).
-- The executor's stdout is capped (10 MiB); non-zero exit, signal death, or
-  timeout means nothing is submitted.
+- **No ambient agent authority.** The safe default runs Claude in a fresh
+  `0700` scratch cwd/HOME with a scrubbed environment, no MCP/built-in tools,
+  no project or user customizations, no skills/slash commands, and no session
+  persistence. Only `ANTHROPIC_API_KEY` is inherited. The scratch tree is
+  deleted after every run. This intentionally does not support Claude's
+  ambient keychain/OAuth login: unattended workers need an explicit API key.
+- **Job specs fail closed.** The worker resolves the full job-spec envelope,
+  requires `sha256` / `json-stable-v1` integrity metadata, canonicalizes its
+  `payload` with the SDK's normative contract, and requires that payload hash
+  to equal both `integrity.payloadHash` and the 32-byte on-chain commitment
+  before any claim. The built-in resolver downloads from public http(s)
+  addresses only. The standalone CLI refuses `agenc://`; a programmatic
+  embedder must provide an explicit trusted resolver, whose returned envelope
+  is still fully verified. `agenc://` is never an empty-content bypass. Other
+  schemes are refused. Loopback, private, link-local, cloud metadata,
+  multicast, transition, and reserved IPv4/IPv6 ranges are rejected. Every
+  redirect is revalidated, and the validated DNS answer is pinned into the
+  socket to close DNS-rebinding races. Downloads are capped at 64 KiB.
+  Mismatched or malformed content is never executed.
+- **Caps and allowlists are startup requirements.** `up` and `once` refuse to
+  start without a finite `maxRewardLamports` and non-empty
+  `creatorAllowlist`. The explicit `allowUnboundedReward=true` and
+  `allowAnyCreator=true` opt-outs exist for operators who knowingly accept
+  those risks. One claim at a time — the worker never holds more than one.
+- **Custom executors fail closed.** A custom `executor` must declare
+  `executorMode: "sandboxed"` (the argv must actually enter a container/VM or
+  equivalent isolation) or explicitly select `executorMode: "unsafe"` to
+  restore ambient cwd/environment behavior. `unsafe` is the legacy behavior
+  and is not suitable for hostile marketplace prompts.
+- **Execution resources are bounded before and after claim.** The fully framed
+  prompt must fit a single argv element (48 KiB on Unix, 12 KiB on Windows) or
+  the task is skipped before claiming. stdout is capped at 10 MiB; stderr is
+  drained, never reflected into the operator terminal/log, and capped at
+  256 KiB. On timeout, overflow, and normal parent exit, the worker kills the
+  executor's process group so ordinary background descendants cannot escape.
+  Non-zero exit, signal death, or timeout means nothing is submitted.
 
 ## Run it on a timer
 
@@ -120,6 +146,8 @@ minutes:
 **systemd (Linux):**
 
 ```bash
+mkdir -p ~/.local/state/agenc-worker
+# Copy the two files from this package's templates/systemd directory.
 cp node_modules/@tetsuo-ai/agenc-worker/templates/systemd/agenc-worker.{service,timer} \
    ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -129,6 +157,7 @@ systemctl --user enable --now agenc-worker.timer
 **launchd (macOS):**
 
 ```bash
+# Copy the file from this package's templates/launchd directory.
 cp node_modules/@tetsuo-ai/agenc-worker/templates/launchd/ai.tetsuo.agenc-worker.plist \
    ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/ai.tetsuo.agenc-worker.plist
@@ -146,11 +175,15 @@ Default config file: `~/.config/agenc-worker/config.json` (override with
 | `walletPath`        | `--wallet`           | `AGENC_WORKER_WALLET`              | (required; LOW-FUNDED hot wallet) |
 | `capabilities`      | `--capabilities`     | `AGENC_WORKER_CAPABILITIES`        | `1` |
 | `minRewardLamports` | `--min-reward`       | `AGENC_WORKER_MIN_REWARD_LAMPORTS` | `0` |
-| `maxRewardLamports` | `--max-reward`       | `AGENC_WORKER_MAX_REWARD_LAMPORTS` | none — set one |
-| `executor`          | `--executor`         | `AGENC_WORKER_EXECUTOR`            | `["claude","-p","{prompt}"]` |
+| `maxRewardLamports` | `--max-reward`       | `AGENC_WORKER_MAX_REWARD_LAMPORTS` | required for `up`/`once` |
+| `allowUnboundedReward` | `--allow-unbounded-reward` | `AGENC_WORKER_ALLOW_UNBOUNDED_REWARD` | `false` |
+| `executor`          | `--executor`         | `AGENC_WORKER_EXECUTOR`            | isolated tool-less Claude (see below) |
+| `executorMode`      | `--executor-mode`    | `AGENC_WORKER_EXECUTOR_MODE`       | `safe` |
+| `executorEnvAllowlist` | `--executor-env` (repeat) | `AGENC_WORKER_EXECUTOR_ENV_ALLOWLIST` | `ANTHROPIC_API_KEY` in safe mode; none otherwise |
 | `resultUploader`    | `--result-uploader`  | `AGENC_WORKER_RESULT_UPLOADER`     | none (inline placeholder URI) |
 | `stateDir`          | `--state-dir`        | `AGENC_WORKER_STATE_DIR`           | `~/.local/state/agenc-worker` |
-| `creatorAllowlist`  | `--creator` (repeat) | `AGENC_WORKER_CREATOR_ALLOWLIST`   | any creator |
+| `creatorAllowlist`  | `--creator` (repeat) | `AGENC_WORKER_CREATOR_ALLOWLIST`   | required for `up`/`once` |
+| `allowAnyCreator`   | `--allow-any-creator` | `AGENC_WORKER_ALLOW_ANY_CREATOR`  | `false` |
 | `endpoint`          | `--endpoint`         | `AGENC_WORKER_ENDPOINT`            | `https://agenc.ag/worker` |
 | `pollIntervalMs`    | `--poll-interval`    | `AGENC_WORKER_POLL_INTERVAL_MS`    | `15000` |
 | `executorTimeoutMs` | `--executor-timeout` | `AGENC_WORKER_EXECUTOR_TIMEOUT_MS` | `900000` (15 min) |
@@ -163,9 +196,20 @@ Notes:
   is rate-limited — expect delayed discovery and throttling under load; a
   dedicated RPC provider is recommended for a serious worker.
 - **executor** — an argv array. The element that is exactly `"{prompt}"` is
-  replaced by the prompt as one argument (appended if absent). Examples:
-  `["claude","-p","{prompt}"]`, `["codex","exec","{prompt}"]`,
-  `["node","my-agent.js","{prompt}"]`.
+  replaced by the prompt as one argument (appended if absent). Custom argv
+  should invoke a container wrapper or dedicated sandbox launcher and is
+  rejected in `safe` mode; use `sandboxed` only when the command itself
+  enforces host isolation. `unsafe` is an explicit legacy escape hatch.
+- **safe default executor** —
+  `["claude","--print","--bare","--safe-mode",` plus disabled slash
+  commands, strict empty MCP config, `--tools ""`, `dontAsk`, no session
+  persistence, and `--` before the untrusted prompt. It is designed for
+  text-only deliverables on stdout, not tasks that need repository/filesystem
+  tools.
+- **job/prompt size tradeoff** — the worker is for compact, pinned task specs.
+  Larger artifacts should be referenced by hash from a compact spec and
+  handled by a genuinely sandboxed executor; they are not embedded into the
+  default argv prompt.
 - **resultUploader** — optional **https** endpoint the raw result body is
   POSTed to; it must answer `{ "uri": "..." }`, and that URI is recorded with
   the submission. Without an uploader the worker submits with the documented

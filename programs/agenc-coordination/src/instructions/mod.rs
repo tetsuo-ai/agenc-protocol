@@ -31,14 +31,16 @@ pub mod constants;
 pub mod dispute_helpers;
 pub mod lamport_transfer;
 pub mod launch_controls;
+pub(crate) mod program_account_helpers;
 pub mod rate_limit_helpers;
 pub mod slash_helpers;
 pub mod task_init_helpers;
+pub mod task_parent_helpers;
 pub mod task_validation_helpers;
 #[cfg(feature = "spl-token-rewards")]
 pub mod token_helpers;
 pub mod validation;
-#[cfg(not(feature = "mainnet-canary"))]
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 pub mod zk_config_helpers;
 
 pub mod accept_task_result;
@@ -66,7 +68,7 @@ pub mod claim_task;
 pub mod close_task;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod complete_task;
-#[cfg(not(feature = "mainnet-canary"))]
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 pub mod complete_task_private;
 pub mod configure_task_moderation;
 pub mod configure_task_validation;
@@ -98,7 +100,7 @@ pub mod hire_from_listing_humanless;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod initialize_governance;
 pub mod initialize_protocol;
-#[cfg(not(feature = "mainnet-canary"))]
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 pub mod initialize_zk_config;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod initiate_dispute;
@@ -123,6 +125,8 @@ pub mod rate_hire;
 pub mod rate_skill;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod reclaim_completion_bond;
+#[cfg(not(feature = "mainnet-canary"))]
+pub mod reclaim_orphan_task_child;
 pub mod reclaim_terminal_claim;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod record_agent_verification;
@@ -177,7 +181,7 @@ pub mod update_skill;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod update_state;
 pub mod update_treasury;
-#[cfg(not(feature = "mainnet-canary"))]
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 pub mod update_zk_image_id;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod upvote_post;
@@ -231,7 +235,7 @@ pub use close_task::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use complete_task::*;
-#[cfg(not(feature = "mainnet-canary"))]
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 #[allow(ambiguous_glob_reexports)]
 pub use complete_task_private::*;
 #[allow(ambiguous_glob_reexports)]
@@ -279,7 +283,7 @@ pub use hire_from_listing_humanless::*;
 pub use initialize_governance::*;
 #[allow(ambiguous_glob_reexports)]
 pub use initialize_protocol::*;
-#[cfg(not(feature = "mainnet-canary"))]
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 #[allow(ambiguous_glob_reexports)]
 pub use initialize_zk_config::*;
 #[cfg(not(feature = "mainnet-canary"))]
@@ -312,6 +316,9 @@ pub use rate_hire::*;
 pub use rate_skill::*;
 #[cfg(not(feature = "mainnet-canary"))]
 pub use reclaim_completion_bond::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use reclaim_orphan_task_child::*;
 pub use reclaim_terminal_claim::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
@@ -394,7 +401,7 @@ pub use update_skill::*;
 pub use update_state::*;
 #[allow(ambiguous_glob_reexports)]
 pub use update_treasury::*;
-#[cfg(not(feature = "mainnet-canary"))]
+#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
 #[allow(ambiguous_glob_reexports)]
 pub use update_zk_image_id::*;
 #[cfg(not(feature = "mainnet-canary"))]

@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**99 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**97 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -28,7 +28,6 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`close_store`](#close_store)
 - [`close_task`](#close_task)
 - [`complete_task`](#complete_task)
-- [`complete_task_private`](#complete_task_private)
 - [`configure_task_moderation`](#configure_task_moderation)
 - [`configure_task_validation`](#configure_task_validation)
 - [`create_bid`](#create_bid)
@@ -53,7 +52,6 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`initialize_bid_marketplace`](#initialize_bid_marketplace)
 - [`initialize_governance`](#initialize_governance)
 - [`initialize_protocol`](#initialize_protocol)
-- [`initialize_zk_config`](#initialize_zk_config)
 - [`initiate_dispute`](#initiate_dispute)
 - [`migrate_protocol`](#migrate_protocol)
 - [`migrate_task`](#migrate_task)
@@ -65,6 +63,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`rate_hire`](#rate_hire)
 - [`rate_skill`](#rate_skill)
 - [`reclaim_completion_bond`](#reclaim_completion_bond)
+- [`reclaim_orphan_task_child`](#reclaim_orphan_task_child)
 - [`reclaim_terminal_claim`](#reclaim_terminal_claim)
 - [`record_agent_verification`](#record_agent_verification)
 - [`record_listing_moderation`](#record_listing_moderation)
@@ -105,7 +104,6 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`update_state`](#update_state)
 - [`update_store`](#update_store)
 - [`update_treasury`](#update_treasury)
-- [`update_zk_image_id`](#update_zk_image_id)
 - [`upvote_post`](#upvote_post)
 - [`validate_task_result`](#validate_task_result)
 - [`vote_proposal`](#vote_proposal)
@@ -115,7 +113,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 
 Accept a Marketplace V2 bid and convert it into a normal task claim.
 
-### Accounts (10)
+### Accounts (11)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -127,12 +125,15 @@ Accept a Marketplace V2 bid and convert it into a normal task claim.
 | 6 | `bidder_market_state` | yes |  |  | PDA ["bidder_market", account:bidder] |  |
 | 7 | `bidder` | yes |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
 | 8 | `task_job_spec` |  |  |  | PDA ["task_job_spec", account:task] | Published, moderation-gated job spec for this task (PDA ["task_job_spec", task]). Required so a bid can only be accepted for work that passed moderation at publish time — `set_task_job_spec` is the only way this account can exist and it hard-requires a publishable `task_moderation`. This gates `accept_bid` before InProgress (spec §6) at parity with `claim_task_with_job_spec`, which makes the legacy no-job-spec assignment path unreachable. |
-| 9 | `creator` | yes | yes |  |  |  |
-| 10 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 9 | `moderation_block` |  |  |  |  | Canonical content-hash BLOCK floor, rechecked at assignment time so a takedown recorded after the bid was created prevents acceptance. |
+| 10 | `creator` | yes | yes |  |  |  |
+| 11 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
-### Args (0)
+### Args (1)
 
-_None._
+| # | Arg | Type |
+|---|---|---|
+| 1 | `expected_bid_terms_hash` | `[u8; 32]` |
 
 ## accept_task_result
 
@@ -150,9 +151,9 @@ Accept a creator-reviewed submission and settle rewards.
 | 6 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
 | 7 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
 | 8 | `treasury` | yes |  |  |  |  |
-| 9 | `creator` | yes | yes |  |  |  |
+| 9 | `creator` | yes | yes |  |  | this signer becomes the permissionless timeout crank after review_deadline_at; the actual creator/rent recipient is then carried in the otherwise-unused writable `operator` slot and revalidated in the handler. |
 | 10 | `worker_authority` | yes |  |  |  |  |
-| 11 | `hire_record` |  |  | yes |  | operator-fee terms; for current hires the terms are read from the Task itself. |
+| 11 | `hire_record` |  |  |  | PDA ["hire", account:task] | direct tasks pass the empty system-owned PDA. Requiring the address prevents legacy hired tasks from omitting their unstamped operator/referrer fee terms. |
 | 12 | `operator` | yes |  | yes |  | when the task carries a non-zero operator fee (a listing hire); receives the operator fee leg in SOL. |
 | 13 | `referrer` | yes |  | yes |  | 4-way split). Required only when the task carries a non-zero referrer fee; receives the referrer fee leg in SOL. |
 | 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] |  |
@@ -398,17 +399,20 @@ _None._
 
 Claim a task only when its content-addressed job specification pointer exists.
 
-### Accounts (7)
+### Accounts (10)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 2 | `task_job_spec` |  |  |  | PDA ["task_job_spec", account:task] |  |
-| 3 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
-| 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 5 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
-| 6 | `authority` | yes | yes |  |  | has_one → worker |
-| 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 3 | `hire_record` |  |  |  | PDA ["hire", account:task] | owner, discriminator, task binding, and designated provider when live. A live record designates the only provider agent allowed to claim; a direct task supplies the empty system account at the same PDA. Full surface only because listing hires are not part of the canary program. |
+| 4 | `legacy_listing` |  |  | yes |  | Legacy fallback for pre-hardening HireRecords whose former reserved field is zero. When needed, this must be the exact stored ServiceListing and the handler derives the designated provider from its immutable provider_agent. |
+| 5 | `moderation_block` |  |  |  |  | Canonical content-hash BLOCK floor. Rechecked at assignment time so a takedown recorded after publication actually stops new work. |
+| 6 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
+| 7 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 8 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
+| 9 | `authority` | yes | yes |  |  | has_one → worker |
+| 10 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (0)
 
@@ -449,8 +453,8 @@ _None._
 
 ## close_task
 
-Reclaim a terminal task's account rent (and optional leftover job-spec
-pointer). Allowed only when the task is Completed or Cancelled.
+Clean supplied children of a terminal task while retaining the rent-exempt
+Task as a durable liveness anchor for any children not supplied.
 
 ### Accounts (9)
 
@@ -458,12 +462,12 @@ pointer). Allowed only when the task is Completed or Cancelled.
 |---|---|---|---|---|---|---|
 | 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 2 | `task_job_spec` | yes |  | yes | PDA ["task_job_spec", account:task] | Optional leftover job-spec pointer for this task. When provided it is closed alongside the task so its rent is reclaimed too. Bound to this task by seeds + constraint so a caller cannot close another task's pointer. |
-| 3 | `escrow` | yes |  | yes | PDA ["escrow", account:task] | Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow account open (drained, `is_closed = true`) on a terminal task; provide it here to reclaim its rent. Bound to this task by seeds + constraint. |
+| 3 | `escrow` | yes |  | yes | PDA ["escrow", account:task] | Optional already-settled escrow PDA. `resolve_dispute` can leave a token task's state escrow open after draining it and setting `is_closed = true`; provide it here to reclaim its rent. A pending token reserve is still marked open and is rejected until its slash finalizer runs. Bound to this task by seeds + constraint. |
 | 4 | `hire_record` | yes |  |  | PDA ["hire", account:task] | Hire link PDA for this task. ALWAYS required — the caller passes the derived ["hire", task] address even for non-hired tasks (where it is an empty system account). close_task decides from the on-chain owner whether a live hire must be settled, so a caller cannot dodge the capacity decrement by omitting it. the handler, and a live record is deserialized + validated there. |
 | 5 | `listing` | yes |  | yes | PDA ["service_listing", account:listing.provider_agent (ServiceListing), account:listing.listing_id (ServiceListing)] | Source listing, required when a live hire link is present, so its `open_jobs` capacity counter can be decremented. Verified against `hire_record.listing`. |
 | 6 | `creator_completion_bond` |  |  |  | PDA ["completion_bond", account:task, account:task.creator (Task)] | Creator completion bond PDA — REQUIRED + seeds-pinned (audit F12). close_task REFUSES to close the Task while this is a live program-owned bond, so the Task PDA (which reclaim_completion_bond needs) can never be destroyed out from under an unsettled creator bond. The party is the creator, so this PDA is canonically derivable here. For an already-settled / un-bonded task it is an empty system PDA. |
 | 7 | `worker_completion_bond` | yes |  | yes |  | Worker completion bond PDA — OPTIONAL (defense-in-depth). close_task cannot canonically pin this (the worker authority is not recorded on the Task after the claim closes), so it is checked only when supplied: if a live program-owned bond is passed, close is REFUSED. The hard guarantee for the worker bond comes from the Completed settlement paths (accept/auto_accept/complete), which are now required + pinned so a worker bond can never be live on a Completed task; reclaim_completion_bond (now also valid on Cancelled) is the worker's permissionless recovery on the cancel path. CHECK: liveness checked in the handler when present. |
-| 8 | `authority` | yes | yes |  |  | Task creator; receives the reclaimed rent. Mutable to credit lamports. |
+| 8 | `authority` | yes | yes |  |  | Task creator; receives child rent and any Task balance above rent minimum. |
 | 9 | `protocol_config` |  |  | yes | PDA ["protocol"] | Protocol config (fix round, FIX 5) — supplies the canonical treasury pubkey for the deregistered-worker straggler path below. Optional so existing close paths (no stragglers, or stragglers with live agents) keep working without it; REQUIRED (fail-closed) whenever a straggler submission's worker agent is provably closed. |
 
 ### Args (0)
@@ -510,43 +514,6 @@ For collaborative tasks, multiple completions may be needed.
 |---|---|---|
 | 1 | `proof_hash` | `[u8; 32]` |
 | 2 | `result_data` | `Option<[u8; 64]>` |
-
-## complete_task_private
-
-Complete a task with private proof verification.
-
-### Accounts (21)
-
-| # | Account | Writable | Signer | Optional | PDA / address | Notes |
-|---|---|---|---|---|---|---|
-| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
-| 2 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] | claim can surface `NotClaimed` instead of Anchor's `AccountNotInitialized`. |
-| 3 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
-| 4 | `creator` | yes |  |  |  |  |
-| 5 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
-| 6 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 7 | `zk_config` |  |  |  | PDA ["zk_config"] |  |
-| 8 | `binding_spend` | yes |  |  | PDA ["binding_spend", arg:proof.binding_seed] |  |
-| 9 | `nullifier_spend` | yes |  |  | PDA ["nullifier_spend", arg:proof.nullifier_seed] |  |
-| 10 | `treasury` | yes |  |  |  |  |
-| 11 | `authority` | yes | yes |  |  | has_one → worker |
-| 12 | `router_program` |  |  |  |  |  |
-| 13 | `router` |  |  |  | PDA ["router"], program=0xc359931df8ee65c5ae1f0ad84c7199eeb090088fd09b2d5b7498dd39d99e30de |  |
-| 14 | `verifier_entry` |  |  |  | PDA ["verifier", "RZVM"], program=0xc359931df8ee65c5ae1f0ad84c7199eeb090088fd09b2d5b7498dd39d99e30de |  |
-| 15 | `verifier_program` |  |  |  |  |  |
-| 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
-| 17 | `token_escrow_ata` | yes |  | yes |  |  |
-| 18 | `worker_token_account` | yes |  | yes |  |  |
-| 19 | `treasury_token_account` | yes |  | yes |  |  |
-| 20 | `reward_mint` |  |  | yes |  |  |
-| 21 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |  |
-
-### Args (2)
-
-| # | Arg | Type |
-|---|---|---|
-| 1 | `task_id` | `u64` |
-| 2 | `proof` | `PrivateCompletionPayload` |
 
 ## configure_task_moderation
 
@@ -597,21 +564,22 @@ Enable Task Validation V2 creator review for an open task.
 
 Create a Marketplace V2 bid for a task.
 
-### Accounts (9)
+### Accounts (10)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 2 | `bid_marketplace` |  |  |  | PDA ["bid_marketplace"] |  |
 | 3 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
-| 4 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
-| 5 | `bid` | yes |  |  | PDA ["bid", account:task, account:bidder] |  |
-| 6 | `bidder_market_state` | yes |  |  | PDA ["bidder_market", account:bidder] |  |
-| 7 | `bidder` | yes |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
-| 8 | `authority` | yes | yes |  |  | has_one → bidder |
-| 9 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 4 | `task_job_spec` |  |  |  | PDA ["task_job_spec", account:task] | The exact creator-locked content-addressed job contract the bidder signs. |
+| 5 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
+| 6 | `bid` | yes |  |  | PDA ["bid", account:task, account:bidder] |  |
+| 7 | `bidder_market_state` | yes |  |  | PDA ["bidder_market", account:bidder] |  |
+| 8 | `bidder` | yes |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
+| 9 | `authority` | yes | yes |  |  | has_one → bidder |
+| 10 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
-### Args (6)
+### Args (8)
 
 | # | Arg | Type |
 |---|---|---|
@@ -621,6 +589,8 @@ Create a Marketplace V2 bid for a task.
 | 4 | `quality_guarantee_hash` | `[u8; 32]` |
 | 5 | `metadata_hash` | `[u8; 32]` |
 | 6 | `expires_at` | `i64` |
+| 7 | `expected_job_spec_hash` | `[u8; 32]` |
+| 8 | `expected_job_spec_updated_at` | `i64` |
 
 ## create_dependent_task
 
@@ -858,8 +828,8 @@ One delegation per (delegator, delegatee) pair.
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `authority` | yes | yes |  |  | has_one → delegator_agent |
-| 2 | `delegator_agent` | yes |  |  |  |  |
-| 3 | `delegatee_agent` |  |  |  |  |  |
+| 2 | `delegator_agent` | yes |  |  | PDA ["agent", account:delegator_agent.agent_id (AgentRegistration)] |  |
+| 3 | `delegatee_agent` |  |  |  | PDA ["agent", account:delegatee_agent.agent_id (AgentRegistration)] |  |
 | 4 | `delegation` | yes |  |  | PDA ["reputation_delegation", account:delegator_agent, account:delegatee_agent] |  |
 | 5 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
@@ -881,7 +851,7 @@ Agent must have no active tasks.
 |---|---|---|---|---|---|---|
 | 1 | `agent` | yes |  |  | PDA ["agent", account:agent.agent_id (AgentRegistration)] |  |
 | 2 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 3 | `reputation_stake` |  |  |  | PDA ["reputation_stake", account:agent] | The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit it to dodge the "stake must be withdrawn first" guard (audit). For an agent that never staked this is an empty system-owned PDA (the handler treats it as zero stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve `slash_count` history — so the agent must withdraw its stake before deregistering; otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the `agent_id` becomes re-registerable by anyone, withdrawable by a new owner. |
+| 3 | `reputation_stake` |  |  |  | PDA ["reputation_stake", account:agent] | The agent's reputation-stake PDA. REQUIRED + seeds-pinned so a caller cannot omit it to dodge the "stake must be withdrawn first" guard (audit). For an agent that never staked this is an empty system-owned PDA (the handler treats it as zero stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve `slash_count` history — so the agent must withdraw its stake before retirement. |
 | 4 | `authority` | yes | yes |  |  | has_one → agent |
 
 ### Args (0)
@@ -933,7 +903,7 @@ Permissionless — anyone can call after quorum + majority is met.
 | 2 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
 | 3 | `governance_config` |  |  |  | PDA ["governance"] |  |
 | 4 | `authority` |  | yes |  |  | Authority can be anyone (permissionless after voting ends) |
-| 5 | `treasury` | yes |  | yes |  | Must match protocol_config.treasury. Spend path supports: - program-owned treasury (direct lamport mutation), or - system-owned treasury when this account signs. |
+| 5 | `treasury` | yes | yes | yes |  | Treasury account for TreasurySpend proposals. The optional signer type makes custody consent explicit in generated account metas. Must match protocol_config.treasury and be system owned. |
 | 6 | `recipient` | yes |  | yes |  | Validated from proposal payload in handler. |
 | 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
@@ -1004,21 +974,21 @@ Expire a dispute after the maximum duration has passed.
 | 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 5 | `creator` | yes |  |  |  |  |
 | 6 | `authority` |  | yes |  |  |  |
-| 7 | `worker_claim` | yes |  | yes | PDA ["claim", account:task, account:worker_claim.worker (TaskClaim)] | Worker's claim on the disputed task (fix #137) Optional - when provided, allows decrementing worker's active_tasks and enables fair refund distribution (fix #418) |
+| 7 | `worker_claim` | yes |  | yes | PDA ["claim", account:task, account:worker_claim.worker (TaskClaim)] | Worker's canonical claim on the disputed task. Retained as an optional ABI slot, but required by the handler on every expiry to bind the defendant and unwind the claim and worker counters. |
 | 8 | `worker` | yes |  | yes |  | Worker's AgentRegistration PDA (must be dispute defendant). |
-| 9 | `worker_wallet` | yes |  | yes |  | Required when worker should receive funds on expiration |
-| 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee cannot be bypassed when an expired dispute pays the worker. Live (program-owned) forces the operator leg; non-hired tasks pass the empty system-owned PDA. |
-| 11 | `dispute_operator` | yes |  | yes |  | HireRecord fallback); required only when those terms carry a non-zero operator fee and the worker is paid. Receives SOL. |
-| 12 | `dispute_referrer` | yes |  | yes |  | dispute exits honor the snapshotted referrer leg); required only when those terms carry a non-zero referrer fee and the worker is paid. Receives SOL. |
+| 9 | `worker_wallet` | yes |  | yes |  | Receives closed-account rent and any refundable worker bond, never unresolved task principal; validated against `worker.authority` before funds can move. |
+| 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | never pays a marketplace leg; all unresolved principal returns to the creator. |
+| 11 | `dispute_operator` | yes |  | yes |  |  |
+| 12 | `dispute_referrer` | yes |  | yes |  |  |
 | 13 | `token_escrow_ata` | yes |  | yes |  | Token escrow ATA holding reward tokens (optional) |
 | 14 | `creator_token_account` | yes |  | yes |  | Creator's token account for refund (optional) |
-| 15 | `worker_token_account_ata` | yes |  | yes |  | Worker's token account for payment (optional) |
+| 15 | `worker_token_account_ata` | yes |  | yes |  |  |
 | 16 | `reward_mint` |  |  | yes |  | SPL token mint (optional, must match task.reward_mint) |
 | 17 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | SPL Token program (optional, required for token tasks) |
 | 18 | `creator_completion_bond` | yes |  |  |  |  |
 | 19 | `worker_completion_bond` | yes |  |  |  |  |
-| 20 | `task_submission` | yes |  | yes |  | OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit — decrements the review counters when still live and returns its rent to the worker authority. Validated + bound in the handler (`sweep_dispute_submission`). |
-| 21 | `task_validation_config` | yes |  | yes |  | OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the swept submission is still live on a manual-validation task (pending-counter hygiene). Bound to the task in the handler. |
+| 20 | `task_submission` | yes |  | yes |  | REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the canonical TaskSubmission PDA for the defendant claim. A live record is swept before claim close; the exact system-owned empty PDA proves absence. `Option` preserves the deployed account list, but `None` fails closed. |
+| 21 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | OPTIONAL: canonical TaskValidationConfig, required when the swept manual submission is still Submitted and therefore carries counter debt. |
 
 ### Args (0)
 
@@ -1029,7 +999,7 @@ _None._
 Permissionless timeout exit for a frozen task (Batch 3 §8): after the review
 window lapses, default to the worker (pay + refund both bonds). Exit path.
 
-### Accounts (13)
+### Accounts (16)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1042,10 +1012,13 @@ window lapses, default to the worker (pay + refund both bonds). Exit path.
 | 7 | `treasury` | yes |  |  |  |  |
 | 8 | `creator` | yes |  |  |  |  |
 | 9 | `worker_authority` | yes |  |  |  |  |
-| 10 | `authority` |  | yes |  |  | Permissionless caller. |
-| 11 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | refunded on this no-fault timeout exit. Making it omittable would let a caller strand a live bond into the terminal task, where reclaim_completion_bond can never reach it once the Task PDA is closed. Pass the derived PDA even for an un-bonded task (empty system account); settle_completion_bond no-ops on it. |
-| 12 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] | worker authority (audit F5/F12); refunded on this no-fault exit. |
-| 13 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | system-owned PDA. A legacy live record carries fee terms not stamped on Task. |
+| 11 | `operator` | yes |  | yes |  |  |
+| 12 | `referrer` | yes |  | yes |  |  |
+| 13 | `authority` |  | yes |  |  | Permissionless caller. |
+| 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | refunded on this no-fault timeout exit. Making it omittable would let a caller strand a live bond into the terminal task, where reclaim_completion_bond can never reach it once the Task PDA is closed. Pass the derived PDA even for an un-bonded task (empty system account); settle_completion_bond no-ops on it. |
+| 15 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] | worker authority (audit F5/F12); refunded on this no-fault exit. |
+| 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (0)
 
@@ -1073,7 +1046,7 @@ _None._
 Hire a provider from a standing service listing, minting a one-shot task
 that snapshots the listing's terms and funds escrow from the buyer.
 
-### Accounts (14)
+### Accounts (15)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1081,16 +1054,17 @@ that snapshots the listing's terms and funds escrow from the buyer.
 | 2 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
 | 3 | `hire_record` | yes |  |  | PDA ["hire", account:task] | Links this hire to its source listing so close_task can decrement capacity without a Task layout change, and snapshots the operator fee terms. |
 | 4 | `listing` | yes |  |  | PDA ["service_listing", account:listing.provider_agent (ServiceListing), account:listing.listing_id (ServiceListing)] | Standing listing being hired from. Mutable to record the hire (`total_hires`, `updated_at`). |
-| 5 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 6 | `moderation_config` |  |  |  | PDA ["moderation_config"] | Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured gate (account absent) makes the hire fail = marketplace halt (spec §6). When `enabled`, a valid `listing_moderation` is required (checked in the handler). |
-| 7 | `listing_moderation` |  |  | yes |  | Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the moderator sits inside the primary record's derivation), so this arrives unchecked and the handler re-implements every dropped constraint via `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy), `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings. |
-| 8 | `moderation_attestor` |  |  | yes |  | OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire gate when the record was authored by a non-global-authority attestor. The canonical-PDA + moderator binding is enforced in the handler via `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>` still guarantees the entry is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load — the WP-A1 fail-closed property, preserved). Only needed for the roster path; the global-authority path passes with `None`. |
-| 9 | `moderation_block` |  |  |  |  | P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`. The handler derives `["moderation_block", listing.spec_hash]` itself and rejects a mismatched address, so it can be neither omitted nor substituted; a multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation presented, and re-minting the same content under a fresh listing PDA is still blocked (content-hash-keyed).  (handler-derived canonical PDA; system-owned/empty = pass). |
-| 10 | `creator_agent` |  |  |  | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | Buyer's agent registration for identity/authorization (mirrors create_task). |
-| 11 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:authority] | Wallet-scoped task/dispute rate limit state shared across all agents. |
-| 12 | `authority` |  | yes |  |  | The authority that owns the buyer's agent. — has_one → creator_agent |
-| 13 | `creator` | yes | yes |  |  | The buyer who pays for and owns the hired task. Must match authority to prevent social-engineering attacks (#375). |
-| 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 5 | `provider_agent` |  |  |  | PDA ["agent", account:provider_agent.agent_id (AgentRegistration)] | Provider identity behind the standing listing. A listing is durable, but a suspended or permanently retired provider must not receive new hires. Existing hires settle independently through their Task/HireRecord. |
+| 6 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
+| 7 | `moderation_config` |  |  |  | PDA ["moderation_config"] | Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured gate (account absent) makes the hire fail = marketplace halt (spec §6). When `enabled`, a valid `listing_moderation` is required (checked in the handler). |
+| 8 | `listing_moderation` |  |  | yes |  | Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the moderator sits inside the primary record's derivation), so this arrives unchecked and the handler re-implements every dropped constraint via `load_listing_moderation_record`: canonical PDA (v2-else-frozen-legacy), `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings. |
+| 9 | `moderation_attestor` |  |  | yes |  | OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire gate when the record was authored by a non-global-authority attestor. The canonical-PDA + moderator binding is enforced in the handler via `resolve_listing_attestor` against the EXPLICIT `moderator` argument (P1.2: the risk-bearing caller chooses the underwriter). `Account<ModerationAttestor>` still guarantees the entry is program-owned and non-revoked (a revoked entry's PDA is closed and fails to load — the WP-A1 fail-closed property, preserved). Only needed for the roster path; the global-authority path passes with `None`. |
+| 10 | `moderation_block` |  |  |  |  | P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`. The handler derives `["moderation_block", listing.spec_hash]` itself and rejects a mismatched address, so it can be neither omitted nor substituted; a multisig-BLOCKED hash hard-rejects the hire regardless of any CLEAN attestation presented, and re-minting the same content under a fresh listing PDA is still blocked (content-hash-keyed).  (handler-derived canonical PDA; system-owned/empty = pass). |
+| 11 | `creator_agent` |  |  |  | PDA ["agent", account:creator_agent.agent_id (AgentRegistration)] | Buyer's agent registration for identity/authorization (mirrors create_task). |
+| 12 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:authority] | Wallet-scoped task/dispute rate limit state shared across all agents. |
+| 13 | `authority` |  | yes |  |  | The authority that owns the buyer's agent. — has_one → creator_agent |
+| 14 | `creator` | yes | yes |  |  | The buyer who pays for and owns the hired task. Must match authority to prevent social-engineering attacks (#375). |
+| 15 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (6)
 
@@ -1110,7 +1084,7 @@ registered agent (single-agent storefront). Funds SOL escrow, carries the
 listing's operator-fee leg (the embedding site's cut), and pins
 ValidationMode::CreatorReview so the human reviews the work before payout.
 
-### Accounts (13)
+### Accounts (14)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1119,14 +1093,15 @@ ValidationMode::CreatorReview so the human reviews the work before payout.
 | 3 | `hire_record` | yes |  |  | PDA ["hire", account:task] | Links this hire to its source listing (capacity decrement via close_task) and snapshots the operator-fee terms for the settlement split. |
 | 4 | `task_validation_config` | yes |  |  | PDA ["task_validation", account:task] | Forced CreatorReview validation config — initialized here so a humanless hire can never settle on the auto-pay path; the human buyer always reviews first. |
 | 5 | `listing` | yes |  |  | PDA ["service_listing", account:listing.provider_agent (ServiceListing), account:listing.listing_id (ServiceListing)] | Standing listing being hired from. Mutable to record the hire. |
-| 6 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 7 | `moderation_config` |  |  |  | PDA ["moderation_config"] | Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). |
-| 8 | `listing_moderation` |  |  | yes |  | Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).  v2/legacy PDA + owner + discriminator + field bindings). |
-| 9 | `moderation_attestor` |  |  | yes |  | OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor` (P1.2: the caller chooses the underwriter). Program-owned + non-revoked is still guaranteed by the `Account` type (fail-closed, preserved from WP-A1). |
-| 10 | `moderation_block` |  |  |  |  | P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash` (see `hire_from_listing`; identical semantics).  (handler-derived canonical PDA; system-owned/empty = pass). |
-| 11 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:creator] | Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent). |
-| 12 | `creator` | yes | yes |  |  | The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. |
-| 13 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 6 | `provider_agent` |  |  |  | PDA ["agent", account:provider_agent.agent_id (AgentRegistration)] | Durable listings cannot outlive the provider's permission to take new work. |
+| 7 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
+| 8 | `moderation_config` |  |  |  | PDA ["moderation_config"] | Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). |
+| 9 | `listing_moderation` |  |  | yes |  | Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`. P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).  v2/legacy PDA + owner + discriminator + field bindings). |
+| 10 | `moderation_attestor` |  |  | yes |  | OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor` (P1.2: the caller chooses the underwriter). Program-owned + non-revoked is still guaranteed by the `Account` type (fail-closed, preserved from WP-A1). |
+| 11 | `moderation_block` |  |  |  |  | P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash` (see `hire_from_listing`; identical semantics).  (handler-derived canonical PDA; system-owned/empty = pass). |
+| 12 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:creator] | Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent). |
+| 13 | `creator` | yes | yes |  |  | The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. |
+| 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (7)
 
@@ -1144,15 +1119,16 @@ ValidationMode::CreatorReview so the human reviews the work before payout.
 
 Initialize a bid book for a Marketplace V2 task.
 
-### Accounts (5)
+### Accounts (6)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
-| 2 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
-| 3 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 4 | `creator` | yes | yes |  |  |  |
-| 5 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 2 | `task_job_spec` | yes |  |  | PDA ["task_job_spec", account:task] | Exact job contract the creator irrevocably freezes when opening bidding. This explicit creator-signed transition prevents a bidder from grief-locking an otherwise editable TaskJobSpec. |
+| 3 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
+| 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 5 | `creator` | yes | yes |  |  |  |
+| 6 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (5)
 
@@ -1222,7 +1198,7 @@ Called once to set up global parameters.
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 2 | `treasury` |  |  |  |  |  |
+| 2 | `treasury` |  | yes |  |  | Treasury account to receive protocol fees. Production clients must request the custody key's signature in generated account metas. |
 | 3 | `authority` | yes | yes |  |  |  |
 | 4 | `second_signer` |  | yes |  |  | Second multisig signer required at initialization to prevent single-party setup. Must be different from authority and must be in multisig_owners. This ensures at least two parties are involved in protocol initialization (fix #556). |
 | 5 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
@@ -1237,25 +1213,6 @@ Called once to set up global parameters.
 | 4 | `min_stake_for_dispute` | `u64` |
 | 5 | `multisig_threshold` | `u8` |
 | 6 | `multisig_owners` | `Vec<pubkey>` |
-
-## initialize_zk_config
-
-Initialize the trusted ZK image ID config.
-
-### Accounts (4)
-
-| # | Account | Writable | Signer | Optional | PDA / address | Notes |
-|---|---|---|---|---|---|---|
-| 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 2 | `zk_config` | yes |  |  | PDA ["zk_config"] |  |
-| 3 | `authority` | yes | yes |  |  | has_one → protocol_config |
-| 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
-
-### Args (1)
-
-| # | Arg | Type |
-|---|---|---|
-| 1 | `active_image_id` | `[u8; 32]` |
 
 ## initiate_dispute
 
@@ -1278,10 +1235,10 @@ Creates a dispute that requires multi-sig consensus to resolve.
 | 3 | `agent` | yes |  |  | PDA ["agent", account:agent.agent_id (AgentRegistration)] |  |
 | 4 | `authority_rate_limit` | yes |  |  | PDA ["authority_rate_limit", account:authority] | Wallet-scoped task/dispute rate limit state shared across all agents |
 | 5 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 6 | `initiator_claim` |  |  | yes | PDA ["claim", account:task, account:agent] | Optional: Initiator's claim if they are a worker (not the creator) |
-| 7 | `worker_agent` | yes |  | yes |  | Optional: Worker agent to be disputed (required when initiator is task creator) |
-| 8 | `worker_claim` |  |  | yes |  | Optional: Worker's claim (required when worker_agent is provided) |
-| 9 | `task_submission` |  |  | yes |  | Optional durable submission record used once the claim slot has been released. |
+| 6 | `initiator_claim` |  |  | yes | PDA ["claim", account:task, account:agent] | Initiator's live claim; required when the initiator is a worker. |
+| 7 | `worker_agent` | yes |  | yes |  | Worker agent to be disputed; required when initiator is task creator. |
+| 8 | `worker_claim` |  |  | yes |  | Defendant's live claim; required when the initiator is task creator. |
+| 9 | `task_submission` |  |  | yes |  | Submitted delivery record; required for worker-initiated disputes. A submission never substitutes for the live claim required by both exits. |
 | 10 | `authority` | yes | yes |  |  | has_one → agent |
 | 11 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
@@ -1367,14 +1324,17 @@ window relaxes the moderation ALLOW gates to moderation-optional
 Post a symmetric 25% completion bond (Batch 3 §8). `role`: 0 = creator,
 1 = worker. SOL-only v1; single-worker (Exclusive) tasks only.
 
-### Accounts (4)
+### Accounts (7)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
-| 2 | `completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:authority] | The bond PDA, keyed by the SIGNING wallet so the two sides get distinct PDAs and `init` makes one-bond-per-wallet-per-task automatic (a second post fails). |
-| 3 | `authority` | yes | yes |  |  |  |
-| 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 1 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 2 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 3 | `completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:authority] | The bond PDA, keyed by the SIGNING wallet so the two sides get distinct PDAs and `init` makes one-bond-per-wallet-per-task automatic (a second post fails). |
+| 4 | `worker` |  |  | yes | PDA ["agent", account:worker.agent_id (AgentRegistration)] | Worker identity for ROLE_WORKER. Omitted for ROLE_CREATOR. |
+| 5 | `worker_claim` |  |  | yes |  | Live claim proving the worker signer is actually assigned to this task. Typed for ownership/discriminator checks; canonical PDA + bindings are verified in the handler because `worker` is role-conditional. |
+| 6 | `authority` | yes | yes |  |  |  |
+| 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (1)
 
@@ -1435,12 +1395,13 @@ cap. `expected_serial` pins this sale's receipt PDA (stale = retry);
 | 15 | `operator_token_account` | yes |  | yes |  |  |
 | 16 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` |  |
 
-### Args (2)
+### Args (3)
 
 | # | Arg | Type |
 |---|---|---|
 | 1 | `expected_serial` | `u64` |
 | 2 | `expected_price` | `u64` |
+| 3 | `expected_metadata_hash` | `[u8; 32]` |
 
 ## purchase_skill
 
@@ -1467,11 +1428,13 @@ expected_price provides slippage protection against front-running.
 | 13 | `treasury_token_account` | yes |  | yes |  | Treasury's token account (optional) |
 | 14 | `token_program` |  |  | yes | address `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` | SPL Token program (optional) |
 
-### Args (1)
+### Args (3)
 
 | # | Arg | Type |
 |---|---|---|
 | 1 | `expected_price` | `u64` |
+| 2 | `expected_version` | `u8` |
+| 3 | `expected_content_hash` | `[u8; 32]` |
 
 ## rate_hire
 
@@ -1506,7 +1469,7 @@ Rate a completed listing hire (P6.1). The task's recorded buyer
 Rate a skill (1-5, reputation-weighted).
 One rating per agent per skill, enforced by PDA uniqueness.
 
-### Accounts (7)
+### Accounts (8)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1514,9 +1477,10 @@ One rating per agent per skill, enforced by PDA uniqueness.
 | 2 | `rating_account` | yes |  |  | PDA ["skill_rating", account:skill, account:rater] |  |
 | 3 | `rater` |  |  |  | PDA ["agent", account:rater.agent_id (AgentRegistration)] |  |
 | 4 | `purchase_record` |  |  |  | PDA ["skill_purchase", account:skill, account:rater] |  |
-| 5 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 6 | `authority` | yes | yes |  |  | has_one → rater |
-| 7 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 5 | `author_agent` |  |  |  | PDA ["agent", account:author_agent.agent_id (AgentRegistration)] | Skill author's durable registration. Required so a legacy purchase made through another agent controlled by the same wallet cannot self-rate. |
+| 6 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 7 | `authority` | yes | yes |  |  | has_one → rater |
+| 8 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (2)
 
@@ -1546,6 +1510,26 @@ the optional bond account (audit fix). `role`: 0 = creator, 1 = worker.
 |---|---|---|
 | 1 | `role` | `u8` |
 
+## reclaim_orphan_task_child
+
+Return rent from a historical rent-only task child whose parent was
+destroyed by an older close_task implementation. The destination is
+derived from stored program state; the permissionless cranker cannot pick it.
+
+### Accounts (5)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `child` | yes |  |  |  | validated in the handler before any lamports move. |
+| 2 | `parent_task` |  |  |  |  | children, `TaskSubmission` for validation votes) and be a provably absent system-owned, zero-data account. The field name is ABI-stable. |
+| 3 | `worker_agent` |  |  |  |  | worker AgentRegistration and is fully deserialized/canonically verified. |
+| 4 | `rent_recipient` | yes |  |  |  | writable. The cranker can never choose the rent destination. |
+| 5 | `authority` |  | yes |  |  | Permissionless cranker. Its signature provides transaction accountability but grants no authority over the rent destination. |
+
+### Args (0)
+
+_None._
+
 ## reclaim_terminal_claim
 
 Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim
@@ -1556,7 +1540,7 @@ active_tasks budget). Requires unfakeable proof there is no live
 submission (the derived submission PDA must be empty). Exit path —
 settles even while paused (money never locks).
 
-### Accounts (8)
+### Accounts (9)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1564,10 +1548,11 @@ settles even while paused (money never locks).
 | 2 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 3 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
 | 4 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] | The derived `["task_submission", claim]` PDA — the unfakeable liveness probe. It must be system-owned with zero data (no submission was ever made for this claim, or it was already closed together with the claim by a settlement path — in which case THIS claim would not exist) OR hold a REJECTED submission (audit F-3 — then its rent is returned to the worker and it is tombstoned here, hence `mut`). A live program-owned submission in any other state means the claim is still settleable by the normal paths and must not be short-circuited. |
-| 5 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
-| 6 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 7 | `treasury` | yes |  |  |  | Receives the forfeited contest entry-deposit surplus (never the creator); 0 lamports for non-contest claims. |
-| 8 | `rent_recipient` | yes |  |  |  | worker authority (stored pubkey; no caller-supplied-account trust). |
+| 5 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | Validation counters for terminal cleanup of a still-Submitted Collaborative straggler. Omitted for the historical no-submission and Rejected-submission cleanup forms. |
+| 6 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
+| 7 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 8 | `treasury` | yes |  |  |  | Receives the forfeited contest entry-deposit surplus (never the creator); 0 lamports for non-contest claims. |
+| 9 | `rent_recipient` | yes |  |  |  | worker authority (stored pubkey; no caller-supplied-account trust). |
 
 ### Args (0)
 
@@ -1694,13 +1679,14 @@ permissionless). The signer pays rent + the hardcoded registration bond onto its
 own roster PDA; `assigned_by = self` marks the entry self-registered. The bond is
 an identity deposit — never confiscatable, refunded in full at exit-finalize.
 
-### Accounts (3)
+### Accounts (4)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `moderation_attestor` | yes |  |  | PDA ["moderation_attestor", account:attestor] | Roster entry for the self-registering signer. `init` ⇒ registering an already-rostered wallet fails (the desired "already registered" signal), and a re-register after exit re-inits a fresh entry. |
 | 2 | `attestor` | yes | yes |  |  | The self-registering wallet. No authority constraint — this is the permissionless path. It pays rent AND the registration bond. |
-| 3 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 3 | `protocol_config` |  |  |  | PDA ["protocol"] | Emergency entry-control. A paused or version-incompatible protocol must not accept a fresh seven-day moderation bond while ordinary marketplace entry is disabled. Exit instructions intentionally do not carry this pause gate, so existing attestors can always recover their bond. |
+| 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (0)
 
@@ -1787,7 +1773,7 @@ Settles only via resolve_reject_frozen / expire_reject_frozen.
 
 Reject a creator-reviewed submission and return the task to active work.
 
-### Accounts (10)
+### Accounts (11)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1801,6 +1787,7 @@ Reject a creator-reviewed submission and return the task to active work.
 | 8 | `worker_authority` | yes |  |  |  |  |
 | 9 | `agent_stats` | yes |  | yes | PDA ["agent_stats", account:worker] | OPTIONAL (P6.6): the worker agent's track-record aggregate. When supplied, this rejection bumps `tasks_rejected`. Created lazily on first write (`init_if_needed`), bound to the canonical `["agent_stats", worker]` PDA. Full-surface only — gated so the frozen canary account list for `reject_task_result` is unchanged. |
 | 10 | `system_program` |  |  | yes | address `11111111111111111111111111111111` | Required only when `agent_stats` is supplied (for `init_if_needed`). |
+| 11 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] | The rejected worker's completion bond is refunded at the same atomic boundary that closes their claim. Leaving it alive after the worker identity disappears from the Task made later cancel/close callers unable to prove which worker bond still existed and allowed permanent stranding. |
 
 ### Args (1)
 
@@ -1886,8 +1873,8 @@ Both are persisted on the dispute alongside the deciding resolver, and the hash
 | 22 | `creator_completion_bond` | yes |  |  |  | forfeited to the treasury. Fully validated by settle_completion_bond. |
 | 23 | `worker_completion_bond` | yes |  |  |  |  |
 | 24 | `bond_treasury` | yes |  |  |  |  |
-| 25 | `task_submission` | yes |  | yes |  | OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit — decrements the review counters when still live and returns its rent to the worker authority. Validated + bound in the handler (`sweep_dispute_submission`). |
-| 26 | `task_validation_config` | yes |  | yes |  | OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the swept submission is still live on a manual-validation task (pending-counter hygiene). Bound to the task in the handler. |
+| 25 | `task_submission` | yes |  | yes |  | REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the canonical TaskSubmission PDA for the defendant claim. A live record is swept before claim close; the exact system-owned empty PDA proves absence. `Option` preserves the deployed account list, but `None` fails closed. |
+| 26 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | OPTIONAL: canonical TaskValidationConfig, required when the swept manual submission is still Submitted and therefore carries counter debt. |
 
 ### Args (3)
 
@@ -1903,7 +1890,7 @@ Multisig review decision on a frozen task (Batch 3 §8): pay the worker
 (approve_completion=true) or refund the creator (false), disposing both bonds.
 Exit path — settles even while paused (money never locks).
 
-### Accounts (13)
+### Accounts (16)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -1916,10 +1903,13 @@ Exit path — settles even while paused (money never locks).
 | 7 | `treasury` | yes |  |  |  |  |
 | 8 | `creator` | yes |  |  |  |  |
 | 9 | `worker_authority` | yes |  |  |  |  |
-| 10 | `authority` |  | yes |  |  | Multisig review authority; `remaining_accounts` carries the co-signers. |
-| 11 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond was posted (the empty PDA). Forfeits go to `treasury` (== protocol_config.treasury). |
-| 12 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] |  |
-| 13 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | system-owned PDA. A legacy live record carries fee terms not stamped on Task. |
+| 11 | `operator` | yes |  | yes |  |  |
+| 12 | `referrer` | yes |  | yes |  |  |
+| 13 | `authority` |  | yes |  |  | Multisig review authority; `remaining_accounts` carries the co-signers. |
+| 14 | `creator_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:creator] | cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond was posted (the empty PDA). Forfeits go to `treasury` (== protocol_config.treasury). |
+| 15 | `worker_completion_bond` | yes |  |  | PDA ["completion_bond", account:task, account:worker_authority] |  |
+| 16 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (1)
 
@@ -1947,15 +1937,18 @@ _None._
 
 ## revoke_delegation
 
-Revoke a reputation delegation and close the account.
-Rent is returned to the delegator's authority.
+Permissionlessly retire a legacy reputation delegation without restoring
+slash-sheltered reputation. An identity-continuous record returns rent to
+its recorded authority; an orphan sends rent only to the canonical treasury.
+Orphan recovery appends exactly two accounts after the three fixed metas:
+`[canonical ProtocolConfig readonly, configured treasury writable]`.
 
 ### Accounts (3)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
-| 1 | `authority` | yes | yes |  |  | has_one → delegator_agent |
-| 2 | `delegator_agent` | yes |  |  |  |  |
+| 1 | `authority` | yes |  |  |  | recorded on `delegator_agent` and is the rent recipient. It deliberately need not sign: delegation is a retired, non-beneficial feature, and making the exit permissionless prevents an owner from blocking a mainnet cutover. |
+| 2 | `delegator_agent` | yes |  |  |  | in the handler. Unchecked is required because deployed revision 4 could close this PDA after creating a delegation. |
 | 3 | `delegation` | yes |  |  | PDA ["reputation_delegation", account:delegator_agent, account:delegation.delegatee (ReputationDelegation)] |  |
 
 ### Args (0)
@@ -2045,7 +2038,10 @@ blocked hash regardless of which CLEAN attestor the caller presents.
 
 ## set_service_listing_state
 
-Pause / reactivate / retire a service listing (provider-only).
+Pause / reactivate / retire a service listing (provider-only). Reactivating
+to `Active` requires exactly one readonly remaining account: the listing's
+canonical provider `AgentRegistration`. Pausing or retiring requires no
+remaining accounts, so a closed provider identity cannot block safe exits.
 
 ### Accounts (3)
 
@@ -2095,14 +2091,15 @@ caller consumes (the record slot is v2-else-legacy; the required
 Stake SOL on agent reputation.
 Creates or adds to an existing reputation stake account.
 
-### Accounts (4)
+### Accounts (5)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `authority` | yes | yes |  |  | has_one → agent |
-| 2 | `agent` |  |  |  |  |  |
+| 2 | `agent` |  |  |  | PDA ["agent", account:agent.agent_id (AgentRegistration)] |  |
 | 3 | `reputation_stake` | yes |  |  | PDA ["reputation_stake", account:agent] |  |
-| 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 5 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (1)
 
@@ -2193,19 +2190,20 @@ Only the agent's authority can modify its registration.
 
 Update an existing Marketplace V2 bid.
 
-### Accounts (7)
+### Accounts (8)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
-| 2 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
-| 3 | `bid` | yes |  |  | PDA ["bid", account:task, account:bidder] |  |
-| 4 | `bidder` | yes |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
-| 5 | `authority` |  | yes |  |  | has_one → bidder |
-| 6 | `bid_marketplace` |  |  |  | PDA ["bid_marketplace"] |  |
-| 7 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 2 | `task_job_spec` |  |  |  | PDA ["task_job_spec", account:task] | Current exact creator-locked job contract. A legacy unbound bid becomes accept-safe only after its bidder refreshes it through this instruction. |
+| 3 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
+| 4 | `bid` | yes |  |  | PDA ["bid", account:task, account:bidder] |  |
+| 5 | `bidder` | yes |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
+| 6 | `authority` |  | yes |  |  | has_one → bidder |
+| 7 | `bid_marketplace` |  |  |  | PDA ["bid_marketplace"] |  |
+| 8 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 
-### Args (6)
+### Args (8)
 
 | # | Arg | Type |
 |---|---|---|
@@ -2215,6 +2213,8 @@ Update an existing Marketplace V2 bid.
 | 4 | `quality_guarantee_hash` | `[u8; 32]` |
 | 5 | `metadata_hash` | `[u8; 32]` |
 | 6 | `expires_at` | `i64` |
+| 7 | `expected_job_spec_hash` | `[u8; 32]` |
+| 8 | `expected_job_spec_updated_at` | `i64` |
 
 ## update_bid_marketplace_config
 
@@ -2382,13 +2382,14 @@ Parameters can be tuned post-deployment without program upgrade.
 
 Update a service listing's terms (provider-only).
 
-### Accounts (3)
+### Accounts (4)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `listing` | yes |  |  | PDA ["service_listing", account:listing.provider_agent (ServiceListing), account:listing.listing_id (ServiceListing)] |  |
-| 2 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 3 | `authority` |  | yes |  |  | has_one → listing |
+| 2 | `provider_agent` |  |  |  | PDA ["agent", account:provider_agent.agent_id (AgentRegistration)] |  |
+| 3 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 4 | `authority` |  | yes |  |  | has_one → listing |
 
 ### Args (9)
 
@@ -2493,30 +2494,12 @@ Hardening:
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 2 | `new_treasury` |  |  |  |  | Must be either: - program-owned (preferred), or - a system-owned signer account (legacy compatibility). |
+| 2 | `new_treasury` |  | yes |  |  | Must be a system-owned signer. Production clients request the new custody key's signature through this typed account in generated account metas. |
 | 3 | `authority` |  | yes |  |  |  |
 
 ### Args (0)
 
 _None._
-
-## update_zk_image_id
-
-Rotate the trusted ZK image ID.
-
-### Accounts (3)
-
-| # | Account | Writable | Signer | Optional | PDA / address | Notes |
-|---|---|---|---|---|---|---|
-| 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
-| 2 | `zk_config` | yes |  |  | PDA ["zk_config"] |  |
-| 3 | `authority` |  | yes |  |  |  |
-
-### Args (1)
-
-| # | Arg | Type |
-|---|---|---|
-| 1 | `new_image_id` | `[u8; 32]` |
 
 ## upvote_post
 
@@ -2555,7 +2538,7 @@ Record a validator quorum vote or external attestation for a submission.
 | 7 | `task_validation_vote` | yes |  |  | PDA ["task_validation_vote", account:task_submission, account:reviewer] |  |
 | 8 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
 | 9 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 10 | `validator_agent` |  |  | yes |  | Optional validator agent for validator-quorum mode, validated in handler. |
+| 10 | `validator_agent` | yes |  | yes |  | Optional validator agent for validator-quorum mode, validated in handler. Writable because a quorum vote must lock the registration stake against immediate identity recycling (see `last_vote_timestamp` in the handler). |
 | 11 | `treasury` | yes |  |  |  |  |
 | 12 | `creator` | yes |  |  |  |  |
 | 13 | `worker_authority` | yes |  |  |  |  |
@@ -2586,7 +2569,7 @@ Voter must be an active agent. Double voting prevented by PDA uniqueness.
 |---|---|---|---|---|---|---|
 | 1 | `proposal` | yes |  |  | PDA ["proposal", account:proposal.proposer (Proposal), account:proposal.nonce (Proposal)] |  |
 | 2 | `vote` | yes |  |  | PDA ["governance_vote", account:proposal, account:authority] |  |
-| 3 | `voter` |  |  |  | PDA ["agent", account:voter.agent_id (AgentRegistration)] |  |
+| 3 | `voter` | yes |  |  | PDA ["agent", account:voter.agent_id (AgentRegistration)] |  |
 | 4 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 5 | `authority` | yes | yes |  |  | has_one → voter |
 | 6 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
@@ -2607,7 +2590,7 @@ Agent must have no pending disputes as defendant.
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
 | 1 | `authority` | yes | yes |  |  | has_one → agent |
-| 2 | `agent` |  |  |  |  |  |
+| 2 | `agent` |  |  |  | PDA ["agent", account:agent.agent_id (AgentRegistration)] |  |
 | 3 | `reputation_stake` | yes |  |  | PDA ["reputation_stake", account:agent] |  |
 
 ### Args (1)

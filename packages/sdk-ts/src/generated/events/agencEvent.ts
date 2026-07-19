@@ -75,17 +75,9 @@ import {
   type BidUpdatedEventData,
 } from "./bidUpdated";
 import {
-  getBondDepositedEventDecoder,
-  type BondDepositedEventData,
-} from "./bondDeposited";
-import {
   getBondForfeitedEventDecoder,
   type BondForfeitedEventData,
 } from "./bondForfeited";
-import {
-  getBondLockedEventDecoder,
-  type BondLockedEventData,
-} from "./bondLocked";
 import {
   getBondPostedEventDecoder,
   type BondPostedEventData,
@@ -94,14 +86,6 @@ import {
   getBondRefundedEventDecoder,
   type BondRefundedEventData,
 } from "./bondRefunded";
-import {
-  getBondReleasedEventDecoder,
-  type BondReleasedEventData,
-} from "./bondReleased";
-import {
-  getBondSlashedEventDecoder,
-  type BondSlashedEventData,
-} from "./bondSlashed";
 import {
   getContestDepositForfeitedEventDecoder,
   type ContestDepositForfeitedEventData,
@@ -211,6 +195,10 @@ import {
   type OperatorFeePaidEventData,
 } from "./operatorFeePaid";
 import {
+  getOrphanTaskChildReclaimedEventDecoder,
+  type OrphanTaskChildReclaimedEventData,
+} from "./orphanTaskChildReclaimed";
+import {
   getPostCreatedEventDecoder,
   type PostCreatedEventData,
 } from "./postCreated";
@@ -271,9 +259,9 @@ import {
   type ReputationChangedEventData,
 } from "./reputationChanged";
 import {
-  getReputationDelegatedEventDecoder,
-  type ReputationDelegatedEventData,
-} from "./reputationDelegated";
+  getReputationDelegationRetiredEventDecoder,
+  type ReputationDelegationRetiredEventData,
+} from "./reputationDelegationRetired";
 import {
   getReputationDelegationRevokedEventDecoder,
   type ReputationDelegationRevokedEventData,
@@ -322,10 +310,6 @@ import {
   getSkillUpdatedEventDecoder,
   type SkillUpdatedEventData,
 } from "./skillUpdated";
-import {
-  getSpeculativeCommitmentCreatedEventDecoder,
-  type SpeculativeCommitmentCreatedEventData,
-} from "./speculativeCommitmentCreated";
 import {
   getStateUpdatedEventDecoder,
   type StateUpdatedEventData,
@@ -414,14 +398,6 @@ import {
   getTreasuryUpdatedEventDecoder,
   type TreasuryUpdatedEventData,
 } from "./treasuryUpdated";
-import {
-  getZkConfigInitializedEventDecoder,
-  type ZkConfigInitializedEventData,
-} from "./zkConfigInitialized";
-import {
-  getZkImageIdUpdatedEventDecoder,
-  type ZkImageIdUpdatedEventData,
-} from "./zkImageIdUpdated";
 
 /**
  * Discriminated union over every event emitted by the agenc-coordination
@@ -452,13 +428,9 @@ export type AgencEvent =
   | { eventName: "BidExpired"; data: BidExpiredEventData }
   | { eventName: "BidMarketplaceInitialized"; data: BidMarketplaceInitializedEventData }
   | { eventName: "BidUpdated"; data: BidUpdatedEventData }
-  | { eventName: "BondDeposited"; data: BondDepositedEventData }
   | { eventName: "BondForfeited"; data: BondForfeitedEventData }
-  | { eventName: "BondLocked"; data: BondLockedEventData }
   | { eventName: "BondPosted"; data: BondPostedEventData }
   | { eventName: "BondRefunded"; data: BondRefundedEventData }
-  | { eventName: "BondReleased"; data: BondReleasedEventData }
-  | { eventName: "BondSlashed"; data: BondSlashedEventData }
   | { eventName: "ContestDepositForfeited"; data: ContestDepositForfeitedEventData }
   | { eventName: "DefaultTrustListUpdated"; data: DefaultTrustListUpdatedEventData }
   | { eventName: "DependentTaskCreated"; data: DependentTaskCreatedEventData }
@@ -486,6 +458,7 @@ export type AgencEvent =
   | { eventName: "ModerationHeartbeatRecorded"; data: ModerationHeartbeatRecordedEventData }
   | { eventName: "MultisigUpdated"; data: MultisigUpdatedEventData }
   | { eventName: "OperatorFeePaid"; data: OperatorFeePaidEventData }
+  | { eventName: "OrphanTaskChildReclaimed"; data: OrphanTaskChildReclaimedEventData }
   | { eventName: "PostCreated"; data: PostCreatedEventData }
   | { eventName: "PostUpvoted"; data: PostUpvotedEventData }
   | { eventName: "ProposalCancelled"; data: ProposalCancelledEventData }
@@ -501,7 +474,7 @@ export type AgencEvent =
   | { eventName: "RejectFrozenExpired"; data: RejectFrozenExpiredEventData }
   | { eventName: "RejectFrozenResolved"; data: RejectFrozenResolvedEventData }
   | { eventName: "ReputationChanged"; data: ReputationChangedEventData }
-  | { eventName: "ReputationDelegated"; data: ReputationDelegatedEventData }
+  | { eventName: "ReputationDelegationRetired"; data: ReputationDelegationRetiredEventData }
   | { eventName: "ReputationDelegationRevoked"; data: ReputationDelegationRevokedEventData }
   | { eventName: "ReputationStakeWithdrawn"; data: ReputationStakeWithdrawnEventData }
   | { eventName: "ReputationStaked"; data: ReputationStakedEventData }
@@ -514,7 +487,6 @@ export type AgencEvent =
   | { eventName: "SkillRated"; data: SkillRatedEventData }
   | { eventName: "SkillRegistered"; data: SkillRegisteredEventData }
   | { eventName: "SkillUpdated"; data: SkillUpdatedEventData }
-  | { eventName: "SpeculativeCommitmentCreated"; data: SpeculativeCommitmentCreatedEventData }
   | { eventName: "StateUpdated"; data: StateUpdatedEventData }
   | { eventName: "StoreClosed"; data: StoreClosedEventData }
   | { eventName: "StoreRegistered"; data: StoreRegisteredEventData }
@@ -536,9 +508,7 @@ export type AgencEvent =
   | { eventName: "TaskResultValidationRecorded"; data: TaskResultValidationRecordedEventData }
   | { eventName: "TaskValidationConfigured"; data: TaskValidationConfiguredEventData }
   | { eventName: "TerminalClaimReclaimed"; data: TerminalClaimReclaimedEventData }
-  | { eventName: "TreasuryUpdated"; data: TreasuryUpdatedEventData }
-  | { eventName: "ZkConfigInitialized"; data: ZkConfigInitializedEventData }
-  | { eventName: "ZkImageIdUpdated"; data: ZkImageIdUpdatedEventData };
+  | { eventName: "TreasuryUpdated"; data: TreasuryUpdatedEventData };
 
 /** The name of any agenc-coordination program event. */
 export type AgencEventName = AgencEvent["eventName"];
@@ -679,25 +649,11 @@ export const AGENC_EVENT_DECODERS: {
       data: getBidUpdatedEventDecoder().decode(payload),
     }),
   },
-  "d2952fe84880f899": {
-    eventName: "BondDeposited",
-    decode: (payload) => ({
-      eventName: "BondDeposited",
-      data: getBondDepositedEventDecoder().decode(payload),
-    }),
-  },
   "8d2e66ea1f1081a9": {
     eventName: "BondForfeited",
     decode: (payload) => ({
       eventName: "BondForfeited",
       data: getBondForfeitedEventDecoder().decode(payload),
-    }),
-  },
-  "592d8b071669e83b": {
-    eventName: "BondLocked",
-    decode: (payload) => ({
-      eventName: "BondLocked",
-      data: getBondLockedEventDecoder().decode(payload),
     }),
   },
   "27c4028eca4a6bcd": {
@@ -712,20 +668,6 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "BondRefunded",
       data: getBondRefundedEventDecoder().decode(payload),
-    }),
-  },
-  "bfa1fa1dbc9278fb": {
-    eventName: "BondReleased",
-    decode: (payload) => ({
-      eventName: "BondReleased",
-      data: getBondReleasedEventDecoder().decode(payload),
-    }),
-  },
-  "3b07fcc3ea9c2a36": {
-    eventName: "BondSlashed",
-    decode: (payload) => ({
-      eventName: "BondSlashed",
-      data: getBondSlashedEventDecoder().decode(payload),
     }),
   },
   "1edf1a42ff5c64e9": {
@@ -917,6 +859,13 @@ export const AGENC_EVENT_DECODERS: {
       data: getOperatorFeePaidEventDecoder().decode(payload),
     }),
   },
+  "a5845a8298e5df0b": {
+    eventName: "OrphanTaskChildReclaimed",
+    decode: (payload) => ({
+      eventName: "OrphanTaskChildReclaimed",
+      data: getOrphanTaskChildReclaimedEventDecoder().decode(payload),
+    }),
+  },
   "d1b2e8189e5c4de3": {
     eventName: "PostCreated",
     decode: (payload) => ({
@@ -1022,11 +971,11 @@ export const AGENC_EVENT_DECODERS: {
       data: getReputationChangedEventDecoder().decode(payload),
     }),
   },
-  "8f0b86ca876179df": {
-    eventName: "ReputationDelegated",
+  "cbefee66128cb359": {
+    eventName: "ReputationDelegationRetired",
     decode: (payload) => ({
-      eventName: "ReputationDelegated",
-      data: getReputationDelegatedEventDecoder().decode(payload),
+      eventName: "ReputationDelegationRetired",
+      data: getReputationDelegationRetiredEventDecoder().decode(payload),
     }),
   },
   "8282bf1451586d98": {
@@ -1111,13 +1060,6 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "SkillUpdated",
       data: getSkillUpdatedEventDecoder().decode(payload),
-    }),
-  },
-  "4845601ea1f406b7": {
-    eventName: "SpeculativeCommitmentCreated",
-    decode: (payload) => ({
-      eventName: "SpeculativeCommitmentCreated",
-      data: getSpeculativeCommitmentCreatedEventDecoder().decode(payload),
     }),
   },
   "bbdc932534d24ead": {
@@ -1272,20 +1214,6 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "TreasuryUpdated",
       data: getTreasuryUpdatedEventDecoder().decode(payload),
-    }),
-  },
-  "c141022c646b47b1": {
-    eventName: "ZkConfigInitialized",
-    decode: (payload) => ({
-      eventName: "ZkConfigInitialized",
-      data: getZkConfigInitializedEventDecoder().decode(payload),
-    }),
-  },
-  "4ebc6a389fc93c02": {
-    eventName: "ZkImageIdUpdated",
-    decode: (payload) => ({
-      eventName: "ZkImageIdUpdated",
-      data: getZkImageIdUpdatedEventDecoder().decode(payload),
     }),
   },
 };

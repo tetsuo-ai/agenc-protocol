@@ -41,6 +41,15 @@ pub struct RateSkill<'info> {
     )]
     pub purchase_record: Account<'info, PurchaseRecord>,
 
+    /// Skill author's durable registration. Required so a legacy purchase made
+    /// through another agent controlled by the same wallet cannot self-rate.
+    #[account(
+        seeds = [b"agent", author_agent.agent_id.as_ref()],
+        bump = author_agent.bump,
+        constraint = skill.author == author_agent.key() @ CoordinationError::InvalidInput
+    )]
+    pub author_agent: Account<'info, AgentRegistration>,
+
     #[account(
         seeds = [b"protocol"],
         bump = protocol_config.bump
@@ -69,10 +78,13 @@ pub fn handler(ctx: Context<RateSkill>, rating: u8, review_hash: Option<[u8; 32]
     );
 
     let skill = &ctx.accounts.skill;
-    require!(skill.is_active, CoordinationError::SkillNotActive);
 
     require!(
         rater.key() != skill.author,
+        CoordinationError::SkillSelfRating
+    );
+    require!(
+        ctx.accounts.authority.key() != ctx.accounts.author_agent.authority,
         CoordinationError::SkillSelfRating
     );
 

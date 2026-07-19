@@ -100,7 +100,7 @@ pub(crate) fn validate_goods_metadata(metadata_hash: &[u8; 32], metadata_uri: &s
         CoordinationError::GoodsInvalidMetadata
     );
     require!(
-        !metadata_uri.is_empty() && metadata_uri.len() <= GOODS_METADATA_URI_MAX_LEN,
+        !metadata_uri.trim().is_empty() && metadata_uri.len() <= GOODS_METADATA_URI_MAX_LEN,
         CoordinationError::GoodsInvalidMetadata
     );
     Ok(())
@@ -138,7 +138,12 @@ pub fn handler(
         CoordinationError::GoodsPriceBelowMinimum
     );
     require!(total_supply > 0, CoordinationError::GoodsInvalidSupply);
-    validate_operator_terms(operator, operator_fee_bps, seller.authority, ctx.accounts.good.key())?;
+    validate_operator_terms(
+        operator,
+        operator_fee_bps,
+        seller.authority,
+        ctx.accounts.good.key(),
+    )?;
 
     // The BLOCK floor: a multisig-blocked content hash cannot be listed.
     require_content_not_blocked(
@@ -220,6 +225,7 @@ mod tests {
         assert!(validate_goods_metadata(&hash, "https://x/y.json").is_ok());
         assert!(validate_goods_metadata(&[0u8; 32], "https://x/y.json").is_err());
         assert!(validate_goods_metadata(&hash, "").is_err());
+        assert!(validate_goods_metadata(&hash, " \t ").is_err());
         let long = "u".repeat(GOODS_METADATA_URI_MAX_LEN + 1);
         assert!(validate_goods_metadata(&hash, &long).is_err());
         let max = "u".repeat(GOODS_METADATA_URI_MAX_LEN);

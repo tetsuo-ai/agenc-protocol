@@ -16,22 +16,27 @@ artifact storage) that integrators may optionally depend on.
 **Report privately. Do not open a public GitHub issue, PR, or discussion for a
 suspected security vulnerability.**
 
-- **Email:** `security@agenc.tech` &nbsp; **[HUMAN: create this alias]** — until
-  it is live, route reports through the maintainer's GitHub security advisory
-  flow: <https://github.com/tetsuo-ai/agenc-protocol/security/advisories/new>
-  (GitHub Private Vulnerability Reporting).
-- **PGP:** **[HUMAN: publish a key fingerprint here]** if you want encrypted
-  reports. Until then, send a request for a key over the channel above and we
-  will exchange one before you share exploit details.
+> **Operational blocker (verified 2026-07-18): there is currently no confirmed
+> private vulnerability-intake channel.** `security@agenc.tech` has not been
+> confirmed as an active mailbox, GitHub Private Vulnerability Reporting is
+> disabled for this repository, and no PGP key is published. Do not send exploit
+> details through a public issue. If you already have a trusted private contact
+> for a maintainer, ask for a reporting channel without including vulnerability
+> details in the initial message.
+
+Before the next release, a maintainer must enable and end-to-end test GitHub
+Private Vulnerability Reporting and/or a monitored security mailbox, then update
+this section and activate `.well-known/security.txt`. The checked-in
+`security.txt` is intentionally an invalid, inactive template until that is done;
+it must not be deployed as if it exposed a working contact. For the same reason,
+the current program candidate intentionally embeds no explorer-visible security
+contact record; add one only after its private endpoint has been verified.
+
 - **What to include:** affected component (program instruction / SDK / hosted
   rail), program ID + cluster, a description of the impact (fund loss, fund
   lock, unauthorized state transition, DoS), and a reproduction (a failing test,
   a transaction, or a localnet script — see `docs/LOCALNET.md` and
   `scripts/localnet-up.mjs` for a one-command full-surface validator).
-
-> **NOTE [HUMAN]:** `security@agenc.tech` is a placeholder. Create the alias (or
-> substitute the real intake address) before publishing this file, then update
-> `.well-known/security.txt` to match.
 
 ---
 
@@ -40,6 +45,12 @@ suspected security vulnerability.**
 Severity and reward priority follow the **money-path-first** ordering also used
 by the bug bounty (`docs/BUG_BOUNTY.md`).
 
+Scope must distinguish the deployed and candidate contracts. Mainnet currently
+runs revision 4 (99 instructions, deployed commit `097ded1`); current production
+source is an undeployed revision-5 candidate (97 instructions). The explicit
+100-instruction `private-zk` build is development-only and is rejected by the
+production deployment rail.
+
 ### In scope — TIER 1: program money paths (highest priority)
 
 The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
@@ -47,7 +58,9 @@ The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 
 - **Escrow custody and settlement** — `create_task`, `cancel_task`,
   `accept_task_result` / `auto_accept_task_result`, `reject_task_result`,
-  `complete_task` / `complete_task_private`, and the dispute settlement paths.
+  `complete_task`, and the dispute settlement paths. The dormant
+  `complete_task_private` ABI remains in deployed revision 4 but cannot run while
+  live `ZkConfig` is uninitialized; revision-5 production removes it entirely.
   Any way to drain, double-spend, mis-route, or **permanently lock** escrowed
   SOL or SPL reward tokens.
 - **Completion bonds** — `post_completion_bond`, `reclaim_completion_bond`, and
@@ -109,8 +122,11 @@ The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 
 ## 3. Disclosure SLA
 
-We aim to meet the following timelines (best-effort while the program is
-pre-external-audit; see `docs/BATCH_1_3_AUDIT_PREP.md`):
+We aim to meet the following timelines once a report reaches a verified private
+channel. No professional external-audit report is currently published; internal
+adversarial work and green gates are evidence, not a substitute. The inactive
+intake described in §1 must be fixed before these targets are operationally
+credible.
 
 | Stage | Target |
 |-------|--------|
@@ -172,18 +188,21 @@ disable specific task types via `update_launch_controls`
 (`programs/agenc-coordination/src/utils/version.rs`) deliberately does **not**
 consider `protocol_paused`. So a pause stops *new* work (task creation, claims,
 bids) but **never** blocks the exit/settlement paths in §5.2. This is the
-encoded "money never locks" guarantee (spec §7, Decision #4), and it is
-revert-sensitively unit-tested in `version.rs`.
+encoded "money never locks" invariant (spec §7, Decision #4), and it is
+revert-sensitively unit-tested in `version.rs`. Tests establish intended
+behavior for covered cases; they are not a guarantee that no unknown bug exists.
 
 ### 5.2 Money-never-locks exit guarantees
 
-Every escrowed task has at least one path that releases funds even while the
-protocol is paused. **Verified** against the program source — each exit calls
-`check_version_compatible_for_exit`:
+The intended invariant is that every escrowed task has at least one path that
+releases funds even while the protocol is paused. The paths below were inspected
+against program source — each exit calls `check_version_compatible_for_exit` —
+but this inventory is not a claim of formal verification:
 
 **Exit paths present in the 25-instruction canary build (allowlist —
 `scripts/check-canary-idl.mjs`) and live on the full mainnet surface
-(the full 84-instruction surface has been live since the 2026-06-11 upgrade):**
+(revision 4 is 99 instructions; the first 84-instruction full build went live
+on 2026-06-11):**
 
 - **`cancel_task`** — creator refund. Refunds `escrow.amount - escrow.distributed`
   to the creator (SOL or SPL), closes the escrow PDA, closes worker claim
@@ -212,8 +231,8 @@ protocol is paused. **Verified** against the program source — each exit calls
 - **`reclaim_completion_bond`** — **permissionless** refund of a still-live bond
   to its poster once the task is `Completed`, so a counterparty cannot strand a
   bond by omitting it during settlement (Batch 3 audit fix).
-- **`expire_dispute`** — releases escrow on a stale/under-quorum dispute
-  (creator refund path).
+- **`expire_dispute`** — applies the stale assigned-resolver expiry policy and
+  releases escrow; the retired arbiter-vote/quorum path is no longer involved.
 - **`resolve_dispute`** — settles a dispute to the winning party; bonds of the
   losing side are forfeited inside this instruction.
 - **`resolve_reject_frozen`** / **`expire_reject_frozen`** — the only exits for a
@@ -243,7 +262,10 @@ Multisig:     7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY   (program SQDS4ep65T
 
 No individual key can now unilaterally push an upgrade — the escrow-custodying
 program requires 2-of-3 signatures for any bytecode change. The migration runbook
-and full record are in `docs/UPGRADE_AUTHORITY.md`. **Residual (tracked, not yet
+and full record are in `docs/UPGRADE_AUTHORITY.md`. Revision 5 is also blocked
+on a separately reviewed 73,880-byte `ExtendProgramChecked` action through
+Squads CPI; extension and upgrade must execute in different slots, and the
+deployment rail refuses implicit auto-extension. **Residual (tracked, not yet
 done):** the three member keys are currently co-located on one operator host;
 distributing at least one onto separate hardware (a Ledger) is the remaining
 hardening — a Squads config change, no program-authority re-transfer required.
@@ -263,6 +285,9 @@ via osec.io) proves the deployed bytecode matches the source **at a public tag**
 **This repository is public.** The deployed program is OtterSec-verified against
 this repo (`is_verified: true` at
 [verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK)).
+That badge attests deployed revision 4 at commit `097ded1`; it does not attest the
+different revision-5 candidate at current HEAD before an approved upgrade and
+new verification.
 Every `protocol-v*` release also records a reproducible SHA-256 of the program
 built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
 with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
@@ -277,14 +302,14 @@ with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
 ## 7. References
 
 - Bug bounty scope & rewards: `docs/BUG_BOUNTY.md`
-- Upgrade-authority migration runbook: `docs/UPGRADE_AUTHORITY.md`
+- Upgrade-authority and pending capacity runbook: `docs/UPGRADE_AUTHORITY.md`
 - Threat model: `docs/audit/THREAT_MODEL.md`
 - Audit prep / invariants / coverage: `docs/BATCH_1_3_AUDIT_PREP.md`
 - Program surface & PDAs: `docs/PROGRAM_SURFACE.md`
 - Mainnet source of truth: `docs/MAINNET_MAINLINE.md`
 - Local full-surface validator for reproduction: `scripts/localnet-up.mjs` (`docs/LOCALNET.md`)
-- Machine-readable contact: `.well-known/security.txt` (served from the hosted
-  domain — **[HUMAN: deploys]**)
+- Machine-readable contact template: `.well-known/security.txt` (**inactive and
+  intentionally invalid until a working private channel is configured**)
 
 ---
 

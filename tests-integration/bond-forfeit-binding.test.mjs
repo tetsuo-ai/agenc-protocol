@@ -36,7 +36,8 @@ async function registerAgent(w, kp, { capabilities = 1, endpoint = "http://v.tes
 }
 
 // CreatorReview task -> moderate + publish -> W claims + posts bond + submits ->
-// creator rejects (task reopens to Open, W's claim closed, W's bond survives).
+// creator rejects (task reopens to Open, W's claim closes, and W's bond is
+// refunded atomically so it can never become a later cancel/close hostage).
 async function rejectedWorkerWithBond(w) {
   const modProg = makeProgram(w.modAuth);
   const taskId = id32();
@@ -74,12 +75,18 @@ async function rejectedWorkerWithBond(w) {
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "W claims");
   const [workerBond] = pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .postCompletionBond(1)
-    .accounts({ task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, protocolConfig: w.protocolPda, completionBond: workerBond,
+      worker: w.providerAgent, workerClaim: claim, authority: w.provider.publicKey,
+      systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "W posts bond");
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   const desc2 = Buffer.alloc(64);
@@ -89,15 +96,15 @@ async function rejectedWorkerWithBond(w) {
     .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "W submits");
 
-  // Creator rejects -> task reopens to Open; W's claim is closed; W's bond survives.
+  // Creator rejects -> task reopens to Open; claim and worker bond close together.
   expectOk(send(w.svm, await w.buyerProg.methods
     .rejectTaskResult(arr(id32()))
-    .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, agentStats: null })
+    .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, agentStats: null, workerCompletionBond: workerBond })
     .instruction(), [w.buyer]), "creator rejects");
   assert.ok(decode(w.svm, "Task", task).status.Open !== undefined, "task reopened to Open after reject");
-  assert.ok(!isClosed(w.svm, workerBond), "W's bond is hostage on the live task");
+  assert.ok(isClosed(w.svm, workerBond), "W's bond refunded atomically on rejection");
 
-  return { task, escrow, validation, jobSpec, workerBond, deadline: now + 3600 };
+  return { task, escrow, validation, jobSpec, jobHash, workerBond, deadline: now + 3600 };
 }
 
 async function claimAsSybil(w, r) {
@@ -108,7 +115,11 @@ async function claimAsSybil(w, r) {
   const [vClaim] = pda([enc("claim"), r.task.toBuffer(), vAgent.toBuffer()]);
   expectOk(send(w.svm, await vProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task: r.task, taskJobSpec: r.jobSpec, claim: vClaim, protocolConfig: w.protocolPda, worker: vAgent, authority: v.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task: r.task, taskJobSpec: r.jobSpec,
+      hireRecord: pda([enc("hire"), r.task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(r.jobHash)[0], claim: vClaim,
+      protocolConfig: w.protocolPda, worker: vAgent,
+      authority: v.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [v]), "V claims the reopened task");
   assert.ok(decode(w.svm, "Task", r.task).status.InProgress !== undefined, "task InProgress after V's claim");
   return { v, vProg, vAgent, vClaim };
@@ -147,8 +158,8 @@ test("F-1: cancel_task CANNOT forfeit an honest rejected worker's bond via a syb
     "BondNotTiedToNoShowWorker",
     "forfeit of an out-of-set worker's bond is rejected (F-1)");
 
-  // Nothing settled: W's bond is still live, the task is still InProgress.
-  assert.ok(!isClosed(w.svm, r.workerBond), "W's bond untouched by the rejected exploit");
+  // The already-refunded W bond stays closed and the task is still InProgress.
+  assert.ok(isClosed(w.svm, r.workerBond), "W's refunded bond cannot be stolen later");
   assert.ok(decode(w.svm, "Task", r.task).status.InProgress !== undefined, "task not cancelled by the rejected exploit");
 });
 
@@ -161,7 +172,9 @@ test("F-1: the legit no-show forfeit still works (bond of the LIVE no-show worke
   const [vBond] = pda([enc("completion_bond"), r.task.toBuffer(), v.publicKey.toBuffer()]);
   expectOk(send(w.svm, await vProg.methods
     .postCompletionBond(1)
-    .accounts({ task: r.task, completionBond: vBond, authority: v.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task: r.task, protocolConfig: w.protocolPda, completionBond: vBond,
+      worker: vAgent, workerClaim: vClaim, authority: v.publicKey,
+      systemProgram: SystemProgram.programId })
     .instruction(), [v]), "V posts bond");
   warpPast(w, r.deadline);
 
@@ -186,18 +199,9 @@ test("F-1: the legit no-show forfeit still works (bond of the LIVE no-show worke
 
   // The creator's delta is the escrow drain (refund + rent) PLUS the 1,000,000 forfeit
   // MINUS the 5,000-lamport tx fee (the buyer is fee payer); V's bond PDA is settled;
-  // W's bond is NOT touched.
+  // W's bond was already refunded at rejection.
   const buyerDelta = Number(w.svm.getBalance(w.buyer.publicKey)) - buyerBefore;
   assert.equal(buyerDelta, escrowBefore + 1_000_000 - 5_000, `creator received escrow (${escrowBefore}) + the live no-show worker's bond, less the tx fee (got ${buyerDelta})`);
   assert.ok(isClosed(w.svm, vBond), "V's bond PDA settled");
-  assert.ok(!isClosed(w.svm, r.workerBond), "W's bond survives the cancel");
-
-  // The task is now Cancelled (terminal), so W can reclaim their bond permissionlessly.
-  const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
-  expectOk(send(w.svm, await w.providerProg.methods
-    .reclaimCompletionBond(1)
-    .accounts({ task: r.task, completionBond: r.workerBond, party: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "W reclaims their bond on the terminal task");
-  const workerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - workerBefore;
-  assert.ok(workerDelta > 1_000_000, `W refunded their full bond (principal + rent, got ${workerDelta})`);
+  assert.ok(isClosed(w.svm, r.workerBond), "W's bond remains safely refunded");
 });

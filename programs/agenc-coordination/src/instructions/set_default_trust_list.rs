@@ -102,9 +102,7 @@ mod tests {
     fn accepts_a_complete_pointer() {
         let mut hash = [0u8; HASH_SIZE];
         hash[0] = 9;
-        assert!(
-            validate_trust_list_pointer(&hash, "agenc://trust-list/sha256/abc").is_ok()
-        );
+        assert!(validate_trust_list_pointer(&hash, "agenc://trust-list/sha256/abc").is_ok());
     }
 
     #[test]

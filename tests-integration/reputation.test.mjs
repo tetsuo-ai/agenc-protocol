@@ -30,9 +30,8 @@ import {
   SystemProgram,
 } from "./harness.mjs";
 
-// REPUTATION_STAKING_COOLDOWN / MIN_DELEGATION_DURATION in the program (seconds).
+// REPUTATION_STAKING_COOLDOWN in the program (seconds).
 const REPUTATION_STAKING_COOLDOWN = 604_800n;
-const MIN_DELEGATION_DURATION = 604_800n;
 const MIN_DELEGATION_AMOUNT = 100;
 const MAX_REPUTATION = 10000;
 // P6.7: fresh agents start at the probationary reputation, not the old max-neutral 5000.
@@ -113,6 +112,7 @@ test("stake_reputation: stakes SOL, records staked_amount + lock, moves lamports
           authority: kp.publicKey,
           agent: agentPda,
           reputationStake: stakePda,
+          protocolConfig: w.protocolPda,
           systemProgram: SystemProgram.programId,
         })
         .instruction(),
@@ -151,6 +151,7 @@ test("stake_reputation: second stake accumulates staked_amount", async () => {
         authority: kp.publicKey,
         agent: agentPda,
         reputationStake: stakePda,
+        protocolConfig: w.protocolPda,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -169,7 +170,7 @@ test("deregister_agent: blocked while reputation stake is live; allowed after fu
 
   expectOk(
     send(w.svm, await prog.methods.stakeReputation(new BN(4_000_000))
-      .accounts({ authority: kp.publicKey, agent: agentPda, reputationStake: stakePda, systemProgram: SystemProgram.programId })
+      .accounts({ authority: kp.publicKey, agent: agentPda, reputationStake: stakePda, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId })
       .instruction(), [kp]),
     "stake",
   );
@@ -193,10 +194,16 @@ test("deregister_agent: blocked while reputation stake is live; allowed after fu
     "withdraw full stake",
   );
 
-  // With the stake withdrawn (staked_amount == 0), deregistration now succeeds.
+  // With the stake withdrawn (staked_amount == 0), retirement now succeeds.
   w.svm.expireBlockhash();
   expectOk(send(w.svm, await deregIx(), [kp]), "deregister after withdrawal");
-  assert.ok(isClosed(w.svm, agentPda), "agent PDA closed");
+  const retired = decode(w.svm, "AgentRegistration", agentPda);
+  assert.deepEqual(retired.status, { Inactive: {} }, "retired identity is inactive");
+  assert.deepEqual(
+    Buffer.from(retired._reserved),
+    Buffer.from("RETD"),
+    "identity tombstone is durable",
+  );
 });
 
 test("stake_reputation: amount=0 rejected (ReputationStakeAmountTooLow)", async () => {
@@ -212,6 +219,7 @@ test("stake_reputation: amount=0 rejected (ReputationStakeAmountTooLow)", async 
         authority: kp.publicKey,
         agent: agentPda,
         reputationStake: stakePda,
+        protocolConfig: w.protocolPda,
         systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -238,6 +246,7 @@ test("stake_reputation: wrong authority rejected (UnauthorizedAgent)", async () 
         authority: intruder.publicKey,
         agent: agentPda,
         reputationStake: stakePda,
+        protocolConfig: w.protocolPda,
         systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -261,6 +270,7 @@ test("stake_reputation: non-active agent rejected (ReputationAgentNotActive)", a
         authority: kp.publicKey,
         agent: agentPda,
         reputationStake: stakePda,
+        protocolConfig: w.protocolPda,
         systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -286,6 +296,7 @@ async function setupStakedAgent(w, amount = 5_000_000) {
           authority: kp.publicKey,
           agent: agentPda,
           reputationStake: stakePda,
+          protocolConfig: w.protocolPda,
           systemProgram: SystemProgram.programId,
         })
         .instruction(),
@@ -390,22 +401,19 @@ test("withdraw_reputation_stake: over-balance rejected (ReputationStakeInsuffici
 // delegate_reputation
 // ---------------------------------------------------------------------------
 
-test("delegate_reputation: creates delegation account + debits delegator reputation", async () => {
+test("delegate_reputation: new entry is disabled atomically", async () => {
   const w = await freshWorld();
   const delegator = await registerAgent(w);
   const delegatee = await registerAgent(w);
   const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
-  // The registration must be strictly older than the delegation (audit gate).
   warpSeconds(w.svm, 2);
 
-  const repBefore = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation; // 3000 (P6.7)
-  const amount = 1000;
-
-  expectOk(
+  const repBefore = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation;
+  expectFail(
     send(
       w.svm,
       await delegator.prog.methods
-        .delegateReputation(amount, new BN(0)) // expires_at = 0 (no expiry)
+        .delegateReputation(1000, new BN(0))
         .accounts({
           authority: delegator.kp.publicKey,
           delegatorAgent: delegator.agentPda,
@@ -416,123 +424,54 @@ test("delegate_reputation: creates delegation account + debits delegator reputat
         .instruction(),
       [delegator.kp],
     ),
-    "delegate_reputation",
+    "ReputationDelegationDisabled",
+    "new reputation delegation is fail-closed",
   );
-
-  const del = decode(w.svm, "ReputationDelegation", delPda);
-  assert.equal(del.delegator.toBase58(), delegator.agentPda.toBase58(), "delegation.delegator set");
-  assert.equal(del.delegatee.toBase58(), delegatee.agentPda.toBase58(), "delegation.delegatee set");
-  assert.equal(del.amount, amount, "delegation.amount recorded");
-  assert.equal(Number(del.expires_at), 0, "delegation.expires_at = 0 (no expiry)");
-
-  const repAfter = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation;
-  assert.equal(repAfter, repBefore - amount, "delegator reputation debited by delegated amount");
-});
-
-test("delegate_reputation: self-delegation rejected (ReputationCannotDelegateSelf)", async () => {
-  const w = await freshWorld();
-  const a = await registerAgent(w);
-  // delegatee == delegator -> account constraint fails before handler runs.
-  const delPda = delegationPda(a.agentPda, a.agentPda);
-
-  const res = send(
-    w.svm,
-    await a.prog.methods
-      .delegateReputation(500, new BN(0))
-      .accounts({
-        authority: a.kp.publicKey,
-        delegatorAgent: a.agentPda,
-        delegateeAgent: a.agentPda,
-        delegation: delPda,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction(),
-    [a.kp],
+  assert.ok(isClosed(w.svm, delPda), "failed entry leaves no delegation account");
+  assert.equal(
+    decode(w.svm, "AgentRegistration", delegator.agentPda).reputation,
+    repBefore,
+    "failed entry leaves reputation unchanged",
   );
-  expectFail(res, "ReputationCannotDelegateSelf", "self delegation");
-});
-
-test("delegate_reputation: amount below minimum rejected (ReputationDelegationAmountInvalid)", async () => {
-  const w = await freshWorld();
-  const delegator = await registerAgent(w);
-  const delegatee = await registerAgent(w);
-  const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
-  warpSeconds(w.svm, 2); // registration-age gate (audit)
-
-  const res = send(
-    w.svm,
-    await delegator.prog.methods
-      .delegateReputation(MIN_DELEGATION_AMOUNT - 1, new BN(0)) // 99 < MIN(100)
-      .accounts({
-        authority: delegator.kp.publicKey,
-        delegatorAgent: delegator.agentPda,
-        delegateeAgent: delegatee.agentPda,
-        delegation: delPda,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction(),
-    [delegator.kp],
-  );
-  expectFail(res, "ReputationDelegationAmountInvalid", "delegate below minimum");
-});
-
-test("delegate_reputation: past expiry rejected (ReputationDelegationExpired)", async () => {
-  const w = await freshWorld();
-  const delegator = await registerAgent(w);
-  const delegatee = await registerAgent(w);
-  const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
-  warpSeconds(w.svm, 2); // registration-age gate (audit)
-
-  const past = w.svm.getClock().unixTimestamp - 100n; // in the past, non-zero
-
-  const res = send(
-    w.svm,
-    await delegator.prog.methods
-      .delegateReputation(500, new BN(past.toString()))
-      .accounts({
-        authority: delegator.kp.publicKey,
-        delegatorAgent: delegator.agentPda,
-        delegateeAgent: delegatee.agentPda,
-        delegation: delPda,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction(),
-    [delegator.kp],
-  );
-  expectFail(res, "ReputationDelegationExpired", "delegate with past expiry");
 });
 
 // ---------------------------------------------------------------------------
 // revoke_delegation
 // ---------------------------------------------------------------------------
 
-// Create an active delegation between two fresh agents.
+// Inject an account written by a legacy binary. The hardened binary retains
+// revoke_delegation as the safe exit even though it no longer permits creation.
 async function setupDelegation(w, amount = 1000) {
   const delegator = await registerAgent(w);
   const delegatee = await registerAgent(w);
-  const delPda = delegationPda(delegator.agentPda, delegatee.agentPda);
-  warpSeconds(w.svm, 2); // registration-age gate (audit)
-  expectOk(
-    send(
-      w.svm,
-      await delegator.prog.methods
-        .delegateReputation(amount, new BN(0))
-        .accounts({
-          authority: delegator.kp.publicKey,
-          delegatorAgent: delegator.agentPda,
-          delegateeAgent: delegatee.agentPda,
-          delegation: delPda,
-          systemProgram: SystemProgram.programId,
-        })
-        .instruction(),
-      [delegator.kp],
-    ),
-    "delegate for revoke setup",
-  );
+  warpSeconds(w.svm, 2);
+  const [delPda, bump] = pda([enc("reputation_delegation"), delegator.agentPda.toBuffer(), delegatee.agentPda.toBuffer()]);
+  const createdAt = w.svm.getClock().unixTimestamp;
+  const data = await coder.accounts.encode("ReputationDelegation", {
+    delegator: delegator.agentPda,
+    delegatee: delegatee.agentPda,
+    amount,
+    expires_at: new BN(0),
+    created_at: new BN(createdAt.toString()),
+    bump,
+    _reserved: Array(8).fill(0),
+  });
+  w.svm.setAccount(delPda, {
+    lamports: Number(w.svm.minimumBalanceForRentExemption(BigInt(data.length))),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+  const agentAccount = w.svm.getAccount(delegator.agentPda);
+  const agent = coder.accounts.decode("AgentRegistration", Buffer.from(agentAccount.data));
+  agent.reputation -= amount;
+  const agentData = await coder.accounts.encode("AgentRegistration", agent);
+  w.svm.setAccount(delegator.agentPda, { ...agentAccount, data: agentData });
   return { delegator, delegatee, delPda, amount };
 }
 
-test("revoke_delegation: after min duration closes account + restores reputation", async () => {
+test("revoke_delegation: immediately closes account without restoring reputation", async () => {
   const w = await freshWorld();
   const { delegator, delPda, amount } = await setupDelegation(w, 1000);
 
@@ -545,13 +484,8 @@ test("revoke_delegation: after min duration closes account + restores reputation
     "reputation debited on delegate (precondition)",
   );
 
-  // Warp past the minimum delegation duration so revoke is allowed.
-  const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + MIN_DELEGATION_DURATION + 1n;
-  w.svm.setClock(clk);
-
   const authBefore = lamports(w.svm, delegator.kp.publicKey);
-  const rentReclaimed = lamports(w.svm, delPda); // closed -> refunded to authority
+  const rentReclaimed = lamports(w.svm, delPda);
 
   expectOk(
     send(
@@ -569,47 +503,20 @@ test("revoke_delegation: after min duration closes account + restores reputation
     "revoke_delegation",
   );
 
-  // Account closed (close = authority).
   assert.ok(isClosed(w.svm, delPda), "delegation account closed");
 
-  // Reputation restored back to the delegator.
   const repAfterRevoke = decode(w.svm, "AgentRegistration", delegator.agentPda).reputation;
-  assert.equal(repAfterRevoke, repAfterDelegate + amount, "reputation restored on revoke");
+  assert.equal(repAfterRevoke, repAfterDelegate, "retirement restores zero reputation");
 
-  // Rent refunded to the authority (closed account lamports go to authority).
+  // The owner is also the fee payer here, so the net increase is rent minus fee.
   const authAfter = lamports(w.svm, delegator.kp.publicKey);
   assert.ok(authAfter > authBefore, "authority reclaimed rent from closed account");
   assert.ok(rentReclaimed > 0n, "delegation account held rent before close");
 });
 
-test("revoke_delegation: before min duration rejected (DelegationCooldownNotElapsed)", async () => {
-  const w = await freshWorld();
-  const { delegator, delPda } = await setupDelegation(w, 1000);
-
-  // No time warp — delegation is younger than MIN_DELEGATION_DURATION.
-  const res = send(
-    w.svm,
-    await delegator.prog.methods
-      .revokeDelegation()
-      .accounts({
-        authority: delegator.kp.publicKey,
-        delegatorAgent: delegator.agentPda,
-        delegation: delPda,
-      })
-      .instruction(),
-    [delegator.kp],
-  );
-  expectFail(res, "DelegationCooldownNotElapsed", "revoke before cooldown elapsed");
-});
-
 test("revoke_delegation: wrong authority rejected (UnauthorizedAgent)", async () => {
   const w = await freshWorld();
   const { delegator, delPda } = await setupDelegation(w, 1000);
-
-  // Warp past cooldown so the only thing wrong is the signer.
-  const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + MIN_DELEGATION_DURATION + 1n;
-  w.svm.setClock(clk);
 
   const intruder = Keypair.generate();
   w.svm.airdrop(intruder.publicKey, BigInt(100e9));

@@ -1,11 +1,13 @@
 // Facade: P6.5 surface-versioning contract.
 //
 // One program ID historically served the restricted 25-instruction canary surface on
-// mainnet and the full surface on dev/devnet (now 99 instructions / surface_revision 4).
-// `getDeployedSurface` lets a client
-// ask, against a live RPC, WHICH surface a given cluster actually exposes — so the
-// facade/client can fail-closed (throw `SurfaceNotDeployedError`) before building a
-// transaction that calls an instruction the deployed program does not have.
+// mainnet and the full surface on dev/devnet. The live revision-4 deployment has
+// 99 instructions; this revision-5 production candidate has 97 after quarantining
+// private-ZK entrypoints and retiring the dispute-vote path.
+// `getDeployedSurface` lets a client ask, against a live RPC, WHICH surface a given
+// cluster actually exposes — so the facade/client can fail-closed (throw
+// `SurfaceNotDeployedError`) before building a transaction that calls an instruction
+// the deployed program does not have.
 //
 // CRITICAL TOLERANCE REQUIREMENT (do not "simplify" away):
 // A pre-migration `ProtocolConfig` can use the PRE-P6.5 layout (349 bytes, no
@@ -54,6 +56,16 @@ export const SURFACE_REVISION_FULL = 1;
  * advertise `goods` below revision 4.
  */
 export const SURFACE_REVISION_BATCH4 = 4;
+
+/**
+ * Audit-hardening release revision. The production inventory is 97 instructions, and
+ * several existing instructions gained stricter remaining-account conventions.
+ * Mirrors `ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING` on-chain.
+ */
+export const SURFACE_REVISION_AUDIT_HARDENING = 5;
+
+/** Highest surface revision understood by this SDK build. */
+export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_AUDIT_HARDENING;
 
 /**
  * A typed capability set describing which instruction families a deployed cluster
@@ -155,8 +167,8 @@ export function readSurfaceRevision(data: Uint8Array): number {
  * program on that cluster.
  *
  * Tolerates EVERY pre-migration shape without throwing:
- * - the account is the OLD 349-byte layout (today's mainnet) → `surface_revision = 0`
- *   → returns the conservative surface (`listings: false`);
+ * - the account is the OLD 349-byte layout (a historical/pre-migration deployment) →
+ *   `surface_revision = 0` → returns the conservative surface (`listings: false`);
  * - the account does not exist at all (mis-pointed RPC / wrong program) →
  *   `surface_revision = 0` → conservative surface;
  * - the account is the new 351-byte layout with `surface_revision` stamped → the

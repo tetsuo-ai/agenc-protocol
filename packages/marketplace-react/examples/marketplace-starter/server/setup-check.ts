@@ -22,6 +22,7 @@ export interface StarterFrontendSetupConfig {
   rpcSubscriptionsUrl?: string;
   indexerUrl: string;
   backendUrl: string;
+  moderator: string;
   referrer?: ReferrerConfig;
 }
 
@@ -243,14 +244,27 @@ function validateFrontend(
     ["http:", "https:"],
     errors,
   );
+  const moderator = requireString(env, "VITE_AGENC_MODERATOR", errors);
+  const validModerator = moderator && isAddress(moderator);
+  if (moderator && !validModerator) {
+    errors.push(
+      issue(
+        "VITE_AGENC_MODERATOR",
+        "VITE_AGENC_MODERATOR must be a valid Solana address.",
+      ),
+    );
+  }
   const referrer = validateReferrer(env, errors);
-  if (!network || !rpcUrl || !indexerUrl || !backendUrl) return undefined;
+  if (!network || !rpcUrl || !indexerUrl || !backendUrl || !validModerator) {
+    return undefined;
+  }
   return {
     network,
     rpcUrl,
     ...(rpcSubscriptionsUrl ? { rpcSubscriptionsUrl } : {}),
     indexerUrl,
     backendUrl,
+    moderator,
     ...(referrer ? { referrer } : {}),
   };
 }

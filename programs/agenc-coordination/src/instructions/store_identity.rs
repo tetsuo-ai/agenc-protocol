@@ -52,7 +52,8 @@ pub(crate) fn validate_store_args(
         CoordinationError::InvalidStoreHandle
     );
     require!(
-        metadata_uri.len() <= STORE_METADATA_URI_MAX_LEN,
+        metadata_uri.len() <= STORE_METADATA_URI_MAX_LEN
+            && (metadata_uri.is_empty() || !metadata_uri.trim().is_empty()),
         CoordinationError::InvalidStoreMetadataUri
     );
     require!(
@@ -87,7 +88,7 @@ pub(crate) fn validate_store_manifest(metadata_hash: &[u8; 32], metadata_uri: &s
     // iff uri present. (Written as `!=` for clippy::nonminimal_bool; identical to
     // the original `(hash set) == !(uri empty)`.)
     require!(
-        (*metadata_hash != [0u8; 32]) != metadata_uri.is_empty(),
+        (*metadata_hash != [0u8; 32]) != metadata_uri.trim().is_empty(),
         CoordinationError::InvalidStoreManifest
     );
     Ok(())
@@ -323,8 +324,8 @@ mod tests {
     #[test]
     fn rejects_invalid_handle() {
         let (_, uri, rbps, op, obps, domain) = ok_args();
-        let err =
-            validate_store_args(&handle_bytes("Ac me"), &uri, rbps, &op, obps, &domain).unwrap_err();
+        let err = validate_store_args(&handle_bytes("Ac me"), &uri, rbps, &op, obps, &domain)
+            .unwrap_err();
         assert_eq!(err, CoordinationError::InvalidStoreHandle.into());
     }
 
@@ -337,22 +338,29 @@ mod tests {
         assert_eq!(err, CoordinationError::InvalidStoreMetadataUri.into());
         let max = "a".repeat(STORE_METADATA_URI_MAX_LEN);
         assert!(validate_store_args(&h, &max, rbps, &op, obps, &domain).is_ok());
+        let err = validate_store_args(&h, " \t ", rbps, &op, obps, &domain).unwrap_err();
+        assert_eq!(err, CoordinationError::InvalidStoreMetadataUri.into());
     }
 
     // Revert-sensitive: drop the per-leg caps and these go red.
     #[test]
     fn rejects_fees_over_per_leg_caps() {
         let (h, uri, _, op, _, domain) = ok_args();
-        let err = validate_store_args(&h, &uri, MAX_REFERRER_FEE_BPS + 1, &op, 100, &domain)
-            .unwrap_err();
+        let err =
+            validate_store_args(&h, &uri, MAX_REFERRER_FEE_BPS + 1, &op, 100, &domain).unwrap_err();
         assert_eq!(err, CoordinationError::ReferrerFeeTooHigh.into());
-        let err = validate_store_args(&h, &uri, 100, &op, MAX_OPERATOR_FEE_BPS + 1, &domain)
-            .unwrap_err();
+        let err =
+            validate_store_args(&h, &uri, 100, &op, MAX_OPERATOR_FEE_BPS + 1, &domain).unwrap_err();
         assert_eq!(err, CoordinationError::ListingOperatorFeeTooHigh.into());
-        assert!(
-            validate_store_args(&h, &uri, MAX_REFERRER_FEE_BPS, &op, MAX_OPERATOR_FEE_BPS, &domain)
-                .is_ok()
-        );
+        assert!(validate_store_args(
+            &h,
+            &uri,
+            MAX_REFERRER_FEE_BPS,
+            &op,
+            MAX_OPERATOR_FEE_BPS,
+            &domain
+        )
+        .is_ok());
     }
 
     // Revert-sensitive: drop the pairing require! and both directions go red.

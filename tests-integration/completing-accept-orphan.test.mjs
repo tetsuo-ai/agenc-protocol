@@ -18,7 +18,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import {
-  enc, arr, pda, id32,
+  enc, arr, pda, id32, coder,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
@@ -41,7 +41,12 @@ async function registerAgent(w, capabilities) {
   return { kp, prog, agentPda };
 }
 
-async function setupManualTask(w, { mode = 1, reviewWindow = 3600, validatorQuorum = 0, reward = 2_000_000, maxWorkers = 1 } = {}) {
+async function setupManualTask(w, {
+  mode = 1, reviewWindow = 3600, validatorQuorum = 0,
+  reward = 2_000_000, maxWorkers = 1,
+  taskType = maxWorkers === 1 ? 0 : 2,
+  legacyMaxWorkers = null,
+} = {}) {
   const taskId = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
@@ -53,14 +58,31 @@ async function setupManualTask(w, { mode = 1, reviewWindow = 3600, validatorQuor
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(CAP_COMPUTE), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), 0, null, 0, null, null, 0)
+    .createTask(arr(taskId), new BN(CAP_COMPUTE), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), taskType, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "manual:create_task");
-  const rw = mode === 1 ? reviewWindow : 0;
+  // New ValidatorQuorum entry is disabled. Create a valid CreatorReview config,
+  // then inject mode 2 only to exercise the grandfathered settlement exit.
   expectOk(send(w.svm, await w.buyerProg.methods
-    .configureTaskValidation(mode, new BN(rw), validatorQuorum, null)
+    .configureTaskValidation(1, new BN(reviewWindow), 0, null)
     .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "manual:configure");
+  if (mode === 2) {
+    const account = w.svm.getAccount(validation);
+    const config = coder.accounts.decode("TaskValidationConfig", Buffer.from(account.data));
+    config.mode = { ValidatorQuorum: {} };
+    config.review_window_secs = new BN(0);
+    config._reserved[0] = validatorQuorum;
+    const data = await coder.accounts.encode("TaskValidationConfig", config);
+    w.svm.setAccount(validation, { ...account, data });
+  }
+  if (legacyMaxWorkers !== null) {
+    const account = w.svm.getAccount(task);
+    const legacyTask = coder.accounts.decode("Task", Buffer.from(account.data));
+    legacyTask.max_workers = legacyMaxWorkers;
+    const data = await coder.accounts.encode("Task", legacyTask);
+    w.svm.setAccount(task, { ...account, data });
+  }
   return { task, escrow, validation, attestor, hireRecord, reward };
 }
 
@@ -78,14 +100,18 @@ async function publishJobSpec(w, task) {
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/f3", w.modAuth.publicKey)
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "publish:job-spec");
-  return { jobSpec };
+  return { jobSpec, jobHash };
 }
 
-async function claimOnly(w, { task, jobSpec }, { prog, agentPda, kp }) {
+async function claimOnly(w, { task, jobSpec, jobHash }, { prog, agentPda, kp }) {
   const [claim] = pda([enc("claim"), task.toBuffer(), agentPda.toBuffer()]);
   expectOk(send(w.svm, await prog.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: agentPda, authority: kp.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: agentPda,
+      authority: kp.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [kp]), "claim");
   return claim;
 }
@@ -128,14 +154,14 @@ async function validateIx(w, m, s, { validatorKp, validatorAgent, workerAgent, w
 test("F-3a: a completing quorum accept is blocked while a peer submission is live, then settles after the peer is rejected", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const m = await setupManualTask(w, { mode: 2, validatorQuorum: 1, maxWorkers: 2 });
-  const { jobSpec } = await publishJobSpec(w, m.task);
+  Object.assign(m, await publishJobSpec(w, m.task));
 
   const a = { prog: w.providerProg, agentPda: w.providerAgent, kp: w.provider };
   const b = await registerAgent(w, CAP_COMPUTE);
   // Both workers claim while InProgress (claim_task rejects PendingValidation),
   // then both submit.
-  const claimA = await claimOnly(w, { task: m.task, jobSpec }, a);
-  const claimB = await claimOnly(w, { task: m.task, jobSpec }, b);
+  const claimA = await claimOnly(w, m, a);
+  const claimB = await claimOnly(w, m, b);
   const subA = await submitOnly(w, m, a, claimA);
   const subB = await submitOnly(w, m, b, claimB);
   const sA = { claim: claimA, submission: subA };
@@ -149,7 +175,7 @@ test("F-3a: a completing quorum accept is blocked while a peer submission is liv
   // Completing accept on A while B is still live -> blocked (F-3a).
   expectFail(
     send(w.svm, await validateIx(w, m, sA, { validatorKp: v.kp, validatorAgent: v.agentPda, workerAgent: a.agentPda, workerKp: a.kp, approved: true }), [v.kp]),
-    "CompletingAcceptRequiresSoleLiveSubmission",
+    "ContestAcceptRequiresSoleLiveSubmission",
     "completing quorum accept with a live peer is blocked",
   );
   assert.ok(decode(w.svm, "Task", m.task).status.Completed === undefined, "task NOT completed by the blocked accept");
@@ -177,13 +203,15 @@ test("F-3a: a completing quorum accept is blocked while a peer submission is liv
 
 test("F-3b: a bounced claim stranded by a peer's completing accept is reclaimed via Rejected-submission evidence", async () => {
   const w = await freshWorld({ moderationEnabled: true });
-  const m = await setupManualTask(w, { mode: 1, maxWorkers: 2 });
-  const { jobSpec } = await publishJobSpec(w, m.task);
+  // Model the pre-hardening Exclusive width that could have two live claims.
+  // New creation rejects this shape, but the exit must remain safe for history.
+  const m = await setupManualTask(w, { mode: 1, maxWorkers: 1, legacyMaxWorkers: 2 });
+  Object.assign(m, await publishJobSpec(w, m.task));
 
   // A claims + submits; the creator bounces A (request_changes) — claim stays open,
   // submission Rejected, live_submissions back to 0.
   const a = { prog: w.providerProg, agentPda: w.providerAgent, kp: w.provider };
-  const sA = await claimSubmit(w, { task: m.task, jobSpec, validation: m.validation }, a);
+  const sA = await claimSubmit(w, m, a);
   expectOk(send(w.svm, await w.buyerProg.methods
     .requestChanges(arr(Buffer.alloc(32, 9)))
     .accounts({ task: m.task, claim: sA.claim, taskValidationConfig: m.validation, taskSubmission: sA.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey })
@@ -192,7 +220,7 @@ test("F-3b: a bounced claim stranded by a peer's completing accept is reclaimed 
 
   // B claims + submits; the creator accepts B (completing, sole live) -> Completed.
   const b = await registerAgent(w, CAP_COMPUTE);
-  const sB = await claimSubmit(w, { task: m.task, jobSpec, validation: m.validation }, b);
+  const sB = await claimSubmit(w, m, b);
   expectOk(send(w.svm, await w.buyerProg.methods
     .acceptTaskResult()
     .accounts({ task: m.task, claim: sB.claim, escrow: m.escrow, taskValidationConfig: m.validation, taskSubmission: sB.submission, worker: b.agentPda, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: b.kp.publicKey, operator: null, referrer: null, hireRecord: null, creatorCompletionBond: null, workerCompletionBond: null, tokenEscrowAta: null, workerTokenAccount: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, systemProgram: SystemProgram.programId })
@@ -206,6 +234,7 @@ test("F-3b: a bounced claim stranded by a peer's completing accept is reclaimed 
     .reclaimTerminalClaim()
     .accounts({
       authority: a.kp.publicKey, task: m.task, claim: sA.claim, taskSubmission: sA.submission,
+      taskValidationConfig: null,
       worker: a.agentPda, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
       rentRecipient: a.kp.publicKey,
     })
@@ -220,7 +249,7 @@ test("F-3b: a bounced claim stranded by a peer's completing accept is reclaimed 
   const [creatorBondPda] = pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
     .closeTask()
-    .accounts({ task: m.task, taskJobSpec: jobSpec, escrow: null, hireRecord: m.hireRecord, listing: null, creatorCompletionBond: creatorBondPda, workerCompletionBond: null, authority: w.buyer.publicKey })
+    .accounts({ task: m.task, taskJobSpec: m.jobSpec, escrow: null, hireRecord: m.hireRecord, listing: null, creatorCompletionBond: creatorBondPda, workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction(), [w.buyer]), "close_task after reclaim");
-  assert.ok(isClosed(w.svm, m.task), "task PDA closed");
+  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
 });

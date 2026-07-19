@@ -1,16 +1,11 @@
-//! Rotate the trusted ZK image ID.
+//! Rotate the trusted ZK image ID (release-disabled).
 //!
-//! M-of-N multisig gated (audit): the active ZK image ID is the root of trust for the
-//! private-completion settlement path — complete_task_private pays out escrow on any
-//! proof whose `image_id == zk_config.active_image_id`. A single compromised authority
-//! key could otherwise rotate the image to an attacker-authored guest and then drain
-//! escrow on every ZK-private task. This now requires the same M-of-N multisig threshold
-//! that gates the treasury and protocol-fee controls (update_treasury /
-//! update_protocol_fee), with co-signers passed in `remaining_accounts`.
+//! M-of-N authorization remains enforced, but this release always returns
+//! `PrivateTaskCreationDisabled` before mutation. Rotation must not imply readiness
+//! while no audited guest or mainnet verifier deployment exists.
 
 use crate::errors::CoordinationError;
-use crate::events::ZkImageIdUpdated;
-use crate::instructions::zk_config_helpers::require_nonzero_image_id;
+use crate::instructions::zk_config_helpers::reject_zk_activation;
 use crate::state::{ProtocolConfig, ZkConfig, HASH_SIZE};
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use anchor_lang::prelude::*;
@@ -38,7 +33,7 @@ pub struct UpdateZkImageId<'info> {
     pub authority: Signer<'info>,
 }
 
-pub fn handler(ctx: Context<UpdateZkImageId>, new_image_id: [u8; HASH_SIZE]) -> Result<()> {
+pub fn handler(ctx: Context<UpdateZkImageId>, _new_image_id: [u8; HASH_SIZE]) -> Result<()> {
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::MultisigNotEnoughSigners
@@ -53,23 +48,6 @@ pub fn handler(ctx: Context<UpdateZkImageId>, new_image_id: [u8; HASH_SIZE]) -> 
         ctx.accounts.zk_config.key(),
         CoordinationError::InvalidInput
     );
-    require_nonzero_image_id(&new_image_id)?;
 
-    let zk_config = &mut ctx.accounts.zk_config;
-    require!(
-        zk_config.active_image_id != new_image_id,
-        CoordinationError::InvalidInput
-    );
-
-    let old_image_id = zk_config.active_image_id;
-    zk_config.active_image_id = new_image_id;
-
-    emit!(ZkImageIdUpdated {
-        old_image_id,
-        new_image_id,
-        updated_by: ctx.accounts.authority.key(),
-        timestamp: Clock::get()?.unix_timestamp,
-    });
-
-    Ok(())
+    reject_zk_activation()
 }

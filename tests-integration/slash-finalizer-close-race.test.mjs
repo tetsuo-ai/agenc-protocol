@@ -7,26 +7,41 @@
 // (disputes_as_defendant never clears -> withdraw/deregister lock forever) or
 // evade their own initiator slash by racing the permissionless crank.
 //
-// The fix (four parts): apply_initiator_slash no longer loads the Task at all;
-// resolve_dispute keeps current_workers == 1 while a worker slash is pending
-// (the deferred claim IS still open); apply_dispute_slash decrements it when it
-// closes the claim; reclaim_terminal_claim refuses a slash-pending deferred
-// claim when the bound dispute is supplied.
+// The fix is layered: close_task retains the Task as a durable liveness anchor;
+// apply_initiator_slash no longer loads it; resolve_dispute keeps
+// current_workers == 1 while a worker slash is pending (the deferred claim IS
+// still open); apply_dispute_slash decrements it when it closes the claim; and
+// reclaim_terminal_claim refuses a slash-pending deferred claim.
 //
 // Revert-sensitive: pre-fix, close_task succeeds right after a slash-pending
-// resolve (the brick), and apply_initiator_slash fails once the Task is gone.
+// resolve (the brick), and the finalizers could then lose their required state.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import {
-  enc, arr, pda, id32,
+  PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, hireIx, injectAgentStake,
-  listingModV2Pda, taskModV2Pda, moderationBlockPda,
+  freshWorld, injectAgentStake,
+  taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
+
+async function mutateProgramAccount(w, address, accountName, mutate) {
+  const account = w.svm.getAccount(address);
+  assert.ok(account, `${accountName} account exists before mutation`);
+  const value = coder.accounts.decode(accountName, Buffer.from(account.data));
+  mutate(value);
+  const data = await coder.accounts.encode(accountName, value);
+  w.svm.setAccount(address, {
+    lamports: Number(account.lamports),
+    data,
+    owner: PID,
+    executable: false,
+    rentEpoch: 0,
+  });
+}
 
 async function assignResolver(w, resolver) {
   const [entry] = pda([enc("dispute_resolver"), resolver.publicKey.toBuffer()]);
@@ -37,20 +52,38 @@ async function assignResolver(w, resolver) {
   return entry;
 }
 
-// Hired task -> moderate/publish -> worker claims -> WORKER initiates a dispute
+// Direct reviewed task -> moderate/publish -> worker submits -> WORKER initiates a dispute
 // (initiator == defendant == worker), with a slashable stake injected first.
 async function setupWorkerDispute(w, { resolutionType, stake = 2_000_000 }) {
   const modProg = makeProgram(w.modAuth);
-  const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
-  if (isClosed(w.svm, listingMod)) {
-    expectOk(send(w.svm, await modProg.methods
-      .recordListingModeration(arr(w.specHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 9)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, listing: w.listing, listingModeration: listingMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-      .instruction(), [w.modAuth]), "listing-mod");
-  }
   const taskId = id32();
-  const { ix: hix, task, escrow, hireRecord } = await hireIx(w, { taskId, listingModeration: listingMod });
-  expectOk(send(w.svm, hix, [w.buyer]), "hire");
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [createRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const taskDescription = Buffer.alloc(64);
+  taskDescription.set(crypto.randomBytes(32), 0);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .createTask(arr(taskId), new BN(1), arr(taskDescription), new BN(4_000_000), 1,
+      new BN(now + 3600), 0, null, 0, null, null, 0)
+    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent,
+      authorityRateLimit: createRate, authority: w.buyer.publicKey,
+      creator: w.buyer.publicKey, systemProgram: SystemProgram.programId,
+      rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null,
+      tokenProgram: null, associatedTokenProgram: null })
+    .instruction(), [w.buyer]), "create direct task");
+
+  // A worker may only initiate from a live submitted delivery. Configure the
+  // hired task for CreatorReview so the submission remains pending and disputable.
+  const [validation] = pda([enc("task_validation"), task.toBuffer()]);
+  const [attestor] = pda([enc("task_attestor"), task.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
+    .configureTaskValidation(1, new BN(3600), 0, null)
+    .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor,
+      protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "configure CreatorReview");
 
   const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
@@ -66,8 +99,21 @@ async function setupWorkerDispute(w, { resolutionType, stake = 2_000_000 }) {
     .instruction(), [w.buyer]), "publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "claim");
+
+  const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
+  const resultDescription = Buffer.alloc(64);
+  resultDescription.set(crypto.randomBytes(32), 0);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .submitTaskResult(arr(id32()), arr(resultDescription))
+    .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "submit disputable delivery");
 
   await injectAgentStake(w.svm, w.providerAgent, stake);
 
@@ -77,10 +123,10 @@ async function setupWorkerDispute(w, { resolutionType, stake = 2_000_000 }) {
   const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), resolutionType, "evidence")
-    .accounts({ dispute, task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ dispute, task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: submission, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "worker initiates dispute");
 
-  return { task, escrow, hireRecord, claim, dispute, jobSpec };
+  return { task, escrow, hireRecord, claim, submission, validation, dispute, jobSpec };
 }
 
 async function resolveIx(w, r, { resolver, resolverEntry, approve }) {
@@ -97,8 +143,9 @@ async function resolveIx(w, r, { resolver, resolverEntry, approve }) {
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       treasuryTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
-      // audit F-9 optional sweep accounts: omitted here (close_task fallback)
-      taskSubmission: null, taskValidationConfig: null,
+      // Mandatory live evidence also supplies the validation counter it owes.
+      taskSubmission: r.submission,
+      taskValidationConfig: r.validation,
     })
     .instruction();
 }
@@ -107,7 +154,7 @@ async function closeTaskIx(w, task, jobSpec, hireRecord) {
   const creatorBond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   return w.buyerProg.methods
     .closeTask()
-    .accounts({ task, taskJobSpec: jobSpec ?? null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey })
+    .accounts({ task, taskJobSpec: jobSpec ?? null, escrow: null, hireRecord, listing: null, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction();
 }
 
@@ -129,13 +176,31 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
   assert.ok(!isClosed(w.svm, r.claim), "defendant claim kept open (deferred)");
   assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).disputes_as_defendant, 1, "defendant counter still pending");
 
-  // (iv) reclaim_terminal_claim with the bound dispute supplied -> ClaimSlashPending.
+  // Omission-proof guard: even with NO dispute remaining account, the required
+  // Task's durable pending bit protects the deferred claim.
   const [submission] = pda([enc("task_submission"), r.claim.toBuffer()]);
   expectFail(
     send(w.svm, await makeProgram(w.provider).methods
       .reclaimTerminalClaim()
       .accounts({
         authority: w.provider.publicKey, task: r.task, claim: r.claim, taskSubmission: submission,
+        taskValidationConfig: null,
+        worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
+        rentRecipient: w.provider.publicKey,
+      })
+      .instruction(), [w.provider]),
+    "ClaimSlashPending",
+    "omitting the dispute cannot reclaim a slash-pending claim",
+  );
+
+  // Supplying the bound dispute is rejected identically.
+  w.svm.expireBlockhash();
+  expectFail(
+    send(w.svm, await makeProgram(w.provider).methods
+      .reclaimTerminalClaim()
+      .accounts({
+        authority: w.provider.publicKey, task: r.task, claim: r.claim, taskSubmission: submission,
+        taskValidationConfig: null,
         worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
         rentRecipient: w.provider.publicKey,
       })
@@ -169,14 +234,128 @@ test("F-2: close_task is blocked while a worker slash is pending, unblocked afte
   assert.equal(decode(w.svm, "Task", r.task).current_workers, 0, "current_workers freed by the finalizer");
   assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).active_tasks, 0, "active_tasks freed by the finalizer");
 
-  // close_task now succeeds (expireBlockhash: the blocked attempt above was the
-  // byte-identical tx — without a fresh blockhash its signature would be deduped).
+  // close_task cleanup now succeeds (expireBlockhash: the blocked attempt above
+  // was byte-identical — without a fresh blockhash its signature would be deduped).
   w.svm.expireBlockhash();
   expectOk(send(w.svm, await closeTaskIx(w, r.task, r.jobSpec, r.hireRecord), [w.buyer]), "close_task after finalization");
-  assert.ok(isClosed(w.svm, r.task), "task PDA closed after finalization");
+  assert.ok(!isClosed(w.svm, r.task), "terminal task retained as a durable liveness anchor");
 });
 
-test("F-2: initiator-slash evasion is dead — apply_initiator_slash works after the Task PDA is destroyed", async () => {
+test("upgrade compatibility: deployed Refund state rejects generic reclaim and remains slash-finalizable", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const resolver = Keypair.generate();
+  w.svm.airdrop(resolver.publicKey, BigInt(100e9));
+  const resolverEntry = await assignResolver(w, resolver);
+  const r = await setupWorkerDispute(w, { resolutionType: 0, stake: 2_000_000 });
+  expectOk(
+    send(
+      w.svm,
+      await resolveIx(w, r, { resolver, resolverEntry, approve: true }),
+      [resolver],
+    ),
+    "resolve Refund before deployed-state mutation",
+  );
+
+  // Reproduce the exact state written by deployed revision 097ded1: it had no
+  // durable pending bit, zeroed current_workers at resolution, and decremented
+  // active_tasks even though the losing claim remained live.
+  await mutateProgramAccount(w, r.task, "Task", (task) => {
+    task.current_workers = 0;
+    task._reserved[2] = 0;
+  });
+  await mutateProgramAccount(w, w.providerAgent, "AgentRegistration", (worker) => {
+    worker.active_tasks = 0;
+  });
+  assert.ok(!isClosed(w.svm, r.claim), "deployed pending claim remains live");
+  assert.equal(decode(w.svm, "Task", r.task).current_workers, 0);
+  assert.equal(decode(w.svm, "Task", r.task)._reserved[2], 0);
+  assert.equal(
+    decode(w.svm, "AgentRegistration", w.providerAgent).disputes_as_defendant,
+    1,
+    "deployed state still owns one defendant liability",
+  );
+
+  // The omission-proof compatibility guard must reserve this zero-worker live
+  // claim for apply_dispute_slash. Generic reclaim previously erased the only
+  // canonical claim evidence and made the historical penalty impossible.
+  w.svm.expireBlockhash();
+  expectFail(
+    send(
+      w.svm,
+      await makeProgram(w.admin).methods
+        .reclaimTerminalClaim()
+        .accounts({
+          authority: w.admin.publicKey,
+          task: r.task,
+          claim: r.claim,
+          taskSubmission: r.submission,
+          taskValidationConfig: null,
+          worker: w.providerAgent,
+          protocolConfig: w.protocolPda,
+          treasury: w.admin.publicKey,
+          rentRecipient: w.provider.publicKey,
+        })
+        .instruction(),
+      [w.admin],
+    ),
+    "ClaimSlashPending",
+    "generic reclaim cannot consume a deployed pending-slash claim",
+  );
+
+  // close_task may clean auxiliary children in this legacy zero-counter shape,
+  // but it deliberately retains the Task tombstone. It therefore cannot destroy
+  // either account required by the historical slash finalizer.
+  w.svm.expireBlockhash();
+  expectOk(
+    send(
+      w.svm,
+      await closeTaskIx(w, r.task, r.jobSpec, r.hireRecord),
+      [w.buyer],
+    ),
+    "legacy close_task cleanup retains finalizer anchor",
+  );
+  assert.ok(!isClosed(w.svm, r.task), "close_task retains the legacy Task anchor");
+  assert.ok(!isClosed(w.svm, r.claim), "close_task cannot consume the legacy claim");
+
+  const before = decode(w.svm, "AgentRegistration", w.providerAgent);
+  w.svm.expireBlockhash();
+  expectOk(
+    send(
+      w.svm,
+      await makeProgram(w.admin).methods
+        .applyDisputeSlash()
+        .accounts({
+          dispute: r.dispute,
+          task: r.task,
+          workerClaim: r.claim,
+          workerAgent: w.providerAgent,
+          workerAuthority: w.provider.publicKey,
+          protocolConfig: w.protocolPda,
+          treasury: w.admin.publicKey,
+          authority: w.admin.publicKey,
+          escrow: null,
+          tokenEscrowAta: null,
+          treasuryTokenAccount: null,
+          rewardMint: null,
+          tokenProgram: null,
+          creator: null,
+        })
+        .instruction(),
+      [w.admin],
+    ),
+    "finalize deployed Refund",
+  );
+
+  const after = decode(w.svm, "AgentRegistration", w.providerAgent);
+  assert.ok(Number(after.stake) < Number(before.stake), "deployed Refund still applies its stake slash");
+  assert.equal(after.disputes_as_defendant, 0, "deployed defendant liability released");
+  assert.equal(after.active_tasks, 0, "deployed already-released activity counter stays zero");
+  assert.ok(isClosed(w.svm, r.claim), "deployed pending claim closed by its finalizer");
+  assert.equal(decode(w.svm, "Task", r.task).current_workers, 0);
+  assert.equal(decode(w.svm, "Task", r.task)._reserved[2], 0);
+});
+
+test("F-2: initiator-slash evasion is dead after close_task cleanup", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
   const resolver = Keypair.generate();
   w.svm.airdrop(resolver.publicKey, BigInt(100e9));
@@ -189,11 +368,12 @@ test("F-2: initiator-slash evasion is dead — apply_initiator_slash works after
   assert.equal(decode(w.svm, "Task", r.task).current_workers, 0, "no worker-slash deferral -> current_workers == 0");
   assert.ok(isClosed(w.svm, r.claim), "claim closed at resolve (no deferral)");
 
-  // The evasion play: close the Task BEFORE the permissionless initiator-slash crank.
+  // Run terminal cleanup BEFORE the permissionless initiator-slash crank. The
+  // task now remains as a durable anchor, and the crank also does not load it.
   expectOk(send(w.svm, await closeTaskIx(w, r.task, r.jobSpec, r.hireRecord), [w.buyer]), "close_task before the crank (was the evasion)");
-  assert.ok(isClosed(w.svm, r.task), "Task PDA destroyed");
+  assert.ok(!isClosed(w.svm, r.task), "Task PDA retained after cleanup");
 
-  // The finalizer no longer loads the Task — it still slashes the lost initiator.
+  // The finalizer still slashes the lost initiator after cleanup.
   const stakeBefore = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .applyInitiatorSlash()
@@ -201,8 +381,74 @@ test("F-2: initiator-slash evasion is dead — apply_initiator_slash works after
       dispute: r.dispute, initiatorAgent: w.providerAgent,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey,
     })
-    .instruction(), [w.admin]), "apply_initiator_slash with the Task gone");
+    .instruction(), [w.admin]), "apply_initiator_slash after close_task cleanup");
   const stakeAfter = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
-  assert.ok(stakeAfter < stakeBefore, `initiator slashed even after close_task (${stakeBefore} -> ${stakeAfter})`);
+  assert.ok(stakeAfter < stakeBefore, `initiator slashed after close_task cleanup (${stakeBefore} -> ${stakeAfter})`);
   assert.equal(decode(w.svm, "Dispute", r.dispute).initiator_slash_applied, true, "initiator slash recorded");
+  assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).active_dispute_votes, 0, "losing finalizer releases the pending initiator outcome");
+});
+
+test("initiator outcome finalizer releases an approved winner without penalty and rejects duplicates", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const resolver = Keypair.generate();
+  w.svm.airdrop(resolver.publicKey, BigInt(100e9));
+  const resolverEntry = await assignResolver(w, resolver);
+
+  // Worker proposes Complete and the resolver approves: the initiator wins.
+  const r = await setupWorkerDispute(w, { resolutionType: 1, stake: 2_000_000 });
+  assert.equal(decode(w.svm, "AgentRegistration", w.providerAgent).active_dispute_votes, 1, "new dispute increments the pending outcome count");
+  expectOk(send(w.svm, await resolveIx(w, r, { resolver, resolverEntry, approve: true }), [resolver]), "resolve Complete (approve) — initiator wins");
+
+  const before = decode(w.svm, "AgentRegistration", w.providerAgent);
+  expectOk(send(w.svm, await makeProgram(w.admin).methods
+    .applyInitiatorSlash()
+    .accounts({
+      dispute: r.dispute, initiatorAgent: w.providerAgent,
+      protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey,
+    })
+    .instruction(), [w.admin]), "finalize approved initiator outcome");
+
+  const after = decode(w.svm, "AgentRegistration", w.providerAgent);
+  assert.equal(after.active_dispute_votes, 0, "winner's pending outcome released");
+  assert.equal(after.stake.toString(), before.stake.toString(), "winner stake unchanged");
+  assert.equal(after.reputation, before.reputation, "winner reputation unchanged");
+  assert.equal(decode(w.svm, "Dispute", r.dispute).initiator_slash_applied, true, "winner outcome marked finalized");
+
+  w.svm.expireBlockhash();
+  expectFail(send(w.svm, await makeProgram(w.admin).methods
+    .applyInitiatorSlash()
+    .accounts({
+      dispute: r.dispute, initiatorAgent: w.providerAgent,
+      protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey,
+    })
+    .instruction(), [w.admin]), "SlashAlreadyApplied", "duplicate winner finalizer rejected");
+});
+
+test("losing initiator with zero remaining stake still receives reputation and bookkeeping finalization", async () => {
+  const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const resolver = Keypair.generate();
+  w.svm.airdrop(resolver.publicKey, BigInt(100e9));
+  const resolverEntry = await assignResolver(w, resolver);
+
+  const r = await setupWorkerDispute(w, { resolutionType: 0, stake: 2_000_000 });
+  expectOk(send(w.svm, await resolveIx(w, r, { resolver, resolverEntry, approve: false }), [resolver]), "resolve reject — initiator loses");
+
+  // Model another penalty having exhausted the current stake before this
+  // permissionless finalizer runs. Zero principal must not become a permanent
+  // identity lock or skip the reputation consequence.
+  await injectAgentStake(w.svm, w.providerAgent, 0);
+  const reputationBefore = decode(w.svm, "AgentRegistration", w.providerAgent).reputation;
+  expectOk(send(w.svm, await makeProgram(w.admin).methods
+    .applyInitiatorSlash()
+    .accounts({
+      dispute: r.dispute, initiatorAgent: w.providerAgent,
+      protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.admin.publicKey,
+    })
+    .instruction(), [w.admin]), "zero-stake losing finalizer");
+
+  const after = decode(w.svm, "AgentRegistration", w.providerAgent);
+  assert.equal(after.stake.toString(), "0", "zero stake remains zero");
+  assert.ok(after.reputation < reputationBefore, "losing reputation penalty still applied");
+  assert.equal(after.active_dispute_votes, 0, "zero-stake loss releases the pending outcome");
+  assert.equal(decode(w.svm, "Dispute", r.dispute).initiator_slash_applied, true, "zero-stake loss marked finalized");
 });

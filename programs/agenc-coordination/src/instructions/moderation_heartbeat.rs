@@ -111,7 +111,10 @@ mod tests {
         assert!(validate_heartbeat(config_auth, config_auth, mod_auth, None).is_ok());
         assert!(validate_heartbeat(mod_auth, config_auth, mod_auth, None).is_ok());
         let err = validate_heartbeat(stranger, config_auth, mod_auth, None).unwrap_err();
-        assert_eq!(err, CoordinationError::UnauthorizedModerationHeartbeat.into());
+        assert_eq!(
+            err,
+            CoordinationError::UnauthorizedModerationHeartbeat.into()
+        );
     }
 
     // Revert-sensitive: drop the config-authority-only require! on window changes
@@ -134,7 +137,10 @@ mod tests {
             Some(MIN_MODERATION_LIVENESS_WINDOW_SECS),
         )
         .unwrap_err();
-        assert_eq!(err, CoordinationError::UnauthorizedModerationHeartbeat.into());
+        assert_eq!(
+            err,
+            CoordinationError::UnauthorizedModerationHeartbeat.into()
+        );
     }
 
     // Revert-sensitive: drop the floor require! and the sub-floor case goes red.
@@ -149,7 +155,10 @@ mod tests {
             Some(MIN_MODERATION_LIVENESS_WINDOW_SECS - 1),
         )
         .unwrap_err();
-        assert_eq!(err, CoordinationError::InvalidModerationLivenessWindow.into());
+        assert_eq!(
+            err,
+            CoordinationError::InvalidModerationLivenessWindow.into()
+        );
     }
 
     // Revert-sensitive: widen the range check to floor-only (drop the ceiling) and
@@ -172,6 +181,9 @@ mod tests {
             Some(MAX_MODERATION_LIVENESS_WINDOW_SECS + 1),
         )
         .unwrap_err();
-        assert_eq!(err, CoordinationError::InvalidModerationLivenessWindow.into());
+        assert_eq!(
+            err,
+            CoordinationError::InvalidModerationLivenessWindow.into()
+        );
     }
 }

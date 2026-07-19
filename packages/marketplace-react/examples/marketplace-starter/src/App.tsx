@@ -36,12 +36,14 @@ type Step = "browse" | "activate" | "work" | "review";
 export interface AppProps {
   backend?: MarketplaceBackendAdapter;
   initialSigner?: TransactionSigner | null;
+  moderator?: Address;
   providerConfigOverrides?: Partial<AgencProviderConfig>;
 }
 
 export function App({
   backend: backendOverride,
   initialSigner = null,
+  moderator: moderatorOverride,
   providerConfigOverrides,
 }: AppProps = {}) {
   const [signer, setSigner] = useState<TransactionSigner | null>(
@@ -52,6 +54,9 @@ export function App({
     () => backendOverride ?? createHttpBackendAdapter(starterConfig.backendUrl),
     [backendOverride],
   );
+  const moderator =
+    moderatorOverride ??
+    (starterConfig.moderator ? address(starterConfig.moderator) : null);
   const providerConfig = useMemo<AgencProviderConfig>(
     () => ({
       network: starterConfig.network,
@@ -107,6 +112,7 @@ export function App({
         </header>
         <MarketplaceFlow
           backend={backend}
+          moderator={moderator}
           signer={signer}
         />
         <footer>
@@ -119,9 +125,11 @@ export function App({
 
 function MarketplaceFlow({
   backend,
+  moderator,
   signer,
 }: {
   backend: MarketplaceBackendAdapter;
+  moderator: Address | null;
   signer: TransactionSigner | null;
 }) {
   const [selected, setSelected] = useState<ListingRow | null>(null);
@@ -160,6 +168,7 @@ function MarketplaceFlow({
         ) : (
           <HireStep
             listing={selected}
+            moderator={moderator}
             signer={signer}
             onHired={(task) => {
               setTaskPda(task);
@@ -173,6 +182,7 @@ function MarketplaceFlow({
             listing={selected}
             signer={signer}
             backend={backend}
+            moderator={moderator}
             step={step}
             setStep={setStep}
           />
@@ -184,10 +194,12 @@ function MarketplaceFlow({
 
 function HireStep({
   listing,
+  moderator,
   signer,
   onHired,
 }: {
   listing: ListingRow;
+  moderator: Address | null;
   signer: TransactionSigner | null;
   onHired: (taskPda: Address) => void;
 }) {
@@ -198,15 +210,20 @@ function HireStep({
     setLocalError(null);
     try {
       if (!signer) throw new Error("Connect a wallet before hiring.");
+      if (!moderator) {
+        throw new Error("Set VITE_AGENC_MODERATOR to the listing attestor's wallet.");
+      }
       const result = await hire.hire({
         humanless: true,
         listing: listing.address,
+        providerAgent: listing.account.providerAgent,
         creator: signer,
         taskId: values.randomId32(),
         expectedPrice: listing.account.price,
         expectedVersion: listing.account.version,
         listingSpecHash: listing.account.specHash,
         reviewWindowSecs: 86_400n,
+        moderator,
       });
       onHired(result.taskPda);
     } catch (cause) {
@@ -237,6 +254,7 @@ function TaskControls({
   listing,
   signer,
   backend,
+  moderator,
   step,
   setStep,
 }: {
@@ -244,9 +262,13 @@ function TaskControls({
   listing: ListingRow | null;
   signer: TransactionSigner | null;
   backend: MarketplaceBackendAdapter;
+  moderator: Address | null;
   step: Step;
   setStep: (step: Step) => void;
 }) {
+  const [hostedJobSpec, setHostedJobSpec] =
+    useState<HostedModeratedJobSpec | null>(null);
+
   return (
     <div className="stack">
       <nav className="tabs" aria-label="Task workflow">
@@ -262,10 +284,20 @@ function TaskControls({
         ))}
       </nav>
       {step === "activate" ? (
-        <ActivationStep taskPda={taskPda} backend={backend} />
+        <ActivationStep
+          taskPda={taskPda}
+          backend={backend}
+          moderator={moderator}
+          hosted={hostedJobSpec}
+          onHosted={setHostedJobSpec}
+        />
       ) : null}
       {step === "work" ? (
-        <WorkerStep taskPda={taskPda} signer={signer} />
+        <WorkerStep
+          taskPda={taskPda}
+          signer={signer}
+          jobSpecHash={hostedJobSpec?.jobSpecHash ?? null}
+        />
       ) : null}
       {step === "review" && listing ? (
         <ReviewStep taskPda={taskPda} listing={listing} signer={signer} />
@@ -277,13 +309,18 @@ function TaskControls({
 function ActivationStep({
   taskPda,
   backend,
+  moderator,
+  hosted,
+  onHosted,
 }: {
   taskPda: Address;
   backend: MarketplaceBackendAdapter;
+  moderator: Address | null;
+  hosted: HostedModeratedJobSpec | null;
+  onHosted: (jobSpec: HostedModeratedJobSpec) => void;
 }) {
   const activation = useTaskActivation(taskPda);
   const lifecycle = useTaskLifecycle(taskPda);
-  const [hosted, setHosted] = useState<HostedModeratedJobSpec | null>(null);
   const [localError, setLocalError] = useState<Error | null>(null);
   const [spec, setSpec] = useState<StarterJobSpec>({
     title: "Complete the hired service",
@@ -298,11 +335,15 @@ function ActivationStep({
       if (!next.moderationAttested) {
         throw new Error("Backend hosted the spec but did not attest moderation.");
       }
-      setHosted(next);
+      if (!moderator) {
+        throw new Error("Set VITE_AGENC_MODERATOR to the task attestor's wallet.");
+      }
       await activation.activate({
         jobSpecHash: next.jobSpecHash,
         jobSpecUri: next.jobSpecUri,
+        moderator,
       });
+      onHosted(next);
     } catch (cause) {
       setLocalError(toError(cause));
     }
@@ -353,9 +394,11 @@ function ActivationStep({
 function WorkerStep({
   taskPda,
   signer,
+  jobSpecHash,
 }: {
   taskPda: Address;
   signer: TransactionSigner | null;
+  jobSpecHash: Uint8Array | null;
 }) {
   const work = useTaskWork(taskPda);
   const [workerAgent, setWorkerAgent] = useState("");
@@ -366,9 +409,11 @@ function WorkerStep({
     setLocalError(null);
     try {
       if (!signer) throw new Error("Connect the worker wallet before claiming.");
+      if (!jobSpecHash) throw new Error("Activate and pin the job spec before claiming.");
       await work.claim({
         worker: address(workerAgent),
         authority: signer,
+        jobSpecHash,
       });
     } catch (cause) {
       setLocalError(toError(cause));
@@ -401,7 +446,11 @@ function WorkerStep({
         <input value={proofHashHex} onChange={(event) => setProofHashHex(event.target.value)} />
       </label>
       <div className="row">
-        <button type="button" disabled={!signer || !workerAgent} onClick={() => void claim()}>
+        <button
+          type="button"
+          disabled={!signer || !workerAgent || !jobSpecHash}
+          onClick={() => void claim()}
+        >
           Claim
         </button>
         <button type="button" disabled={!signer || !workerAgent} onClick={() => void submit()}>

@@ -289,16 +289,14 @@ pub fn validate_contest_accept_window(task: &Task, now: i64) -> Result<()> {
     Ok(())
 }
 
-/// Audit M-2: a manual-review accept that COMPLETES the task must be the sole live
-/// submission. Otherwise the flip to Completed orphans any peer submission still under
-/// review — reject/expire both require a non-terminal task, so a straggler's claim +
-/// submission rent and unpaid work would be stranded forever and the Task PDA could never
-/// close. `required_completions > 1` (Collaborative) means NON-completing accepts
-/// legitimately leave peers live, so the guard fires ONLY on the accept that reaches the
-/// completion threshold. Contest tasks (required_completions == 1) are already covered by
-/// `validate_contest_accept_window`, which enforces sole-live-submission on every accept.
-/// MUST be called BEFORE `note_submission_left_review`, while `live_submissions()` still
-/// counts the submission being accepted. Pure + revert-sensitive.
+/// A non-collaborative manual-review accept that completes the task must be the
+/// sole live submission. Contest tasks are covered by
+/// `validate_contest_accept_window`; Collaborative tasks deliberately allow a
+/// completing accept with excess submitted workers because
+/// `reclaim_terminal_claim` provides their permissionless, full-refund cleanup.
+/// Keeping the old sole-submission rule for Collaborative tasks made timeout
+/// auto-accept deadlock forever whenever more results were submitted than the
+/// remaining completion slots.
 ///
 /// Schema-gated exactly like `note_submission_entered_review` / `note_submission_left_review`:
 /// a schema-0 (pre-batch-3) task NEVER maintains `live_submissions()` — it reads 0 forever —
@@ -309,6 +307,9 @@ pub fn validate_contest_accept_window(task: &Task, now: i64) -> Result<()> {
 /// live-submission accounting to exist at all.
 pub fn validate_completing_accept_sole_submission(task: &Task) -> Result<()> {
     if task.is_contest_task() {
+        return Ok(());
+    }
+    if task.task_type == TaskType::Collaborative {
         return Ok(());
     }
     if task.task_schema() < Task::TASK_SCHEMA_CONTEST_AWARE {
@@ -558,16 +559,16 @@ mod tests {
         task
     }
 
-    // Revert-sensitive: dropping the guard lets the completing accept flip a Collaborative
-    // task to Completed while a peer submission is still live, orphaning it.
+    // Collaborative stragglers have a terminal Submitted cleanup path, so a
+    // completing timeout accept must not depend on the creator returning.
     #[test]
-    fn completing_accept_requires_sole_submission_for_collaborative() {
+    fn completing_accept_allows_collaborative_straggler_cleanup() {
         // required_completions = 2. A non-completing accept (0 -> 1) may leave peers live.
         let task = schema1_task(TaskType::Collaborative, 2, 0, 2);
         assert!(validate_completing_accept_sole_submission(&task).is_ok());
-        // The completing accept (1 -> 2) with a straggler still live must be rejected.
+        // The completing accept (1 -> 2) may leave a straggler for terminal reclaim.
         let task = schema1_task(TaskType::Collaborative, 2, 1, 2);
-        assert!(validate_completing_accept_sole_submission(&task).is_err());
+        assert!(validate_completing_accept_sole_submission(&task).is_ok());
         // The completing accept as the sole live submission is allowed.
         let task = schema1_task(TaskType::Collaborative, 2, 1, 1);
         assert!(validate_completing_accept_sole_submission(&task).is_ok());
@@ -578,6 +579,12 @@ mod tests {
         // Contest is covered by validate_contest_accept_window; this guard defers to it.
         let task = schema1_task(TaskType::Competitive, 1, 0, 3);
         assert!(validate_completing_accept_sole_submission(&task).is_ok());
+    }
+
+    #[test]
+    fn completing_accept_still_rejects_non_collaborative_orphans() {
+        let task = schema1_task(TaskType::Exclusive, 1, 0, 2);
+        assert!(validate_completing_accept_sole_submission(&task).is_err());
     }
 
     // Revert-sensitive (canary regression): schema-0 tasks never maintain live_submissions(),
@@ -632,7 +639,10 @@ mod tests {
             ..Task::default()
         };
         note_submission_entered_review(&mut task).unwrap();
-        assert_eq!(task._reserved, [0u8; 16], "schema-0 reserved bytes untouched");
+        assert_eq!(
+            task._reserved, [0u8; 16],
+            "schema-0 reserved bytes untouched"
+        );
         // Decrement on schema-0 must not underflow-error either (no-op).
         note_submission_left_review(&mut task).unwrap();
         assert_eq!(task._reserved, [0u8; 16]);
@@ -641,7 +651,10 @@ mod tests {
     #[test]
     fn test_contest_ghost_at_is_deadline_plus_window() {
         let task = contest_task(1_000, 1);
-        assert_eq!(contest_ghost_at(&task).unwrap(), 1_000 + SELECTION_WINDOW_SECS);
+        assert_eq!(
+            contest_ghost_at(&task).unwrap(),
+            1_000 + SELECTION_WINDOW_SECS
+        );
         assert_eq!(SELECTION_WINDOW_SECS, 172_800);
     }
 
@@ -748,17 +761,18 @@ mod tests {
         // contest-incapable by construction (distribute_ghost_share is
         // full-module-only, so a canary contest could never exit after ghost_at).
         #[cfg(feature = "mainnet-canary")]
-        assert!(validate_task_supports_validation_mode(&contest, ValidationMode::CreatorReview)
-            .is_err());
+        assert!(
+            validate_task_supports_validation_mode(&contest, ValidationMode::CreatorReview)
+                .is_err()
+        );
         #[cfg(not(feature = "mainnet-canary"))]
         assert!(
             validate_task_supports_validation_mode(&contest, ValidationMode::CreatorReview).is_ok()
         );
-        assert!(validate_task_supports_validation_mode(
-            &contest,
-            ValidationMode::ValidatorQuorum
-        )
-        .is_err());
+        assert!(
+            validate_task_supports_validation_mode(&contest, ValidationMode::ValidatorQuorum)
+                .is_err()
+        );
         assert!(validate_task_supports_validation_mode(
             &contest,
             ValidationMode::ExternalAttestation

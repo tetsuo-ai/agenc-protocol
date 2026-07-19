@@ -40,13 +40,30 @@ pub fn handler(
     let agent = &mut ctx.accounts.agent;
     let clock = Clock::get()?;
 
-    // Rate limit: enforce cooldown between updates
+    // Deregistration leaves a permanent identity tombstone so durable child PDAs
+    // cannot be inherited by an agent_id squatter. The former authority must not be
+    // able to reactivate that tombstone without paying a fresh registration stake or
+    // restoring ProtocolConfig.total_agents.
     require!(
-        clock.unix_timestamp >= agent.last_state_update + UPDATE_COOLDOWN,
+        !agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
+
+    // Rate limit: enforce cooldown between updates
+    let next_update_at = agent
+        .last_state_update
+        .checked_add(UPDATE_COOLDOWN)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    require!(
+        clock.unix_timestamp >= next_update_at,
         CoordinationError::UpdateTooFrequent
     );
 
     if let Some(caps) = capabilities {
+        // Registration rejects a zero capability mask. Preserve that identity
+        // invariant on update as well; an agent that wants to stop advertising
+        // work can set its status to Inactive without publishing malformed state.
+        require!(caps != 0, CoordinationError::InvalidCapabilities);
         agent.capabilities = caps;
     }
 

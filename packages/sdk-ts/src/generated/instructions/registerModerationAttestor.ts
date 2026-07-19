@@ -37,7 +37,7 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findModerationAttestorPda } from "../pdas";
+import { findModerationAttestorPda, findProtocolConfigPda } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const REGISTER_MODERATION_ATTESTOR_DISCRIMINATOR: ReadonlyUint8Array =
@@ -53,6 +53,7 @@ export type RegisterModerationAttestorInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountModerationAttestor extends string | AccountMeta<string> = string,
   TAccountAttestor extends string | AccountMeta<string> = string,
+  TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -67,6 +68,9 @@ export type RegisterModerationAttestorInstruction<
         ? WritableSignerAccount<TAccountAttestor> &
             AccountSignerMeta<TAccountAttestor>
         : TAccountAttestor,
+      TAccountProtocolConfig extends string
+        ? ReadonlyAccount<TAccountProtocolConfig>
+        : TAccountProtocolConfig,
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
@@ -109,6 +113,7 @@ export function getRegisterModerationAttestorInstructionDataCodec(): FixedSizeCo
 export type RegisterModerationAttestorAsyncInput<
   TAccountModerationAttestor extends string = string,
   TAccountAttestor extends string = string,
+  TAccountProtocolConfig extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   /**
@@ -122,18 +127,27 @@ export type RegisterModerationAttestorAsyncInput<
    * permissionless path. It pays rent AND the registration bond.
    */
   attestor: TransactionSigner<TAccountAttestor>;
+  /**
+   * Emergency entry-control. A paused or version-incompatible protocol must
+   * not accept a fresh seven-day moderation bond while ordinary marketplace
+   * entry is disabled. Exit instructions intentionally do not carry this
+   * pause gate, so existing attestors can always recover their bond.
+   */
+  protocolConfig?: Address<TAccountProtocolConfig>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
 
 export async function getRegisterModerationAttestorInstructionAsync<
   TAccountModerationAttestor extends string,
   TAccountAttestor extends string,
+  TAccountProtocolConfig extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RegisterModerationAttestorAsyncInput<
     TAccountModerationAttestor,
     TAccountAttestor,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -142,6 +156,7 @@ export async function getRegisterModerationAttestorInstructionAsync<
     TProgramAddress,
     TAccountModerationAttestor,
     TAccountAttestor,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >
 > {
@@ -156,6 +171,7 @@ export async function getRegisterModerationAttestorInstructionAsync<
       isWritable: true,
     },
     attestor: { value: input.attestor ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -172,6 +188,9 @@ export async function getRegisterModerationAttestorInstructionAsync<
       ),
     });
   }
+  if (!accounts.protocolConfig.value) {
+    accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
@@ -182,6 +201,7 @@ export async function getRegisterModerationAttestorInstructionAsync<
     accounts: [
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("attestor", accounts.attestor),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRegisterModerationAttestorInstructionDataEncoder().encode({}),
@@ -190,6 +210,7 @@ export async function getRegisterModerationAttestorInstructionAsync<
     TProgramAddress,
     TAccountModerationAttestor,
     TAccountAttestor,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >);
 }
@@ -197,6 +218,7 @@ export async function getRegisterModerationAttestorInstructionAsync<
 export type RegisterModerationAttestorInput<
   TAccountModerationAttestor extends string = string,
   TAccountAttestor extends string = string,
+  TAccountProtocolConfig extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   /**
@@ -210,18 +232,27 @@ export type RegisterModerationAttestorInput<
    * permissionless path. It pays rent AND the registration bond.
    */
   attestor: TransactionSigner<TAccountAttestor>;
+  /**
+   * Emergency entry-control. A paused or version-incompatible protocol must
+   * not accept a fresh seven-day moderation bond while ordinary marketplace
+   * entry is disabled. Exit instructions intentionally do not carry this
+   * pause gate, so existing attestors can always recover their bond.
+   */
+  protocolConfig: Address<TAccountProtocolConfig>;
   systemProgram?: Address<TAccountSystemProgram>;
 };
 
 export function getRegisterModerationAttestorInstruction<
   TAccountModerationAttestor extends string,
   TAccountAttestor extends string,
+  TAccountProtocolConfig extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RegisterModerationAttestorInput<
     TAccountModerationAttestor,
     TAccountAttestor,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >,
   config?: { programAddress?: TProgramAddress },
@@ -229,6 +260,7 @@ export function getRegisterModerationAttestorInstruction<
   TProgramAddress,
   TAccountModerationAttestor,
   TAccountAttestor,
+  TAccountProtocolConfig,
   TAccountSystemProgram
 > {
   // Program address.
@@ -242,6 +274,7 @@ export function getRegisterModerationAttestorInstruction<
       isWritable: true,
     },
     attestor: { value: input.attestor ?? null, isWritable: true },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
   const accounts = originalAccounts as Record<
@@ -260,6 +293,7 @@ export function getRegisterModerationAttestorInstruction<
     accounts: [
       getAccountMeta("moderationAttestor", accounts.moderationAttestor),
       getAccountMeta("attestor", accounts.attestor),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
     data: getRegisterModerationAttestorInstructionDataEncoder().encode({}),
@@ -268,6 +302,7 @@ export function getRegisterModerationAttestorInstruction<
     TProgramAddress,
     TAccountModerationAttestor,
     TAccountAttestor,
+    TAccountProtocolConfig,
     TAccountSystemProgram
   >);
 }
@@ -289,7 +324,14 @@ export type ParsedRegisterModerationAttestorInstruction<
      * permissionless path. It pays rent AND the registration bond.
      */
     attestor: TAccountMetas[1];
-    systemProgram: TAccountMetas[2];
+    /**
+     * Emergency entry-control. A paused or version-incompatible protocol must
+     * not accept a fresh seven-day moderation bond while ordinary marketplace
+     * entry is disabled. Exit instructions intentionally do not carry this
+     * pause gate, so existing attestors can always recover their bond.
+     */
+    protocolConfig: TAccountMetas[2];
+    systemProgram: TAccountMetas[3];
   };
   data: RegisterModerationAttestorInstructionData;
 };
@@ -302,12 +344,12 @@ export function parseRegisterModerationAttestorInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRegisterModerationAttestorInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 3) {
+  if (instruction.accounts.length < 4) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 3,
+        expectedAccountMetas: 4,
       },
     );
   }
@@ -322,6 +364,7 @@ export function parseRegisterModerationAttestorInstruction<
     accounts: {
       moderationAttestor: getNextAccount(),
       attestor: getNextAccount(),
+      protocolConfig: getNextAccount(),
       systemProgram: getNextAccount(),
     },
     data: getRegisterModerationAttestorInstructionDataDecoder().decode(

@@ -62,7 +62,10 @@ export type GovernanceConfig = {
   votingPeriod: bigint;
   /** Execution delay after voting ends (timelock) in seconds */
   executionDelay: bigint;
-  /** Quorum in basis points of total agents' stake */
+  /**
+   * Quorum in basis points of the bounded two-voter vote-weight capacity.
+   * New proposals also enforce `2 * min_proposal_stake` as an absolute floor.
+   */
   quorumBps: number;
   /** Approval threshold in basis points (e.g., 5000 = simple majority) */
   approvalThresholdBps: number;
@@ -83,7 +86,10 @@ export type GovernanceConfigArgs = {
   votingPeriod: number | bigint;
   /** Execution delay after voting ends (timelock) in seconds */
   executionDelay: number | bigint;
-  /** Quorum in basis points of total agents' stake */
+  /**
+   * Quorum in basis points of the bounded two-voter vote-weight capacity.
+   * New proposals also enforce `2 * min_proposal_stake` as an absolute floor.
+   */
   quorumBps: number;
   /** Approval threshold in basis points (e.g., 5000 = simple majority) */
   approvalThresholdBps: number;

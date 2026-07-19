@@ -3,6 +3,26 @@
 /// Divisor for basis points calculations (100% = 10000 bps)
 pub const BASIS_POINTS_DIVISOR: u64 = 10000;
 
+/// Absolute anti-spam floor shared by protocol initialization, direct multisig
+/// updates, and governance payload validation. Keeping one definition prevents
+/// fresh deployments and later updates from accepting contradictory values.
+pub const MIN_DISPUTE_STAKE_LAMPORTS: u64 = 1_000;
+
+/// Absolute dispute-stake ceiling (1 SOL). Every initialization and mutation
+/// path also caps this value at `ProtocolConfig.min_agent_stake`, so a rate-limit
+/// change cannot exclude every minimally registered worker from dispute access.
+pub const MAX_DISPUTE_STAKE_LAMPORTS: u64 = 1_000_000_000;
+
+/// Governance hardening constants. Registration is permissionless and its stake
+/// is refundable, so these voting requirements provide participation friction;
+/// executable FeeChange/RateLimitChange proposals additionally require the
+/// ProtocolConfig multisig and never rely on these constants as sole authority.
+pub const MIN_GOVERNANCE_VOTER_STAKE_LAMPORTS: u64 = 10_000_000;
+pub const MIN_GOVERNANCE_VOTER_REPUTATION: u16 = 5_000;
+pub const MIN_GOVERNANCE_DISTINCT_VOTERS: u16 = 3;
+pub const MIN_GOVERNANCE_QUORUM_WEIGHT: u64 = 100_000_000;
+pub const GOVERNANCE_VOTE_WEIGHT_CAP_MULTIPLIER: u64 = 10;
+
 /// Maximum protocol fee in basis points (20% = 2000 bps)
 pub const MAX_PROTOCOL_FEE_BPS: u16 = 2000;
 
@@ -36,6 +56,16 @@ pub const MAX_PERCENT: u8 = 100;
 
 /// Reputation points awarded per successful task completion
 pub const REPUTATION_PER_COMPLETION: u16 = 100;
+
+/// Irrecoverable SOL protocol fees required per earned reputation point.
+///
+/// Completion reputation is an economic signal, not a raw completion counter. Tying
+/// it to fees actually paid into the protocol treasury prevents two colluding wallets
+/// from recycling a one-lamport reward to manufacture reputation. SPL-token fees are
+/// deliberately ineligible because arbitrary token base units have no trustworthy SOL
+/// value without an oracle. At this calibration the full 100-point completion award
+/// requires a 0.01 SOL protocol fee.
+pub const REPUTATION_FEE_LAMPORTS_PER_POINT: u64 = 100_000;
 
 /// Maximum reputation an agent can accumulate
 pub const MAX_REPUTATION: u16 = 10000;
@@ -73,6 +103,12 @@ pub const MIN_VOTERS_FOR_RESOLUTION: usize = 3;
 /// longer exists, so a dispute never records a voter and resolve/expire no longer take
 /// `(vote, arbiter)` pairs. This cap is unreferenced; retained only for API stability.
 pub const MAX_DISPUTE_VOTERS: u8 = 20;
+
+/// Maximum simultaneous workers supportable by the monolithic dispute unwind.
+/// Resolution and expiry carry every other `(claim, worker)` pair in one Solana
+/// transaction; four workers preserves room for the fixed accounts and maximum
+/// rationale payload. Larger collaboration needs chunked settlement state.
+pub const DISPUTE_SAFE_MAX_WORKERS: u8 = 4;
 
 // ============================================================================
 // Reputation Economy Constants

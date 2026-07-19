@@ -42,6 +42,7 @@ import {
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findTaskValidationConfigPda,
+  findWorkerCompletionBondPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -67,6 +68,7 @@ export type RejectTaskResultInstruction<
   TAccountAgentStats extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
+  TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -103,6 +105,9 @@ export type RejectTaskResultInstruction<
       TAccountSystemProgram extends string
         ? ReadonlyAccount<TAccountSystemProgram>
         : TAccountSystemProgram,
+      TAccountWorkerCompletionBond extends string
+        ? WritableAccount<TAccountWorkerCompletionBond>
+        : TAccountWorkerCompletionBond,
       ...TRemainingAccounts,
     ]
   >;
@@ -154,6 +159,7 @@ export type RejectTaskResultAsyncInput<
   TAccountWorkerAuthority extends string = string,
   TAccountAgentStats extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountWorkerCompletionBond extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -172,6 +178,13 @@ export type RejectTaskResultAsyncInput<
   agentStats?: Address<TAccountAgentStats>;
   /** Required only when `agent_stats` is supplied (for `init_if_needed`). */
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * The rejected worker's completion bond is refunded at the same atomic
+   * boundary that closes their claim. Leaving it alive after the worker
+   * identity disappears from the Task made later cancel/close callers unable
+   * to prove which worker bond still existed and allowed permanent stranding.
+   */
+  workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
   rejectionHash: RejectTaskResultInstructionDataArgs["rejectionHash"];
 };
 
@@ -186,6 +199,7 @@ export async function getRejectTaskResultInstructionAsync<
   TAccountWorkerAuthority extends string,
   TAccountAgentStats extends string,
   TAccountSystemProgram extends string,
+  TAccountWorkerCompletionBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RejectTaskResultAsyncInput<
@@ -198,7 +212,8 @@ export async function getRejectTaskResultInstructionAsync<
     TAccountCreator,
     TAccountWorkerAuthority,
     TAccountAgentStats,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerCompletionBond
   >,
   config?: { programAddress?: TProgramAddress },
 ): Promise<
@@ -213,7 +228,8 @@ export async function getRejectTaskResultInstructionAsync<
     TAccountCreator,
     TAccountWorkerAuthority,
     TAccountAgentStats,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerCompletionBond
   >
 > {
   // Program address.
@@ -235,6 +251,10 @@ export async function getRejectTaskResultInstructionAsync<
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    workerCompletionBond: {
+      value: input.workerCompletionBond ?? null,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -276,6 +296,18 @@ export async function getRejectTaskResultInstructionAsync<
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
   }
+  if (!accounts.workerCompletionBond.value) {
+    accounts.workerCompletionBond.value = await findWorkerCompletionBondPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+      workerAuthority: getAddressFromResolvedInstructionAccount(
+        "workerAuthority",
+        accounts.workerAuthority.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -290,6 +322,7 @@ export async function getRejectTaskResultInstructionAsync<
       getAccountMeta("workerAuthority", accounts.workerAuthority),
       getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
     ],
     data: getRejectTaskResultInstructionDataEncoder().encode(
       args as RejectTaskResultInstructionDataArgs,
@@ -306,7 +339,8 @@ export async function getRejectTaskResultInstructionAsync<
     TAccountCreator,
     TAccountWorkerAuthority,
     TAccountAgentStats,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerCompletionBond
   >);
 }
 
@@ -321,6 +355,7 @@ export type RejectTaskResultInput<
   TAccountWorkerAuthority extends string = string,
   TAccountAgentStats extends string = string,
   TAccountSystemProgram extends string = string,
+  TAccountWorkerCompletionBond extends string = string,
 > = {
   task: Address<TAccountTask>;
   claim: Address<TAccountClaim>;
@@ -339,6 +374,13 @@ export type RejectTaskResultInput<
   agentStats?: Address<TAccountAgentStats>;
   /** Required only when `agent_stats` is supplied (for `init_if_needed`). */
   systemProgram?: Address<TAccountSystemProgram>;
+  /**
+   * The rejected worker's completion bond is refunded at the same atomic
+   * boundary that closes their claim. Leaving it alive after the worker
+   * identity disappears from the Task made later cancel/close callers unable
+   * to prove which worker bond still existed and allowed permanent stranding.
+   */
+  workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   rejectionHash: RejectTaskResultInstructionDataArgs["rejectionHash"];
 };
 
@@ -353,6 +395,7 @@ export function getRejectTaskResultInstruction<
   TAccountWorkerAuthority extends string,
   TAccountAgentStats extends string,
   TAccountSystemProgram extends string,
+  TAccountWorkerCompletionBond extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: RejectTaskResultInput<
@@ -365,7 +408,8 @@ export function getRejectTaskResultInstruction<
     TAccountCreator,
     TAccountWorkerAuthority,
     TAccountAgentStats,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerCompletionBond
   >,
   config?: { programAddress?: TProgramAddress },
 ): RejectTaskResultInstruction<
@@ -379,7 +423,8 @@ export function getRejectTaskResultInstruction<
   TAccountCreator,
   TAccountWorkerAuthority,
   TAccountAgentStats,
-  TAccountSystemProgram
+  TAccountSystemProgram,
+  TAccountWorkerCompletionBond
 > {
   // Program address.
   const programAddress =
@@ -400,6 +445,10 @@ export function getRejectTaskResultInstruction<
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
     agentStats: { value: input.agentStats ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
+    workerCompletionBond: {
+      value: input.workerCompletionBond ?? null,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -428,6 +477,7 @@ export function getRejectTaskResultInstruction<
       getAccountMeta("workerAuthority", accounts.workerAuthority),
       getAccountMeta("agentStats", accounts.agentStats),
       getAccountMeta("systemProgram", accounts.systemProgram),
+      getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
     ],
     data: getRejectTaskResultInstructionDataEncoder().encode(
       args as RejectTaskResultInstructionDataArgs,
@@ -444,7 +494,8 @@ export function getRejectTaskResultInstruction<
     TAccountCreator,
     TAccountWorkerAuthority,
     TAccountAgentStats,
-    TAccountSystemProgram
+    TAccountSystemProgram,
+    TAccountWorkerCompletionBond
   >);
 }
 
@@ -471,6 +522,13 @@ export type ParsedRejectTaskResultInstruction<
     agentStats?: TAccountMetas[8] | undefined;
     /** Required only when `agent_stats` is supplied (for `init_if_needed`). */
     systemProgram?: TAccountMetas[9] | undefined;
+    /**
+     * The rejected worker's completion bond is refunded at the same atomic
+     * boundary that closes their claim. Leaving it alive after the worker
+     * identity disappears from the Task made later cancel/close callers unable
+     * to prove which worker bond still existed and allowed permanent stranding.
+     */
+    workerCompletionBond: TAccountMetas[10];
   };
   data: RejectTaskResultInstructionData;
 };
@@ -483,12 +541,12 @@ export function parseRejectTaskResultInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedRejectTaskResultInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 10) {
+  if (instruction.accounts.length < 11) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 10,
+        expectedAccountMetas: 11,
       },
     );
   }
@@ -517,6 +575,7 @@ export function parseRejectTaskResultInstruction<
       workerAuthority: getNextAccount(),
       agentStats: getNextOptionalAccount(),
       systemProgram: getNextOptionalAccount(),
+      workerCompletionBond: getNextAccount(),
     },
     data: getRejectTaskResultInstructionDataDecoder().decode(instruction.data),
   };

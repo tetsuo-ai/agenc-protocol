@@ -63,7 +63,11 @@ export type PurchaseRecord = {
   timestamp: bigint;
   /** Bump seed */
   bump: number;
-  /** Reserved for future use */
+  /**
+   * Purchase metadata carved from the existing reserved tail:
+   * `_reserved[0]` snapshots the purchased `SkillRegistration::version`;
+   * bytes `[1..4]` remain reserved and must stay zero.
+   */
   reserved: ReadonlyUint8Array;
 };
 
@@ -78,7 +82,11 @@ export type PurchaseRecordArgs = {
   timestamp: number | bigint;
   /** Bump seed */
   bump: number;
-  /** Reserved for future use */
+  /**
+   * Purchase metadata carved from the existing reserved tail:
+   * `_reserved[0]` snapshots the purchased `SkillRegistration::version`;
+   * bytes `[1..4]` remain reserved and must stay zero.
+   */
   reserved: ReadonlyUint8Array;
 };
 

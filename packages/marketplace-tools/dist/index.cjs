@@ -548,6 +548,7 @@ var prepareHire = defineTool({
     additionalProperties: false,
     required: [
       "listing",
+      "providerAgent",
       "buyer",
       "creatorAgent",
       "taskId",
@@ -558,6 +559,10 @@ var prepareHire = defineTool({
     ],
     properties: {
       listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
+      providerAgent: {
+        type: "string",
+        description: "Provider AgentRegistration PDA pinned by the listing (base58)."
+      },
       buyer: {
         type: "string",
         description: "Buyer wallet (base58) \u2014 fee payer + authority + creator of the hired task."
@@ -608,6 +613,7 @@ var prepareHire = defineTool({
     const buyer = (0, import_kit.createNoopSigner)(args.buyer);
     const input = {
       listing: args.listing,
+      providerAgent: args.providerAgent,
       creatorAgent: args.creatorAgent,
       authority: buyer,
       creator: buyer,
@@ -638,6 +644,7 @@ var prepareHireHumanless = defineTool({
     additionalProperties: false,
     required: [
       "listing",
+      "providerAgent",
       "buyer",
       "taskId",
       "expectedPrice",
@@ -647,6 +654,10 @@ var prepareHireHumanless = defineTool({
     ],
     properties: {
       listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
+      providerAgent: {
+        type: "string",
+        description: "Provider AgentRegistration PDA pinned by the listing (base58)."
+      },
       buyer: { type: "string", description: "Plain buyer wallet that signs and funds escrow." },
       taskId: { type: "string", description: "32-byte task id as 64 hex chars." },
       expectedPrice: { type: "string", description: "Expected listing price in lamports." },
@@ -688,6 +699,7 @@ var prepareHireHumanless = defineTool({
     const buyer = (0, import_kit.createNoopSigner)(args.buyer);
     const input = {
       listing: args.listing,
+      providerAgent: args.providerAgent,
       creator: buyer,
       taskId: hex32(args.taskId, "taskId", "prepare_hire_humanless"),
       expectedPrice: BigInt(args.expectedPrice),
@@ -764,7 +776,7 @@ var prepareClaim = defineTool({
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["task", "worker", "workerAuthority"],
+    required: ["task", "worker", "workerAuthority", "jobSpecHash"],
     properties: {
       task: { type: "string", description: "The Task PDA to claim (base58)." },
       worker: {
@@ -774,6 +786,10 @@ var prepareClaim = defineTool({
       workerAuthority: {
         type: "string",
         description: "The wallet authority that owns the worker agent (signs the claim)."
+      },
+      jobSpecHash: {
+        type: "string",
+        description: "The task's pinned job-spec hash as 64 hex chars (BLOCK-gate binding)."
       }
     }
   },
@@ -782,7 +798,8 @@ var prepareClaim = defineTool({
     const ix = await import_marketplace_sdk3.facade.claimTaskWithJobSpec({
       task: args.task,
       worker: args.worker,
-      authority
+      authority,
+      jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_claim")
     });
     return projectInstruction(ix);
   }
@@ -939,13 +956,20 @@ var prepareCancel = defineTool({
     required: ["task", "authority"],
     properties: {
       task: { type: "string", description: "Task PDA to cancel." },
-      authority: { type: "string", description: "Task creator wallet that signs." }
+      authority: { type: "string", description: "Task creator wallet that signs." },
+      workerBondAuthority: {
+        type: "string",
+        description: "Wallet whose worker completion bond PDA is settled (refunded, or forfeited on a no-show cancel \u2014 must then be a live claim worker, audit F-1). Defaults to the task PDA, which can never be a bond poster (empty no-op PDA)."
+      }
     }
   },
   async handler(args) {
     const ix = await import_marketplace_sdk3.facade.cancelTask({
       task: args.task,
-      authority: (0, import_kit.createNoopSigner)(args.authority)
+      authority: (0, import_kit.createNoopSigner)(args.authority),
+      // audit F5/F12: required bond PDAs are facade-derived; default to the
+      // guaranteed bond-free task PDA for the worker side.
+      workerBondAuthority: args.workerBondAuthority ?? args.task
     });
     return projectInstruction(ix);
   }

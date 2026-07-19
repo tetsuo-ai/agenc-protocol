@@ -6,8 +6,10 @@
 > multisig since 2026-07-03), and verified-build status (OtterSec badge now live)
 > have moved on, and the "0 open findings" summary in §4 is historical — the
 > 2026-07-16/17 adversarial audit found additional issues the earlier audits
-> missed. See `TODO.MD` (open hardening queue F-1..F-19, 2026-07 audit),
-> `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
+> missed. Its F-1..F-19 remediation queue is now implemented in the pending
+> revision-5 candidate; see `TODO.MD` for the remediation record,
+> `docs/MAINNET_MAINLINE.md` for the live/candidate split, and `CHANGELOG.md`
+> for current validation evidence.
 
 Single entry point for the external security auditor of the AgenC coordination
 program. The program **custodies escrow, completion bonds, and reputation stakes**, so

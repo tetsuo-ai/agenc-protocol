@@ -5,10 +5,13 @@
  */
 
 import {
+  fixDecoderSize,
   getAddressDecoder,
+  getBytesDecoder,
   getI64Decoder,
   getStructDecoder,
   getU64Decoder,
+  getU8Decoder,
   type Address,
   type Decoder,
   type ReadonlyUint8Array,
@@ -24,6 +27,8 @@ export type SkillPurchasedEventData = {
   skill: Address;
   buyer: Address;
   author: Address;
+  contentHash: ReadonlyUint8Array;
+  contentVersion: number;
   pricePaid: bigint;
   protocolFee: bigint;
   timestamp: bigint;
@@ -38,6 +43,8 @@ export function getSkillPurchasedEventDecoder(): Decoder<SkillPurchasedEventData
     ["skill", getAddressDecoder()],
     ["buyer", getAddressDecoder()],
     ["author", getAddressDecoder()],
+    ["contentHash", fixDecoderSize(getBytesDecoder(), 32)],
+    ["contentVersion", getU8Decoder()],
     ["pricePaid", getU64Decoder()],
     ["protocolFee", getU64Decoder()],
     ["timestamp", getI64Decoder()],

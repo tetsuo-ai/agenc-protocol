@@ -92,9 +92,12 @@ export type AgentRegistration = {
   registeredAt: bigint;
   /** Last activity timestamp */
   lastActive: bigint;
-  /** Total tasks completed */
+  /** Total tasks completed (saturating telemetry) */
   tasksCompleted: bigint;
-  /** Total rewards earned */
+  /**
+   * Total SOL rewards earned, in lamports (excludes SPL-token base units;
+   * saturating telemetry)
+   */
   totalEarned: bigint;
   /**
    * Agent reputation score (0-10000)
@@ -104,27 +107,38 @@ export type AgentRegistration = {
   reputation: number;
   /** Active task count */
   activeTasks: number;
-  /** Stake amount (for arbiters) */
+  /** Slashable stake used for protocol eligibility and governance weight */
   stake: bigint;
   /** Bump seed */
   bump: number;
-  /** Timestamp of last task creation */
+  /** Historical timestamp of last task creation */
   lastTaskCreated: bigint;
   /** Timestamp of last dispute initiated */
   lastDisputeInitiated: bigint;
-  /** Number of tasks created in current 24h window */
+  /** Historical agent-scoped task count */
   taskCount24h: number;
-  /** Number of disputes initiated in current 24h window */
+  /** Historical agent-scoped dispute count */
   disputeCount24h: number;
-  /** Start of current rate limit window (unix timestamp) */
+  /** Historical agent-scoped rate-limit window start */
   rateLimitWindowStart: bigint;
   /**
-   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing
-   * increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a
-   * permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable.
+   * Number of disputes initiated by this agent whose initiator outcome has not
+   * yet been finalized by `apply_initiator_slash`.
+   *
+   * P6.3 retired the arbiter-vote model that originally used this byte. Reusing
+   * it as a pending-outcome counter preserves the deployed AgentRegistration
+   * layout while making deregistration wait for every initiator liability (or
+   * no-fault outcome) to be finalized. The historical field name is retained
+   * deliberately so account layouts and generated decoders remain compatible.
    */
   activeDisputeVotes: number;
-  /** DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore. */
+  /**
+   * Governance registration-stake lock anchor. Governance voting stores the
+   * proposal voting deadline here; deregistration then enforces its 24-hour
+   * post-vote cooldown after that deadline. Legacy dispute-vote timestamps
+   * remain valid conservative anchors. The field is retained in place so the
+   * AgentRegistration layout does not change.
+   */
   lastVoteTimestamp: bigint;
   /** Timestamp of last state update */
   lastStateUpdate: bigint;
@@ -165,9 +179,12 @@ export type AgentRegistrationArgs = {
   registeredAt: number | bigint;
   /** Last activity timestamp */
   lastActive: number | bigint;
-  /** Total tasks completed */
+  /** Total tasks completed (saturating telemetry) */
   tasksCompleted: number | bigint;
-  /** Total rewards earned */
+  /**
+   * Total SOL rewards earned, in lamports (excludes SPL-token base units;
+   * saturating telemetry)
+   */
   totalEarned: number | bigint;
   /**
    * Agent reputation score (0-10000)
@@ -177,27 +194,38 @@ export type AgentRegistrationArgs = {
   reputation: number;
   /** Active task count */
   activeTasks: number;
-  /** Stake amount (for arbiters) */
+  /** Slashable stake used for protocol eligibility and governance weight */
   stake: number | bigint;
   /** Bump seed */
   bump: number;
-  /** Timestamp of last task creation */
+  /** Historical timestamp of last task creation */
   lastTaskCreated: number | bigint;
   /** Timestamp of last dispute initiated */
   lastDisputeInitiated: number | bigint;
-  /** Number of tasks created in current 24h window */
+  /** Historical agent-scoped task count */
   taskCount24h: number;
-  /** Number of disputes initiated in current 24h window */
+  /** Historical agent-scoped dispute count */
   disputeCount24h: number;
-  /** Start of current rate limit window (unix timestamp) */
+  /** Historical agent-scoped rate-limit window start */
   rateLimitWindowStart: number | bigint;
   /**
-   * DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing
-   * increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a
-   * permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable.
+   * Number of disputes initiated by this agent whose initiator outcome has not
+   * yet been finalized by `apply_initiator_slash`.
+   *
+   * P6.3 retired the arbiter-vote model that originally used this byte. Reusing
+   * it as a pending-outcome counter preserves the deployed AgentRegistration
+   * layout while making deregistration wait for every initiator liability (or
+   * no-fault outcome) to be finalized. The historical field name is retained
+   * deliberately so account layouts and generated decoders remain compatible.
    */
   activeDisputeVotes: number;
-  /** DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore. */
+  /**
+   * Governance registration-stake lock anchor. Governance voting stores the
+   * proposal voting deadline here; deregistration then enforces its 24-hour
+   * post-vote cooldown after that deadline. Legacy dispute-vote timestamps
+   * remain valid conservative anchors. The field is retained in place so the
+   * AgentRegistration layout does not change.
+   */
   lastVoteTimestamp: number | bigint;
   /** Timestamp of last state update */
   lastStateUpdate: number | bigint;

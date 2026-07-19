@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
 import {
-  enc, arr, pda, id32,
+  enc, arr, pda, id32, coder,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
@@ -70,11 +70,21 @@ async function setupReviewedTask(w, { taskType = 2, maxWorkers = 3, reward = 9_0
     .createTask(arr(taskId), new BN(CAP_COMPUTE), arr(desc), new BN(reward), maxWorkers, new BN(deadline), taskType, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "contest:create_task");
-  const rw = mode === 1 ? reviewWindow : 0;
+  // New ValidatorQuorum entry is disabled. Configure CreatorReview, then
+  // inject mode 2 solely to exercise the grandfathered settlement path.
   expectOk(send(w.svm, await w.buyerProg.methods
-    .configureTaskValidation(mode, new BN(rw), validatorQuorum, null)
+    .configureTaskValidation(1, new BN(reviewWindow), 0, null)
     .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "contest:configure CreatorReview");
+  if (mode === 2) {
+    const account = w.svm.getAccount(validation);
+    const config = coder.accounts.decode("TaskValidationConfig", Buffer.from(account.data));
+    config.mode = { ValidatorQuorum: {} };
+    config.review_window_secs = new BN(0);
+    config._reserved[0] = validatorQuorum;
+    const data = await coder.accounts.encode("TaskValidationConfig", config);
+    w.svm.setAccount(validation, { ...account, data });
+  }
   return { task, escrow, validation, attestor, reward, deadline, ghostAt: deadline + SELECTION_WINDOW_SECS };
 }
 
@@ -92,7 +102,7 @@ async function publishJobSpec(w, { task }) {
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/contest", w.modAuth.publicKey)
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "contest:job-spec");
-  return { jobSpec, taskMod };
+  return { jobSpec, jobHash, taskMod };
 }
 
 /// One entrant claims + submits. Returns { claim, submission }.
@@ -100,7 +110,11 @@ async function enterContest(w, m, entrant, { submit = true } = {}) {
   const [claim] = pda([enc("claim"), m.task.toBuffer(), entrant.agentPda.toBuffer()]);
   expectOk(send(w.svm, await entrant.prog.methods
     .claimTaskWithJobSpec()
-    .accounts({ task: m.task, taskJobSpec: m.jobSpec, claim, protocolConfig: w.protocolPda, worker: entrant.agentPda, authority: entrant.kp.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task: m.task, taskJobSpec: m.jobSpec,
+      hireRecord: pda([enc("hire"), m.task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(m.jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: entrant.agentPda,
+      authority: entrant.kp.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [entrant.kp]), "contest:claim");
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   if (submit) {
@@ -151,6 +165,7 @@ async function rejectIx(w, m, entrant, entry) {
       task: m.task, claim: entry.claim, taskValidationConfig: m.validation,
       taskSubmission: entry.submission, worker: entrant.agentPda, protocolConfig: w.protocolPda,
       creator: w.buyer.publicKey, workerAuthority: entrant.kp.publicKey, agentStats: null,
+      workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), entrant.kp.publicKey.toBuffer()])[0],
     })
     .instruction();
 }
@@ -388,13 +403,16 @@ test("contest: cancel is blocked while live submissions exist; reject-all then c
 // close_task straggler: submission rent -> WORKER, fail-closed (spec §1)
 // ===========================================================================
 
-test("close_task: straggler submission rent returns to the worker, and is FAIL-CLOSED without the worker accounts", async () => {
-  const w = await freshWorld({ moderationEnabled: true });
+async function setupRejectedStragglerForClose(w) {
   // ValidatorQuorum reject leaves the TaskSubmission alive (Rejected) with the
   // claim closed — the canonical straggler.
   const m = await setupReviewedTask(w, { taskType: 0, maxWorkers: 1, mode: 2, validatorQuorum: 1, reward: 2_000_000 });
   Object.assign(m, await publishJobSpec(w, m));
   const workerA = await registerAgent(w);
+  // The continuity rule is deliberately strict. Advance one second so this
+  // fixture is an unambiguous original registration, not the same-second clone
+  // shape exercised below.
+  warpTo(w, Number(w.svm.getClock().unixTimestamp) + 1);
   const entry = await enterContest(w, m, workerA);
 
   const validator = await registerAgent(w, CAP_VALIDATOR);
@@ -432,14 +450,22 @@ test("close_task: straggler submission rent returns to the worker, and is FAIL-C
 
   const [hireRecord] = pda([enc("hire"), m.task.toBuffer()]);
   const [creatorBondPda] = pda([enc("completion_bond"), m.task.toBuffer(), w.buyer.publicKey.toBuffer()]);
-  const closeIx = (remaining) => w.buyerProg.methods
+  const closeIx = (remaining, protocolConfig = null) => w.buyerProg.methods
     .closeTask()
     .accounts({
       task: m.task, taskJobSpec: m.jobSpec, escrow: null, hireRecord, listing: null,
       creatorCompletionBond: creatorBondPda, workerCompletionBond: null, authority: w.buyer.publicKey,
+      protocolConfig,
     })
     .remainingAccounts(remaining)
     .instruction();
+
+  return { m, workerA, entry, closeIx };
+}
+
+test("close_task: straggler submission rent returns to the worker, and is FAIL-CLOSED without the worker accounts", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const { m, workerA, entry, closeIx } = await setupRejectedStragglerForClose(w);
 
   // FAIL-CLOSED (revert-sensitive §1): submission child WITHOUT the worker agent +
   // authority accounts must error — the creator is never paid a worker's rent.
@@ -473,7 +499,76 @@ test("close_task: straggler submission rent returns to the worker, and is FAIL-C
     subRent,
     "REVERT-SENSITIVE (§1): straggler submission rent went to the WORKER, not the creator",
   );
-  assert.ok(isClosed(w.svm, m.task), "task account closed");
+  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
+});
+
+test("close_task routes equal-time and later AgentRegistration clones to the canonical treasury", async () => {
+  for (const timestampDelta of [0, 1]) {
+    const w = await freshWorld({ moderationEnabled: true });
+    const { m, workerA, entry, closeIx } = await setupRejectedStragglerForClose(w);
+    const submission = decode(w.svm, "TaskSubmission", entry.submission);
+    const cloneAuthority = Keypair.generate();
+    w.svm.airdrop(cloneAuthority.publicKey, BigInt(1e9));
+
+    // Inject the byte-accurate shape that revision 4 could create by closing the
+    // original identity and registering the same agent_id to another wallet.
+    const agentAccount = w.svm.getAccount(workerA.agentPda);
+    const clonedAgent = decode(w.svm, "AgentRegistration", workerA.agentPda);
+    clonedAgent.authority = cloneAuthority.publicKey;
+    clonedAgent.registered_at = submission.submitted_at.addn(timestampDelta);
+    const encodedClone = await coder.accounts.encode("AgentRegistration", clonedAgent);
+    assert.ok(encodedClone.length <= agentAccount.data.length);
+    const cloneData = Buffer.alloc(agentAccount.data.length);
+    encodedClone.copy(cloneData);
+    w.svm.setAccount(workerA.agentPda, {
+      ...agentAccount,
+      data: cloneData,
+    });
+
+    const childBefore = w.svm.getAccount(entry.submission);
+    const cloneBefore = balance(w, cloneAuthority.publicKey);
+    const treasuryBefore = balance(w, w.admin.publicKey);
+
+    // Without the canonical config/treasury destination, the discontinuous
+    // branch fails atomically and never falls back to the clone authority.
+    expectFail(
+      send(w.svm, await closeIx([
+        { pubkey: entry.submission, isSigner: false, isWritable: true },
+        { pubkey: workerA.agentPda, isSigner: false, isWritable: false },
+        { pubkey: cloneAuthority.publicKey, isSigner: false, isWritable: true },
+      ]), [w.buyer]),
+      "SubmissionRentAccountsRequired",
+      `clone cannot receive straggler rent (delta=${timestampDelta})`,
+    );
+    const childAfterFailure = w.svm.getAccount(entry.submission);
+    assert.equal(childAfterFailure.lamports, childBefore.lamports, "failed close preserves rent");
+    assert.deepEqual(
+      Buffer.from(childAfterFailure.data),
+      Buffer.from(childBefore.data),
+      "failed close preserves submission bytes",
+    );
+    assert.equal(balance(w, cloneAuthority.publicKey), cloneBefore);
+    assert.equal(balance(w, w.admin.publicKey), treasuryBefore);
+
+    w.svm.expireBlockhash();
+    const subRent = balance(w, entry.submission);
+    expectOk(
+      send(w.svm, await closeIx([
+        { pubkey: entry.submission, isSigner: false, isWritable: true },
+        { pubkey: workerA.agentPda, isSigner: false, isWritable: false },
+        { pubkey: w.admin.publicKey, isSigner: false, isWritable: true },
+      ], w.protocolPda), [w.buyer]),
+      `clone straggler uses treasury fallback (delta=${timestampDelta})`,
+    );
+    assert.ok(isClosed(w.svm, entry.submission));
+    assert.equal(balance(w, cloneAuthority.publicKey), cloneBefore, "clone receives zero rent");
+    assert.equal(
+      balance(w, w.admin.publicKey) - treasuryBefore,
+      subRent,
+      "canonical treasury receives exact straggler rent",
+    );
+    assert.ok(!isClosed(w.svm, m.task), "durable Task remains after cleanup");
+  }
 });
 
 // ===========================================================================

@@ -1,4 +1,4 @@
-//! Expires a dispute after voting period ends.
+//! Expires an unresolved dispute after its resolver window closes.
 //!
 //! # Permissionless Design
 //! This instruction can be called by anyone. This is intentional:
@@ -7,58 +7,51 @@
 //! - No economic risk since only valid expirations succeed
 //!
 //! # Refund-on-expiry distribution (audit 2026-07 swarm, supersedes fix #418)
-//! Post-P6.3 the arbiter vote model is retired, so an expired dispute is an
-//! UNRESOLVED dispute (no votes ever exist). The arbiter-era splits below were
-//! therefore all payout arms to a possibly zero-work worker and have been
-//! removed from the reachable state space:
-//! - Worker completed + no votes: UNREACHABLE (an open claim on a Disputed task
-//!   is never a completed claim — every completing path requires a non-Disputed
-//!   status and closes the claim; kept below only as dead, defensive code)
-//! - No completion + no votes: was a 50/50 split — now the funder is refunded
-//!   100% (a no-show could self-dispute and steal half the escrow)
-//! - "Some votes but insufficient quorum": impossible (no votes ever exist)
+//! The arbiter vote model is retired. Expiry is therefore an UNRESOLVED outcome:
+//! all remaining reward principal returns to the funder. Objective claim/submission
+//! evidence may still penalize a true no-show's bonds, but never redirects principal.
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeExpired;
 use crate::instructions::bid_settlement_helpers::{
-    settle_accepted_bid, AcceptedBidBondDisposition, AcceptedBidBookDisposition,
+    accepted_bid_no_show_bond_disposition, settle_accepted_bid, AcceptedBidBookDisposition,
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
-    check_duplicate_workers, defendant_claim_required, expected_worker_pairs,
-    pay_dispute_marketplace_legs, process_worker_claim_pair, resolve_task_marketplace_terms,
-    sweep_dispute_submission, validate_remaining_accounts_structure, MarketplaceTerms,
+    process_dispute_peer_bundles, settle_dispute_submission_evidence,
+    validate_dispute_worker_accounts,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
+use crate::instructions::post_completion_bond::dependency_parent_completed;
+use crate::instructions::program_account_helpers::{remaining_account_at, remaining_account_range};
 use crate::instructions::token_helpers::{
-    close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
+    close_token_escrow, transfer_tokens_from_escrow, validate_token_escrow_account,
     validate_unchecked_token_mint,
 };
 use crate::state::{
-    AgentRegistration, CompletionBond, Dispute, DisputeStatus, ProtocolConfig, Task, TaskClaim,
-    TaskEscrow, TaskStatus, TaskType, TaskValidationConfig,
+    AgentRegistration, CompletionBond, DependencyType, Dispute, DisputeStatus, ProtocolConfig,
+    Task, TaskClaim, TaskEscrow, TaskStatus, TaskType, TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
-fn remaining_account_info<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    index: usize,
-) -> &'info AccountInfo<'info> {
-    // SAFETY: `remaining_accounts` already stores `AccountInfo<'info>` values.
-    // We only widen the reference itself back to `'info` for downstream helpers.
-    unsafe { std::mem::transmute(&remaining_accounts[index]) }
-}
-
-fn remaining_account_slice<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    start: usize,
-    end: usize,
-) -> &'info [AccountInfo<'info>] {
-    // SAFETY: same rationale as `remaining_account_info`; the slice elements
-    // already carry `'info`, so only the slice reference needs rebinding.
-    unsafe { std::mem::transmute(&remaining_accounts[start..end]) }
+/// A dispute expiry is allowed to carry a no-show penalty only when the same
+/// objective evidence required by the ordinary claim-expiry path is present.
+/// In particular, dispute initiation cannot shorten the worker's claim window,
+/// and any live TaskSubmission protects the worker from confiscation.
+fn expiry_no_show_penalty_allowed(
+    claim_is_completed: bool,
+    claim_expires_at: i64,
+    now: i64,
+    submission_was_live: bool,
+    dependency_parent_completed: bool,
+) -> bool {
+    !claim_is_completed
+        && claim_expires_at > 0
+        && now > claim_expires_at
+        && !submission_was_live
+        && dependency_parent_completed
 }
 
 /// Note: Large accounts use Box<Account<...>> to avoid stack overflow
@@ -103,9 +96,9 @@ pub struct ExpireDispute<'info> {
 
     pub authority: Signer<'info>,
 
-    /// Worker's claim on the disputed task (fix #137)
-    /// Optional - when provided, allows decrementing worker's active_tasks
-    /// and enables fair refund distribution (fix #418)
+    /// Worker's canonical claim on the disputed task.
+    /// Retained as an optional ABI slot, but required by the handler on every expiry
+    /// to bind the defendant and unwind the claim and worker counters.
     #[account(
         mut,
         seeds = [b"claim", task.key().as_ref(), worker_claim.worker.as_ref()],
@@ -118,30 +111,25 @@ pub struct ExpireDispute<'info> {
     #[account(mut)]
     pub worker: Option<Box<Account<'info, AgentRegistration>>>,
 
-    /// CHECK: Worker's wallet for receiving payment (fix #418)
-    /// Required when worker should receive funds on expiration
+    /// CHECK: Worker's authority wallet, required by the handler on every expiry.
+    /// Receives closed-account rent and any refundable worker bond, never unresolved
+    /// task principal; validated against `worker.authority` before funds can move.
     #[account(mut)]
     pub worker_wallet: Option<UncheckedAccount<'info>>,
 
-    /// Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
-    /// cannot be bypassed when an expired dispute pays the worker. Live (program-owned)
-    /// forces the operator leg; non-hired tasks pass the empty system-owned PDA.
-    /// CHECK: live-vs-absent decided by `owner` in the handler; a live record is validated there.
+    /// CHECK: canonical legacy hire-link slot retained for ABI stability. Expiry
+    /// never pays a marketplace leg; all unresolved principal returns to the creator.
     #[account(
         seeds = [b"hire", task.key().as_ref()],
         bump
     )]
     pub hire_record: UncheckedAccount<'info>,
 
-    /// CHECK: operator payee — validated against the resolved marketplace terms (Task-first,
-    /// HireRecord fallback); required only when those terms carry a non-zero operator fee
-    /// and the worker is paid. Receives SOL.
+    /// CHECK: legacy optional operator slot retained for ABI stability; ignored on expiry.
     #[account(mut)]
     pub dispute_operator: Option<UncheckedAccount<'info>>,
 
-    /// CHECK: referrer payee — validated against the resolved marketplace terms (P3.6 §3.3:
-    /// dispute exits honor the snapshotted referrer leg); required only when those terms
-    /// carry a non-zero referrer fee and the worker is paid. Receives SOL.
+    /// CHECK: legacy optional referrer slot retained for ABI stability; ignored on expiry.
     #[account(mut)]
     pub dispute_referrer: Option<UncheckedAccount<'info>>,
 
@@ -155,8 +143,7 @@ pub struct ExpireDispute<'info> {
     #[account(mut)]
     pub creator_token_account: Option<UncheckedAccount<'info>>,
 
-    /// Worker's token account for payment (optional)
-    /// CHECK: Validated in handler
+    /// CHECK: legacy worker-token slot retained for ABI stability; ignored on expiry.
     #[account(mut)]
     pub worker_token_account_ata: Option<UncheckedAccount<'info>>,
 
@@ -166,35 +153,39 @@ pub struct ExpireDispute<'info> {
     /// SPL Token program (optional, required for token tasks)
     pub token_program: Option<Program<'info, Token>>,
 
-    // === Batch 3 completion bonds (REQUIRED; both refunded on no-fault expiry) ===
+    // === Batch 3 completion bonds (REQUIRED; evidence-bound on expiry) ===
     // Required, not optional: expire_dispute is PERMISSIONLESS and always Cancels the
     // task, so a posted bond is recoverable only here (reclaim_completion_bond needs a
     // Completed task). If the caller could omit a bond it would be stranded forever on
     // the Cancelled task. The caller passes the seeds-derived PDA even for an un-bonded
     // task; settle_completion_bond validates the canonical derivation and no-ops when no
     // live bond was posted (mirrors resolve_dispute / resolve_reject_frozen hardening).
-    /// CHECK: creator completion bond PDA; refunded on expiry. Validated by helper.
+    /// CHECK: creator completion bond PDA; always refunded on expiry. Validated by helper.
     #[account(mut)]
     pub creator_completion_bond: UncheckedAccount<'info>,
-    /// CHECK: worker completion bond PDA; refunded on expiry.
+    /// CHECK: worker completion bond PDA; refunded unless canonical evidence proves no-show.
     #[account(mut)]
     pub worker_completion_bond: UncheckedAccount<'info>,
 
-    /// OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-    /// decrements the review counters when still live and returns its rent to the
-    /// worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
-    /// CHECK: seeds-pinned to the defendant claim; inspected in the handler.
+    /// REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+    /// canonical TaskSubmission PDA for the defendant claim. A live record is
+    /// swept before claim close; the exact system-owned empty PDA proves absence.
+    /// `Option` preserves the deployed account list, but `None` fails closed.
+    /// CHECK: seeds-pinned to the defendant claim and inspected in the handler.
     #[account(mut)]
     pub task_submission: Option<UncheckedAccount<'info>>,
 
-    /// OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-    /// swept submission is still live on a manual-validation task (pending-counter
-    /// hygiene). Bound to the task in the handler.
-    #[account(mut)]
+    /// OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+    /// submission is still Submitted and therefore carries counter debt.
+    #[account(
+        mut,
+        seeds = [b"task_validation", task.key().as_ref()],
+        bump = task_validation_config.bump
+    )]
     pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 }
 
-/// Expires a dispute after voting period ends.
+/// Expires a dispute after its direct-resolver window closes.
 ///
 /// # Permissionless Design
 /// This instruction can be called by anyone. This is intentional:
@@ -233,32 +224,23 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         CoordinationError::InvalidStatusTransition
     );
 
-    // Fix #574: Allow expiration when EITHER expires_at OR voting_deadline has passed.
-    // This closes the gap between voting_deadline and expires_at where disputes
-    // could get stuck with funds locked if no one called resolve_dispute.
-    //
-    // Grace period: expire_dispute requires voting_deadline + 2 minutes, giving
-    // resolve_dispute priority at the boundary. This prevents front-running attacks
-    // where an attacker calls expire_dispute at exactly voting_deadline to get a
-    // more favorable fund distribution than resolve_dispute would provide.
-    const VOTING_DEADLINE_GRACE: i64 = 120;
+    // The legacy `voting_deadline` field is now the first resolver-action
+    // deadline. Permissionless expiry opens after that deadline plus a two-minute
+    // grace period, or immediately after the hard `expires_at` boundary. The
+    // complementary predicates in `Dispute` give resolution and expiry disjoint
+    // windows, so escrow has neither an overlap race nor a liveness gap.
     require!(
-        clock.unix_timestamp > dispute.expires_at
-            || clock.unix_timestamp
-                >= dispute
-                    .voting_deadline
-                    .saturating_add(VOTING_DEADLINE_GRACE),
+        dispute.expiry_window_open(clock.unix_timestamp),
         CoordinationError::DisputeNotExpired
     );
 
     // Validate and bind defendant worker accounts (fix #842)
-    validate_worker_accounts(
+    validate_dispute_worker_accounts(
         dispute.as_ref(),
         &ctx.accounts.worker,
         &ctx.accounts.worker_claim,
         &ctx.accounts.worker_wallet,
         &task.key(),
-        task.current_workers,
     )?;
 
     let (dispute_remaining_accounts, accepted_bid_accounts) =
@@ -279,11 +261,27 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
                 .checked_add(2)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
             (
-                remaining_account_slice(ctx.remaining_accounts, 0, split_at),
+                remaining_account_range(
+                    ctx.remaining_accounts,
+                    0..split_at,
+                    CoordinationError::BidSettlementAccountsRequired,
+                )?,
                 Some((
-                    remaining_account_info(ctx.remaining_accounts, split_at),
-                    remaining_account_info(ctx.remaining_accounts, accepted_bid_index),
-                    remaining_account_info(ctx.remaining_accounts, bidder_state_index),
+                    remaining_account_at(
+                        ctx.remaining_accounts,
+                        split_at,
+                        CoordinationError::BidSettlementAccountsRequired,
+                    )?,
+                    remaining_account_at(
+                        ctx.remaining_accounts,
+                        accepted_bid_index,
+                        CoordinationError::BidSettlementAccountsRequired,
+                    )?,
+                    remaining_account_at(
+                        ctx.remaining_accounts,
+                        bidder_state_index,
+                        CoordinationError::BidSettlementAccountsRequired,
+                    )?,
                 )),
             )
         } else {
@@ -295,30 +293,27 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         .checked_sub(escrow.distributed)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
 
-    // Track distribution for event emission (fix #418)
-    let mut creator_amount: u64 = 0;
-    let mut worker_amount: u64 = 0;
-
-    // Fair refund distribution based on context (fix #418)
+    // Expiry is an unresolved outcome. The retired vote instruction cannot
+    // authorize a worker payout, so return every remaining reward unit to the
+    // funder. Worker fault is handled separately through objective no-show bond
+    // evidence below; it must never redirect task principal.
+    let creator_amount = remaining_funds;
+    let worker_amount = 0;
     let is_token_task = task.reward_mint.is_some();
     let task_key = task.key();
-    // §4 marketplace legs (operator + referrer; Task-first, HireRecord fallback);
-    // SOL-only path below.
-    let expire_terms = resolve_task_marketplace_terms(
-        task.operator,
-        task.operator_fee_bps,
-        task.referrer,
-        task.referrer_fee_bps,
-        &ctx.accounts.hire_record.to_account_info(),
-        &task_key,
+    dispute.initiator_outcome_counter_tracked()?;
+
+    // A dependent task always supplies its canonical parent at slot 0. The
+    // parent state controls only evidence-bound no-show penalties, never the
+    // creator's ability to recover principal.
+    let dependency_parent_completed =
+        dependency_parent_completed(task.as_ref(), dispute_remaining_accounts, ctx.program_id)?;
+    let dependency_parent_prefix = usize::from(task.dependency_type != DependencyType::None);
+    let dispute_worker_accounts = remaining_account_range(
+        dispute_remaining_accounts,
+        dependency_parent_prefix..dispute_remaining_accounts.len(),
+        CoordinationError::InvalidInput,
     )?;
-    let worker_completed = ctx
-        .accounts
-        .worker_claim
-        .as_ref()
-        .ok_or(CoordinationError::WorkerClaimRequired)?
-        .is_completed;
-    let no_votes = dispute.total_voters == 0;
 
     if remaining_funds > 0 {
         if is_token_task {
@@ -345,7 +340,11 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
                 .token_escrow_ata
                 .as_mut()
                 .ok_or(CoordinationError::MissingTokenAccounts)?;
-            validate_token_account(token_escrow, &mint.key(), &escrow.key())?;
+            validate_token_escrow_account(
+                &token_escrow.to_account_info(),
+                &mint.key(),
+                &escrow.key(),
+            )?;
             let token_escrow_starting_amount =
                 anchor_spl::token::accessor::amount(&token_escrow.to_account_info())
                     .map_err(|_| CoordinationError::TokenTransferFailed)?;
@@ -357,173 +356,42 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
             let task_key_bytes = task_key.to_bytes();
             let bump_slice = [escrow.bump];
             let escrow_seeds: &[&[u8]] = &[b"escrow", task_key_bytes.as_ref(), &bump_slice];
-            let creator_ta_info = ctx
+            let creator_ta = ctx
                 .accounts
                 .creator_token_account
                 .as_ref()
-                .map(|a| a.to_account_info());
-            let worker_ta_info = ctx
-                .accounts
-                .worker_token_account_ata
-                .as_ref()
-                .map(|a| a.to_account_info());
-
-            // Validate destination token accounts before any escrow transfers.
-            // This prevents permissionless expiration callers from redirecting payouts.
-            match (no_votes, worker_completed) {
-                (true, true) => {
-                    let worker_ta = worker_ta_info
-                        .as_ref()
-                        .ok_or(CoordinationError::MissingTokenAccounts)?;
-                    validate_unchecked_token_mint(
-                        worker_ta,
-                        &mint.key(),
-                        &ctx.accounts
-                            .worker_wallet
-                            .as_ref()
-                            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
-                            .key(),
-                    )?;
-                }
-                (true, false) => {
-                    let creator_ta = creator_ta_info
-                        .as_ref()
-                        .ok_or(CoordinationError::MissingTokenAccounts)?;
-                    let worker_ta = worker_ta_info
-                        .as_ref()
-                        .ok_or(CoordinationError::MissingTokenAccounts)?;
-                    validate_unchecked_token_mint(
-                        creator_ta,
-                        &mint.key(),
-                        &ctx.accounts.creator.key(),
-                    )?;
-                    validate_unchecked_token_mint(
-                        worker_ta,
-                        &mint.key(),
-                        &ctx.accounts
-                            .worker_wallet
-                            .as_ref()
-                            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
-                            .key(),
-                    )?;
-                }
-                (false, _) => {
-                    let creator_ta = creator_ta_info
-                        .as_ref()
-                        .ok_or(CoordinationError::MissingTokenAccounts)?;
-                    validate_unchecked_token_mint(
-                        creator_ta,
-                        &mint.key(),
-                        &ctx.accounts.creator.key(),
-                    )?;
-                }
-            }
-
-            let (ca, wa) = distribute_expired_tokens(
+                .ok_or(CoordinationError::MissingTokenAccounts)?
+                .to_account_info();
+            validate_unchecked_token_mint(&creator_ta, &mint.key(), &ctx.accounts.creator.key())?;
+            transfer_tokens_from_escrow(
                 token_escrow,
+                &creator_ta,
                 &escrow.to_account_info(),
-                creator_ta_info.as_ref(),
-                worker_ta_info.as_ref(),
                 remaining_funds,
-                worker_completed,
-                no_votes,
                 escrow_seeds,
                 token_program,
             )?;
-            creator_amount = ca;
-            worker_amount = wa;
 
-            // Sweep any unsolicited residual dust to the same class of recipient
-            // used by this expiration branch, then close escrow ATA.
-            let dust_destination_ta = match (no_votes, worker_completed) {
-                (true, true) => worker_ta_info
-                    .as_ref()
-                    .ok_or(CoordinationError::MissingTokenAccounts)?,
-                (true, false) => creator_ta_info
-                    .as_ref()
-                    .ok_or(CoordinationError::MissingTokenAccounts)?,
-                (false, _) => creator_ta_info
-                    .as_ref()
-                    .ok_or(CoordinationError::MissingTokenAccounts)?,
-            };
+            // Unsolicited residual dust follows principal back to the creator.
             let residual_amount = token_escrow_starting_amount
                 .checked_sub(remaining_funds)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
-
-            // Close token escrow ATA
             close_token_escrow(
                 token_escrow,
                 residual_amount,
-                dust_destination_ta,
+                &creator_ta,
                 &ctx.accounts.creator.to_account_info(),
                 &escrow.to_account_info(),
                 escrow_seeds,
                 token_program,
             )?;
         } else {
-            let (ca, wa) = distribute_expired_funds(
+            transfer_lamports(
                 &escrow.to_account_info(),
                 &ctx.accounts.creator.to_account_info(),
-                &ctx.accounts
-                    .worker_wallet
-                    .as_ref()
-                    .ok_or(CoordinationError::IncompleteWorkerAccounts)?
-                    .to_account_info(),
-                &expire_terms,
-                ctx.accounts
-                    .dispute_operator
-                    .as_ref()
-                    .map(|a| a.to_account_info()),
-                ctx.accounts
-                    .dispute_referrer
-                    .as_ref()
-                    .map(|a| a.to_account_info()),
-                task.task_id,
-                clock.unix_timestamp,
                 remaining_funds,
-                worker_completed,
-                no_votes,
             )?;
-            creator_amount = ca;
-            worker_amount = wa;
         }
-    }
-
-    if let Some((bid_book_info, accepted_bid_info, bidder_market_state_info)) =
-        accepted_bid_accounts
-    {
-        // Audit (2026-07 swarm): an expired dispute is UNRESOLVED — no fault was
-        // established, so the accepted bid's bond is refunded, never slashed.
-        // Previously the `no_votes` arm full-slashed it to the creator: a ghost
-        // resolver turned a SUBMITTED worker's bond into the ghosting creator's
-        // prize (the `worker_completed` Refund arm is unreachable — every
-        // completing path closes the claim, so an open claim is never "completed").
-        let bond_disposition = AcceptedBidBondDisposition::Refund;
-        let worker_claim = ctx
-            .accounts
-            .worker_claim
-            .as_ref()
-            .ok_or(CoordinationError::WorkerClaimRequired)?;
-        let worker_wallet = ctx
-            .accounts
-            .worker_wallet
-            .as_ref()
-            .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
-        let worker_wallet_info = worker_wallet.to_account_info();
-        let creator_info = ctx.accounts.creator.to_account_info();
-
-        settle_accepted_bid(
-            &task_key,
-            worker_claim.as_ref(),
-            bid_book_info,
-            accepted_bid_info,
-            bidder_market_state_info,
-            worker_wallet_info,
-            Some(creator_info),
-            clock.unix_timestamp,
-            AcceptedBidBookDisposition::Close,
-            bond_disposition,
-        )?;
     }
 
     // Decrement defendant counters deterministically (fix #544, #842)
@@ -534,54 +402,26 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         .ok_or(CoordinationError::WorkerAgentRequired)?;
     // Saturating (F-15 consistency): a legacy drifted counter must not brick the
     // designated un-bricking exit — every other decrement of this counter
-    // (dispute_helpers::process_worker_claim_pair, the multi-worker loop below)
+    // (dispute_helpers::process_worker_claim_bundle, the multi-worker loop below)
     // already saturates.
     worker.active_tasks = worker.active_tasks.saturating_sub(1);
     worker.disputes_as_defendant = worker.disputes_as_defendant.saturating_sub(1);
     let defendant_worker_key = worker.key();
 
     // P6.3: the arbiter vote/quorum model is retired. A dispute never records a voter,
-    // so there are NO (vote, arbiter) pairs to clean up and the `ArbiterVotesCleanedUp`
-    // event is removed. `remaining_accounts` now carry ONLY the optional collaborative
-    // (claim, worker) pairs; `validate_remaining_accounts_structure` asserts
-    // `total_voters == 0` and pair-alignment.
-    let arbiter_accounts =
-        validate_remaining_accounts_structure(dispute_remaining_accounts, dispute.total_voters)?;
-
-    let remaining_worker_accounts = dispute_remaining_accounts
-        .len()
-        .checked_sub(arbiter_accounts)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let worker_pairs = remaining_worker_accounts
-        .checked_div(2)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    // saturating_sub (not checked_sub): 0 workers -> 0 expected pairs, never an underflow
-    // that would lock the disputed escrow (#72). Identical to checked_sub for all N >= 1.
-    let expected_worker_pairs = expected_worker_pairs(task.current_workers);
-    require!(
-        worker_pairs == expected_worker_pairs,
-        CoordinationError::IncompleteWorkerAccounts
-    );
-
-    // Check for duplicate workers before processing (fix #826)
-    check_duplicate_workers(
-        dispute_remaining_accounts,
-        arbiter_accounts,
-        Some(defendant_worker_key),
+    // so there are NO (vote, arbiter) pairs to clean up. Each additional collaborative
+    // worker supplies a canonical `(claim, worker, task_submission)` bundle. The
+    // submission meta is non-skippable evidence: live records are swept before claim
+    // close; the exact empty PDA proves absence.
+    process_dispute_peer_bundles(
+        task.as_mut(),
+        &task_key,
+        dispute_worker_accounts,
+        dispute.total_voters,
+        defendant_worker_key,
+        ctx.accounts.task_validation_config.as_deref_mut(),
+        ctx.program_id,
     )?;
-
-    // Process additional worker (claim, worker) pairs to decrement active_tasks (fix #333)
-    for i in (arbiter_accounts..dispute_remaining_accounts.len()).step_by(2) {
-        let worker_index = i
-            .checked_add(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        process_worker_claim_pair(
-            &dispute_remaining_accounts[i],
-            &dispute_remaining_accounts[worker_index],
-            &task.key(),
-            &crate::ID,
-        )?;
-    }
 
     task.status = TaskStatus::Cancelled;
     task.current_workers = 0;
@@ -589,7 +429,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     dispute.resolved_at = clock.unix_timestamp;
     escrow.is_closed = true;
 
-    // Close defendant claim account and return rent to worker wallet.
+    // Bind the defendant claim + wallet once for mandatory submission cleanup
+    // and the subsequent claim-rent return.
     let claim = ctx
         .accounts
         .worker_claim
@@ -601,30 +442,62 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
         .as_ref()
         .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
     let worker_wallet_info = worker_wallet.to_account_info();
-    claim.close(worker_wallet_info.clone())?;
 
-    // Audit F-9: sweep the defendant's TaskSubmission when the caller supplies it —
-    // decrement the review counters if it is still live and return its rent to the
-    // worker authority, so neither the counters nor the rent strand on the terminal
-    // task. Optional: when omitted, close_task remains the fallback sweep.
-    if let Some(submission_info) = ctx.accounts.task_submission.as_ref() {
-        sweep_dispute_submission(
-            task,
+    // Audit F-9 follow-up: a permissionless expirer cannot omit a live
+    // TaskSubmission and strand its rent/counter debt on the terminal task. The
+    // canonical account is required as evidence: live records are swept; the
+    // exact empty system-owned PDA proves absence. Cleanup precedes claim close.
+    let submission_was_live = settle_dispute_submission_evidence(
+        task,
+        &task_key,
+        &claim.key(),
+        &defendant_worker_key,
+        &worker_wallet_info,
+        ctx.accounts.task_submission.as_ref().map(AsRef::as_ref),
+        ctx.accounts.task_validation_config.as_deref_mut(),
+        ctx.program_id,
+    )?;
+
+    // D16: creator-initiated disputes previously laundered a true no-show through
+    // the no-fault expiry branch: expire_claim/cancel would slash the worker, but
+    // expire_dispute refunded every bond. Use only objective on-chain evidence.
+    // A creator cannot confiscate before the claim window ends, a live submission
+    // always forces a refund, and an unmet/closed dependency is creator-side
+    // availability failure rather than worker fault.
+    let no_show_penalty_allowed = expiry_no_show_penalty_allowed(
+        claim.is_completed,
+        claim.expires_at,
+        clock.unix_timestamp,
+        submission_was_live,
+        dependency_parent_completed,
+    );
+
+    if let Some((bid_book_info, accepted_bid_info, bidder_market_state_info)) =
+        accepted_bid_accounts
+    {
+        let bond_disposition = accepted_bid_no_show_bond_disposition(no_show_penalty_allowed);
+        let creator_info = ctx.accounts.creator.to_account_info();
+
+        settle_accepted_bid(
             &task_key,
-            &claim.key(),
-            &defendant_worker_key,
-            &worker_wallet_info,
-            &submission_info.to_account_info(),
-            ctx.accounts.task_validation_config.as_deref_mut(),
+            claim.as_ref(),
+            bid_book_info,
+            accepted_bid_info,
+            bidder_market_state_info,
+            worker_wallet_info.clone(),
+            Some(creator_info),
+            clock.unix_timestamp,
+            AcceptedBidBookDisposition::Close,
+            bond_disposition,
         )?;
     }
 
-    // Batch 3 §8: a no-fault expiry refunds BOTH completion bonds. The bond accounts are
-    // REQUIRED (see struct) so this permissionless exit cannot strand a posted bond on
-    // the now-Cancelled task. Both are pinned to their canonical PDA: settle_completion_bond
-    // no-ops on any non-program-owned account, so without this pin a caller could pass a
-    // junk account to skip a refund and strand the real bond. An un-bonded task still
-    // passes (correct address, no account → settle no-ops).
+    claim.close(worker_wallet_info.clone())?;
+
+    // Completion-bond accounts remain mandatory so a permissionless terminal exit
+    // cannot strand them. The creator always receives a no-fault refund. The worker
+    // is forfeited only for the exact same evidence-bound no-show classification
+    // used above; completion bonds are supported only for Exclusive tasks.
     {
         let creator_info = ctx.accounts.creator.to_account_info();
         let (expected_creator_bond, _) = Pubkey::find_program_address(
@@ -663,7 +536,13 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
             &worker_wallet_info,
             &task_key,
             CompletionBond::ROLE_WORKER,
-            BondDisposition::Refund,
+            if task.task_type == TaskType::Exclusive && no_show_penalty_allowed {
+                BondDisposition::Forfeit {
+                    recipient: &creator_info,
+                }
+            } else {
+                BondDisposition::Refund
+            },
         )?;
     }
 
@@ -679,166 +558,117 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     Ok(())
 }
 
-fn validate_worker_accounts(
-    dispute: &Dispute,
-    worker: &Option<Box<Account<AgentRegistration>>>,
-    worker_claim: &Option<Box<Account<TaskClaim>>>,
-    worker_wallet: &Option<UncheckedAccount>,
-    task_key: &Pubkey,
-    current_workers: u8,
-) -> Result<()> {
-    // #72 tripwire: the defendant claim is required for EVERY worker count, including 0.
-    // Do NOT relax this to `current_workers != 0` — see defendant_claim_required: it unlocks
-    // no reachable escrow and adds fund-routing risk.
-    require!(
-        defendant_claim_required(current_workers),
-        CoordinationError::WorkerClaimRequired
-    );
-    let worker = worker
-        .as_ref()
-        .ok_or(CoordinationError::WorkerAgentRequired)?;
-    let worker_claim = worker_claim
-        .as_ref()
-        .ok_or(CoordinationError::WorkerClaimRequired)?;
-    let worker_wallet = worker_wallet
-        .as_ref()
-        .ok_or(CoordinationError::IncompleteWorkerAccounts)?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instructions::bid_settlement_helpers::AcceptedBidBondDisposition;
 
-    require!(
-        worker.key() == dispute.defendant,
-        CoordinationError::WorkerNotInDispute
-    );
-    require!(
-        worker.key() == worker_claim.worker,
-        CoordinationError::UnauthorizedAgent
-    );
-    require!(
-        worker_claim.task == *task_key,
-        CoordinationError::NotClaimed
-    );
-    require!(
-        worker_wallet.key() == worker.authority,
-        CoordinationError::UnauthorizedAgent
-    );
+    #[test]
+    fn expiry_no_show_penalty_requires_expired_incomplete_claim_and_absence() {
+        let expires_at = 1_000;
 
-    Ok(())
-}
-
-/// Distributes remaining escrow funds on dispute expiration (audit 2026-07 swarm,
-/// supersedes the fix #418 context split).
-///
-/// Post-P6.3 an expired dispute is ALWAYS an unresolved one (the arbiter vote
-/// model is retired, so `no_votes` is always true and the "insufficient quorum"
-/// case cannot exist), so the only reachable outcome is a FULL refund to the
-/// funder. The `worker_completed` arm is unreachable by construction (an open
-/// claim on a Disputed task is never a completed claim — every completing path
-/// requires a non-Disputed status and closes the claim); it is kept only as
-/// dead, defensive code with its marketplace legs intact.
-///
-/// Returns (creator_amount, worker_amount) for event emission; worker_amount is
-/// always 0 on reachable paths.
-#[allow(clippy::too_many_arguments)]
-fn distribute_expired_funds<'a>(
-    escrow_info: &AccountInfo<'a>,
-    creator_info: &AccountInfo<'a>,
-    worker_wallet_info: &AccountInfo<'a>,
-    terms: &MarketplaceTerms,
-    operator: Option<AccountInfo<'a>>,
-    referrer: Option<AccountInfo<'a>>,
-    task_id: [u8; 32],
-    now: i64,
-    remaining_funds: u64,
-    worker_completed: bool,
-    no_votes: bool,
-) -> Result<(u64, u64)> {
-    let mut creator_amount: u64 = 0;
-    let mut worker_amount: u64 = 0;
-
-    if no_votes && worker_completed {
-        // UNREACHABLE (kept as dead, defensive code): `no_votes` is always true
-        // post-P6.3, but an OPEN claim on a Disputed task is never a completed
-        // claim — every completing path requires a non-Disputed status and
-        // closes the claim first. If a future change ever made this reachable,
-        // it still pays the worker only through the marketplace legs.
-        // Worker gets 100% minus the marketplace legs (operator + referrer) so an
-        // expired dispute cannot bypass the §4 split. No-op for non-hired,
-        // unreferred tasks.
-        let legs_fee = pay_dispute_marketplace_legs(
-            terms,
-            operator,
-            referrer,
-            escrow_info,
-            remaining_funds,
-            task_id,
-            now,
-        )?;
-        worker_amount = remaining_funds
-            .checked_sub(legs_fee)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        transfer_lamports(escrow_info, worker_wallet_info, worker_amount)?;
-    } else {
-        // Audit (2026-07 swarm): post-P6.3 the arbiter vote model is retired, so
-        // `no_votes` is ALWAYS true and an expired dispute is an UNRESOLVED one —
-        // the initiator's case was never adjudicated. The old "no votes -> 50/50"
-        // arbiter-era fairness split paid HALF the escrow to a possibly zero-work
-        // worker: a no-show could self-dispute, wait out the resolver window, and
-        // steal 50% of any claimable escrow (and a ghost resolver flipped a
-        // legitimate no-show slash into a payout). The only safe default for an
-        // unproven dispute is a full refund to the funder. The submitted worker's
-        // SOLE recourse is the resolver (the review-window crank cannot run on a
-        // Disputed task); expiry is precisely that recourse having failed, so the
-        // 0% they take here is the deliberate price of never paying unproven work.
-        creator_amount = remaining_funds;
-        transfer_lamports(escrow_info, creator_info, remaining_funds)?;
+        assert!(expiry_no_show_penalty_allowed(
+            false,
+            expires_at,
+            expires_at + 1,
+            false,
+            true,
+        ));
+        assert!(!expiry_no_show_penalty_allowed(
+            false, expires_at, expires_at, false, true,
+        ));
+        assert!(!expiry_no_show_penalty_allowed(
+            false,
+            expires_at,
+            expires_at - 1,
+            false,
+            true,
+        ));
+        assert!(!expiry_no_show_penalty_allowed(
+            true,
+            expires_at,
+            expires_at + 1,
+            false,
+            true,
+        ));
+        assert!(!expiry_no_show_penalty_allowed(
+            false,
+            0,
+            expires_at + 1,
+            false,
+            true,
+        ));
     }
 
-    Ok((creator_amount, worker_amount))
-}
-
-/// Token variant of distribute_expired_funds for SPL token tasks.
-/// Same logic but uses token CPI transfers instead of lamport transfers.
-///
-/// Returns (creator_amount, worker_amount) for event emission.
-fn distribute_expired_tokens<'a>(
-    token_escrow: &mut Account<'a, TokenAccount>,
-    escrow_authority: &AccountInfo<'a>,
-    creator_token_account: Option<&AccountInfo<'a>>,
-    worker_token_account: Option<&AccountInfo<'a>>,
-    remaining_funds: u64,
-    worker_completed: bool,
-    no_votes: bool,
-    escrow_seeds: &[&[u8]],
-    token_program: &Program<'a, Token>,
-) -> Result<(u64, u64)> {
-    let mut creator_amount: u64 = 0;
-    let mut worker_amount: u64 = 0;
-
-    if no_votes && worker_completed {
-        let worker_ta = worker_token_account.ok_or(CoordinationError::MissingTokenAccounts)?;
-        worker_amount = remaining_funds;
-        transfer_tokens_from_escrow(
-            token_escrow,
-            worker_ta,
-            escrow_authority,
-            remaining_funds,
-            escrow_seeds,
-            token_program,
-        )?;
-    } else {
-        // Audit (2026-07 swarm): post-P6.3 an expired dispute is always UNRESOLVED
-        // (no_votes is structurally true) — refund the funder in full, mirroring
-        // the SOL path. Never split escrow to a possibly zero-work worker.
-        let creator_ta = creator_token_account.ok_or(CoordinationError::MissingTokenAccounts)?;
-        creator_amount = remaining_funds;
-        transfer_tokens_from_escrow(
-            token_escrow,
-            creator_ta,
-            escrow_authority,
-            remaining_funds,
-            escrow_seeds,
-            token_program,
-        )?;
+    #[test]
+    fn any_live_submission_forces_bond_refund() {
+        let allowed = expiry_no_show_penalty_allowed(false, 1_000, 2_000, true, true);
+        assert!(!allowed);
+        assert_eq!(
+            accepted_bid_no_show_bond_disposition(allowed),
+            AcceptedBidBondDisposition::Refund,
+        );
     }
 
-    Ok((creator_amount, worker_amount))
+    #[test]
+    fn expired_absent_non_dependent_claim_uses_snapshotted_bid_slash() {
+        let task = Task::default();
+        let parent_completed = dependency_parent_completed(&task, &[], &crate::ID).unwrap();
+        let allowed = expiry_no_show_penalty_allowed(false, 1_000, 1_001, false, parent_completed);
+
+        assert!(allowed);
+        assert_eq!(
+            accepted_bid_no_show_bond_disposition(allowed),
+            AcceptedBidBondDisposition::SnapshottedNoShowSlashToCreator,
+        );
+    }
+
+    #[test]
+    fn dependent_no_show_refunds_when_parent_is_not_completed() {
+        assert!(!expiry_no_show_penalty_allowed(
+            false, 1_000, 1_001, false, false,
+        ));
+    }
+
+    #[test]
+    fn dependent_expiry_rejects_missing_or_substituted_parent_evidence() {
+        let parent_key = Pubkey::new_unique();
+        let child = Task {
+            depends_on: Some(parent_key),
+            dependency_type: DependencyType::Data,
+            ..Task::default()
+        };
+
+        assert!(dependency_parent_completed(&child, &[], &crate::ID).is_err());
+
+        let substituted_key = Pubkey::new_unique();
+        let system_owner = anchor_lang::system_program::ID;
+        let mut lamports = 0;
+        let mut data = [];
+        let substituted = AccountInfo::new(
+            &substituted_key,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &system_owner,
+            false,
+            0,
+        );
+        assert!(dependency_parent_completed(&child, &[substituted], &crate::ID).is_err());
+
+        let mut closed_parent_lamports = 0;
+        let mut closed_parent_data = [];
+        let closed_parent = AccountInfo::new(
+            &parent_key,
+            false,
+            false,
+            &mut closed_parent_lamports,
+            &mut closed_parent_data,
+            &system_owner,
+            false,
+            0,
+        );
+        assert!(!dependency_parent_completed(&child, &[closed_parent], &crate::ID).unwrap());
+    }
 }

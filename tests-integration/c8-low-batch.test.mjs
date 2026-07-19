@@ -67,7 +67,7 @@ async function publishJobSpec(w, task) {
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/c8", w.modAuth.publicKey)
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "job-spec");
-  return { jobSpec };
+  return { jobSpec, jobHash };
 }
 
 // A CreatorReview Competitive (contest) task with a short deadline.
@@ -120,14 +120,18 @@ function cancelTaskIx(w, m, entrant, claim, treasury) {
 test("cancel_task: a no-show contest claim forfeits its entry deposit to the treasury (not back to the squatter)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const m = await setupContestTask(w, { deadlineOffset: 60 });
-  const { jobSpec } = await publishJobSpec(w, m.task);
+  const { jobSpec, jobHash } = await publishJobSpec(w, m.task);
   const entrant = await registerAgent(w);
 
   // The squatter claims but never submits (the claim carries rent + deposit).
   const [claim] = pda([enc("claim"), m.task.toBuffer(), entrant.agentPda.toBuffer()]);
   expectOk(send(w.svm, await entrant.prog.methods
     .claimTaskWithJobSpec()
-    .accounts({ task: m.task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: entrant.agentPda, authority: entrant.kp.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task: m.task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), m.task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: entrant.agentPda,
+      authority: entrant.kp.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [entrant.kp]), "squatter claims");
   const claimTotal = balance(w, claim);
   assert.ok(claimTotal > CONTEST_ENTRY_DEPOSIT, "claim carries the entry deposit");
@@ -184,20 +188,21 @@ async function setupBidTask(w, { bidExpiresIn = 1800 } = {}) {
     .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "bid:create_task");
-  const { jobSpec } = await publishJobSpec(w, task);
+  const { jobSpec, jobHash } = await publishJobSpec(w, task);
+  const lockedJobSpec = decode(w.svm, "TaskJobSpec", jobSpec);
 
   const bidMarket = await injectBidMarketplace(w.svm, w.admin, { minBond: 100_000 });
   const [bidBook] = pda([enc("bid_book"), task.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
     .initializeBidBook(0, 0, 0, 0, 0)
-    .accounts({ task, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "bid:init-book");
 
   const [bid] = pda([enc("bid"), task.toBuffer(), w.providerAgent.toBuffer()]);
   const [bidderMarket] = pda([enc("bidder_market"), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
-    .createBid(new BN(reward), 3600, 5000, arr(Buffer.alloc(32, 4)), arr(Buffer.alloc(32, 5)), new BN(now + bidExpiresIn))
-    .accounts({ protocolConfig: w.protocolPda, bidMarketplace: bidMarket, task, bidBook, bid, bidderMarketState: bidderMarket, bidder: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .createBid(new BN(reward), 900, 5000, arr(Buffer.alloc(32, 4)), arr(Buffer.alloc(32, 5)), new BN(now + bidExpiresIn), arr(jobHash), lockedJobSpec.updated_at)
+    .accounts({ protocolConfig: w.protocolPda, bidMarketplace: bidMarket, task, taskJobSpec: jobSpec, bidBook, bid, bidderMarketState: bidderMarket, bidder: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "bid:create_bid");
 
   return { task, escrow, jobSpec, bidBook, bid, bidMarket, bidderMarket };
@@ -245,14 +250,17 @@ test("deregister_agent: a live bid blocks deregistration (AgentHasActiveBids); o
 
   w.svm.expireBlockhash(); // same ix shape as the blocked attempt above
   expectOk(send(w.svm, await deregisterIx(w, w.provider, w.providerAgent), [w.provider]), "deregister after withdrawal");
-  assert.ok(isClosed(w.svm, w.providerAgent), "agent deregistered");
+  const retired = decode(w.svm, "AgentRegistration", w.providerAgent);
+  assert.ok(!isClosed(w.svm, w.providerAgent), "durable identity tombstone remains");
+  assert.ok(retired.status.Inactive !== undefined, "agent retired after withdrawal");
+  assert.deepEqual(Buffer.from(retired._reserved), Buffer.from("RETD"), "retirement is permanent");
 });
 
 // ---------------------------------------------------------------------------
-// 3) deregister_agent: the verification badge is swept with the registration
+// 3) deregister_agent: the verification badge is durably revoked
 // ---------------------------------------------------------------------------
 
-test("deregister_agent: a live verification badge is closed with the registration (no badge inheritance)", async () => {
+test("deregister_agent: a live verification badge is retained but revoked with the permanent identity", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const a = await registerAgent(w);
 
@@ -264,26 +272,19 @@ test("deregister_agent: a live verification badge is closed with the registratio
     .instruction(), [w.modAuth]), "record verification");
   assert.ok(!isClosed(w.svm, verification), "badge live before deregistration");
 
-  const badgeRent = balance(w, verification);
-  const agentRent = balance(w, a.agentPda);
-  const authBefore = balance(w, a.kp.publicKey);
-
   expectOk(send(w.svm, await deregisterIx(w, a.kp, a.agentPda), [a.kp]), "deregister with a live badge");
-  assert.ok(isClosed(w.svm, a.agentPda), "agent closed");
-  assert.ok(isClosed(w.svm, verification), "badge swept with the registration (pre-fix: survived)");
+  const retired = decode(w.svm, "AgentRegistration", a.agentPda);
+  assert.ok(!isClosed(w.svm, a.agentPda), "identity tombstone remains");
+  assert.deepEqual(Buffer.from(retired._reserved), Buffer.from("RETD"), "identity cannot be recycled");
+  assert.ok(!isClosed(w.svm, verification), "verification audit record remains");
+  assert.equal(decode(w.svm, "AgentVerification", verification).revoked, true, "badge revoked atomically");
 
-  // Both accounts' rent (minus the tx fee) returned to the deregistering authority.
-  const gained = balance(w, a.kp.publicKey) - authBefore;
-  assert.ok(
-    gained >= agentRent + badgeRent - 20_000n,
-    `authority reclaimed agent + badge rent (gained ${gained}, expected ~${agentRent + badgeRent})`,
-  );
-
-  // Re-registering the same agent_id does NOT revive a badge.
+  // Re-registering the same agent_id is impossible and cannot revive the badge.
   w.svm.expireBlockhash();
-  expectOk(send(w.svm, await a.prog.methods
+  const retry = send(w.svm, await a.prog.methods
     .registerAgent(arr(a.agentId), new BN(1), "http://c8.test", null, new BN(0))
     .accounts({ agent: a.agentPda, protocolConfig: w.protocolPda, authority: a.kp.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [a.kp]), "re-register same agent_id");
-  assert.ok(isClosed(w.svm, verification), "no badge attaches to the new registration");
+    .instruction(), [a.kp]);
+  assert.ok(retry.constructor.name.includes("Failed"), "retired agent_id cannot be registered again");
+  assert.equal(decode(w.svm, "AgentVerification", verification).revoked, true, "revoked badge remains revoked");
 });

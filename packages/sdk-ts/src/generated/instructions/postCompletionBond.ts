@@ -39,7 +39,10 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findCancelTaskCreatorCompletionBondPda } from "../pdas";
+import {
+  findCancelTaskCreatorCompletionBondPda,
+  findProtocolConfigPda,
+} from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const POST_COMPLETION_BOND_DISCRIMINATOR: ReadonlyUint8Array =
@@ -54,7 +57,10 @@ export function getPostCompletionBondDiscriminatorBytes(): ReadonlyUint8Array {
 export type PostCompletionBondInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountTask extends string | AccountMeta<string> = string,
+  TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountCompletionBond extends string | AccountMeta<string> = string,
+  TAccountWorker extends string | AccountMeta<string> = string,
+  TAccountWorkerClaim extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
     "11111111111111111111111111111111",
@@ -64,11 +70,20 @@ export type PostCompletionBondInstruction<
   InstructionWithAccounts<
     [
       TAccountTask extends string
-        ? WritableAccount<TAccountTask>
+        ? ReadonlyAccount<TAccountTask>
         : TAccountTask,
+      TAccountProtocolConfig extends string
+        ? ReadonlyAccount<TAccountProtocolConfig>
+        : TAccountProtocolConfig,
       TAccountCompletionBond extends string
         ? WritableAccount<TAccountCompletionBond>
         : TAccountCompletionBond,
+      TAccountWorker extends string
+        ? ReadonlyAccount<TAccountWorker>
+        : TAccountWorker,
+      TAccountWorkerClaim extends string
+        ? ReadonlyAccount<TAccountWorkerClaim>
+        : TAccountWorkerClaim,
       TAccountAuthority extends string
         ? WritableSignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
@@ -119,16 +134,28 @@ export function getPostCompletionBondInstructionDataCodec(): FixedSizeCodec<
 
 export type PostCompletionBondAsyncInput<
   TAccountTask extends string = string,
+  TAccountProtocolConfig extends string = string,
   TAccountCompletionBond extends string = string,
+  TAccountWorker extends string = string,
+  TAccountWorkerClaim extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   task: Address<TAccountTask>;
+  protocolConfig?: Address<TAccountProtocolConfig>;
   /**
    * The bond PDA, keyed by the SIGNING wallet so the two sides get distinct PDAs
    * and `init` makes one-bond-per-wallet-per-task automatic (a second post fails).
    */
   completionBond?: Address<TAccountCompletionBond>;
+  /** Worker identity for ROLE_WORKER. Omitted for ROLE_CREATOR. */
+  worker?: Address<TAccountWorker>;
+  /**
+   * Live claim proving the worker signer is actually assigned to this task.
+   * Typed for ownership/discriminator checks; canonical PDA + bindings are
+   * verified in the handler because `worker` is role-conditional.
+   */
+  workerClaim?: Address<TAccountWorkerClaim>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
   role: PostCompletionBondInstructionDataArgs["role"];
@@ -136,14 +163,20 @@ export type PostCompletionBondAsyncInput<
 
 export async function getPostCompletionBondInstructionAsync<
   TAccountTask extends string,
+  TAccountProtocolConfig extends string,
   TAccountCompletionBond extends string,
+  TAccountWorker extends string,
+  TAccountWorkerClaim extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: PostCompletionBondAsyncInput<
     TAccountTask,
+    TAccountProtocolConfig,
     TAccountCompletionBond,
+    TAccountWorker,
+    TAccountWorkerClaim,
     TAccountAuthority,
     TAccountSystemProgram
   >,
@@ -152,7 +185,10 @@ export async function getPostCompletionBondInstructionAsync<
   PostCompletionBondInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountProtocolConfig,
     TAccountCompletionBond,
+    TAccountWorker,
+    TAccountWorkerClaim,
     TAccountAuthority,
     TAccountSystemProgram
   >
@@ -163,8 +199,11 @@ export async function getPostCompletionBondInstructionAsync<
 
   // Original accounts.
   const originalAccounts = {
-    task: { value: input.task ?? null, isWritable: true },
+    task: { value: input.task ?? null, isWritable: false },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     completionBond: { value: input.completionBond ?? null, isWritable: true },
+    worker: { value: input.worker ?? null, isWritable: false },
+    workerClaim: { value: input.workerClaim ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
@@ -177,6 +216,9 @@ export async function getPostCompletionBondInstructionAsync<
   const args = { ...input };
 
   // Resolve default values.
+  if (!accounts.protocolConfig.value) {
+    accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
   if (!accounts.completionBond.value) {
     accounts.completionBond.value =
       await findCancelTaskCreatorCompletionBondPda({
@@ -199,7 +241,10 @@ export async function getPostCompletionBondInstructionAsync<
   return Object.freeze({
     accounts: [
       getAccountMeta("task", accounts.task),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("completionBond", accounts.completionBond),
+      getAccountMeta("worker", accounts.worker),
+      getAccountMeta("workerClaim", accounts.workerClaim),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -210,7 +255,10 @@ export async function getPostCompletionBondInstructionAsync<
   } as PostCompletionBondInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountProtocolConfig,
     TAccountCompletionBond,
+    TAccountWorker,
+    TAccountWorkerClaim,
     TAccountAuthority,
     TAccountSystemProgram
   >);
@@ -218,16 +266,28 @@ export async function getPostCompletionBondInstructionAsync<
 
 export type PostCompletionBondInput<
   TAccountTask extends string = string,
+  TAccountProtocolConfig extends string = string,
   TAccountCompletionBond extends string = string,
+  TAccountWorker extends string = string,
+  TAccountWorkerClaim extends string = string,
   TAccountAuthority extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   task: Address<TAccountTask>;
+  protocolConfig: Address<TAccountProtocolConfig>;
   /**
    * The bond PDA, keyed by the SIGNING wallet so the two sides get distinct PDAs
    * and `init` makes one-bond-per-wallet-per-task automatic (a second post fails).
    */
   completionBond: Address<TAccountCompletionBond>;
+  /** Worker identity for ROLE_WORKER. Omitted for ROLE_CREATOR. */
+  worker?: Address<TAccountWorker>;
+  /**
+   * Live claim proving the worker signer is actually assigned to this task.
+   * Typed for ownership/discriminator checks; canonical PDA + bindings are
+   * verified in the handler because `worker` is role-conditional.
+   */
+  workerClaim?: Address<TAccountWorkerClaim>;
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
   role: PostCompletionBondInstructionDataArgs["role"];
@@ -235,14 +295,20 @@ export type PostCompletionBondInput<
 
 export function getPostCompletionBondInstruction<
   TAccountTask extends string,
+  TAccountProtocolConfig extends string,
   TAccountCompletionBond extends string,
+  TAccountWorker extends string,
+  TAccountWorkerClaim extends string,
   TAccountAuthority extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: PostCompletionBondInput<
     TAccountTask,
+    TAccountProtocolConfig,
     TAccountCompletionBond,
+    TAccountWorker,
+    TAccountWorkerClaim,
     TAccountAuthority,
     TAccountSystemProgram
   >,
@@ -250,7 +316,10 @@ export function getPostCompletionBondInstruction<
 ): PostCompletionBondInstruction<
   TProgramAddress,
   TAccountTask,
+  TAccountProtocolConfig,
   TAccountCompletionBond,
+  TAccountWorker,
+  TAccountWorkerClaim,
   TAccountAuthority,
   TAccountSystemProgram
 > {
@@ -260,8 +329,11 @@ export function getPostCompletionBondInstruction<
 
   // Original accounts.
   const originalAccounts = {
-    task: { value: input.task ?? null, isWritable: true },
+    task: { value: input.task ?? null, isWritable: false },
+    protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     completionBond: { value: input.completionBond ?? null, isWritable: true },
+    worker: { value: input.worker ?? null, isWritable: false },
+    workerClaim: { value: input.workerClaim ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
   };
@@ -283,7 +355,10 @@ export function getPostCompletionBondInstruction<
   return Object.freeze({
     accounts: [
       getAccountMeta("task", accounts.task),
+      getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("completionBond", accounts.completionBond),
+      getAccountMeta("worker", accounts.worker),
+      getAccountMeta("workerClaim", accounts.workerClaim),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -294,7 +369,10 @@ export function getPostCompletionBondInstruction<
   } as PostCompletionBondInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountProtocolConfig,
     TAccountCompletionBond,
+    TAccountWorker,
+    TAccountWorkerClaim,
     TAccountAuthority,
     TAccountSystemProgram
   >);
@@ -307,13 +385,22 @@ export type ParsedPostCompletionBondInstruction<
   programAddress: Address<TProgram>;
   accounts: {
     task: TAccountMetas[0];
+    protocolConfig: TAccountMetas[1];
     /**
      * The bond PDA, keyed by the SIGNING wallet so the two sides get distinct PDAs
      * and `init` makes one-bond-per-wallet-per-task automatic (a second post fails).
      */
-    completionBond: TAccountMetas[1];
-    authority: TAccountMetas[2];
-    systemProgram: TAccountMetas[3];
+    completionBond: TAccountMetas[2];
+    /** Worker identity for ROLE_WORKER. Omitted for ROLE_CREATOR. */
+    worker?: TAccountMetas[3] | undefined;
+    /**
+     * Live claim proving the worker signer is actually assigned to this task.
+     * Typed for ownership/discriminator checks; canonical PDA + bindings are
+     * verified in the handler because `worker` is role-conditional.
+     */
+    workerClaim?: TAccountMetas[4] | undefined;
+    authority: TAccountMetas[5];
+    systemProgram: TAccountMetas[6];
   };
   data: PostCompletionBondInstructionData;
 };
@@ -326,12 +413,12 @@ export function parsePostCompletionBondInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedPostCompletionBondInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 4) {
+  if (instruction.accounts.length < 7) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 4,
+        expectedAccountMetas: 7,
       },
     );
   }
@@ -341,11 +428,20 @@ export function parsePostCompletionBondInstruction<
     accountIndex += 1;
     return accountMeta;
   };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
+  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
       task: getNextAccount(),
+      protocolConfig: getNextAccount(),
       completionBond: getNextAccount(),
+      worker: getNextOptionalAccount(),
+      workerClaim: getNextOptionalAccount(),
       authority: getNextAccount(),
       systemProgram: getNextAccount(),
     },

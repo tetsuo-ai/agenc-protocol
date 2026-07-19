@@ -17,7 +17,7 @@ import crypto from "node:crypto";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  injectAgentStake, freshWorld,
+  injectAgentStake, freshWorld, setProtocolPaused,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
@@ -66,12 +66,22 @@ async function setupManualTask(w, { mode = 1, reviewWindow = 3600, validatorQuor
     .createTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), maxWorkers, new BN(now + 3600), taskType, null, 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "manual:create_task");
-  // ValidatorQuorum / ExternalAttestation require review_window == 0; CreatorReview requires > 0.
-  const rw = mode === 1 ? reviewWindow : 0;
+  // New quorum configurations are disabled in the hardened binary. Configure a
+  // normal CreatorReview task through the public entrypoint, then inject mode 2
+  // only when exercising the retained LEGACY settlement branch.
   expectOk(send(w.svm, await w.buyerProg.methods
-    .configureTaskValidation(mode, new BN(rw), validatorQuorum, null)
+    .configureTaskValidation(1, new BN(reviewWindow), 0, null)
     .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "manual:configure");
+  if (mode === 2) {
+    const account = w.svm.getAccount(validation);
+    const config = coder.accounts.decode("TaskValidationConfig", Buffer.from(account.data));
+    config.mode = { ValidatorQuorum: {} };
+    config.review_window_secs = new BN(0);
+    config._reserved[0] = validatorQuorum;
+    const data = await coder.accounts.encode("TaskValidationConfig", config);
+    w.svm.setAccount(validation, { ...account, data });
+  }
   return { task, escrow, validation, attestor, reward };
 }
 
@@ -96,7 +106,11 @@ async function publishClaimSubmit(w, { task, validation }, { workerProg = w.prov
   const [claim] = pda([enc("claim"), task.toBuffer(), workerAgent.toBuffer()]);
   expectOk(send(w.svm, await workerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: workerAgent, authority: workerKp.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: workerAgent,
+      authority: workerKp.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [workerKp]), "publish:claim");
 
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
@@ -130,7 +144,13 @@ async function createParentTask(w, { reward = 1_000_000, capabilities = CAP_COMP
 }
 
 /// Build (but don't send) a create_dependent_task instruction for the buyer.
-async function dependentIx(w, parentTask, { dependencyType = 1, reward = 2_000_000, capabilities = CAP_COMPUTE, taskId = id32() } = {}) {
+async function dependentIx(w, parentTask, {
+  dependencyType = 1,
+  reward = 2_000_000,
+  capabilities = CAP_COMPUTE,
+  taskId = id32(),
+  constraintHash = null,
+} = {}) {
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
   const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
@@ -138,7 +158,11 @@ async function dependentIx(w, parentTask, { dependencyType = 1, reward = 2_000_0
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
   const ix = await w.buyerProg.methods
-    .createDependentTask(arr(taskId), new BN(capabilities), arr(desc), new BN(reward), 1, new BN(now + 3600), 0, null, dependencyType, 0, null)
+    .createDependentTask(
+      arr(taskId), new BN(capabilities), arr(desc), new BN(reward), 1,
+      new BN(now + 3600), 0, constraintHash === null ? null : arr(constraintHash),
+      dependencyType, 0, null,
+    )
     .accounts({
       task, escrow, parentTask, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent,
       authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey,
@@ -167,11 +191,53 @@ test("create_dependent_task: links to parent + funds escrow (Data dependency)", 
   assert.ok(Number(w.svm.getBalance(escrow)) >= reward, "escrow account holds at least the reward in lamports");
 });
 
+test("paused cutover keeps the nonterminal dependent-task set at stable zero", async () => {
+  const w = await freshWorld({});
+  const parent = await createParentTask(w);
+  await setProtocolPaused(w.svm, true);
+
+  for (const dependencyType of [1, 2, 3]) {
+    const { ix, task, escrow } = await dependentIx(w, parent, {
+      dependencyType,
+    });
+    expectFail(
+      send(w.svm, ix, [w.buyer]),
+      "ProtocolPaused",
+      `paused dependent creation type ${dependencyType}`,
+    );
+    assert.ok(
+      isClosed(w.svm, task),
+      `type ${dependencyType} must not create a child Task while paused`,
+    );
+    assert.ok(
+      isClosed(w.svm, escrow),
+      `type ${dependencyType} must not create child escrow while paused`,
+    );
+  }
+});
+
 test("create_dependent_task: zero reward is rejected (RewardTooSmall)", async () => {
   const w = await freshWorld({});
   const parent = await createParentTask(w);
   const { ix } = await dependentIx(w, parent, { dependencyType: 1, reward: 0 });
   expectFail(send(w.svm, ix, [w.buyer]), "RewardTooSmall", "zero-reward dependent task");
+});
+
+test("create_dependent_task: ZK-private creation is release-disabled before funding", async () => {
+  const w = await freshWorld({});
+  const parent = await createParentTask(w);
+  const { ix, task, escrow } = await dependentIx(w, parent, {
+    dependencyType: 1,
+    constraintHash: crypto.randomBytes(32),
+  });
+
+  expectFail(
+    send(w.svm, ix, [w.buyer]),
+    "PrivateTaskCreationDisabled",
+    "dependent private creation release gate",
+  );
+  assert.ok(isClosed(w.svm, task), "failed dependent creation leaves no Task account");
+  assert.ok(isClosed(w.svm, escrow), "failed dependent creation leaves no escrow account");
 });
 
 test("create_dependent_task: out-of-range dependency_type is rejected (InvalidDependencyType)", async () => {
@@ -268,6 +334,23 @@ test("auto_accept_task_result: after the window ANY signer settles and pays the 
 // validate_task_result  (ValidatorQuorum mode)
 // ===========================================================================
 
+test("configure_task_validation: new ValidatorQuorum entry is disabled", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const m = await setupManualTask(w, { mode: 1 });
+  w.svm.expireBlockhash();
+  expectFail(
+    send(w.svm, await w.buyerProg.methods
+      .configureTaskValidation(2, new BN(0), 1, null)
+      .accounts({ task: m.task, taskValidationConfig: m.validation,
+        taskAttestorConfig: m.attestor, protocolConfig: w.protocolPda,
+        hireRecord: pda([enc("hire"), m.task.toBuffer()])[0],
+        creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+      .instruction(), [w.buyer]),
+    "InvalidValidationMode",
+    "new self-asserted validator quorum configuration is fail-closed",
+  );
+});
+
 /// Build a validate_task_result instruction signed by a validator agent.
 async function validateIx(w, r, { validatorKp, validatorAgent, approved = true }) {
   const [vote] = pda([enc("task_validation_vote"), r.submission.toBuffer(), validatorKp.publicKey.toBuffer()]);
@@ -287,7 +370,36 @@ async function validateIx(w, r, { validatorKp, validatorAgent, approved = true }
     .instruction();
 }
 
-test("validate_task_result: validator quorum approvals pay the worker", async () => {
+function validationVotePda(submission, reviewer) {
+  return pda([
+    enc("task_validation_vote"),
+    submission.toBuffer(),
+    reviewer.toBuffer(),
+  ])[0];
+}
+
+async function reclaimValidationVoteIx(w, {
+  vote,
+  submission,
+  reviewer,
+  cranker,
+  child = vote,
+  parentTask = submission,
+  rentRecipient = reviewer,
+}) {
+  return makeProgram(cranker).methods
+    .reclaimOrphanTaskChild()
+    .accounts({
+      child,
+      parentTask,
+      workerAgent: SystemProgram.programId,
+      rentRecipient,
+      authority: cranker.publicKey,
+    })
+    .instruction();
+}
+
+test("validate_task_result: quorum settlement leaves recoverable reviewer votes", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const quorum = 2;
   const m = await setupManualTask(w, { mode: 2, validatorQuorum: quorum });
@@ -300,12 +412,27 @@ test("validate_task_result: validator quorum approvals pay the worker", async ()
   // 2026-07 swarm: quorum votes require the anti-griefing stake floor.
   await injectAgentStake(w.svm, v1.agentPda, 100_000_000);
   await injectAgentStake(w.svm, v2.agentPda, 100_000_000);
+  const vote1 = validationVotePda(r.submission, v1.kp.publicKey);
+  const vote2 = validationVotePda(r.submission, v2.kp.publicKey);
+  const cranker = Keypair.generate();
+  w.svm.airdrop(cranker.publicKey, BigInt(10e9));
 
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
 
   // First approval: below quorum, settlement does not fire yet.
   expectOk(send(w.svm, await validateIx(w, r, { validatorKp: v1.kp, validatorAgent: v1.agentPda, approved: true }), [v1.kp]), "validate vote #1");
   assert.ok(decode(w.svm, "Task", r.task).status.Completed === undefined, "task not yet completed below quorum");
+  assert.ok(!isClosed(w.svm, vote1), "first reviewer vote exists below quorum");
+  expectFail(
+    send(w.svm, await reclaimValidationVoteIx(w, {
+      vote: vote1,
+      submission: r.submission,
+      reviewer: v1.kp.publicKey,
+      cranker,
+    }), [cranker]),
+    "OrphanTaskParentStillLive",
+    "live submission prevents vote-rent recovery",
+  );
 
   // Second approval: reaches quorum -> worker paid, claim closed.
   expectOk(send(w.svm, await validateIx(w, r, { validatorKp: v2.kp, validatorAgent: v2.agentPda, approved: true }), [v2.kp]), "validate vote #2");
@@ -315,6 +442,79 @@ test("validate_task_result: validator quorum approvals pay the worker", async ()
   assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > workerBalBefore, "worker paid on quorum approval");
   assert.ok(isClosed(w.svm, r.claim), "claim closed on quorum settlement");
   assert.ok(isClosed(w.svm, r.escrow), "escrow closed on quorum settlement");
+  assert.ok(isClosed(w.svm, r.submission), "submission closed on quorum settlement");
+  assert.ok(!isClosed(w.svm, vote1), "first reviewer vote remains for recovery");
+  assert.ok(!isClosed(w.svm, vote2), "settling reviewer vote remains for recovery");
+
+  const wrongParent = Keypair.generate().publicKey;
+  expectFail(
+    send(w.svm, await reclaimValidationVoteIx(w, {
+      vote: vote1,
+      submission: r.submission,
+      reviewer: v1.kp.publicKey,
+      cranker,
+      parentTask: wrongParent,
+    }), [cranker]),
+    "InvalidInput",
+    "stored submission parent cannot be substituted",
+  );
+
+  const forgedRecipient = Keypair.generate();
+  w.svm.airdrop(forgedRecipient.publicKey, BigInt(1e9));
+  expectFail(
+    send(w.svm, await reclaimValidationVoteIx(w, {
+      vote: vote1,
+      submission: r.submission,
+      reviewer: v1.kp.publicKey,
+      cranker,
+      rentRecipient: forgedRecipient.publicKey,
+    }), [cranker]),
+    "TaskChildRentRecipientRequired",
+    "stored reviewer rent recipient cannot be substituted",
+  );
+
+  const vote1Account = w.svm.getAccount(vote1);
+  const substitutedVote = Keypair.generate().publicKey;
+  w.svm.setAccount(substitutedVote, {
+    ...vote1Account,
+    data: Buffer.from(vote1Account.data),
+  });
+  expectFail(
+    send(w.svm, await reclaimValidationVoteIx(w, {
+      vote: vote1,
+      submission: r.submission,
+      reviewer: v1.kp.publicKey,
+      cranker,
+      child: substitutedVote,
+    }), [cranker]),
+    "InvalidInput",
+    "vote account address cannot be substituted",
+  );
+
+  // The first successful reclaim has the same account metas and instruction
+  // data as the intentional pre-settlement failure. Rotate the test blockhash
+  // so LiteSVM executes the post-settlement state transition instead of
+  // rejecting the identical signed transaction as AlreadyProcessed.
+  w.svm.expireBlockhash();
+  for (const [vote, reviewer, label] of [
+    [vote1, v1.kp.publicKey, "reviewer vote #1"],
+    [vote2, v2.kp.publicKey, "reviewer vote #2"],
+  ]) {
+    const voteAccount = w.svm.getAccount(vote);
+    const rent = BigInt(voteAccount.lamports);
+    const before = w.svm.getBalance(reviewer);
+    expectOk(
+      send(w.svm, await reclaimValidationVoteIx(w, {
+        vote,
+        submission: r.submission,
+        reviewer,
+        cranker,
+      }), [cranker]),
+      `permissionless reclaim: ${label}`,
+    );
+    assert.equal(w.svm.getBalance(reviewer) - before, rent, `${label}: exact rent returned`);
+    assert.ok(isClosed(w.svm, vote), `${label}: vote closed after recovery`);
+  }
 });
 
 test("validate_task_result: an agent without the VALIDATOR capability is rejected (UnauthorizedTaskValidator)", async () => {
@@ -376,8 +576,9 @@ test("validate_task_result (2026-07 swarm): a quorum vote with NO stake is rejec
 /// slashable stake, then cancels the dispute (-> DisputeStatus::Cancelled).
 /// Returns the dispute PDA + initiator (worker) agent handles.
 async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
-  // Open + publish a manual task and have the worker claim it (claim is required
-  // for the worker to be a dispute participant), but do NOT submit a result.
+  // Open + publish a manual task and have the worker claim and submit. A worker
+  // dispute must bind both the live claim and its canonical live submission;
+  // a no-show claim cannot self-dispute to evade bond forfeiture.
   const m = await setupManualTask(w, { mode: 1 });
   const modProg = makeProgram(w.modAuth);
   const jobHash = id32();
@@ -394,8 +595,22 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
   const [claim] = pda([enc("claim"), m.task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task: m.task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task: m.task, taskJobSpec: jobSpec,
+      hireRecord: pda([enc("hire"), m.task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "slash:claim");
+  const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
+  const resultDescription = Buffer.alloc(64);
+  resultDescription.set(id32(), 0);
+  expectOk(send(w.svm, await w.providerProg.methods
+    .submitTaskResult(arr(id32()), arr(resultDescription))
+    .accounts({ task: m.task, claim, taskValidationConfig: m.validation,
+      taskSubmission: submission, protocolConfig: w.protocolPda,
+      worker: w.providerAgent, authority: w.provider.publicKey,
+      systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "slash:submit");
 
   // Give the worker agent (the dispute initiator) a slashable stake.
   await injectAgentStake(w.svm, w.providerAgent, stake);
@@ -407,7 +622,11 @@ async function setupLostDispute(w, { stake = 2_000_000 } = {}) {
   const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 0, "evidence")
-    .accounts({ dispute, task: m.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ dispute, task: m.task, agent: w.providerAgent,
+      authorityRateLimit: initRate, protocolConfig: w.protocolPda,
+      initiatorClaim: claim, workerAgent: null, workerClaim: null,
+      taskSubmission: submission, authority: w.provider.publicKey,
+      systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "slash:initiate");
 
   // Cancel (no votes cast) -> DisputeStatus::Cancelled => initiator always loses.

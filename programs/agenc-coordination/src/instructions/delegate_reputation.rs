@@ -1,11 +1,8 @@
-//! Delegate reputation points to a trusted peer
+//! Disabled entry point for the retired reputation-delegation feature.
 
 use crate::errors::CoordinationError;
-use crate::events::ReputationDelegated;
-use crate::state::{AgentRegistration, AgentStatus, ReputationDelegation};
+use crate::state::{AgentRegistration, ReputationDelegation};
 use anchor_lang::prelude::*;
-
-use super::constants::{MAX_REPUTATION, MIN_DELEGATION_AMOUNT};
 
 #[derive(Accounts)]
 pub struct DelegateReputation<'info> {
@@ -14,11 +11,15 @@ pub struct DelegateReputation<'info> {
 
     #[account(
         mut,
+        seeds = [b"agent", delegator_agent.agent_id.as_ref()],
+        bump = delegator_agent.bump,
         has_one = authority @ CoordinationError::UnauthorizedAgent,
     )]
     pub delegator_agent: Account<'info, AgentRegistration>,
 
     #[account(
+        seeds = [b"agent", delegatee_agent.agent_id.as_ref()],
+        bump = delegatee_agent.bump,
         constraint = delegatee_agent.key() != delegator_agent.key() @ CoordinationError::ReputationCannotDelegateSelf
     )]
     pub delegatee_agent: Account<'info, AgentRegistration>,
@@ -35,95 +36,12 @@ pub struct DelegateReputation<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<DelegateReputation>, amount: u16, expires_at: i64) -> Result<()> {
-    // Capture keys before mutable borrow
-    let delegator_key = ctx.accounts.delegator_agent.key();
-    let delegatee_key = ctx.accounts.delegatee_agent.key();
-
-    // Cannot self-delegate
-    require!(
-        delegator_key != delegatee_key,
-        CoordinationError::ReputationCannotDelegateSelf
-    );
-
-    let delegator = &mut ctx.accounts.delegator_agent;
-    let delegatee = &ctx.accounts.delegatee_agent;
-
-    // Both agents must be Active
-    require!(
-        delegator.status == AgentStatus::Active,
-        CoordinationError::ReputationAgentNotActive
-    );
-    require!(
-        delegatee.status == AgentStatus::Active,
-        CoordinationError::ReputationAgentNotActive
-    );
-    // Audit (2026-07 swarm): a defendant may NOT delegate. Delegating mid-dispute
-    // empties the reputation pot that apply_dispute_slash penalizes
-    // (apply_reputation_penalty subtracts from agent.reputation), making the
-    // reputation half of every slash optional — the delegation survives the slash
-    // and can be revoked back after settlement.
-    require!(
-        delegator.disputes_as_defendant == 0,
-        CoordinationError::ReputationDelegationWhileDefendant
-    );
-
-    // Audit (2026-07 swarm, re-opened): the delegation must be created STRICTLY
-    // after the delegator's registration. This pairs with the strict
-    // `registered_at < delegation.created_at` check in revoke_delegation: without
-    // it, an attacker could bundle [delegate, deregister, register] in ONE slot —
-    // the re-registration's registered_at then EQUALS the delegation's created_at,
-    // and no timestamp comparison can distinguish that clone from an honest
-    // "register then delegate in the same second" user. Making equality impossible
-    // HERE means the revoke-side strictness can never cost an honest user their
-    // delegation. Fails fast with a clear error; the honest user retries a slot
-    // later. Legacy delegations created in the same second as their registration
-    // predate this gate and stay revocable (they cannot be exploited: any
-    // deregister→re-register stamps registered_at LATER than their created_at).
-    let clock = Clock::get()?;
-    require!(
-        clock.unix_timestamp > delegator.registered_at,
-        CoordinationError::ReputationDelegationTooSoon
-    );
-
-    // Validate amount
-    require!(
-        amount > 0 && (MIN_DELEGATION_AMOUNT..=MAX_REPUTATION).contains(&amount),
-        CoordinationError::ReputationDelegationAmountInvalid
-    );
-    require!(
-        amount <= delegator.reputation,
-        CoordinationError::ReputationDelegationAmountInvalid
-    );
-
-    // Deduct delegated amount from delegator's reputation to prevent inflation.
-    // The delegator cannot delegate more reputation than they actually have.
-    delegator.reputation = delegator
-        .reputation
-        .checked_sub(amount)
-        .ok_or(CoordinationError::ReputationDelegationAmountInvalid)?;
-
-    // Validate expires_at: 0 = no expiry, otherwise must be in the future
-    require!(
-        expires_at == 0 || expires_at > clock.unix_timestamp,
-        CoordinationError::ReputationDelegationExpired
-    );
-
-    let delegation = &mut ctx.accounts.delegation;
-    delegation.delegator = delegator_key;
-    delegation.delegatee = delegatee_key;
-    delegation.amount = amount;
-    delegation.expires_at = expires_at;
-    delegation.created_at = clock.unix_timestamp;
-    delegation.bump = ctx.bumps.delegation;
-
-    emit!(ReputationDelegated {
-        delegator: delegation.delegator,
-        delegatee: delegation.delegatee,
-        amount,
-        expires_at,
-        timestamp: clock.unix_timestamp,
-    });
-
-    Ok(())
+pub fn handler(_ctx: Context<DelegateReputation>, _amount: u16, _expires_at: i64) -> Result<()> {
+    // This account type never credited or influenced the delegatee anywhere in
+    // the protocol; it only parked the delegator's reputation and later restored
+    // it. That made it a pre-positioned shelter from dispute reputation slashes.
+    // Mainnet preflight proves there are no live delegations, so rev5 disables
+    // new entry unconditionally while retaining revoke_delegation as an exit for
+    // any legacy/devnet record. Keep the ABI stable, but fail before mutation.
+    err!(CoordinationError::ReputationDelegationDisabled)
 }

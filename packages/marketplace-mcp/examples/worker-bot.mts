@@ -34,6 +34,7 @@ import {
   findTaskJobSpecPda,
   getTaskDecoder,
   TaskStatus,
+  values,
   watchClaimableTasks,
 } from "@tetsuo-ai/marketplace-sdk";
 import type {
@@ -102,6 +103,7 @@ async function main(): Promise<void> {
 
   // --- start watching BEFORE the task exists; claim the first match ---
   const claimed: ClaimableTask[] = [];
+  let publishedJobSpecHash: Uint8Array | null = null;
   let resolveClaimed!: (t: ClaimableTask) => void;
   const firstClaim = new Promise<ClaimableTask>((r) => (resolveClaimed = r));
 
@@ -116,10 +118,14 @@ async function main(): Promise<void> {
       // claim rather than crash — catch it, log it, and keep watching for the
       // next task instead of letting the rejection tear down the watch.
       try {
+        if (publishedJobSpecHash === null) {
+          throw new Error("claimable task surfaced before its job-spec hash was published");
+        }
         await workerClient.claimTaskWithJobSpec({
           task: task.task,
           worker: workerAgent,
           authority: worker,
+          jobSpecHash: publishedJobSpecHash,
         });
       } catch (err) {
         console.warn(
@@ -153,6 +159,9 @@ async function main(): Promise<void> {
 
   const taskId = new Uint8Array(32).fill(202);
   const reward = 3_000_000n;
+  const description = await values.descriptionHash(
+    "Claim and complete the worker-bot example task",
+  );
   const now = market.svm.getClock().unixTimestamp;
   const tCreate = Date.now();
   await creatorClient.send([
@@ -162,7 +171,7 @@ async function main(): Promise<void> {
       creatorAgent,
       taskId,
       requiredCapabilities: 0b1n,
-      description: new Uint8Array(64).fill(7),
+      description,
       rewardAmount: reward,
       maxWorkers: 1,
       deadline: now + 3600n,
@@ -178,6 +187,7 @@ async function main(): Promise<void> {
   // marketplace moderator does the attestation; here the sandbox moderator
   // records the CLEAN attestation.
   const jobSpecHash = new Uint8Array(32).fill(55);
+  publishedJobSpecHash = jobSpecHash;
   await market.moderator.attestTask(taskPda, jobSpecHash);
   await creatorClient.send([
     await facade.setTaskJobSpec({
@@ -185,6 +195,7 @@ async function main(): Promise<void> {
       creator,
       jobSpecHash,
       jobSpecUri: "agenc://job-spec/sha256/worker-bot",
+      moderator: market.moderator.address,
     }),
   ]);
 

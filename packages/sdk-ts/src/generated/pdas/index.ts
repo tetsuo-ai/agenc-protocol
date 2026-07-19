@@ -59,4 +59,3 @@ export * from "./taskValidationVote";
 export * from "./vote";
 export * from "./voteProposalVote";
 export * from "./workerCompletionBond";
-export * from "./zkConfig";

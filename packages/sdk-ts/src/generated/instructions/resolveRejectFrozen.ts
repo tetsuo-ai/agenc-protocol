@@ -42,6 +42,7 @@ import {
 import {
   findCreatorCompletionBondPda,
   findEscrowPda,
+  findHireRecordPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   findWorkerCompletionBondPda,
@@ -68,6 +69,9 @@ export type ResolveRejectFrozenInstruction<
   TAccountTreasury extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountWorkerAuthority extends string | AccountMeta<string> = string,
+  TAccountHireRecord extends string | AccountMeta<string> = string,
+  TAccountOperator extends string | AccountMeta<string> = string,
+  TAccountReferrer extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
   TAccountCreatorCompletionBond extends string | AccountMeta<string> = string,
   TAccountWorkerCompletionBond extends string | AccountMeta<string> = string,
@@ -105,6 +109,15 @@ export type ResolveRejectFrozenInstruction<
       TAccountWorkerAuthority extends string
         ? WritableAccount<TAccountWorkerAuthority>
         : TAccountWorkerAuthority,
+      TAccountHireRecord extends string
+        ? ReadonlyAccount<TAccountHireRecord>
+        : TAccountHireRecord,
+      TAccountOperator extends string
+        ? WritableAccount<TAccountOperator>
+        : TAccountOperator,
+      TAccountReferrer extends string
+        ? WritableAccount<TAccountReferrer>
+        : TAccountReferrer,
       TAccountAuthority extends string
         ? ReadonlySignerAccount<TAccountAuthority> &
             AccountSignerMeta<TAccountAuthority>
@@ -171,6 +184,9 @@ export type ResolveRejectFrozenAsyncInput<
   TAccountTreasury extends string = string,
   TAccountCreator extends string = string,
   TAccountWorkerAuthority extends string = string,
+  TAccountHireRecord extends string = string,
+  TAccountOperator extends string = string,
+  TAccountReferrer extends string = string,
   TAccountAuthority extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
@@ -185,6 +201,10 @@ export type ResolveRejectFrozenAsyncInput<
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
+  /** system-owned PDA. A legacy live record carries fee terms not stamped on Task. */
+  hireRecord?: Address<TAccountHireRecord>;
+  operator?: Address<TAccountOperator>;
+  referrer?: Address<TAccountReferrer>;
   /** Multisig review authority; `remaining_accounts` carries the co-signers. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
@@ -207,6 +227,9 @@ export async function getResolveRejectFrozenInstructionAsync<
   TAccountTreasury extends string,
   TAccountCreator extends string,
   TAccountWorkerAuthority extends string,
+  TAccountHireRecord extends string,
+  TAccountOperator extends string,
+  TAccountReferrer extends string,
   TAccountAuthority extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
@@ -223,6 +246,9 @@ export async function getResolveRejectFrozenInstructionAsync<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
+    TAccountReferrer,
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
@@ -241,6 +267,9 @@ export async function getResolveRejectFrozenInstructionAsync<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
+    TAccountReferrer,
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
@@ -262,6 +291,9 @@ export async function getResolveRejectFrozenInstructionAsync<
     treasury: { value: input.treasury ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
+    operator: { value: input.operator ?? null, isWritable: true },
+    referrer: { value: input.referrer ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
@@ -300,6 +332,14 @@ export async function getResolveRejectFrozenInstructionAsync<
   }
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
+  }
+  if (!accounts.hireRecord.value) {
+    accounts.hireRecord.value = await findHireRecordPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
   }
   if (!accounts.creatorCompletionBond.value) {
     accounts.creatorCompletionBond.value = await findCreatorCompletionBondPda({
@@ -342,6 +382,9 @@ export async function getResolveRejectFrozenInstructionAsync<
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("workerAuthority", accounts.workerAuthority),
+      getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("operator", accounts.operator),
+      getAccountMeta("referrer", accounts.referrer),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
@@ -362,6 +405,9 @@ export async function getResolveRejectFrozenInstructionAsync<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
+    TAccountReferrer,
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
@@ -379,6 +425,9 @@ export type ResolveRejectFrozenInput<
   TAccountTreasury extends string = string,
   TAccountCreator extends string = string,
   TAccountWorkerAuthority extends string = string,
+  TAccountHireRecord extends string = string,
+  TAccountOperator extends string = string,
+  TAccountReferrer extends string = string,
   TAccountAuthority extends string = string,
   TAccountCreatorCompletionBond extends string = string,
   TAccountWorkerCompletionBond extends string = string,
@@ -393,6 +442,10 @@ export type ResolveRejectFrozenInput<
   treasury: Address<TAccountTreasury>;
   creator: Address<TAccountCreator>;
   workerAuthority: Address<TAccountWorkerAuthority>;
+  /** system-owned PDA. A legacy live record carries fee terms not stamped on Task. */
+  hireRecord: Address<TAccountHireRecord>;
+  operator?: Address<TAccountOperator>;
+  referrer?: Address<TAccountReferrer>;
   /** Multisig review authority; `remaining_accounts` carries the co-signers. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
@@ -415,6 +468,9 @@ export function getResolveRejectFrozenInstruction<
   TAccountTreasury extends string,
   TAccountCreator extends string,
   TAccountWorkerAuthority extends string,
+  TAccountHireRecord extends string,
+  TAccountOperator extends string,
+  TAccountReferrer extends string,
   TAccountAuthority extends string,
   TAccountCreatorCompletionBond extends string,
   TAccountWorkerCompletionBond extends string,
@@ -431,6 +487,9 @@ export function getResolveRejectFrozenInstruction<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
+    TAccountReferrer,
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
@@ -448,6 +507,9 @@ export function getResolveRejectFrozenInstruction<
   TAccountTreasury,
   TAccountCreator,
   TAccountWorkerAuthority,
+  TAccountHireRecord,
+  TAccountOperator,
+  TAccountReferrer,
   TAccountAuthority,
   TAccountCreatorCompletionBond,
   TAccountWorkerCompletionBond,
@@ -468,6 +530,9 @@ export function getResolveRejectFrozenInstruction<
     treasury: { value: input.treasury ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
     workerAuthority: { value: input.workerAuthority ?? null, isWritable: true },
+    hireRecord: { value: input.hireRecord ?? null, isWritable: false },
+    operator: { value: input.operator ?? null, isWritable: true },
+    referrer: { value: input.referrer ?? null, isWritable: true },
     authority: { value: input.authority ?? null, isWritable: false },
     creatorCompletionBond: {
       value: input.creatorCompletionBond ?? null,
@@ -505,6 +570,9 @@ export function getResolveRejectFrozenInstruction<
       getAccountMeta("treasury", accounts.treasury),
       getAccountMeta("creator", accounts.creator),
       getAccountMeta("workerAuthority", accounts.workerAuthority),
+      getAccountMeta("hireRecord", accounts.hireRecord),
+      getAccountMeta("operator", accounts.operator),
+      getAccountMeta("referrer", accounts.referrer),
       getAccountMeta("authority", accounts.authority),
       getAccountMeta("creatorCompletionBond", accounts.creatorCompletionBond),
       getAccountMeta("workerCompletionBond", accounts.workerCompletionBond),
@@ -525,6 +593,9 @@ export function getResolveRejectFrozenInstruction<
     TAccountTreasury,
     TAccountCreator,
     TAccountWorkerAuthority,
+    TAccountHireRecord,
+    TAccountOperator,
+    TAccountReferrer,
     TAccountAuthority,
     TAccountCreatorCompletionBond,
     TAccountWorkerCompletionBond,
@@ -547,15 +618,19 @@ export type ParsedResolveRejectFrozenInstruction<
     treasury: TAccountMetas[6];
     creator: TAccountMetas[7];
     workerAuthority: TAccountMetas[8];
+    /** system-owned PDA. A legacy live record carries fee terms not stamped on Task. */
+    hireRecord: TAccountMetas[9];
+    operator?: TAccountMetas[10] | undefined;
+    referrer?: TAccountMetas[11] | undefined;
     /** Multisig review authority; `remaining_accounts` carries the co-signers. */
-    authority: TAccountMetas[9];
+    authority: TAccountMetas[12];
     /**
      * cannot omit a live bond to dodge the forfeit (audit). settle no-ops if no bond
      * was posted (the empty PDA). Forfeits go to `treasury` (== protocol_config.treasury).
      */
-    creatorCompletionBond: TAccountMetas[10];
-    workerCompletionBond: TAccountMetas[11];
-    systemProgram: TAccountMetas[12];
+    creatorCompletionBond: TAccountMetas[13];
+    workerCompletionBond: TAccountMetas[14];
+    systemProgram: TAccountMetas[15];
   };
   data: ResolveRejectFrozenInstructionData;
 };
@@ -568,12 +643,12 @@ export function parseResolveRejectFrozenInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedResolveRejectFrozenInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 13) {
+  if (instruction.accounts.length < 16) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 13,
+        expectedAccountMetas: 16,
       },
     );
   }
@@ -582,6 +657,12 @@ export function parseResolveRejectFrozenInstruction<
     const accountMeta = (instruction.accounts as TAccountMetas)[accountIndex]!;
     accountIndex += 1;
     return accountMeta;
+  };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
   };
   return {
     programAddress: instruction.programAddress,
@@ -595,6 +676,9 @@ export function parseResolveRejectFrozenInstruction<
       treasury: getNextAccount(),
       creator: getNextAccount(),
       workerAuthority: getNextAccount(),
+      hireRecord: getNextAccount(),
+      operator: getNextOptionalAccount(),
+      referrer: getNextOptionalAccount(),
       authority: getNextAccount(),
       creatorCompletionBond: getNextAccount(),
       workerCompletionBond: getNextAccount(),

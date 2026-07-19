@@ -9,10 +9,6 @@
 //! For SDK/client-side: use the `RECOMMENDED_CU_*` constants when building
 //! transactions with `ComputeBudgetInstruction::set_compute_unit_limit()`.
 //!
-//! For on-chain profiling: call `log_compute_units("label")` at key points
-//! within instruction handlers to measure CU consumption during development.
-
-use anchor_lang::prelude::*;
 
 // ============================================================================
 // Recommended Compute Unit Budgets per Instruction
@@ -58,7 +54,7 @@ pub const RECOMMENDED_CU_INITIATE_DISPUTE: u32 = 50_000;
 /// Unreferenced; retained only for API stability.
 pub const RECOMMENDED_CU_VOTE_DISPUTE: u32 = 30_000;
 
-/// Resolve dispute: vote counting + reward transfer + state updates (~45k measured)
+/// Resolve dispute: ruling validation + reward transfer + state updates (~45k measured)
 pub const RECOMMENDED_CU_RESOLVE_DISPUTE: u32 = 60_000;
 
 // Compile-time ordering invariants for recommended CU budgets.
@@ -96,13 +92,20 @@ pub const MAX_FEE_DISCOUNT_BPS: u16 = 40;
 
 /// Calculate the effective protocol fee after volume discount.
 ///
-/// Returns the adjusted fee in basis points, guaranteed to be >= 1 bps
-/// (protocol always takes a minimum fee to cover rent/overhead).
+/// Returns zero when governance explicitly configured a free protocol. Positive
+/// base fees retain a 1-bps floor so a discount cannot accidentally erase a fee.
 ///
 /// # Arguments
 /// * `base_fee_bps` - The base protocol fee in basis points
 /// * `completed_tasks` - The creator's total completed tasks (for tier lookup)
 pub fn calculate_tiered_fee(base_fee_bps: u16, completed_tasks: u64) -> u16 {
+    // Zero is a first-class protocol policy: initialize_protocol,
+    // update_protocol_fee, and governance FeeChange all accept it. Preserve that
+    // sentinel before applying discounts or the positive-fee floor.
+    if base_fee_bps == 0 {
+        return 0;
+    }
+
     let mut discount_bps: u16 = 0;
 
     // Walk tiers in reverse to find the highest applicable tier
@@ -113,7 +116,7 @@ pub fn calculate_tiered_fee(base_fee_bps: u16, completed_tasks: u64) -> u16 {
         }
     }
 
-    // Apply discount, ensuring fee doesn't go below 1 bps
+    // Apply the discount while keeping an explicitly positive fee positive.
     base_fee_bps.saturating_sub(discount_bps).max(1)
 }
 
@@ -136,7 +139,8 @@ pub const REPUTATION_FEE_TIERS: [(u16, u16); 4] = [
 /// Calculate reputation-based fee discount in basis points.
 ///
 /// Returns the discount amount to subtract from the protocol fee.
-/// The caller is responsible for flooring the result at 1 bps.
+/// The caller preserves an explicit zero-fee policy and floors only positive
+/// protocol fees at 1 bps.
 pub fn calculate_reputation_fee_discount(reputation: u16) -> u16 {
     let mut discount_bps: u16 = 0;
 
@@ -149,23 +153,6 @@ pub fn calculate_reputation_fee_discount(reputation: u16) -> u16 {
     }
 
     discount_bps
-}
-
-/// Log current compute units consumed (development/profiling only).
-///
-/// Calls `sol_log_compute_units()` with a descriptive label.
-/// This is a no-op in production builds when `msg!` is stripped,
-/// but the syscall itself always executes on-chain.
-///
-pub fn log_compute_units(label: &str) {
-    msg!("CU checkpoint [{}]", label);
-    #[cfg(target_os = "solana")]
-    {
-        extern "C" {
-            fn sol_log_compute_units_();
-        }
-        unsafe { sol_log_compute_units_() };
-    }
 }
 
 #[cfg(test)]
@@ -210,9 +197,9 @@ mod tests {
 
     #[test]
     fn test_tiered_fee_zero_base() {
-        // If base fee is 0 (free protocol), discount doesn't matter
-        // but minimum floor is 1
-        assert_eq!(calculate_tiered_fee(0, 1000), 1);
+        // An explicit zero is the governance-configured free-protocol mode.
+        assert_eq!(calculate_tiered_fee(0, 0), 0);
+        assert_eq!(calculate_tiered_fee(0, 1000), 0);
     }
 
     #[test]

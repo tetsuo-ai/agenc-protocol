@@ -125,6 +125,7 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
     const taskId = new Uint8Array(32).fill(44);
     await buyerClient.hireFromListing({
       listing,
+      providerAgent,
       creatorAgent: buyerAgent,
       authority: buyerSigner,
       creator: buyerSigner,
@@ -159,6 +160,7 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
       task,
       worker: providerAgent,
       authority: provider,
+      jobSpecHash,
     });
     expect(getTaskDecoder().decode(accountData(market, task)!).status).toBe(
       TaskStatus.InProgress,

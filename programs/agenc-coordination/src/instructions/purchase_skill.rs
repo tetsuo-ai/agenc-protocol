@@ -89,13 +89,23 @@ pub struct PurchaseSkill<'info> {
     pub token_program: Option<Program<'info, Token>>,
 }
 
-pub fn handler(ctx: Context<PurchaseSkill>, expected_price: u64) -> Result<()> {
+pub fn handler(
+    ctx: Context<PurchaseSkill>,
+    expected_price: u64,
+    expected_version: u8,
+    expected_content_hash: [u8; 32],
+) -> Result<()> {
     let config = &ctx.accounts.protocol_config;
     check_version_compatible(config)?;
 
     let buyer = &ctx.accounts.buyer;
     require!(
         buyer.status == AgentStatus::Active,
+        CoordinationError::AgentNotActive
+    );
+    require!(
+        ctx.accounts.author_agent.status != AgentStatus::Suspended
+            && !ctx.accounts.author_agent.is_retired_identity(),
         CoordinationError::AgentNotActive
     );
 
@@ -106,12 +116,24 @@ pub fn handler(ctx: Context<PurchaseSkill>, expected_price: u64) -> Result<()> {
         buyer.key() != skill.author,
         CoordinationError::SkillSelfPurchase
     );
+    require!(
+        ctx.accounts.authority.key() != ctx.accounts.author_wallet.key(),
+        CoordinationError::SkillSelfPurchase
+    );
 
     let clock = Clock::get()?;
     let price = skill.price;
     require!(
         price <= expected_price,
         CoordinationError::SkillPriceChanged
+    );
+    require!(
+        skill.version == expected_version,
+        CoordinationError::SkillVersionChanged
+    );
+    require!(
+        skill.content_hash == expected_content_hash,
+        CoordinationError::SkillContentChanged
     );
     let mut protocol_fee = 0u64;
 
@@ -288,12 +310,14 @@ pub fn handler(ctx: Context<PurchaseSkill>, expected_price: u64) -> Result<()> {
     purchase_record.price_paid = price;
     purchase_record.timestamp = clock.unix_timestamp;
     purchase_record.bump = ctx.bumps.purchase_record;
-    purchase_record._reserved = [0u8; 4];
+    purchase_record.snapshot_content_version(skill.version);
 
     emit!(SkillPurchased {
         skill: skill.key(),
         buyer: buyer.key(),
         author: ctx.accounts.author_agent.key(),
+        content_hash: skill.content_hash,
+        content_version: skill.version,
         price_paid: price,
         protocol_fee,
         timestamp: clock.unix_timestamp,

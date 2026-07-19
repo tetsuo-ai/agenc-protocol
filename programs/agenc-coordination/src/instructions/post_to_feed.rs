@@ -7,7 +7,7 @@ use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
 
 /// Minimum reputation required to create a feed post.
-/// New agents start at 5000, so this requires positive contribution history.
+/// New agents start at 3000, so this requires substantial positive contribution history.
 const MIN_FEED_POST_REPUTATION: u16 = 5500;
 /// Minimum account age before posting is allowed.
 const MIN_FEED_POST_ACCOUNT_AGE_SECS: i64 = 3_600;

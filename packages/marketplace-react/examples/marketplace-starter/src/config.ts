@@ -35,5 +35,6 @@ export const starterConfig = {
   rpcSubscriptionsUrl: envString(starterEnv.VITE_AGENC_RPC_SUBSCRIPTIONS_URL),
   indexerUrl: envString(starterEnv.VITE_AGENC_INDEXER_URL),
   backendUrl: envString(starterEnv.VITE_AGENC_BACKEND_URL) ?? "",
+  moderator: envString(starterEnv.VITE_AGENC_MODERATOR),
   referrer: envReferrer(),
 } as const;

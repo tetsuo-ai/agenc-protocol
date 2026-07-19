@@ -41,6 +41,7 @@ import {
   findEscrowPda,
   findHireRecordPda,
   findProtocolConfigPda,
+  findTaskValidationConfigPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -210,36 +211,26 @@ export type ExpireDisputeAsyncInput<
   creator: Address<TAccountCreator>;
   authority: TransactionSigner<TAccountAuthority>;
   /**
-   * Worker's claim on the disputed task (fix #137)
-   * Optional - when provided, allows decrementing worker's active_tasks
-   * and enables fair refund distribution (fix #418)
+   * Worker's canonical claim on the disputed task.
+   * Retained as an optional ABI slot, but required by the handler on every expiry
+   * to bind the defendant and unwind the claim and worker counters.
    */
   workerClaim?: Address<TAccountWorkerClaim>;
   /** Worker's AgentRegistration PDA (must be dispute defendant). */
   worker?: Address<TAccountWorker>;
-  /** Required when worker should receive funds on expiration */
+  /**
+   * Receives closed-account rent and any refundable worker bond, never unresolved
+   * task principal; validated against `worker.authority` before funds can move.
+   */
   workerWallet?: Address<TAccountWorkerWallet>;
-  /**
-   * Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
-   * cannot be bypassed when an expired dispute pays the worker. Live (program-owned)
-   * forces the operator leg; non-hired tasks pass the empty system-owned PDA.
-   */
+  /** never pays a marketplace leg; all unresolved principal returns to the creator. */
   hireRecord?: Address<TAccountHireRecord>;
-  /**
-   * HireRecord fallback); required only when those terms carry a non-zero operator fee
-   * and the worker is paid. Receives SOL.
-   */
   disputeOperator?: Address<TAccountDisputeOperator>;
-  /**
-   * dispute exits honor the snapshotted referrer leg); required only when those terms
-   * carry a non-zero referrer fee and the worker is paid. Receives SOL.
-   */
   disputeReferrer?: Address<TAccountDisputeReferrer>;
   /** Token escrow ATA holding reward tokens (optional) */
   tokenEscrowAta?: Address<TAccountTokenEscrowAta>;
   /** Creator's token account for refund (optional) */
   creatorTokenAccount?: Address<TAccountCreatorTokenAccount>;
-  /** Worker's token account for payment (optional) */
   workerTokenAccountAta?: Address<TAccountWorkerTokenAccountAta>;
   /** SPL token mint (optional, must match task.reward_mint) */
   rewardMint?: Address<TAccountRewardMint>;
@@ -248,15 +239,15 @@ export type ExpireDisputeAsyncInput<
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   /**
-   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-   * decrements the review counters when still live and returns its rent to the
-   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   * REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+   * canonical TaskSubmission PDA for the defendant claim. A live record is
+   * swept before claim close; the exact system-owned empty PDA proves absence.
+   * `Option` preserves the deployed account list, but `None` fails closed.
    */
   taskSubmission?: Address<TAccountTaskSubmission>;
   /**
-   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-   * swept submission is still live on a manual-validation task (pending-counter
-   * hygiene). Bound to the task in the handler.
+   * OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+   * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
 };
@@ -407,6 +398,14 @@ export async function getExpireDisputeInstructionAsync<
     accounts.tokenProgram.value =
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" as Address<"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA">;
   }
+  if (!accounts.taskValidationConfig.value) {
+    accounts.taskValidationConfig.value = await findTaskValidationConfigPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
 
   const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
   return Object.freeze({
@@ -491,36 +490,26 @@ export type ExpireDisputeInput<
   creator: Address<TAccountCreator>;
   authority: TransactionSigner<TAccountAuthority>;
   /**
-   * Worker's claim on the disputed task (fix #137)
-   * Optional - when provided, allows decrementing worker's active_tasks
-   * and enables fair refund distribution (fix #418)
+   * Worker's canonical claim on the disputed task.
+   * Retained as an optional ABI slot, but required by the handler on every expiry
+   * to bind the defendant and unwind the claim and worker counters.
    */
   workerClaim?: Address<TAccountWorkerClaim>;
   /** Worker's AgentRegistration PDA (must be dispute defendant). */
   worker?: Address<TAccountWorker>;
-  /** Required when worker should receive funds on expiration */
+  /**
+   * Receives closed-account rent and any refundable worker bond, never unresolved
+   * task principal; validated against `worker.authority` before funds can move.
+   */
   workerWallet?: Address<TAccountWorkerWallet>;
-  /**
-   * Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
-   * cannot be bypassed when an expired dispute pays the worker. Live (program-owned)
-   * forces the operator leg; non-hired tasks pass the empty system-owned PDA.
-   */
+  /** never pays a marketplace leg; all unresolved principal returns to the creator. */
   hireRecord: Address<TAccountHireRecord>;
-  /**
-   * HireRecord fallback); required only when those terms carry a non-zero operator fee
-   * and the worker is paid. Receives SOL.
-   */
   disputeOperator?: Address<TAccountDisputeOperator>;
-  /**
-   * dispute exits honor the snapshotted referrer leg); required only when those terms
-   * carry a non-zero referrer fee and the worker is paid. Receives SOL.
-   */
   disputeReferrer?: Address<TAccountDisputeReferrer>;
   /** Token escrow ATA holding reward tokens (optional) */
   tokenEscrowAta?: Address<TAccountTokenEscrowAta>;
   /** Creator's token account for refund (optional) */
   creatorTokenAccount?: Address<TAccountCreatorTokenAccount>;
-  /** Worker's token account for payment (optional) */
   workerTokenAccountAta?: Address<TAccountWorkerTokenAccountAta>;
   /** SPL token mint (optional, must match task.reward_mint) */
   rewardMint?: Address<TAccountRewardMint>;
@@ -529,15 +518,15 @@ export type ExpireDisputeInput<
   creatorCompletionBond: Address<TAccountCreatorCompletionBond>;
   workerCompletionBond: Address<TAccountWorkerCompletionBond>;
   /**
-   * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-   * decrements the review counters when still live and returns its rent to the
-   * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+   * REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+   * canonical TaskSubmission PDA for the defendant claim. A live record is
+   * swept before claim close; the exact system-owned empty PDA proves absence.
+   * `Option` preserves the deployed account list, but `None` fails closed.
    */
   taskSubmission?: Address<TAccountTaskSubmission>;
   /**
-   * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-   * swept submission is still live on a manual-validation task (pending-counter
-   * hygiene). Bound to the task in the handler.
+   * OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+   * submission is still Submitted and therefore carries counter debt.
    */
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
 };
@@ -734,36 +723,26 @@ export type ParsedExpireDisputeInstruction<
     creator: TAccountMetas[4];
     authority: TAccountMetas[5];
     /**
-     * Worker's claim on the disputed task (fix #137)
-     * Optional - when provided, allows decrementing worker's active_tasks
-     * and enables fair refund distribution (fix #418)
+     * Worker's canonical claim on the disputed task.
+     * Retained as an optional ABI slot, but required by the handler on every expiry
+     * to bind the defendant and unwind the claim and worker counters.
      */
     workerClaim?: TAccountMetas[6] | undefined;
     /** Worker's AgentRegistration PDA (must be dispute defendant). */
     worker?: TAccountMetas[7] | undefined;
-    /** Required when worker should receive funds on expiration */
+    /**
+     * Receives closed-account rent and any refundable worker bond, never unresolved
+     * task principal; validated against `worker.authority` before funds can move.
+     */
     workerWallet?: TAccountMetas[8] | undefined;
-    /**
-     * Hire link PDA (["hire", task]) — ALWAYS required so a hired task's operator fee
-     * cannot be bypassed when an expired dispute pays the worker. Live (program-owned)
-     * forces the operator leg; non-hired tasks pass the empty system-owned PDA.
-     */
+    /** never pays a marketplace leg; all unresolved principal returns to the creator. */
     hireRecord: TAccountMetas[9];
-    /**
-     * HireRecord fallback); required only when those terms carry a non-zero operator fee
-     * and the worker is paid. Receives SOL.
-     */
     disputeOperator?: TAccountMetas[10] | undefined;
-    /**
-     * dispute exits honor the snapshotted referrer leg); required only when those terms
-     * carry a non-zero referrer fee and the worker is paid. Receives SOL.
-     */
     disputeReferrer?: TAccountMetas[11] | undefined;
     /** Token escrow ATA holding reward tokens (optional) */
     tokenEscrowAta?: TAccountMetas[12] | undefined;
     /** Creator's token account for refund (optional) */
     creatorTokenAccount?: TAccountMetas[13] | undefined;
-    /** Worker's token account for payment (optional) */
     workerTokenAccountAta?: TAccountMetas[14] | undefined;
     /** SPL token mint (optional, must match task.reward_mint) */
     rewardMint?: TAccountMetas[15] | undefined;
@@ -772,15 +751,15 @@ export type ParsedExpireDisputeInstruction<
     creatorCompletionBond: TAccountMetas[17];
     workerCompletionBond: TAccountMetas[18];
     /**
-     * OPTIONAL (audit F-9): the defendant's TaskSubmission to sweep on exit —
-     * decrements the review counters when still live and returns its rent to the
-     * worker authority. Validated + bound in the handler (`sweep_dispute_submission`).
+     * REQUIRED-EVIDENCE ON THE OPTIONAL WIRE (audit F-9): callers pass the
+     * canonical TaskSubmission PDA for the defendant claim. A live record is
+     * swept before claim close; the exact system-owned empty PDA proves absence.
+     * `Option` preserves the deployed account list, but `None` fails closed.
      */
     taskSubmission?: TAccountMetas[19] | undefined;
     /**
-     * OPTIONAL (audit F-9): the task's TaskValidationConfig — required only when the
-     * swept submission is still live on a manual-validation task (pending-counter
-     * hygiene). Bound to the task in the handler.
+     * OPTIONAL: canonical TaskValidationConfig, required when the swept manual
+     * submission is still Submitted and therefore carries counter debt.
      */
     taskValidationConfig?: TAccountMetas[20] | undefined;
   };

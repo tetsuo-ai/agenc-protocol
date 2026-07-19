@@ -143,31 +143,17 @@ pub fn arb_malformed_deadline() -> impl Strategy<Value = i64> {
     ]
 }
 
-/// Arbitrary vote (approve/reject)
-pub fn arb_vote() -> impl Strategy<Value = bool> {
-    any::<bool>()
-}
-
-/// Arbitrary dispute threshold (1-100)
-pub fn arb_dispute_threshold() -> impl Strategy<Value = u8> {
+/// Dispute timestamps, including values that exercise saturating deadline math.
+pub fn arb_dispute_time() -> impl Strategy<Value = i64> {
     prop_oneof![
-        Just(1u8),
-        Just(50u8),  // Typical
-        Just(51u8),  // Simple majority
-        Just(67u8),  // Supermajority
-        Just(100u8), // Unanimous
-        1u8..=100u8,
-    ]
-}
-
-/// Arbitrary stake amount
-pub fn arb_stake() -> impl Strategy<Value = u64> {
-    prop_oneof![
-        Just(0u64),
-        Just(1u64),
-        Just(1_000_000u64),
-        Just(u64::MAX),
-        0u64..1_000_000_000u64,
+        Just(i64::MIN),
+        Just(i64::MIN + 1),
+        Just(-1i64),
+        Just(0i64),
+        Just(1i64),
+        Just(i64::MAX - 1),
+        Just(i64::MAX),
+        -1_000_000i64..=1_000_000i64,
     ]
 }
 
@@ -319,66 +305,68 @@ impl Arbitrary for CompleteTaskInput {
     }
 }
 
-/// Input for vote_dispute fuzz testing
-#[derive(Debug, Clone)]
-pub struct VoteDisputeInput {
-    pub dispute_id: [u8; 32],
-    pub arbiter_id: [u8; 32],
-    pub approve: bool,
-    pub arbiter_stake: u64,
-    pub min_arbiter_stake: u64,
-    pub arbiter_capabilities: u64,
-    pub current_votes_for: u8,
-    pub current_votes_against: u8,
-    pub voting_deadline: i64,
-    pub current_timestamp: i64,
+/// Identity selected for a direct dispute ruling. Party roles are modeled as
+/// assigned resolvers so the conflict guards, rather than the roster gate, are
+/// what reject them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolverRole {
+    ProtocolAuthority,
+    AssignedResolver,
+    UnassignedResolver,
+    Initiator,
+    Creator,
+    Worker,
 }
 
-impl Arbitrary for VoteDisputeInput {
+pub const PROTOCOL_AUTHORITY: [u8; 32] = [1; 32];
+pub const ASSIGNED_RESOLVER: [u8; 32] = [2; 32];
+pub const UNASSIGNED_RESOLVER: [u8; 32] = [3; 32];
+pub const DISPUTE_INITIATOR: [u8; 32] = [4; 32];
+pub const TASK_CREATOR: [u8; 32] = [5; 32];
+pub const TASK_WORKER: [u8; 32] = [6; 32];
+
+/// Materialize a role into the exact identity relationships checked by the
+/// simulation. Party roles carry a valid assignment so they exercise the
+/// self-dealing guards after passing the roster gate.
+pub fn direct_ruling(
+    role: ResolverRole,
+    approve: bool,
+    has_rationale: bool,
+) -> crate::scenarios::SimulatedRuling {
+    let (resolver, resolver_assigned) = match role {
+        ResolverRole::ProtocolAuthority => (PROTOCOL_AUTHORITY, false),
+        ResolverRole::AssignedResolver => (ASSIGNED_RESOLVER, true),
+        ResolverRole::UnassignedResolver => (UNASSIGNED_RESOLVER, false),
+        ResolverRole::Initiator => (DISPUTE_INITIATOR, true),
+        ResolverRole::Creator => (TASK_CREATOR, true),
+        ResolverRole::Worker => (TASK_WORKER, true),
+    };
+
+    crate::scenarios::SimulatedRuling {
+        resolver,
+        protocol_authority: PROTOCOL_AUTHORITY,
+        resolver_assigned,
+        creator_authority: TASK_CREATOR,
+        worker_authority: TASK_WORKER,
+        approve,
+        rationale_hash: if has_rationale { [7; 32] } else { [0; 32] },
+    }
+}
+
+impl Arbitrary for ResolverRole {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            arb_id(),
-            arb_id(),
-            arb_vote(),
-            arb_stake(),
-            arb_stake(),
-            arb_capabilities(),
-            0u8..=127u8,
-            0u8..=127u8,
-            arb_timestamp(),
-            arb_timestamp(),
-        )
-            .prop_map(
-                |(
-                    dispute_id,
-                    arbiter_id,
-                    approve,
-                    arbiter_stake,
-                    min_arbiter_stake,
-                    arbiter_capabilities,
-                    current_votes_for,
-                    current_votes_against,
-                    voting_deadline,
-                    current_timestamp,
-                )| {
-                    VoteDisputeInput {
-                        dispute_id,
-                        arbiter_id,
-                        approve,
-                        arbiter_stake,
-                        min_arbiter_stake,
-                        arbiter_capabilities,
-                        current_votes_for,
-                        current_votes_against,
-                        voting_deadline,
-                        current_timestamp,
-                    }
-                },
-            )
-            .boxed()
+        prop_oneof![
+            Just(Self::ProtocolAuthority),
+            Just(Self::AssignedResolver),
+            Just(Self::UnassignedResolver),
+            Just(Self::Initiator),
+            Just(Self::Creator),
+            Just(Self::Worker),
+        ]
+        .boxed()
     }
 }
 
@@ -387,12 +375,15 @@ impl Arbitrary for VoteDisputeInput {
 pub struct ResolveDisputeInput {
     pub dispute_id: [u8; 32],
     pub resolution_type: u8, // 0=Refund, 1=Complete, 2=Split
-    pub votes_for: u8,
-    pub votes_against: u8,
-    pub dispute_threshold: u8,
+    pub approve: bool,
+    pub resolver_role: ResolverRole,
+    pub has_rationale: bool,
+    pub dispute_active: bool,
+    pub task_disputed: bool,
     pub escrow_amount: u64,
     pub escrow_distributed: u64,
     pub voting_deadline: i64,
+    pub expires_at: i64,
     pub current_timestamp: i64,
 }
 
@@ -402,37 +393,30 @@ impl Arbitrary for ResolveDisputeInput {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            arb_id(),
-            0u8..=2u8,
-            0u8..=127u8,
-            0u8..=127u8,
-            arb_dispute_threshold(),
-            arb_reward_amount(),
-            arb_reward_amount(),
-            arb_timestamp(),
-            arb_timestamp(),
+            (arb_id(), 0u8..=2u8, any::<bool>(), any::<ResolverRole>()),
+            (any::<bool>(), any::<bool>(), any::<bool>()),
+            (arb_reward_amount(), arb_reward_amount()),
+            (arb_dispute_time(), arb_dispute_time(), arb_dispute_time()),
         )
             .prop_map(
                 |(
-                    dispute_id,
-                    resolution_type,
-                    votes_for,
-                    votes_against,
-                    dispute_threshold,
-                    escrow_amount,
-                    escrow_distributed,
-                    voting_deadline,
-                    current_timestamp,
+                    (dispute_id, resolution_type, approve, resolver_role),
+                    (has_rationale, dispute_active, task_disputed),
+                    (escrow_amount, escrow_distributed),
+                    (voting_deadline, expires_at, current_timestamp),
                 )| {
                     ResolveDisputeInput {
                         dispute_id,
                         resolution_type,
-                        votes_for,
-                        votes_against,
-                        dispute_threshold,
+                        approve,
+                        resolver_role,
+                        has_rationale,
+                        dispute_active,
+                        task_disputed,
                         escrow_amount,
                         escrow_distributed,
                         voting_deadline,
+                        expires_at,
                         current_timestamp,
                     }
                 },
@@ -543,26 +527,17 @@ impl Arbitrary for TaskLifecycleSequence {
 
 #[derive(Debug, Clone)]
 pub enum DisputeAction {
-    Vote {
-        arbiter_index: u8,
-        approved: bool,
-        timestamp: i64,
-    },
     Resolve {
+        resolver_role: ResolverRole,
+        approve: bool,
+        has_rationale: bool,
         timestamp: i64,
     },
     Cancel {
-        timestamp: i64,
+        by_initiator: bool,
     },
     Expire {
         timestamp: i64,
-    },
-    ApplySlash {
-        arbiter_index: u8,
-        amount: u64,
-    },
-    ApplyInitiatorSlash {
-        amount: u64,
     },
 }
 
@@ -572,16 +547,17 @@ impl Arbitrary for DisputeAction {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            5 => (0u8..=10u8, arb_vote(), arb_timestamp()).prop_map(|(arbiter_index, approved, timestamp)| {
-                DisputeAction::Vote { arbiter_index, approved, timestamp }
-            }),
-            2 => arb_timestamp().prop_map(|timestamp| DisputeAction::Resolve { timestamp }),
-            2 => arb_timestamp().prop_map(|timestamp| DisputeAction::Cancel { timestamp }),
-            2 => arb_timestamp().prop_map(|timestamp| DisputeAction::Expire { timestamp }),
-            2 => (0u8..=10u8, arb_reward_amount()).prop_map(|(arbiter_index, amount)| {
-                DisputeAction::ApplySlash { arbiter_index, amount }
-            }),
-            1 => arb_reward_amount().prop_map(|amount| DisputeAction::ApplyInitiatorSlash { amount }),
+            5 => (any::<ResolverRole>(), any::<bool>(), any::<bool>(), arb_dispute_time())
+                .prop_map(|(resolver_role, approve, has_rationale, timestamp)| {
+                    DisputeAction::Resolve {
+                        resolver_role,
+                        approve,
+                        has_rationale,
+                        timestamp,
+                    }
+                }),
+            2 => any::<bool>().prop_map(|by_initiator| DisputeAction::Cancel { by_initiator }),
+            3 => arb_dispute_time().prop_map(|timestamp| DisputeAction::Expire { timestamp }),
         ]
         .boxed()
     }
@@ -591,17 +567,11 @@ impl Arbitrary for DisputeAction {
 pub struct DisputeLifecycleSequence {
     pub dispute_id: [u8; 32],
     pub task_id: [u8; 32],
-    pub initiator_id: [u8; 32],
-    pub initiator_stake: u64,
     pub initial_task_status: u8,
-    pub arbiter_ids: Vec<[u8; 32]>,
-    pub arbiter_stakes: Vec<u64>,
-    pub min_arbiter_stake: u64,
     pub resolution_type: u8,
-    pub dispute_threshold: u8,
     pub voting_deadline: i64,
+    pub expires_at: i64,
     pub escrow_amount: u64,
-    pub protocol_fee_bps: u16,
     pub actions: Vec<DisputeAction>,
 }
 
@@ -611,89 +581,38 @@ impl Arbitrary for DisputeLifecycleSequence {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            arb_id(),
-            arb_id(),
-            arb_id(),
-            arb_stake(),
-            prop_oneof![
-                Just(0u8), // OPEN
-                Just(1u8), // IN_PROGRESS
-                Just(2u8), // PENDING_VALIDATION
-                Just(3u8), // COMPLETED
-                Just(4u8), // CANCELLED
-                Just(5u8), // DISPUTED
-            ],
-            1usize..=5usize,
-            arb_stake(),
-            0u8..=2u8,
-            arb_dispute_threshold(),
-            0i64..1_000_000_000i64,
+            (arb_id(), arb_id()),
+            (
+                prop_oneof![
+                    Just(0u8), // OPEN
+                    Just(1u8), // IN_PROGRESS
+                    Just(2u8), // PENDING_VALIDATION
+                    Just(3u8), // COMPLETED
+                    Just(4u8), // CANCELLED
+                    Just(5u8), // DISPUTED
+                ],
+                0u8..=2u8,
+            ),
+            (arb_dispute_time(), arb_dispute_time()),
             arb_reward_amount(),
-            arb_protocol_fee_bps(),
+            prop::collection::vec(any::<DisputeAction>(), 0..30),
         )
-            .prop_flat_map(
-                |(
-                    dispute_id,
-                    task_id,
-                    initiator_id,
-                    initiator_stake,
-                    initial_task_status,
-                    arbiter_count,
-                    min_arbiter_stake,
-                    resolution_type,
-                    dispute_threshold,
-                    voting_deadline,
-                    escrow_amount,
-                    protocol_fee_bps,
-                )| {
-                    (
-                        (Just(dispute_id), Just(task_id), Just(initiator_id)),
-                        (Just(initiator_stake), Just(initial_task_status)),
-                        (
-                            prop::collection::vec(arb_id(), arbiter_count),
-                            prop::collection::vec(arb_stake(), arbiter_count),
-                        ),
-                        (
-                            Just(min_arbiter_stake),
-                            Just(resolution_type),
-                            Just(dispute_threshold),
-                            Just(voting_deadline),
-                            Just(escrow_amount),
-                            Just(protocol_fee_bps),
-                        ),
-                        prop::collection::vec(any::<DisputeAction>(), 0..30),
-                    )
-                },
-            )
             .prop_map(
                 |(
-                    (dispute_id, task_id, initiator_id),
-                    (initiator_stake, initial_task_status),
-                    (arbiter_ids, arbiter_stakes),
-                    (
-                        min_arbiter_stake,
-                        resolution_type,
-                        dispute_threshold,
-                        voting_deadline,
-                        escrow_amount,
-                        protocol_fee_bps,
-                    ),
+                    (dispute_id, task_id),
+                    (initial_task_status, resolution_type),
+                    (voting_deadline, expires_at),
+                    escrow_amount,
                     actions,
                 )| {
                     DisputeLifecycleSequence {
                         dispute_id,
                         task_id,
-                        initiator_id,
-                        initiator_stake,
                         initial_task_status,
-                        arbiter_ids,
-                        arbiter_stakes,
-                        min_arbiter_stake,
                         resolution_type,
-                        dispute_threshold,
                         voting_deadline,
+                        expires_at,
                         escrow_amount,
-                        protocol_fee_bps,
                         actions,
                     }
                 },
@@ -733,11 +652,8 @@ impl Arbitrary for DependencyGraphInput {
 #[derive(Debug, Clone)]
 pub struct DisputeTimingInput {
     pub voting_deadline: i64,
-    pub vote_timestamps: Vec<i64>,
-    pub resolution_timestamp: i64,
-    pub expiry_timestamp: i64,
-    pub claim_deadline: i64,
-    pub claim_expiry_timestamp: i64,
+    pub expires_at: i64,
+    pub timestamps: Vec<i64>,
 }
 
 impl Arbitrary for DisputeTimingInput {
@@ -746,28 +662,15 @@ impl Arbitrary for DisputeTimingInput {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            -1_000i64..=1_000_000i64,
-            prop::collection::vec(-1_000i64..=1_000_000i64, 0..20),
-            -1_000i64..=1_000_000i64,
-            -1_000i64..=1_000_000i64,
-            -1_000i64..=1_000_000i64,
-            -1_000i64..=1_000_000i64,
+            arb_dispute_time(),
+            arb_dispute_time(),
+            prop::collection::vec(arb_dispute_time(), 1..20),
         )
             .prop_map(
-                |(
+                |(voting_deadline, expires_at, timestamps)| DisputeTimingInput {
                     voting_deadline,
-                    vote_timestamps,
-                    resolution_timestamp,
-                    expiry_timestamp,
-                    claim_deadline,
-                    claim_expiry_timestamp,
-                )| DisputeTimingInput {
-                    voting_deadline,
-                    vote_timestamps,
-                    resolution_timestamp,
-                    expiry_timestamp,
-                    claim_deadline,
-                    claim_expiry_timestamp,
+                    expires_at,
+                    timestamps,
                 },
             )
             .boxed()
@@ -791,11 +694,6 @@ mod tests {
         }
 
         #[test]
-        fn test_arb_dispute_threshold_within_bounds(threshold in arb_dispute_threshold()) {
-            prop_assert!(threshold >= 1 && threshold <= 100);
-        }
-
-        #[test]
         fn test_claim_task_input_generates(input in any::<ClaimTaskInput>()) {
             // Ensure input is generated without panicking
             let _ = input.task_id;
@@ -806,6 +704,10 @@ mod tests {
         fn test_complete_task_input_generates(input in any::<CompleteTaskInput>()) {
             prop_assert!(input.task_type <= 2);
             prop_assert!(input.required_completions >= 1);
+        }
+
+        #[test]
+        fn test_resolve_dispute_input_generates(_input in any::<ResolveDisputeInput>()) {
         }
 
         #[test]

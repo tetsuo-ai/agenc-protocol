@@ -4,6 +4,7 @@ import {
   findAgentPda,
   findTaskPda,
   findHireRecordPda,
+  findModerationBlockPda,
   getTaskDecoder,
   TaskStatus,
 } from "../src/index.js";
@@ -15,6 +16,10 @@ import {
   send,
   accountData,
 } from "./harness.js";
+
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
 
 // REAL on-chain execution of the core embeddable happy path against the compiled
 // agenc-coordination program in litesvm, driven entirely by SDK-built (@solana/kit)
@@ -128,6 +133,7 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
     await send(svm, buyer, [
       await facade.hireFromListing({
         listing,
+        providerAgent,
         creatorAgent: buyerAgent,
         authority: buyer,
         creator: buyer,
@@ -173,6 +179,8 @@ describe("e2e: hire -> settle pays the worker on the real program", () => {
         task,
         worker: providerAgent,
         authority: provider,
+        moderationBlock: await moderationBlockFor(jobHash),
+        jobSpecHash: jobHash,
       }),
     ]);
 

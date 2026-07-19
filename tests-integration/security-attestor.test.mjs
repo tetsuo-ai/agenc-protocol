@@ -87,7 +87,11 @@ async function setupAttestedTask(w, { attestor, reward = 2_000_000 } = {}) {
       const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
       expectOk(send(w.svm, await w.providerProg.methods
         .claimTaskWithJobSpec()
-        .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+        .accounts({ task, taskJobSpec: jobSpec,
+          hireRecord: pda([enc("hire"), task.toBuffer()])[0], legacyListing: null,
+          moderationBlock: moderationBlockPda(jobHash)[0], claim,
+          protocolConfig: w.protocolPda, worker: w.providerAgent,
+          authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
         .instruction(), [w.provider]), "attested:claim");
 
       const [submission] = pda([enc("task_submission"), claim.toBuffer()]);

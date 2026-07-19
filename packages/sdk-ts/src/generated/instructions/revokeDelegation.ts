@@ -18,7 +18,6 @@ import {
   SolanaError,
   transformEncoder,
   type AccountMeta,
-  type AccountSignerMeta,
   type Address,
   type FixedSizeCodec,
   type FixedSizeDecoder,
@@ -27,9 +26,7 @@ import {
   type InstructionWithAccounts,
   type InstructionWithData,
   type ReadonlyUint8Array,
-  type TransactionSigner,
   type WritableAccount,
-  type WritableSignerAccount,
 } from "@solana/kit";
 import {
   getAccountMetaFactory,
@@ -57,8 +54,7 @@ export type RevokeDelegationInstruction<
   InstructionWithAccounts<
     [
       TAccountAuthority extends string
-        ? WritableSignerAccount<TAccountAuthority> &
-            AccountSignerMeta<TAccountAuthority>
+        ? WritableAccount<TAccountAuthority>
         : TAccountAuthority,
       TAccountDelegatorAgent extends string
         ? WritableAccount<TAccountDelegatorAgent>
@@ -104,7 +100,16 @@ export type RevokeDelegationInput<
   TAccountDelegatorAgent extends string = string,
   TAccountDelegation extends string = string,
 > = {
-  authority: TransactionSigner<TAccountAuthority>;
+  /**
+   * recorded on `delegator_agent` and is the rent recipient. It deliberately
+   * need not sign: delegation is a retired, non-beneficial feature, and making
+   * the exit permissionless prevents an owner from blocking a mainnet cutover.
+   */
+  authority: Address<TAccountAuthority>;
+  /**
+   * in the handler. Unchecked is required because deployed revision 4 could
+   * close this PDA after creating a delegation.
+   */
   delegatorAgent: Address<TAccountDelegatorAgent>;
   delegation: Address<TAccountDelegation>;
 };
@@ -165,7 +170,16 @@ export type ParsedRevokeDelegationInstruction<
 > = {
   programAddress: Address<TProgram>;
   accounts: {
+    /**
+     * recorded on `delegator_agent` and is the rent recipient. It deliberately
+     * need not sign: delegation is a retired, non-beneficial feature, and making
+     * the exit permissionless prevents an owner from blocking a mainnet cutover.
+     */
     authority: TAccountMetas[0];
+    /**
+     * in the handler. Unchecked is required because deployed revision 4 could
+     * close this PDA after creating a delegation.
+     */
     delegatorAgent: TAccountMetas[1];
     delegation: TAccountMetas[2];
   };

@@ -4,9 +4,9 @@ export default defineConfig({
   entry: {
     // Programmatic surface (runtime pieces for embedding the worker loop).
     index: "src/index.ts",
-    // The npx-able CLI entry. Its source carries the `#!/usr/bin/env node`
-    // shebang, which tsup preserves on the emitted `./dist/cli.js` so
-    // `npx @tetsuo-ai/agenc-worker up` boots the worker directly.
+    // The CLI entry. Its source carries the `#!/usr/bin/env node` shebang,
+    // which tsup preserves so a pinned install can invoke `agenc-worker up`
+    // directly without resolving mutable registry state at runtime.
     cli: "src/cli.ts",
   },
   format: ["cjs", "esm"],

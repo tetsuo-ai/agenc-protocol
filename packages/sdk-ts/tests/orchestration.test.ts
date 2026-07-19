@@ -70,6 +70,7 @@ const ROSTER_MODERATOR = address(
 );
 const TASK = address("SysvarC1ock11111111111111111111111111111111");
 const LISTING = address("SysvarRent111111111111111111111111111111111");
+const PROVIDER_AGENT = address("Vote111111111111111111111111111111111111111");
 const HASH = new Uint8Array(32).fill(9);
 
 beforeEach(() => {
@@ -232,6 +233,7 @@ describe("hireAndActivate moderation-result validation", () => {
   }
   const hire = {
     listing: LISTING,
+    providerAgent: PROVIDER_AGENT,
     taskId: new Uint8Array(32).fill(1),
     expectedPrice: 1n,
     expectedVersion: 1n,

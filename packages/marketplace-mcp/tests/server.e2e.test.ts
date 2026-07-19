@@ -339,6 +339,7 @@ describe("MCP server: mutation prepare tools return UNSIGNED transactions", () =
           task: seeded.taskPda,
           worker: seeded.providerAgent,
           workerAuthority: seeded.creatorWallet,
+          jobSpecHash: "07".repeat(32),
         },
       });
       const out = parseResult(result) as {

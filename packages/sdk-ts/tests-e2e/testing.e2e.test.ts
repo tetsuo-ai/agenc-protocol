@@ -21,6 +21,7 @@ import {
   findCompletionBondPda,
   findClaimPda,
   findTaskSubmissionPda,
+  findModerationBlockPda,
   getTaskDecoder,
   getTaskSubmissionDecoder,
   TaskStatus,
@@ -32,6 +33,10 @@ import {
   DEFAULT_FUNDING_LAMPORTS,
   type LocalMarketplace,
 } from "../src/testing/index.js";
+
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
 
 // node:fs passthrough mock used ONLY by the missing-.so test below: with
 // forceMissingSo=false (the default) every call delegates to the real
@@ -121,6 +126,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
     const taskId = new Uint8Array(32).fill(44);
     await buyerClient.hireFromListing({
       listing,
+      providerAgent,
       creatorAgent: buyerAgent,
       authority: buyer,
       creator: buyer,
@@ -150,6 +156,8 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
       task,
       worker: providerAgent,
       authority: provider,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
     expect(getTaskDecoder().decode(accountData(market, task)!).status).toBe(
       TaskStatus.InProgress,
@@ -161,6 +169,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
       authority: provider,
       task,
       role: 1,
+      worker: providerAgent,
     });
     const [creatorBond] = await findCompletionBondPda({
       task,
@@ -286,6 +295,8 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
       task,
       worker: workerAgent,
       authority: worker,
+      moderationBlock: await moderationBlockFor(jobSpecHash),
+      jobSpecHash,
     });
 
     // submit (worker) -> PendingValidation, submission Submitted

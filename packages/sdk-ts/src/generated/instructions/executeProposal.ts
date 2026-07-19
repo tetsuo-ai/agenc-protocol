@@ -31,6 +31,7 @@ import {
   type ReadonlyUint8Array,
   type TransactionSigner,
   type WritableAccount,
+  type WritableSignerAccount,
 } from "@solana/kit";
 import {
   getAccountMetaFactory,
@@ -77,7 +78,8 @@ export type ExecuteProposalInstruction<
             AccountSignerMeta<TAccountAuthority>
         : TAccountAuthority,
       TAccountTreasury extends string
-        ? WritableAccount<TAccountTreasury>
+        ? WritableSignerAccount<TAccountTreasury> &
+            AccountSignerMeta<TAccountTreasury>
         : TAccountTreasury,
       TAccountRecipient extends string
         ? WritableAccount<TAccountRecipient>
@@ -133,11 +135,11 @@ export type ExecuteProposalAsyncInput<
   /** Authority can be anyone (permissionless after voting ends) */
   authority: TransactionSigner<TAccountAuthority>;
   /**
-   * Must match protocol_config.treasury. Spend path supports:
-   * - program-owned treasury (direct lamport mutation), or
-   * - system-owned treasury when this account signs.
+   * Treasury account for TreasurySpend proposals. The optional signer type
+   * makes custody consent explicit in generated account metas.
+   * Must match protocol_config.treasury and be system owned.
    */
-  treasury?: Address<TAccountTreasury>;
+  treasury?: TransactionSigner<TAccountTreasury>;
   /** Validated from proposal payload in handler. */
   recipient?: Address<TAccountRecipient>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -249,11 +251,11 @@ export type ExecuteProposalInput<
   /** Authority can be anyone (permissionless after voting ends) */
   authority: TransactionSigner<TAccountAuthority>;
   /**
-   * Must match protocol_config.treasury. Spend path supports:
-   * - program-owned treasury (direct lamport mutation), or
-   * - system-owned treasury when this account signs.
+   * Treasury account for TreasurySpend proposals. The optional signer type
+   * makes custody consent explicit in generated account metas.
+   * Must match protocol_config.treasury and be system owned.
    */
-  treasury?: Address<TAccountTreasury>;
+  treasury?: TransactionSigner<TAccountTreasury>;
   /** Validated from proposal payload in handler. */
   recipient?: Address<TAccountRecipient>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -354,9 +356,9 @@ export type ParsedExecuteProposalInstruction<
     /** Authority can be anyone (permissionless after voting ends) */
     authority: TAccountMetas[3];
     /**
-     * Must match protocol_config.treasury. Spend path supports:
-     * - program-owned treasury (direct lamport mutation), or
-     * - system-owned treasury when this account signs.
+     * Treasury account for TreasurySpend proposals. The optional signer type
+     * makes custody consent explicit in generated account metas.
+     * Must match protocol_config.treasury and be system owned.
      */
     treasury?: TAccountMetas[4] | undefined;
     /** Validated from proposal payload in handler. */

@@ -147,9 +147,11 @@ export type CloseTaskAsyncInput<
    */
   taskJobSpec?: Address<TAccountTaskJobSpec>;
   /**
-   * Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow
-   * account open (drained, `is_closed = true`) on a terminal task; provide it
-   * here to reclaim its rent. Bound to this task by seeds + constraint.
+   * Optional already-settled escrow PDA. `resolve_dispute` can leave a token
+   * task's state escrow open after draining it and setting `is_closed = true`;
+   * provide it here to reclaim its rent. A pending token reserve is still marked
+   * open and is rejected until its slash finalizer runs. Bound to this task by
+   * seeds + constraint.
    */
   escrow?: Address<TAccountEscrow>;
   /**
@@ -184,7 +186,7 @@ export type CloseTaskAsyncInput<
    * path. CHECK: liveness checked in the handler when present.
    */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
-  /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
+  /** Task creator; receives child rent and any Task balance above rent minimum. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Protocol config (fix round, FIX 5) — supplies the canonical treasury
@@ -338,9 +340,11 @@ export type CloseTaskInput<
    */
   taskJobSpec?: Address<TAccountTaskJobSpec>;
   /**
-   * Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow
-   * account open (drained, `is_closed = true`) on a terminal task; provide it
-   * here to reclaim its rent. Bound to this task by seeds + constraint.
+   * Optional already-settled escrow PDA. `resolve_dispute` can leave a token
+   * task's state escrow open after draining it and setting `is_closed = true`;
+   * provide it here to reclaim its rent. A pending token reserve is still marked
+   * open and is rejected until its slash finalizer runs. Bound to this task by
+   * seeds + constraint.
    */
   escrow?: Address<TAccountEscrow>;
   /**
@@ -375,7 +379,7 @@ export type CloseTaskInput<
    * path. CHECK: liveness checked in the handler when present.
    */
   workerCompletionBond?: Address<TAccountWorkerCompletionBond>;
-  /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
+  /** Task creator; receives child rent and any Task balance above rent minimum. */
   authority: TransactionSigner<TAccountAuthority>;
   /**
    * Protocol config (fix round, FIX 5) — supplies the canonical treasury
@@ -493,9 +497,11 @@ export type ParsedCloseTaskInstruction<
      */
     taskJobSpec?: TAccountMetas[1] | undefined;
     /**
-     * Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow
-     * account open (drained, `is_closed = true`) on a terminal task; provide it
-     * here to reclaim its rent. Bound to this task by seeds + constraint.
+     * Optional already-settled escrow PDA. `resolve_dispute` can leave a token
+     * task's state escrow open after draining it and setting `is_closed = true`;
+     * provide it here to reclaim its rent. A pending token reserve is still marked
+     * open and is rejected until its slash finalizer runs. Bound to this task by
+     * seeds + constraint.
      */
     escrow?: TAccountMetas[2] | undefined;
     /**
@@ -530,7 +536,7 @@ export type ParsedCloseTaskInstruction<
      * path. CHECK: liveness checked in the handler when present.
      */
     workerCompletionBond?: TAccountMetas[6] | undefined;
-    /** Task creator; receives the reclaimed rent. Mutable to credit lamports. */
+    /** Task creator; receives child rent and any Task balance above rent minimum. */
     authority: TAccountMetas[7];
     /**
      * Protocol config (fix round, FIX 5) — supplies the canonical treasury

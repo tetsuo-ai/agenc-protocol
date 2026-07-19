@@ -110,6 +110,7 @@ describe("prepare_hire handler", () => {
     const ix = (await getTool("prepare_hire")!.handler(
       {
         listing: A_LISTING_PDA,
+        providerAgent: A_PROVIDER,
         buyer: A_AUTHORITY,
         creatorAgent: A_PROVIDER,
         taskId: HEX32,
@@ -128,6 +129,7 @@ describe("prepare_hire handler", () => {
     expect(ix.accounts.length).toBeGreaterThan(0);
     expect(typeof ix.dataBase64).toBe("string");
     expect(ix.dataBase64.length).toBeGreaterThan(0);
+    expect(ix.accounts[4]!.address).toBe(A_PROVIDER);
 
     // The buyer wallet appears as a writable signer (fee payer); a noop signer
     // carries the address but never produced a signature.
@@ -146,6 +148,7 @@ describe("prepare_hire handler", () => {
     const ix = (await getTool("prepare_hire")!.handler(
       {
         listing: A_LISTING_PDA,
+        providerAgent: A_PROVIDER,
         buyer: A_AUTHORITY,
         creatorAgent: A_PROVIDER,
         taskId: HEX32,
@@ -173,6 +176,7 @@ describe("prepare_hire handler", () => {
       getTool("prepare_hire")!.handler(
         {
           listing: A_LISTING_PDA,
+          providerAgent: A_PROVIDER,
           buyer: A_AUTHORITY,
           creatorAgent: A_PROVIDER,
           taskId: HEX32,
@@ -192,6 +196,7 @@ describe("prepare_hire handler", () => {
       getTool("prepare_hire")!.handler(
         {
           listing: A_LISTING_PDA,
+          providerAgent: A_PROVIDER,
           buyer: A_AUTHORITY,
           creatorAgent: A_PROVIDER,
           taskId: "deadbeef", // too short
@@ -210,6 +215,7 @@ describe("prepare_hire handler", () => {
       getTool("prepare_hire")!.handler(
         {
           listing: A_LISTING_PDA,
+          providerAgent: A_PROVIDER,
           buyer: A_AUTHORITY,
           creatorAgent: A_PROVIDER,
           taskId: HEX32,
@@ -229,6 +235,7 @@ describe("prepare_hire_humanless handler", () => {
     const ix = (await getTool("prepare_hire_humanless")!.handler(
       {
         listing: A_LISTING_PDA,
+        providerAgent: A_PROVIDER,
         buyer: A_AUTHORITY,
         taskId: HEX32,
         expectedPrice: "50000000",
@@ -240,6 +247,7 @@ describe("prepare_hire_humanless handler", () => {
     )) as UnsignedInstructionView;
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(ix.signatures).toEqual([]);
+    expect(ix.accounts[5]!.address).toBe(A_PROVIDER);
     const buyer = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(buyer?.role.signer).toBe(true);
 
@@ -255,6 +263,7 @@ describe("prepare_hire_humanless handler", () => {
       getTool("prepare_hire_humanless")!.handler(
         {
           listing: A_LISTING_PDA,
+          providerAgent: A_PROVIDER,
           buyer: A_AUTHORITY,
           taskId: HEX32,
           expectedPrice: "50000000",
@@ -362,10 +371,11 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
     expect(ix.accounts[3]!.address).toBe(A_CREATOR);
   });
 
-  it("prepare_hire emits the 14-account post-P1.2 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
+  it("prepare_hire emits the 15-account provider-bound shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
     const ix = (await getTool("prepare_hire")!.handler(
       {
         listing: A_LISTING_PDA,
+        providerAgent: A_PROVIDER,
         buyer: A_AUTHORITY,
         creatorAgent: A_PROVIDER,
         taskId: HEX32,
@@ -376,14 +386,15 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(14);
-    expect(ix.accounts[7]!.address).toBe(NONE_PLACEHOLDER);
+    expect(ix.accounts).toHaveLength(15);
+    expect(ix.accounts[8]!.address).toBe(NONE_PLACEHOLDER);
   });
 
   it("prepare_hire with moderatorIsAttestor:true attaches the roster PDA; the legacy listingModeration override lands in the record slot", async () => {
     const ix = (await getTool("prepare_hire")!.handler(
       {
         listing: A_LISTING_PDA,
+        providerAgent: A_PROVIDER,
         buyer: A_AUTHORITY,
         creatorAgent: A_PROVIDER,
         taskId: HEX32,
@@ -396,19 +407,20 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(14);
-    expect(ix.accounts[6]!.address).toBe(A_CREATOR);
+    expect(ix.accounts).toHaveLength(15);
+    expect(ix.accounts[7]!.address).toBe(A_CREATOR);
     const [rosterPda] = await findModerationAttestorPda({
       attestor: A_MODERATOR,
     });
-    expect(ix.accounts[7]!.address).toBe(rosterPda);
+    expect(ix.accounts[8]!.address).toBe(rosterPda);
     expect(rosterPda).not.toBe(NONE_PLACEHOLDER);
   });
 
-  it("prepare_hire_humanless emits the 13-account post-P1.2 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
+  it("prepare_hire_humanless emits the 14-account provider-bound shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
     const ix = (await getTool("prepare_hire_humanless")!.handler(
       {
         listing: A_LISTING_PDA,
+        providerAgent: A_PROVIDER,
         buyer: A_AUTHORITY,
         taskId: HEX32,
         expectedPrice: "50000000",
@@ -418,14 +430,15 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(13);
-    expect(ix.accounts[8]!.address).toBe(NONE_PLACEHOLDER);
+    expect(ix.accounts).toHaveLength(14);
+    expect(ix.accounts[9]!.address).toBe(NONE_PLACEHOLDER);
   });
 
   it("prepare_hire_humanless with moderatorIsAttestor:true attaches the roster PDA", async () => {
     const ix = (await getTool("prepare_hire_humanless")!.handler(
       {
         listing: A_LISTING_PDA,
+        providerAgent: A_PROVIDER,
         buyer: A_AUTHORITY,
         taskId: HEX32,
         expectedPrice: "50000000",
@@ -436,11 +449,11 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(13);
+    expect(ix.accounts).toHaveLength(14);
     const [rosterPda] = await findModerationAttestorPda({
       attestor: A_MODERATOR,
     });
-    expect(ix.accounts[8]!.address).toBe(rosterPda);
+    expect(ix.accounts[9]!.address).toBe(rosterPda);
     expect(rosterPda).not.toBe(NONE_PLACEHOLDER);
   });
 });
@@ -453,6 +466,7 @@ describe("prepare_claim handler", () => {
         claim: A_TASK_PDA,
         worker: A_PROVIDER,
         workerAuthority: A_AUTHORITY,
+        jobSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;

@@ -104,6 +104,7 @@ VITE_AGENC_NETWORK=devnet
 VITE_AGENC_RPC_URL=https://api.devnet.solana.com
 VITE_AGENC_INDEXER_URL=https://your-indexer.example
 VITE_AGENC_BACKEND_URL=https://your-marketplace.example
+VITE_AGENC_MODERATOR=<listing-and-task-attestor-wallet>
 ```
 
 Optional referrer config:
@@ -121,8 +122,8 @@ the backend variables in your shell or deployment environment, run:
 npm run check:setup
 ```
 
-The setup check validates required environment variables, URL shape, referrer
-address/fee bounds, and the self-hosted activation backend trust-boundary
+The setup check validates required environment variables, URL shape, the
+moderator address, referrer address/fee bounds, and the self-hosted activation backend trust-boundary
 wiring. It also reminds you that browser wallet wiring is a runtime integration:
 `window.agencWallet`, wallet signing, RPC broadcast, and settlement are not
 proven by this command.

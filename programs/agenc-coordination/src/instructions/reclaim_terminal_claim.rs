@@ -24,13 +24,30 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TerminalClaimReclaimed;
-use crate::instructions::task_validation_helpers::saturating_dec_counter;
+use crate::instructions::task_validation_helpers::{
+    decrement_pending_submission_count, ensure_validation_config, note_submission_left_review,
+    saturating_dec_counter,
+};
 use crate::state::{
-    AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, SubmissionStatus, Task, TaskClaim,
-    TaskStatus, TaskSubmission,
+    AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskStatus,
+    TaskSubmission, TaskType, TaskValidationConfig,
 };
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
+
+/// Generic terminal-claim cleanup is valid only when the Task still accounts
+/// for that live claim. A terminal live claim with `current_workers == 0` is the
+/// exact shape left by the deployed dispute resolver for a pending worker slash;
+/// before the durable pending bit existed, no stronger omission-proof marker was
+/// available on Task. Conservatively reserve that shape for
+/// `apply_dispute_slash` so generic reclaim cannot erase its canonical evidence.
+fn validate_terminal_claim_not_slash_reserved(task: &Task) -> Result<()> {
+    require!(
+        !task.worker_slash_pending() && task.current_workers > 0,
+        CoordinationError::ClaimSlashPending
+    );
+    Ok(())
+}
 
 #[derive(Accounts)]
 pub struct ReclaimTerminalClaim<'info> {
@@ -68,6 +85,16 @@ pub struct ReclaimTerminalClaim<'info> {
         bump
     )]
     pub task_submission: UncheckedAccount<'info>,
+
+    /// Validation counters for terminal cleanup of a still-Submitted
+    /// Collaborative straggler. Omitted for the historical no-submission and
+    /// Rejected-submission cleanup forms.
+    #[account(
+        mut,
+        seeds = [b"task_validation", task.key().as_ref()],
+        bump = task_validation_config.bump
+    )]
+    pub task_validation_config: Option<Box<Account<'info, TaskValidationConfig>>>,
 
     #[account(
         mut,
@@ -123,40 +150,12 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         CoordinationError::ClaimAlreadyCompleted
     );
 
-    // Audit F-2: never reclaim the defendant's claim while its dispute is Resolved
-    // with the slash unapplied — apply_dispute_slash is the designated finalizer for
-    // exactly this claim (and the current_workers slot resolve_dispute left for it);
-    // reclaiming it would brick the finalizer, the deferred reserve, and the worker's
-    // stake-clearing bookkeeping. The dispute travels as an OPTIONAL remaining
-    // account (no IDL change; omission is disclosed in TODO.MD — it cannot profit
-    // the caller, whose reclaim pays only the worker / treasury).
-    if let Some(dispute_info) = ctx.remaining_accounts.first() {
-        require!(
-            dispute_info.owner == &crate::ID,
-            CoordinationError::InvalidAccountOwner
-        );
-        let dispute = {
-            let data = dispute_info.try_borrow_data()?;
-            Dispute::try_deserialize(&mut &data[..])
-                .map_err(|_| CoordinationError::InvalidInput)?
-        };
-        let (expected_dispute, _) = Pubkey::find_program_address(
-            &[b"dispute", dispute.dispute_id.as_ref()],
-            &crate::ID,
-        );
-        require!(
-            dispute_info.key() == expected_dispute
-                && dispute.task == task.key()
-                && dispute.defendant == worker.key(),
-            CoordinationError::InvalidInput
-        );
-        require!(
-            dispute.status != DisputeStatus::Resolved || dispute.slash_applied,
-            CoordinationError::ClaimSlashPending
-        );
-    }
+    // Load-bearing, omission-proof slash guard. The pending bit lives on the
+    // required Task account, so omitting the optional Dispute remaining account
+    // can no longer reclaim the exact claim reserved for apply_dispute_slash.
+    validate_terminal_claim_not_slash_reserved(task)?;
 
-    // Unfakeable no-live-submission proof, two acceptable forms (audit F-3):
+    // Unfakeable submission-state proof, with three accepted cleanup forms:
     //  1. the seeds-derived submission address is system-owned + zero-data (no
     //     submission was ever made for this claim, or it was already closed with it);
     //  2. it holds a REJECTED submission (bounced via request_changes / quorum-reject).
@@ -165,13 +164,18 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     //     recovers the worker's submission rent below. A bounced worker's claim is
     //     otherwise stranded forever once a peer's completing accept flips the task
     //     terminal (resubmit needs a non-terminal task; expire_claim too).
-    // A live program-owned submission in any OTHER state means the claim is still
-    // settleable by the normal paths and must not be short-circuited.
+    //  3. a still-SUBMITTED Collaborative straggler after the task is Completed.
+    //     The accepted completions already consumed the escrow; this branch
+    //     releases the otherwise permanent claim/submission/counter debt and
+    //     refunds all rent/surplus to the worker. It is never available for a
+    //     contest, Exclusive task, or merely Cancelled task.
+    // A live program-owned submission in any OTHER shape remains unavailable.
     let submission_info = ctx.accounts.task_submission.to_account_info();
-    let close_rejected_submission = if submission_info.owner == &anchor_lang::system_program::ID
+    let (close_submission, submitted_straggler) = if submission_info.owner
+        == &anchor_lang::system_program::ID
         && submission_info.data_is_empty()
     {
-        false
+        (false, false)
     } else if submission_info.owner == &crate::ID {
         let submission = {
             let data = submission_info.try_borrow_data()?;
@@ -179,12 +183,33 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
                 .map_err(|_| CoordinationError::ClaimReclaimRequiresNoSubmission)?
         };
         require!(
-            submission.status == SubmissionStatus::Rejected
-                && submission.task == task.key()
-                && submission.claim == claim.key(),
+            submission.task == task.key()
+                && submission.claim == claim.key()
+                && submission.worker == worker.key(),
             CoordinationError::ClaimReclaimRequiresNoSubmission
         );
-        true
+        match submission.status {
+            SubmissionStatus::Rejected => (true, false),
+            SubmissionStatus::Submitted => {
+                require!(
+                    task.status == TaskStatus::Completed
+                        && task.task_type == TaskType::Collaborative,
+                    CoordinationError::ClaimReclaimRequiresNoSubmission
+                );
+                let validation_config = ctx
+                    .accounts
+                    .task_validation_config
+                    .as_mut()
+                    .ok_or(CoordinationError::TaskValidationConfigRequired)?;
+                ensure_validation_config(validation_config, &task.key(), task)?;
+                decrement_pending_submission_count(validation_config)?;
+                note_submission_left_review(task)?;
+                (true, true)
+            }
+            _ => {
+                return Err(CoordinationError::ClaimReclaimRequiresNoSubmission.into());
+            }
+        }
     } else {
         return Err(CoordinationError::ClaimReclaimRequiresNoSubmission.into());
     };
@@ -200,9 +225,13 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     // the worker, any surplus (the contest entry deposit) to the treasury — a
     // no-show exit forfeits the deposit; only submitters are made whole.
     let claim_info = claim.to_account_info();
-    let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
     let total = claim_info.lamports();
-    let forfeited = total.saturating_sub(rent_min);
+    let forfeited = if submitted_straggler {
+        0
+    } else {
+        let rent_min = Rent::get()?.minimum_balance(claim_info.data_len());
+        total.saturating_sub(rent_min)
+    };
     if forfeited > 0 {
         let treasury_info = ctx.accounts.treasury.to_account_info();
         **claim_info.try_borrow_mut_lamports()? = total
@@ -229,12 +258,10 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         .claim
         .close(ctx.accounts.rent_recipient.to_account_info())?;
 
-    // A bounced (Rejected) submission carries no counter debt (request_changes
-    // decremented both review counters at bounce time) — just return its rent to
-    // the worker (rent_recipient is constrained == worker.authority) and tombstone
-    // it, mirroring the claim-close pattern. Not reachable on the no-submission
-    // evidence form.
-    if close_rejected_submission {
+    // Rejected submissions carry no counter debt; Submitted Collaborative
+    // stragglers had both counters decremented above. Return the full account
+    // balance to the worker and tombstone either form.
+    if close_submission {
         let lamports = submission_info.lamports();
         **submission_info.try_borrow_mut_lamports()? = 0;
         **ctx.accounts.rent_recipient.try_borrow_mut_lamports()? = ctx
@@ -249,4 +276,25 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_claim_reclaim_reserves_current_and_legacy_slash_shapes() {
+        let mut task = Task {
+            current_workers: 1,
+            ..Task::default()
+        };
+        assert!(validate_terminal_claim_not_slash_reserved(&task).is_ok());
+
+        task.set_worker_slash_pending(true);
+        assert!(validate_terminal_claim_not_slash_reserved(&task).is_err());
+
+        task.set_worker_slash_pending(false);
+        task.current_workers = 0;
+        assert!(validate_terminal_claim_not_slash_reserved(&task).is_err());
+    }
 }

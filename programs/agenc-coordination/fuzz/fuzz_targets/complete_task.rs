@@ -23,10 +23,9 @@ proptest! {
     fn fuzz_complete_task(input in any::<CompleteTaskInput>()) {
         // Setup valid preconditions
         let escrow_amount = input.task_reward.max(input.escrow_amount);
-        // Use checked arithmetic to properly handle underflow in test setup
-        let distributed = input.escrow_distributed.min(
-            escrow_amount.checked_sub(input.task_reward).unwrap_or(0)
-        );
+        let distributed = input
+            .escrow_distributed
+            .min(escrow_amount.saturating_sub(input.task_reward));
 
         let mut task = SimulatedTask {
             task_id: input.task_id,
@@ -36,10 +35,9 @@ proptest! {
             current_workers: 1,
             required_capabilities: 0,
             deadline: 0,
-            // Use checked arithmetic to properly handle underflow in test setup
-            completions: input.current_completions.min(
-                input.required_completions.checked_sub(1).unwrap_or(0)
-            ),
+            completions: input
+                .current_completions
+                .min(input.required_completions.saturating_sub(1)),
             required_completions: input.required_completions.max(1),
             task_type: input.task_type.min(2),
         };
@@ -63,7 +61,6 @@ proptest! {
 
         let config = SimulatedConfig {
             protocol_fee_bps: input.protocol_fee_bps,
-            ..Default::default()
         };
 
         let old_distributed = escrow.distributed;
@@ -96,10 +93,18 @@ proptest! {
             prop_assert!(worker.reputation <= 10000,
                 "R1 violated: reputation {} > 10000", worker.reputation);
 
-            // R3: Reputation increment - use checked arithmetic for clarity
-            let expected_rep = old_reputation.checked_add(100)
-                .map(|r| r.min(10000))
-                .unwrap_or(10000);
+            // R3: reputation is backed by irreversible protocol fees, not raw
+            // completion count. The simulator models SOL completions only.
+            let reward_per_worker = if task.task_type == 1 {
+                input.task_reward / task.required_completions as u64
+            } else {
+                input.task_reward
+            };
+            let protocol_fee = ((reward_per_worker as u128)
+                * input.protocol_fee_bps as u128
+                / 10_000) as u64;
+            let reputation_gain = (protocol_fee / 100_000).min(100) as u16;
+            let expected_rep = old_reputation.saturating_add(reputation_gain).min(10000);
             prop_assert!(worker.reputation == expected_rep,
                 "R3 violated: expected {} got {}",
                 expected_rep, worker.reputation);
@@ -137,7 +142,6 @@ proptest! {
 
         let config = SimulatedConfig {
             protocol_fee_bps: fee_bps,
-            ..Default::default()
         };
 
         let result = simulate_complete_task(
@@ -216,13 +220,15 @@ proptest! {
     ) {
         let mut task = SimulatedTask {
             status: task_status::IN_PROGRESS,
-            reward_amount: 1_000_000,
+            // At the default 1% fee this pays the 0.01 SOL protocol fee needed
+            // for the capped 100-point completion award.
+            reward_amount: 1_000_000_000,
             required_completions: 1,
             ..Default::default()
         };
 
         let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
+            amount: 1_000_000_000,
             distributed: 0,
             is_closed: false,
         };
@@ -313,7 +319,6 @@ mod edge_cases {
 
         let config = SimulatedConfig {
             protocol_fee_bps: 10000, // 100% fee
-            ..Default::default()
         };
 
         let result =

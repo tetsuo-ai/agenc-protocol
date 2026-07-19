@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * `npx @tetsuo-ai/agenc-worker <up|once|status>` — your agent's day job.
+ * `agenc-worker <up|once|status>` — install a reviewed, exact package version
+ * first; timer units never resolve mutable registry state at startup.
  *
  * - `up`     long-running: register if needed, watch claimable tasks, claim →
  *            execute (your own coding-agent CLI) → submit, report settlements.
@@ -66,11 +67,15 @@ FLAGS (flags > AGENC_WORKER_* env > config file > defaults)
   --capabilities <bitmask>   capability bitmask (default 1)
   --min-reward <lamports>    minimum task reward (default 0)
   --max-reward <lamports>    safety cap: never claim above this
-  --executor <json-argv>     e.g. '["claude","-p","{prompt}"]' (default)
+  --allow-unbounded-reward   UNSAFE: explicitly disable the reward bait cap
+  --executor <json-argv>     custom executor argv (requires --executor-mode)
+  --executor-mode <mode>     safe (default), sandboxed, or unsafe
+  --executor-env <name>      env var copied into isolated executor (repeatable)
   --result-uploader <url>    HTTPS endpoint to POST results to (returns {"uri"})
   --state-dir <path>         state directory (default ~/.local/state/agenc-worker)
   --config <path>            config file (default ~/.config/agenc-worker/config.json)
   --creator <address>        creator allowlist (repeatable)
+  --allow-any-creator        UNSAFE: explicitly disable creator allowlisting
   --endpoint <url>           agent endpoint recorded at registration
   --poll-interval <ms>       up-mode poll interval (default 15000)
   --executor-timeout <ms>    executor wall-clock budget (default 900000)
@@ -93,10 +98,14 @@ function flagsToConfigInput(values: {
   capabilities?: string;
   "min-reward"?: string;
   "max-reward"?: string;
+  "allow-unbounded-reward"?: boolean;
   executor?: string;
+  "executor-mode"?: string;
+  "executor-env"?: string[];
   "result-uploader"?: string;
   "state-dir"?: string;
   creator?: string[];
+  "allow-any-creator"?: boolean;
   endpoint?: string;
   "poll-interval"?: string;
   "executor-timeout"?: string;
@@ -107,12 +116,16 @@ function flagsToConfigInput(values: {
   if (values.capabilities !== undefined) input.capabilities = values.capabilities;
   if (values["min-reward"] !== undefined) input.minRewardLamports = values["min-reward"];
   if (values["max-reward"] !== undefined) input.maxRewardLamports = values["max-reward"];
+  if (values["allow-unbounded-reward"] === true) input.allowUnboundedReward = true;
   if (values.executor !== undefined) input.executor = values.executor;
+  if (values["executor-mode"] !== undefined) input.executorMode = values["executor-mode"];
+  if (values["executor-env"] !== undefined) input.executorEnvAllowlist = values["executor-env"];
   if (values["result-uploader"] !== undefined) input.resultUploader = values["result-uploader"];
   if (values["state-dir"] !== undefined) input.stateDir = values["state-dir"];
   if (values.creator !== undefined && values.creator.length > 0) {
     input.creatorAllowlist = values.creator;
   }
+  if (values["allow-any-creator"] === true) input.allowAnyCreator = true;
   if (values.endpoint !== undefined) input.endpoint = values.endpoint;
   if (values["poll-interval"] !== undefined) input.pollIntervalMs = values["poll-interval"];
   if (values["executor-timeout"] !== undefined) {
@@ -186,11 +199,15 @@ async function main(): Promise<number> {
       capabilities: { type: "string" },
       "min-reward": { type: "string" },
       "max-reward": { type: "string" },
+      "allow-unbounded-reward": { type: "boolean" },
       executor: { type: "string" },
+      "executor-mode": { type: "string" },
+      "executor-env": { type: "string", multiple: true },
       "result-uploader": { type: "string" },
       "state-dir": { type: "string" },
       config: { type: "string" },
       creator: { type: "string", multiple: true },
+      "allow-any-creator": { type: "boolean" },
       endpoint: { type: "string" },
       "poll-interval": { type: "string" },
       "executor-timeout": { type: "string" },

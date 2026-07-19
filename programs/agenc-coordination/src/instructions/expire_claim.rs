@@ -19,12 +19,16 @@ use crate::errors::CoordinationError;
 use crate::instructions::agent_stats_helpers::{apply_track_record, Counter};
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bid_settlement_helpers::{
-    bid_settlement_offset, settle_accepted_bid, AcceptedBidBondDisposition,
+    accepted_bid_no_show_bond_disposition, bid_settlement_offset, settle_accepted_bid,
     AcceptedBidBookDisposition,
 };
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::lamport_transfer::transfer_lamports;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::post_completion_bond::dependency_parent_completed;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::program_account_helpers::remaining_account_at;
 use crate::instructions::task_validation_helpers::{
     ensure_validation_config, is_manual_validation_task, saturating_dec_counter,
     sync_task_validation_status,
@@ -33,12 +37,14 @@ use crate::instructions::task_validation_helpers::{
 use crate::state::AgentStats;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::state::CompletionBond;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::DependencyType;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::state::TaskType;
 use crate::state::{
     AgentRegistration, ProtocolConfig, SubmissionStatus, Task, TaskClaim, TaskEscrow, TaskStatus,
     TaskSubmission, TaskValidationConfig,
 };
-#[cfg(not(feature = "mainnet-canary"))]
-use crate::state::{BidMarketplaceConfig, TaskType};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 
@@ -65,24 +71,27 @@ fn cleanup_reward_for_task(is_token_task: bool, remaining_funds: u64) -> u64 {
 /// post-H-1; defense-in-depth against future status-machine edits. Pure +
 /// revert-sensitive.
 fn claim_is_expirable(status: TaskStatus, claim_has_pending_submission: bool) -> bool {
-    matches!(status, TaskStatus::InProgress | TaskStatus::PendingValidation)
-        && !claim_has_pending_submission
+    matches!(
+        status,
+        TaskStatus::InProgress | TaskStatus::PendingValidation
+    ) && !claim_has_pending_submission
+}
+
+/// A no-show penalty is valid only when the worker was actually free to perform
+/// the task. Independent tasks are always worker-controlled; dependent tasks
+/// are worker-controlled only while their canonical parent proves Completed.
+#[cfg(not(feature = "mainnet-canary"))]
+fn dependency_allows_worker_bond_forfeit(
+    dependency_type: DependencyType,
+    parent_completed: bool,
+) -> bool {
+    dependency_type == DependencyType::None || parent_completed
 }
 
 /// Grace period in seconds after claim expiry during which only the worker
 /// authority can expire the claim. This prevents griefing attacks where
 /// malicious actors race workers to expire their claims. (Issue #421)
 const GRACE_PERIOD: i64 = 60;
-
-#[cfg(not(feature = "mainnet-canary"))]
-fn remaining_account_info<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
-    index: usize,
-) -> &'info AccountInfo<'info> {
-    // SAFETY: the slice already stores `AccountInfo<'info>` values; we only
-    // widen the reference itself back to `'info` for Anchor deserialization.
-    unsafe { std::mem::transmute(&remaining_accounts[index]) }
-}
 
 #[derive(Accounts)]
 pub struct ExpireClaim<'info> {
@@ -419,35 +428,44 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
     if task.task_type == TaskType::BidExclusive {
         // Audit F-14: honor the Proof-dependency offset exactly like the accept
         // paths — a uniform-layout client passes [parent, bid…] for those tasks.
+        // The accepted bid carries its immutable no-show penalty, so no mutable
+        // marketplace-config account is consumed at settlement.
         let offset = bid_settlement_offset(task);
         require!(
-            ctx.remaining_accounts.len() >= offset.checked_add(5).ok_or(CoordinationError::ArithmeticOverflow)?,
+            ctx.remaining_accounts.len()
+                >= offset
+                    .checked_add(4)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?,
             CoordinationError::BidSettlementAccountsRequired
         );
 
-        let bid_marketplace_info = remaining_account_info(ctx.remaining_accounts, offset);
-        let bid_book_info = remaining_account_info(
+        let bid_book_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(1).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
-        let accepted_bid_info = remaining_account_info(
+            offset,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
+        let accepted_bid_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(2).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
-        let bidder_market_state_info = remaining_account_info(
+            offset
+                .checked_add(1)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
+        let bidder_market_state_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(3).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
-        let creator_info = remaining_account_info(
+            offset
+                .checked_add(2)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
+        let creator_info = remaining_account_at(
             ctx.remaining_accounts,
-            offset.checked_add(4).ok_or(CoordinationError::ArithmeticOverflow)?,
-        );
+            offset
+                .checked_add(3)
+                .ok_or(CoordinationError::ArithmeticOverflow)?,
+            CoordinationError::BidSettlementAccountsRequired,
+        )?;
 
-        require!(
-            bid_marketplace_info.owner == &crate::ID,
-            CoordinationError::InvalidAccountOwner
-        );
-        let bid_marketplace = Account::<BidMarketplaceConfig>::try_from(bid_marketplace_info)?;
         require!(
             creator_info.key() == task.creator,
             CoordinationError::InvalidCreator
@@ -464,17 +482,17 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
             Some(creator_info.clone()),
             clock.unix_timestamp,
             AcceptedBidBookDisposition::Reopen,
-            AcceptedBidBondDisposition::SlashByBpsToCreator(
-                bid_marketplace.accepted_no_show_slash_bps,
-            ),
+            accepted_bid_no_show_bond_disposition(true),
         )?;
     }
 
-    // Batch 3 §8: a pure no-show forfeits the worker's completion bond to the creator.
-    // This is the case the dedicated-PDA design exists for — the claim closes to the
-    // worker (auto-refunding their rent), but the bond lives in its own PDA so a
-    // no-show worker does NOT get their bond back. Skip BidExclusive (it already
-    // slashes a bid bond above — no double-charge).
+    // Batch 3 §8: a pure no-show forfeits the worker's completion bond to the creator
+    // only if the task was actually executable. A dependent task requires canonical
+    // parent evidence at remaining_accounts[0]. Completed means the worker controlled
+    // the no-show and forfeits; a live non-Completed or closed parent means dependency
+    // failure and refunds the worker. The parent account itself remains mandatory so
+    // a worker cannot hide a Completed parent to select the refund branch. Skip
+    // BidExclusive (it already slashes a bid bond above — no double-charge).
     //
     // SECURITY (#71): the forfeit is NON-SKIPPABLE. The bond accounts cannot be made
     // required+seeds-fixed in the struct (`ExpireClaim` is shared with the canary
@@ -536,18 +554,30 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireClaim<'info>>) -> Re
         );
 
         let creator_info = creator.to_account_info();
-        // No-op when the canonical PDA holds no live bond (un-bonded task); forfeits the
-        // principal to the creator and tombstones the PDA when a live worker bond exists,
-        // so it can never be re-claimed after the task reopens (closes exploit #71).
-        settle_completion_bond(
-            &bond.to_account_info(),
-            &worker_wallet_info,
-            &task.key(),
-            CompletionBond::ROLE_WORKER,
-            BondDisposition::Forfeit {
-                recipient: &creator_info,
-            },
-        )?;
+        let parent_completed =
+            dependency_parent_completed(task, ctx.remaining_accounts, ctx.program_id)?;
+
+        // No-op when the canonical PDA holds no live bond (un-bonded task). A live
+        // bond is always tombstoned so it cannot be replayed after task reopen.
+        if dependency_allows_worker_bond_forfeit(task.dependency_type, parent_completed) {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &worker_wallet_info,
+                &task.key(),
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Forfeit {
+                    recipient: &creator_info,
+                },
+            )?;
+        } else {
+            settle_completion_bond(
+                &bond.to_account_info(),
+                &worker_wallet_info,
+                &task.key(),
+                CompletionBond::ROLE_WORKER,
+                BondDisposition::Refund,
+            )?;
+        }
     }
 
     // Decrement worker active tasks. saturating (audit F-15): legacy counter drift
@@ -602,5 +632,29 @@ mod tests {
         assert!(!claim_is_expirable(TaskStatus::Open, false));
         assert!(!claim_is_expirable(TaskStatus::Completed, false));
         assert!(!claim_is_expirable(TaskStatus::Cancelled, false));
+    }
+
+    // Revert-sensitive: dependency failure is creator-controlled availability,
+    // not worker no-show. Data and Ordering are included because the original
+    // exploit incorrectly treated only Proof as a real dependency gate.
+    #[cfg(not(feature = "mainnet-canary"))]
+    #[test]
+    fn dependent_worker_bond_refunds_unless_parent_is_completed() {
+        for dependency_type in [
+            DependencyType::Data,
+            DependencyType::Ordering,
+            DependencyType::Proof,
+        ] {
+            assert!(!dependency_allows_worker_bond_forfeit(
+                dependency_type,
+                false
+            ));
+            assert!(dependency_allows_worker_bond_forfeit(dependency_type, true));
+        }
+
+        assert!(dependency_allows_worker_bond_forfeit(
+            DependencyType::None,
+            false
+        ));
     }
 }

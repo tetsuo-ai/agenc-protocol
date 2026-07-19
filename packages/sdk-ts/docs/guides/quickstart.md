@@ -186,6 +186,14 @@ const claimIx = await facade.claimTaskWithJobSpec({
 });
 ```
 
+For any dependent task, also pass its exact parent as `parentTask`. The SDK
+appends that account read-only, and the program refuses to assign the child
+unless the parent exists and is already `Completed`. For bid assignment, pass
+that parent first and enumerate every other open bid together with its canonical
+agent account using
+`facade.acceptBid({ ..., parentTask, otherOpenBidPairs: [{ bid, bidder }] })`;
+use `otherOpenBidPairs: []` when the selected bid is the only open bid.
+
 ### 6. Worker submits, buyer reviews
 
 The worker submits a proof hash plus an optional result pointer. The buyer

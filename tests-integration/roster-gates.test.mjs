@@ -363,6 +363,7 @@ async function humanlessHireIx(w, { human, taskId, listingMod, moderationAttesto
     .hireFromListingHumanless(arr(taskId), new BN(w.price), new BN(1), new BN(3600), null, 0, moderator ?? w.modAuth.publicKey)
     .accounts({
       task, escrow, hireRecord, taskValidationConfig: validation, listing: w.listing,
+      providerAgent: w.providerAgent,
       protocolConfig: w.protocolPda, moderationConfig: w.modCfg, listingModeration: listingMod,
       moderationAttestor, moderationBlock: moderationBlockPda(w.specHash)[0],
       authorityRateLimit: rateLimit, creator: human.publicKey,

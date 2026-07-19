@@ -6,17 +6,43 @@
 //   is the worker's ONLY spend authority and therefore the blast-radius bound:
 //   task content is untrusted, so the worker must never be handed a wallet
 //   whose loss would hurt.
-// - `executor` is an ARGV ARRAY, never a shell string. The `{prompt}`
-//   placeholder is replaced as a SINGLE argv element (see executor.ts), so
-//   task content can never be interpreted by a shell.
+// - `executor` is an ARGV ARRAY, never a shell string. The safe default also
+//   disables Claude tools/customizations/session persistence and runs in an
+//   isolated scratch environment. Custom executors require an explicit
+//   `sandboxed` or `unsafe` mode acknowledgement.
 // - `resultUploader` must be an https: URL — results are never POSTed over
 //   plaintext HTTP.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-/** Default executor: the Claude Code CLI in print mode. */
-export const DEFAULT_EXECUTOR: readonly string[] = ["claude", "-p", "{prompt}"];
+/**
+ * Default executor: Claude Code as a tool-less, customization-free,
+ * non-persistent text generator. The child process additionally gets a fresh
+ * HOME/cwd and a scrubbed environment in executor.ts.
+ */
+export const DEFAULT_EXECUTOR: readonly string[] = [
+  "claude",
+  "--print",
+  "--bare",
+  "--safe-mode",
+  "--disable-slash-commands",
+  "--strict-mcp-config",
+  "--tools",
+  "",
+  "--permission-mode",
+  "dontAsk",
+  "--no-session-persistence",
+  "--",
+  "{prompt}",
+];
+
+/** Only this credential is inherited by the isolated default executor. */
+export const DEFAULT_EXECUTOR_ENV_ALLOWLIST: readonly string[] = [
+  "ANTHROPIC_API_KEY",
+];
+
+export type ExecutorMode = "safe" | "sandboxed" | "unsafe";
 
 /** Default capability bitmask claimed/required (bit 0). */
 export const DEFAULT_CAPABILITIES = 1n;
@@ -59,15 +85,21 @@ export type WorkerConfig = {
   minRewardLamports: bigint;
   /**
    * Safety cap: never claim tasks paying MORE than this (bait filter — a
-   * too-good-to-be-true reward is a lure to run hostile content). `null`
-   * disables the cap (the default; set one).
+   * too-good-to-be-true reward is a lure to run hostile content). Active
+   * workers reject `null` unless `allowUnboundedReward` is explicitly true.
    */
   maxRewardLamports: bigint | null;
+  /** Explicitly allow a null reward cap (unsafe; false by default). */
+  allowUnboundedReward: boolean;
   /**
    * Executor command as an argv array. Any element that is exactly
    * `"{prompt}"` is replaced by the prompt as ONE argv element.
    */
   executor: string[];
+  /** Safe built-in, externally sandboxed custom command, or explicit unsafe legacy mode. */
+  executorMode: ExecutorMode;
+  /** Variable names copied into the otherwise-scrubbed executor environment. */
+  executorEnvAllowlist: string[];
   /**
    * Optional HTTPS URL to POST the raw result body to. The response must be
    * JSON `{ "uri": "..." }`. When absent the worker submits with the inline
@@ -77,8 +109,10 @@ export type WorkerConfig = {
   resultUploader: string | null;
   /** Directory for the worker's persistent state (agent id, submissions). */
   stateDir: string;
-  /** Only claim tasks created by these wallets (base58). `null` = any creator. */
+  /** Only claim tasks created by these wallets (base58). Active workers require a policy. */
   creatorAllowlist: string[] | null;
+  /** Explicitly allow tasks from every creator (unsafe; false by default). */
+  allowAnyCreator: boolean;
   /** Agent endpoint recorded at registration (non-empty http(s); on-chain rule). */
   endpoint: string;
   /** Poll interval for `up` mode (ms). */
@@ -94,10 +128,14 @@ export type WorkerConfigInput = Partial<{
   capabilities: string | bigint;
   minRewardLamports: string | bigint;
   maxRewardLamports: string | bigint | null;
+  allowUnboundedReward: boolean | string;
   executor: string[] | string;
+  executorMode: ExecutorMode | string;
+  executorEnvAllowlist: string[] | string;
   resultUploader: string | null;
   stateDir: string;
   creatorAllowlist: string[] | string | null;
+  allowAnyCreator: boolean | string;
   endpoint: string;
   pollIntervalMs: string | number;
   executorTimeoutMs: string | number;
@@ -131,6 +169,13 @@ function parseNumber(field: string, value: string | number): number {
   return parsed;
 }
 
+function parseBoolean(field: string, value: boolean | string): boolean {
+  if (typeof value === "boolean") return value;
+  if (/^(1|true|yes|on)$/i.test(value.trim())) return true;
+  if (/^(0|false|no|off)$/i.test(value.trim())) return false;
+  throw new ConfigError(`${field}: expected true or false, got ${JSON.stringify(value)}`);
+}
+
 function parseExecutor(field: string, value: string[] | string): string[] {
   let argv: unknown = value;
   if (typeof value === "string") {
@@ -138,7 +183,7 @@ function parseExecutor(field: string, value: string[] | string): string[] {
       argv = JSON.parse(value);
     } catch {
       throw new ConfigError(
-        `${field}: expected a JSON argv array like ["claude","-p","{prompt}"]`,
+        `${field}: expected a JSON argv array like ["sandbox-wrapper","{prompt}"]`,
       );
     }
   }
@@ -172,6 +217,42 @@ function parseAllowlist(
   return list.length === 0 ? null : list;
 }
 
+function parseStringList(field: string, value: string[] | string): string[] {
+  let list: unknown = value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        list = JSON.parse(trimmed);
+      } catch {
+        throw new ConfigError(`${field}: expected a JSON array or comma-separated names`);
+      }
+    } else {
+      list = trimmed.split(",").map((entry) => entry.trim()).filter(Boolean);
+    }
+  }
+  if (
+    !Array.isArray(list) ||
+    !list.every((entry) =>
+      typeof entry === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry)
+    )
+  ) {
+    throw new ConfigError(`${field}: expected environment variable names`);
+  }
+  return [...new Set(list as string[])];
+}
+
+function parseExecutorMode(value: string): ExecutorMode {
+  if (value === "safe" || value === "sandboxed" || value === "unsafe") return value;
+  throw new ConfigError(
+    `executorMode: expected "safe", "sandboxed", or "unsafe", got ${JSON.stringify(value)}`,
+  );
+}
+
+function argvEquals(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 /** Map `AGENC_WORKER_*` environment variables to a config input. */
 export function configFromEnv(
   env: Record<string, string | undefined>,
@@ -188,13 +269,25 @@ export function configFromEnv(
   if (env.AGENC_WORKER_MAX_REWARD_LAMPORTS !== undefined) {
     input.maxRewardLamports = env.AGENC_WORKER_MAX_REWARD_LAMPORTS;
   }
+  if (env.AGENC_WORKER_ALLOW_UNBOUNDED_REWARD !== undefined) {
+    input.allowUnboundedReward = env.AGENC_WORKER_ALLOW_UNBOUNDED_REWARD;
+  }
   if (env.AGENC_WORKER_EXECUTOR !== undefined) input.executor = env.AGENC_WORKER_EXECUTOR;
+  if (env.AGENC_WORKER_EXECUTOR_MODE !== undefined) {
+    input.executorMode = env.AGENC_WORKER_EXECUTOR_MODE;
+  }
+  if (env.AGENC_WORKER_EXECUTOR_ENV_ALLOWLIST !== undefined) {
+    input.executorEnvAllowlist = env.AGENC_WORKER_EXECUTOR_ENV_ALLOWLIST;
+  }
   if (env.AGENC_WORKER_RESULT_UPLOADER !== undefined) {
     input.resultUploader = env.AGENC_WORKER_RESULT_UPLOADER;
   }
   if (env.AGENC_WORKER_STATE_DIR !== undefined) input.stateDir = env.AGENC_WORKER_STATE_DIR;
   if (env.AGENC_WORKER_CREATOR_ALLOWLIST !== undefined) {
     input.creatorAllowlist = env.AGENC_WORKER_CREATOR_ALLOWLIST;
+  }
+  if (env.AGENC_WORKER_ALLOW_ANY_CREATOR !== undefined) {
+    input.allowAnyCreator = env.AGENC_WORKER_ALLOW_ANY_CREATOR;
   }
   if (env.AGENC_WORKER_ENDPOINT !== undefined) input.endpoint = env.AGENC_WORKER_ENDPOINT;
   if (env.AGENC_WORKER_POLL_INTERVAL_MS !== undefined) {
@@ -279,6 +372,10 @@ export function resolveWorkerConfig(
     merged.maxRewardLamports === undefined || merged.maxRewardLamports === null
       ? null
       : parseBigint("maxRewardLamports", merged.maxRewardLamports);
+  const allowUnboundedReward =
+    merged.allowUnboundedReward === undefined
+      ? false
+      : parseBoolean("allowUnboundedReward", merged.allowUnboundedReward);
   if (maxRewardLamports !== null && maxRewardLamports < minRewardLamports) {
     throw new ConfigError(
       `maxRewardLamports (${maxRewardLamports}) must be >= minRewardLamports (${minRewardLamports})`,
@@ -289,6 +386,32 @@ export function resolveWorkerConfig(
     merged.executor === undefined
       ? [...DEFAULT_EXECUTOR]
       : parseExecutor("executor", merged.executor);
+  const executorMode =
+    merged.executorMode === undefined
+      ? "safe"
+      : parseExecutorMode(merged.executorMode);
+  if (executorMode === "safe" && !argvEquals(executor, DEFAULT_EXECUTOR)) {
+    throw new ConfigError(
+      "executor: custom argv is not permitted in safe mode; wrap it in an external " +
+        "sandbox and set executorMode=\"sandboxed\", or explicitly acknowledge legacy " +
+        "host access with executorMode=\"unsafe\"",
+    );
+  }
+  const executorEnvAllowlist =
+    merged.executorEnvAllowlist === undefined
+      ? executorMode === "safe"
+        ? [...DEFAULT_EXECUTOR_ENV_ALLOWLIST]
+        : []
+      : parseStringList("executorEnvAllowlist", merged.executorEnvAllowlist);
+  if (
+    executorMode === "safe" &&
+    executorEnvAllowlist.some((name) => !DEFAULT_EXECUTOR_ENV_ALLOWLIST.includes(name))
+  ) {
+    throw new ConfigError(
+      "executorEnvAllowlist: safe mode may inherit only ANTHROPIC_API_KEY; use an " +
+        "externally sandboxed executor for other credentials",
+    );
+  }
 
   let resultUploader: string | null = null;
   if (merged.resultUploader !== undefined && merged.resultUploader !== null) {
@@ -317,19 +440,29 @@ export function resolveWorkerConfig(
     );
   }
 
+  const creatorAllowlist =
+    merged.creatorAllowlist === undefined
+      ? null
+      : parseAllowlist("creatorAllowlist", merged.creatorAllowlist);
+  const allowAnyCreator =
+    merged.allowAnyCreator === undefined
+      ? false
+      : parseBoolean("allowAnyCreator", merged.allowAnyCreator);
+
   return {
     rpcUrl: merged.rpcUrl,
     walletPath: merged.walletPath,
     capabilities,
     minRewardLamports,
     maxRewardLamports,
+    allowUnboundedReward,
     executor,
+    executorMode,
+    executorEnvAllowlist,
     resultUploader,
     stateDir: merged.stateDir ?? defaultStateDir(),
-    creatorAllowlist:
-      merged.creatorAllowlist === undefined
-        ? null
-        : parseAllowlist("creatorAllowlist", merged.creatorAllowlist),
+    creatorAllowlist,
+    allowAnyCreator,
     endpoint,
     pollIntervalMs:
       merged.pollIntervalMs === undefined
@@ -340,4 +473,69 @@ export function resolveWorkerConfig(
         ? DEFAULT_EXECUTOR_TIMEOUT_MS
         : parseNumber("executorTimeoutMs", merged.executorTimeoutMs),
   };
+}
+
+/**
+ * Enforce claim-risk policy at active-worker startup. Readonly `status` can
+ * still resolve a partial config, but `up`/`once` and programmatic ticks fail
+ * before registration or claiming unless both limits are explicit.
+ */
+export function assertActiveWorkerConfig(
+  config: Pick<
+    WorkerConfig,
+    | "maxRewardLamports"
+    | "allowUnboundedReward"
+    | "creatorAllowlist"
+    | "allowAnyCreator"
+    | "executor"
+    | "executorMode"
+    | "executorEnvAllowlist"
+  >,
+): void {
+  if (config.maxRewardLamports === null && !config.allowUnboundedReward) {
+    throw new ConfigError(
+      "maxRewardLamports is required for up/once. Set a finite bait cap, or " +
+        "explicitly opt out with allowUnboundedReward=true.",
+    );
+  }
+  if (config.creatorAllowlist === null && !config.allowAnyCreator) {
+    throw new ConfigError(
+      "creatorAllowlist is required for up/once. List trusted creator addresses, or " +
+        "explicitly opt out with allowAnyCreator=true.",
+    );
+  }
+  if (
+    config.executorMode !== "safe" &&
+    config.executorMode !== "sandboxed" &&
+    config.executorMode !== "unsafe"
+  ) {
+    throw new ConfigError(`executorMode: invalid runtime value ${String(config.executorMode)}`);
+  }
+  if (config.executorMode === "safe") {
+    if (!argvEquals(config.executor, DEFAULT_EXECUTOR)) {
+      throw new ConfigError(
+        "executor: runtime safe mode requires the built-in tool-less executor argv",
+      );
+    }
+    if (
+      config.executorEnvAllowlist.some(
+        (name) => !DEFAULT_EXECUTOR_ENV_ALLOWLIST.includes(name),
+      )
+    ) {
+      throw new ConfigError(
+        "executorEnvAllowlist: runtime safe mode may inherit only ANTHROPIC_API_KEY",
+      );
+    }
+    if (!config.executorEnvAllowlist.includes("ANTHROPIC_API_KEY")) {
+      throw new ConfigError(
+        "executorEnvAllowlist: runtime safe mode requires ANTHROPIC_API_KEY inheritance",
+      );
+    }
+    if ((process.env.ANTHROPIC_API_KEY ?? "").trim() === "") {
+      throw new ConfigError(
+        "ANTHROPIC_API_KEY is required by the isolated safe executor; refusing to " +
+          "register or claim before executor authentication is ready",
+      );
+    }
+  }
 }

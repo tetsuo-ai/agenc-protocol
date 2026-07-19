@@ -11,72 +11,26 @@
 // Run:  cd /home/tetsuo/git/AgenC/agenc-protocol && node --test tests-integration/bid-extra.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, sendMany, expectOk, expectFail, decode, isClosed,
   injectBidMarketplace, setMultisig, freshWorld,
-  taskModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
+import { setupBidExclusiveFixture } from "./bid-fixture.mjs";
 
-/// Mirror of marketplace.test.mjs's setupBidTask (helpers there are not exported).
 /// Builds a BidExclusive task (task_type=3) in a moderation-enabled world, injects
 /// a BidMarketplaceConfig, opens a bid book (creator), and posts ONE active bid by
 /// the provider agent. Returns all the handles cancel/expire/update_bid need.
 /// `bidExpiresIn` controls the bid's lifetime relative to `now` (for expire tests);
 /// `minBond` overrides the injected min bid bond (for refund assertions).
-async function setupBidTask(w, { publishJobSpec = true, bidExpiresIn = 1800, minBond = 100_000 } = {}) {
-  const modProg = makeProgram(w.modAuth);
-  const taskId = id32();
-  const reward = 4_000_000;
-  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
-  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
-  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
-  const now = Number(w.svm.getClock().unixTimestamp);
-  const desc = Buffer.alloc(64);
-  desc.set(crypto.randomBytes(32), 0);
-
-  // 1) create a BidExclusive task (task_type = 3, SOL-only).
-  expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null, null, 0)
-    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
-    .instruction(), [w.buyer]), "bid:create_task");
-
-  // 2) optionally publish a moderated job spec (kept for parity; not needed by the
-  //    cancel/expire/update_bid paths, but exercises the same setup as accept_bid).
-  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
-  if (publishJobSpec) {
-    const jobHash = id32();
-    const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
-    expectOk(send(w.svm, await modProg.methods
-      .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-      .instruction(), [w.modAuth]), "bid:task-mod");
-    expectOk(send(w.svm, await w.buyerProg.methods
-      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid", w.modAuth.publicKey)
-      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [w.buyer]), "bid:publish");
-  }
-
-  // 3) inject the bid marketplace, then init the bid book (creator) + a bid (provider).
-  const bidMarket = await injectBidMarketplace(w.svm, w.admin, { minBond });
-  const [bidBook] = pda([enc("bid_book"), task.toBuffer()]);
-  expectOk(send(w.svm, await w.buyerProg.methods
-    .initializeBidBook(0, 0, 0, 0, 0) // policy 0 = BestPrice
-    .accounts({ task, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.buyer]), "bid:init-book");
-
-  const [bid] = pda([enc("bid"), task.toBuffer(), w.providerAgent.toBuffer()]);
-  const [bidderMarket] = pda([enc("bidder_market"), w.providerAgent.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
-    .createBid(new BN(reward), 3600, 5000, arr(Buffer.alloc(32, 4)), arr(Buffer.alloc(32, 5)), new BN(now + bidExpiresIn))
-    .accounts({ protocolConfig: w.protocolPda, bidMarketplace: bidMarket, task, bidBook, bid, bidderMarketState: bidderMarket, bidder: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "bid:create_bid");
-
-  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
-  return { task, escrow, jobSpec, bidBook, bid, bidMarket, bidderMarket, claim, reward, now, bidExpiresIn };
+async function setupBidTask(w, { bidExpiresIn = 1800, minBond = 100_000 } = {}) {
+  return setupBidExclusiveFixture(w, {
+    bidExpiresIn,
+    minBond,
+    jobUri: "agenc://job-spec/sha256/bid",
+  });
 }
 
 const BID_CFG_PDA = () => pda([enc("bid_marketplace")])[0];
@@ -274,15 +228,15 @@ test("update_bid: the bidder re-prices/extends an active bid; fields + book vers
   assert.equal(before.requested_reward_lamports.toString(), b.reward.toString(), "starting reward == task reward");
 
   const newReward = b.reward - 500_000; // strictly below task budget, > 0
-  const newEta = 7200;
+  const newEta = 600;
   const newConfidence = 9000;
   const newQuality = arr(Buffer.alloc(32, 7));
   const newMeta = arr(Buffer.alloc(32, 8));
   const newExpires = b.now + 3000; // > now, <= deadline (now+3600), within lifetime (86400)
 
   expectOk(send(w.svm, await w.providerProg.methods
-    .updateBid(new BN(newReward), newEta, newConfidence, newQuality, newMeta, new BN(newExpires))
-    .accounts({ task: b.task, bidBook: b.bidBook, bid: b.bid, bidder: w.providerAgent, authority: w.provider.publicKey, bidMarketplace: b.bidMarket, protocolConfig: w.protocolPda })
+    .updateBid(new BN(newReward), newEta, newConfidence, newQuality, newMeta, new BN(newExpires), arr(b.jobHash), b.jobSpecUpdatedAt)
+    .accounts({ task: b.task, taskJobSpec: b.jobSpec, bidBook: b.bidBook, bid: b.bid, bidder: w.providerAgent, authority: w.provider.publicKey, bidMarketplace: b.bidMarket, protocolConfig: w.protocolPda })
     .instruction(), [w.provider]), "update_bid");
 
   const after = decode(w.svm, "TaskBid", b.bid);
@@ -292,7 +246,7 @@ test("update_bid: the bidder re-prices/extends an active bid; fields + book vers
   assert.equal(after.expires_at.toString(), newExpires.toString(), "expiry updated");
   assert.deepEqual(after.quality_guarantee_hash, newQuality, "quality hash updated");
   assert.deepEqual(after.metadata_hash, newMeta, "metadata hash updated");
-  assert.ok(after.state.Active !== undefined, "bid stays Active after update");
+  assert.ok(after.state.BoundActive !== undefined, "bid stays BoundActive after update");
 
   const bookAfter = decode(w.svm, "TaskBidBook", b.bidBook);
   assert.equal(bookAfter.version.toString(), bookBefore.version.add(new BN(1)).toString(), "book version bumped on update");
@@ -304,8 +258,8 @@ test("update_bid: a bid above the task budget is rejected (BidPriceExceedsTaskBu
 
   const tooHigh = b.reward + 1; // exceeds task.reward_amount
   const res = send(w.svm, await w.providerProg.methods
-    .updateBid(new BN(tooHigh), 3600, 5000, arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 8)), new BN(b.now + 1800))
-    .accounts({ task: b.task, bidBook: b.bidBook, bid: b.bid, bidder: w.providerAgent, authority: w.provider.publicKey, bidMarketplace: b.bidMarket, protocolConfig: w.protocolPda })
+    .updateBid(new BN(tooHigh), 900, 5000, arr(Buffer.alloc(32, 7)), arr(Buffer.alloc(32, 8)), new BN(b.now + 1800), arr(b.jobHash), b.jobSpecUpdatedAt)
+    .accounts({ task: b.task, taskJobSpec: b.jobSpec, bidBook: b.bidBook, bid: b.bid, bidder: w.providerAgent, authority: w.provider.publicKey, bidMarketplace: b.bidMarket, protocolConfig: w.protocolPda })
     .instruction(), [w.provider]);
   expectFail(res, "BidPriceExceedsTaskBudget", "update_bid above the task budget is refused");
   // unchanged

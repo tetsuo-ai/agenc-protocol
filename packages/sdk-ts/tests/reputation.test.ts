@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { address, createNoopSigner, none, some } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  createNoopSigner,
+  none,
+  some,
+} from "@solana/kit";
 import {
   // stake / reputation
   getStakeReputationInstruction,
@@ -24,6 +30,7 @@ import {
   getPostToFeedInstructionDataDecoder,
   getUpvotePostInstruction,
   getUpvotePostInstructionDataDecoder,
+  findProtocolConfigPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../src/index.js";
 import {
@@ -66,6 +73,7 @@ describe("reputation facade — staking & delegation", () => {
       authority,
       agent: A1,
       reputationStake: A2,
+      protocolConfig: A3,
       amount: 5000n,
     });
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -73,6 +81,7 @@ describe("reputation facade — staking & delegation", () => {
       authority.address,
       A1,
       A2,
+      A3,
       SYSTEM_PROGRAM,
     ]);
     const decoded = getStakeReputationInstructionDataDecoder().decode(ix.data);
@@ -123,18 +132,18 @@ describe("reputation facade — staking & delegation", () => {
   });
 
   it("revokeDelegation: program, account order, data round-trip", () => {
-    const authority = createNoopSigner(signerAddr);
     const ix = getRevokeDelegationInstruction({
-      authority,
+      authority: signerAddr,
       delegatorAgent: A1,
       delegation: A2,
     });
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(ix.accounts.map((a) => a.address)).toEqual([
-      authority.address,
+      signerAddr,
       A1,
       A2,
     ]);
+    expect(ix.accounts[0]!.role).toBe(AccountRole.WRITABLE);
     // No args beyond the discriminator — decoding must still succeed.
     const decoded = getRevokeDelegationInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator.length).toBe(8);
@@ -208,7 +217,8 @@ describe("reputation facade — skills", () => {
       ratingAccount: A2,
       rater: A3,
       purchaseRecord: A4,
-      protocolConfig: A5,
+      authorAgent: A5,
+      protocolConfig: A6,
       authority,
       rating: 5,
       reviewHash: null,
@@ -220,6 +230,7 @@ describe("reputation facade — skills", () => {
       A3,
       A4,
       A5,
+      A6,
       authority.address,
       SYSTEM_PROGRAM,
     ]);
@@ -230,6 +241,7 @@ describe("reputation facade — skills", () => {
 
   it("purchaseSkill: program, account order, data round-trip", () => {
     const authority = createNoopSigner(signerAddr);
+    const expectedContentHash = new Uint8Array(32).fill(8);
     const ix = getPurchaseSkillInstruction({
       skill: A1,
       purchaseRecord: A2,
@@ -241,6 +253,8 @@ describe("reputation facade — skills", () => {
       authority,
       // priceMint / token accounts omitted -> default to program id sentinel
       expectedPrice: 7_777n,
+      expectedVersion: 3,
+      expectedContentHash,
     });
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(ix.accounts.slice(0, 9).map((a) => a.address)).toEqual([
@@ -260,6 +274,10 @@ describe("reputation facade — skills", () => {
     expect(ix.accounts[13]!.address).toBe(TOKEN_PROGRAM);
     const decoded = getPurchaseSkillInstructionDataDecoder().decode(ix.data);
     expect(decoded.expectedPrice).toBe(7_777n);
+    expect(decoded.expectedVersion).toBe(3);
+    expect(Array.from(decoded.expectedContentHash)).toEqual(
+      Array.from(expectedContentHash),
+    );
   });
 });
 
@@ -325,7 +343,9 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
     expect(ix.accounts[1]!.address).toBe(A1);
     // reputationStake (idx 2) is derived: not the agent, not the system program.
     expect(ix.accounts[2]!.address).not.toBe(A1);
-    expect(ix.accounts[3]!.address).toBe(SYSTEM_PROGRAM);
+    const [protocolConfig] = await findProtocolConfigPda();
+    expect(ix.accounts[3]!.address).toBe(protocolConfig);
+    expect(ix.accounts[4]!.address).toBe(SYSTEM_PROGRAM);
     expect(getStakeReputationInstructionDataDecoder().decode(ix.data).amount).toBe(
       100n,
     );
@@ -385,6 +405,32 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
     expect(explicit.accounts[2]!.address).toBe(derived.accounts[2]!.address);
   });
 
+  it("revokeDelegation appends the exact orphan-recovery account suffix", async () => {
+    const authority = createNoopSigner(signerAddr);
+    const [protocolConfig] = await findProtocolConfigPda();
+    const ix = await revokeDelegation({
+      authority,
+      delegatorAgent: A1,
+      delegation: A2,
+      recovery: { treasury: A3 },
+    });
+
+    expect(ix.accounts.map((account) => account.address)).toEqual([
+      authority.address,
+      A1,
+      A2,
+      protocolConfig,
+      A3,
+    ]);
+    expect(ix.accounts.map((account) => account.role)).toEqual([
+      AccountRole.WRITABLE,
+      AccountRole.WRITABLE,
+      AccountRole.WRITABLE,
+      AccountRole.READONLY,
+      AccountRole.WRITABLE,
+    ]);
+  });
+
   it("registerSkill defaults priceMint to null and derives skill + protocolConfig", async () => {
     const authority = createNoopSigner(signerAddr);
     const ix = await registerSkill({
@@ -410,15 +456,17 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
     const ix = await rateSkill({
       skill: A1,
       rater: A3,
+      authorAgent: A4,
       authority,
       rating: 4,
     });
-    expect(ix.accounts.length).toBe(7);
+    expect(ix.accounts.length).toBe(8);
     expect(ix.accounts[0]!.address).toBe(A1);
     expect(ix.accounts[2]!.address).toBe(A3);
     // ratingAccount (1) and purchaseRecord (3) are distinct derived PDAs.
     expect(ix.accounts[1]!.address).not.toBe(ix.accounts[3]!.address);
-    expect(ix.accounts[6]!.address).toBe(SYSTEM_PROGRAM);
+    expect(ix.accounts[4]!.address).toBe(A4);
+    expect(ix.accounts[7]!.address).toBe(SYSTEM_PROGRAM);
     expect(getRateSkillInstructionDataDecoder().decode(ix.data).rating).toBe(4);
   });
 
@@ -468,6 +516,7 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
 
   it("purchaseSkill derives purchaseRecord/protocolConfig and defaults programs", async () => {
     const authority = createNoopSigner(signerAddr);
+    const expectedContentHash = new Uint8Array(32).fill(6);
     const ix = await purchaseSkill({
       skill: A1,
       buyer: A3,
@@ -476,6 +525,8 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
       treasury: A7,
       authority,
       expectedPrice: 1n,
+      expectedVersion: 4,
+      expectedContentHash,
     });
     expect(ix.accounts.length).toBe(14);
     expect(ix.accounts[0]!.address).toBe(A1);
@@ -485,5 +536,9 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
     expect(
       getPurchaseSkillInstructionDataDecoder().decode(ix.data).expectedPrice,
     ).toBe(1n);
+    expect(ix.data.at(-33)).toBe(4);
+    expect(Array.from(ix.data.slice(-32))).toEqual(
+      Array.from(expectedContentHash),
+    );
   });
 });

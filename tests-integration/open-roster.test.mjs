@@ -44,6 +44,7 @@ async function register(w, attestor) {
       .accounts({
         moderationAttestor: entry,
         attestor: attestor.publicKey,
+        protocolConfig: w.config,
         systemProgram: SystemProgram.programId,
       })
       .instruction(),
@@ -460,7 +461,7 @@ test("a legacy-seed record whose stored moderator is a non-authority stranger (n
   // No roster entry exists for the stranger -> the gate must fail CLOSED.
   expectFail(
     await publish(w, { task, jobHash, taskMod: legacy, moderator: stranger.publicKey, attestorEntry: null }),
-    "UnauthorizedTaskModerator",
+    "InvalidModerationRecord",
     "legacy record by a rosterless stranger rejected (unforgeable)",
   );
 });

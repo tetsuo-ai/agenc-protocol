@@ -1,11 +1,16 @@
 # VERSIONS — surface-versioning compatibility matrix (P6.5)
 
-One program ID (`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`) can serve **two
-instruction surfaces**:
+One program ID (`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`) can serve two
+release surfaces:
 
 - the restricted **25-instruction canary** surface (`--features mainnet-canary`) —
   a conservative BUILD that still exists in the source; and
-- the **full surface** (**99 instructions** as of batch-4, default features).
+- the full production surface (the pending revision-5 candidate is **97
+  instructions** with default features).
+
+An explicit development-only `private-zk` feature adds three quarantined proof
+instructions, producing a 100-instruction build. It is not a release surface and
+the deployment preflight rejects a production build or IDL that contains it.
 
 > **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
 > (`surface_revision = 4` / `BATCH4`, last deployed slot **431918664**, all task
@@ -28,6 +33,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 | `2` (`SURFACE_REVISION_BATCH2`) | Batch-2: **94 ix** — store identity, moderation heartbeat, dispute/freeze-exit referrer legs, `rate_hire` rollup | full-surface capabilities `true`; **`goods: false`** |
 | `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest: **96 ix** — submission-rent return, contest rails (`distribute_ghost_share`, `reclaim_terminal_claim`, entry deposit, selection window) | full-surface capabilities `true`; **`goods: false`** |
 | `4` (`SURFACE_REVISION_BATCH4`) | Batch-4 goods: **99 ix** — `create_goods_listing` / `purchase_good` / `update_goods_listing` (handlers require `surface_revision >= 4`) | full-surface capabilities `true`; **`goods: true`** |
+| `5` (`SURFACE_REVISION_AUDIT_HARDENING`) | Pending 2026-07 audit-hardening contract: **97 production ix**; explicitly retires the three unaudited private-ZK entrypoints, adds orphan-child recovery, and tightens account/finalizer conventions | full-surface capabilities `true`; **`goods: true`** |
 
 > **Goods is the first revision-gated capability.** Revisions ≥ 1 still imply the
 > pre-goods full capability set (`listings`, `disputes`, `bonds`, …); only
@@ -59,10 +65,10 @@ with `target_version == current_version` = `1` for the realloc-only path). An op
 then stamps the real revision via **`update_launch_controls`** (existing multisig
 config-update authority; rejects unknown revisions with `InvalidSurfaceRevision`).
 
-A **fresh full-surface deploy** stamps `SURFACE_REVISION_FULL` in
-`initialize_protocol`, so it advertises the base full capabilities with no manual step.
-Goods handlers remain disabled until an operator stamps revision `4`; a fresh **canary**
-deploy stamps `0`.
+A **fresh full-surface deploy** stamps `SURFACE_REVISION_CURRENT` (`5` in this
+source) in `initialize_protocol`, so it advertises the exact wire contract compiled
+into the binary. Goods handlers are enabled at every revision `>= 4`; a fresh
+**canary** deploy stamps `0`.
 
 ## Compatibility matrix (program build ↔ SDK semver ↔ cluster)
 
@@ -74,13 +80,15 @@ deploy stamps `0`.
 | Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
 |---|---|---|---|---|---|---|
 | full | **99 ix** | **mainnet** (live as of 2026-07-09) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
-| full | 99 ix | devnet / localnet (fresh stamp may be 1 until operator stamps 4) | `1`…`4` | ≥ 0.8.0 | `true` if ≥ 1 | `true` only if ≥ 4 |
+| production audit-hardening candidate | **97 ix** | pending next mainnet upgrade | `5` | coordinated SDK release required | `true` | `true` |
+| explicit `private-zk` development build | 100 ix | local development only | not releasable | unsupported | n/a | n/a |
+| historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 |
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 
-Current published packages at the time of writing: `@tetsuo-ai/protocol` **0.3.0**,
-`@tetsuo-ai/marketplace-sdk` **0.11.0**. The full-surface SDK includes
-`getDeployedSurface`, the 99-instruction generated client, store/contest/goods
-facades, and referrer fields on the hire/create facades.
+Current published packages at the time of writing: `@tetsuo-ai/protocol` **0.3.0**
+and `@tetsuo-ai/marketplace-sdk` **0.11.0** speak the live revision-4 wire. The
+revision-5 program and regenerated 97-instruction clients must be released as one
+coordinated compatibility set; they are not yet live.
 
 ## Release runbook — `anchor idl init` per cluster (fetchable on-chain IDL)
 
@@ -127,8 +135,9 @@ program deploy/upgrade:
    therefore safe. The first-call constraint above is about restoring the rest of the live
    surface (every typed-`Account<ProtocolConfig>` instruction), not about the migration pair.
 4. **Stamp the surface**: `update_launch_controls(..., surface_revision)` —
-   stamp the highest revision actually verified live (`4` for the current mainnet
-   surface); otherwise leave `0` or the last verified lower revision.
+   stamp the highest revision actually verified live (`4` for the currently deployed
+   mainnet binary; `5` only after the audit-hardening artifact is verified live);
+   otherwise leave `0` or the last verified lower revision.
 5. Update the matrix above (program build, cluster, `surface_revision`, SDK semver) and
    `docs/MAINNET_MAINLINE.md` in the same release window.
 
@@ -137,11 +146,11 @@ program deploy/upgrade:
 - **Append-only accounts.** `ProtocolConfig` / `Task` fields are never reordered or
   removed; new fields are appended and covered by a `migrate_*` instruction and a size
   `const_assert`. A removed field would invalidate the live-account prefix.
-- **Surface revisions are monotonic and additive.** A new `surface_revision` only adds
-  capabilities; `getDeployedSurface` maps any revision `≥ SURFACE_REVISION_FULL` to the
-  full set, and unknown/lower values fall back to the conservative set. Retiring a
-  capability is a NEW revision plus an SDK minor that maps it — never a silent change of
-  an existing revision's meaning.
+- **Surface revisions are monotonic and explicit.** Additive changes are preferred.
+  Retiring an unsafe capability requires a new revision plus a coordinated client
+  release; it never silently changes an existing revision's meaning. Revision 5 is the
+  first such retirement: private-ZK was never advertised by `CapabilitySet`, and its
+  three entrypoints are absent from the production build and IDL.
 - **Conservative by default.** Any ambiguity (old layout, missing account, unknown
   revision) resolves to the smallest safe surface (`false`). Clients fail-closed via
   `SurfaceNotDeployedError`, never by emitting an instruction the cluster lacks.

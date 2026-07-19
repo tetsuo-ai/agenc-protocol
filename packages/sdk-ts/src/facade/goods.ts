@@ -100,13 +100,17 @@ export async function createGoodsListing(
  *    init-collision) — re-read `sold_count` and retry with the new serial
  *    ({@link purchaseGoodWithRetry} does this for you).
  *  - `expectedPrice` is the slippage ceiling.
+ *  - `expectedMetadataHash` pins the exact off-chain good description the buyer
+ *    reviewed; a concurrent metadata swap fails before payment.
  *  - when the listing carries an operator leg you MUST pass `operatorWallet`
  *    (and, on the SPL rail, `operatorTokenAccount`) or the tx fails
  *    `MissingOperatorAccount`.
  *  - every SOL payee must be rent-exempt ({@link MIN_RENT_EXEMPT_PAYEE_LAMPORTS}).
  */
+export type PurchaseGoodInput = PurchaseGoodAsyncInput;
+
 export async function purchaseGood(
-  input: PurchaseGoodAsyncInput,
+  input: PurchaseGoodInput,
   opts: { surface?: CapabilitySet } = {},
 ) {
   if (opts.surface) assertCapability(opts.surface, "goods");

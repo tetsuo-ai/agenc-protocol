@@ -152,7 +152,12 @@ pub(crate) fn split_good_price(
     Ok((seller_share, protocol_fee, operator_fee))
 }
 
-pub fn handler(ctx: Context<PurchaseGood>, expected_serial: u64, expected_price: u64) -> Result<()> {
+pub fn handler(
+    ctx: Context<PurchaseGood>,
+    expected_serial: u64,
+    expected_price: u64,
+    expected_metadata_hash: [u8; 32],
+) -> Result<()> {
     let config = &ctx.accounts.protocol_config;
     check_version_compatible(config)?;
     require_goods_enabled(config)?;
@@ -163,8 +168,9 @@ pub fn handler(ctx: Context<PurchaseGood>, expected_serial: u64, expected_price:
     // protocol-enforced ban, so requiring Active would break sales for a seller
     // legitimately marked Busy while working other tasks.
     require!(
-        ctx.accounts.seller_agent.status != AgentStatus::Suspended,
-        CoordinationError::AgentSuspended
+        ctx.accounts.seller_agent.status != AgentStatus::Suspended
+            && !ctx.accounts.seller_agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
     );
 
     let good = &ctx.accounts.good;
@@ -184,7 +190,14 @@ pub fn handler(ctx: Context<PurchaseGood>, expected_serial: u64, expected_price:
 
     // Slippage guard: the price the buyer previewed is the most they pay.
     let price = good.price;
-    require!(price <= expected_price, CoordinationError::GoodsPriceChanged);
+    require!(
+        price <= expected_price,
+        CoordinationError::GoodsPriceChanged
+    );
+    require!(
+        good.metadata_hash == expected_metadata_hash,
+        CoordinationError::GoodsMetadataChanged
+    );
 
     // Self-purchase block: wash-trading sold_count is not free. (Alt-wallet
     // sybil remains possible at the cost of the protocol fee — sold_count must
@@ -239,9 +252,7 @@ pub fn handler(ctx: Context<PurchaseGood>, expected_serial: u64, expected_price:
             .price_mint
             .as_ref()
             .ok_or(CoordinationError::MissingTokenAccounts)?;
-        let expected_mint = good
-            .price_mint
-            .ok_or(CoordinationError::InvalidTokenMint)?;
+        let expected_mint = good.price_mint.ok_or(CoordinationError::InvalidTokenMint)?;
         require!(
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
@@ -270,8 +281,14 @@ pub fn handler(ctx: Context<PurchaseGood>, expected_serial: u64, expected_price:
 
         // Mint checks
         let mint_key = mint.key();
-        require!(buyer_ta.mint == mint_key, CoordinationError::InvalidTokenMint);
-        require!(seller_ta.mint == mint_key, CoordinationError::InvalidTokenMint);
+        require!(
+            buyer_ta.mint == mint_key,
+            CoordinationError::InvalidTokenMint
+        );
+        require!(
+            seller_ta.mint == mint_key,
+            CoordinationError::InvalidTokenMint
+        );
         require!(
             treasury_ta.mint == mint_key,
             CoordinationError::InvalidTokenMint
@@ -488,7 +505,10 @@ mod tests {
         // ArithmeticOverflow. The u128-intermediate math must return Ok AND still
         // conserve exactly at those prices.
         for price in [u64::MAX / 1000, u64::MAX - 7] {
-            for (p_bps, o_bps) in [(500u16, 100u16), (MAX_PROTOCOL_FEE_BPS, MAX_OPERATOR_FEE_BPS)] {
+            for (p_bps, o_bps) in [
+                (500u16, 100u16),
+                (MAX_PROTOCOL_FEE_BPS, MAX_OPERATOR_FEE_BPS),
+            ] {
                 let (seller, protocol, operator) = split_good_price(price, p_bps, o_bps)
                     .expect("huge prices must not overflow the fee multiply");
                 assert_eq!(

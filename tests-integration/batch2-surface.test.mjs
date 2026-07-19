@@ -271,18 +271,21 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
     .instruction(), [w.buyer]), "b2ref:publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "b2ref:claim");
 
-  // Worker opens a Complete dispute (resolution_type 1 -> worker is paid).
+  // Creator opens a Complete dispute against the claimed worker.
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), 1, "evidence")
-    .accounts({ dispute, task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "b2ref:initiate Complete");
+    .accounts({ dispute, task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "b2ref:initiate Complete");
 
   const resolveAccounts = (disputeReferrer) => ({
     dispute, task, escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey,
@@ -295,8 +298,9 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
     creatorCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0],
     workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0],
     bondTreasury: w.admin.publicKey,
-    // audit F-9 optional sweep accounts: omitted here (close_task fallback)
-    taskSubmission: null, taskValidationConfig: null,
+    // Mandatory canonical evidence: this system-owned PDA proves no submission exists.
+    taskSubmission: pda([enc("task_submission"), claim.toBuffer()])[0],
+    taskValidationConfig: null,
   });
 
   // Fail-closed: a referred settlement with the referrer payee OMITTED must revert —
@@ -336,7 +340,7 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
 // batch-2 the child whitelist accepted only TaskModeration / TaskValidationConfig /
 // TaskSubmission, stranding ~0.00178 SOL on every reviewed task forever.
 // ---------------------------------------------------------------------------
-test("close_task: reclaims TaskAttestorConfig rent via the child whitelist (and still rejects another task's account)", async () => {
+test("close_task: reclaims TaskAttestorConfig rent while retaining the task liveness anchor", async () => {
   const w = await freshWorld({ price: 1_500_000 });
 
   // Two plain (non-hired) REVIEWED tasks, each with a validation + attestor config
@@ -397,7 +401,9 @@ test("close_task: reclaims TaskAttestorConfig rent via the child whitelist (and 
   expectOk(send(w.svm, await closeIx([a.validation, a.attestorCfg]), [w.buyer]),
     "b2close:close with attestor-config child");
 
-  assert.ok(isClosed(w.svm, a.task), "task closed");
+  assert.ok(!isClosed(w.svm, a.task), "terminal task retained as the durable child-liveness anchor");
+  assert.ok(decode(w.svm, "Task", a.task).status.Cancelled !== undefined,
+    "retained task remains terminal");
   // Tombstoned: lamports drained to the creator, discriminator poisoned.
   assert.equal(Number(w.svm.getBalance(a.attestorCfg)), 0, "attestor config rent drained");
   const tomb = w.svm.getAccount(a.attestorCfg);

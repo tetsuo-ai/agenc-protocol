@@ -171,6 +171,7 @@ async function renderStarter({
       <App
         backend={backend}
         initialSigner={signer}
+        moderator={PROVIDER_AGENT}
         providerConfigOverrides={{
           client,
           queryTransport: makeReadTransport(),

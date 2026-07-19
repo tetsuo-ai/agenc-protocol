@@ -12,42 +12,50 @@ name = "agenc_coordination"
 crate-type = ["cdylib"]
 
 [features]
-default = ["private-zk", "spl-token-rewards"]
+# Production surface: private proof settlement is quarantined until an audited
+# guest and the pinned verifier/router programs exist on mainnet.  It must be
+# enabled explicitly for development builds.
+default = ["spl-token-rewards"]
 mainnet-canary = []
-private-zk = ["solana-sha256-hasher"]
+private-zk = []
 spl-token-rewards = [
     "anchor-spl",
     "anchor-spl/token",
-    "anchor-spl/token_2022",
-    "anchor-spl/associated_token",
+    "dep:spl-associated-token-account-client",
 ]
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build", "anchor-spl?/idl-build"]
+# Anchor SPL 0.32's IDL emitter references `token_interface` unconditionally.
+# Enable its Token-2022 module only while compiling IDL metadata; the production
+# SBF build does not enable `idl-build` and remains classic-SPL-only.
+idl-build = [
+    "anchor-lang/idl-build",
+    "anchor-spl/idl-build",
+    "anchor-spl/token",
+    "anchor-spl/token_2022",
+]
 init-if-needed = []
 validation-timings = []
 
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
-# Embedded security contact blob (read by explorers: Solscan "Security.txt").
-# no-entrypoint feature keeps it out of CPI consumers.
-solana-security-txt = "1.1.1"
 anchor-spl  = { version = "0.32.1", default-features = false, optional = true }
+# Instruction/address-only ATA client. Using Anchor SPL's `associated_token`
+# feature pulls the complete Token-2022 program, confidential-transfer proofs,
+# and ZK/ElGamal stack into the default classic-SPL dependency graph even though
+# this program only constructs one classic ATA creation instruction.
+spl-associated-token-account-client = { version = "=2.0.0", optional = true }
 
 # MSRV compatibility: Solana BPF toolchain uses rustc 1.79.0-dev
 # indexmap 2.12.1+ requires rustc 1.82, so pin to last compatible version
 indexmap = "=2.12.0"
 
-# Latest getrandom release on the 0.2.x line that still supports SBPF custom RNG hooks.
-getrandom = { version = "=0.2.17", default-features = false, features = ["custom"] }
-
-# SHA-256 journal digest hashing for verifier-router integration
-solana-sha256-hasher = { version = "3.1.0", optional = true }
-
-[target.'cfg(target_os = "solana")'.dependencies]
-getrandom = { version = "=0.2.17", default-features = false, features = ["custom"] }
+# SHA-256 hashing is shared by the verifier journal and the full-surface bid
+# acceptance CAS. Keep it available even when `private-zk` is disabled so a
+# no-default-features full build cannot silently lose bid-term commitments.
+solana-sha256-hasher = { version = "=2.3.0", features = ["sha2"] }
 
 # Defense-in-depth: the Rust release profile defaults overflow-checks = false, so any
 # integer add/sub/mul not written with checked_*/saturating_* would SILENTLY WRAP in the

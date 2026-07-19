@@ -56,7 +56,12 @@ function canonicalize(value: unknown, path: string): unknown {
     );
   }
   const source = value as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
+  // A normal object would invoke the legacy `__proto__` setter instead of
+  // creating an own property. JSON permits that key and the canonicalization
+  // contract requires every own JSON property to be preserved, so build into
+  // a null-prototype dictionary. This also prevents canonicalization itself
+  // from becoming a prototype-pollution primitive for parsed hostile JSON.
+  const out = Object.create(null) as Record<string, unknown>;
   for (const key of Object.keys(source).sort()) {
     const item = source[key];
     if (item === undefined) continue;

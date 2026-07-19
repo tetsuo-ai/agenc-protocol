@@ -89,7 +89,7 @@ test("REHEARSAL: dark -> stamp 4 (preserving paused+mask) -> real sale -> event 
   const price = 1_000_000;
   const [receipt] = pda([enc("goods_sale"), good.toBuffer(), new BN(0).toArrayLike(Buffer, "le", 8)]);
   const buyRes = send(w.svm, await makeProgram(buyer).methods
-    .purchaseGood(new BN(0), new BN(price))
+    .purchaseGood(new BN(0), new BN(price), arr(metaHash))
     .accounts({ good, saleReceipt: receipt, sellerAgent: provider.agent, sellerWallet: provider.wallet.publicKey,
       protocolConfig: protocolPda, treasury: w.admin.publicKey, moderationBlock: moderationBlockPda(metaHash)[0],
       authority: buyer.publicKey, systemProgram: SystemProgram.programId, operatorWallet: null,

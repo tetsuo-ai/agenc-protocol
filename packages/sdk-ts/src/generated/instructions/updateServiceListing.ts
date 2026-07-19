@@ -69,6 +69,7 @@ export function getUpdateServiceListingDiscriminatorBytes(): ReadonlyUint8Array 
 export type UpdateServiceListingInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountListing extends string | AccountMeta<string> = string,
+  TAccountProviderAgent extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountAuthority extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -79,6 +80,9 @@ export type UpdateServiceListingInstruction<
       TAccountListing extends string
         ? WritableAccount<TAccountListing>
         : TAccountListing,
+      TAccountProviderAgent extends string
+        ? ReadonlyAccount<TAccountProviderAgent>
+        : TAccountProviderAgent,
       TAccountProtocolConfig extends string
         ? ReadonlyAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
@@ -171,10 +175,12 @@ export function getUpdateServiceListingInstructionDataCodec(): Codec<
 
 export type UpdateServiceListingAsyncInput<
   TAccountListing extends string = string,
+  TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountAuthority extends string = string,
 > = {
   listing: Address<TAccountListing>;
+  providerAgent: Address<TAccountProviderAgent>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   authority: TransactionSigner<TAccountAuthority>;
   price: UpdateServiceListingInstructionDataArgs["price"];
@@ -190,12 +196,14 @@ export type UpdateServiceListingAsyncInput<
 
 export async function getUpdateServiceListingInstructionAsync<
   TAccountListing extends string,
+  TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: UpdateServiceListingAsyncInput<
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountAuthority
   >,
@@ -204,6 +212,7 @@ export async function getUpdateServiceListingInstructionAsync<
   UpdateServiceListingInstruction<
     TProgramAddress,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountAuthority
   >
@@ -215,6 +224,7 @@ export async function getUpdateServiceListingInstructionAsync<
   // Original accounts.
   const originalAccounts = {
     listing: { value: input.listing ?? null, isWritable: true },
+    providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: false },
   };
@@ -235,6 +245,7 @@ export async function getUpdateServiceListingInstructionAsync<
   return Object.freeze({
     accounts: [
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("authority", accounts.authority),
     ],
@@ -245,6 +256,7 @@ export async function getUpdateServiceListingInstructionAsync<
   } as UpdateServiceListingInstruction<
     TProgramAddress,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountAuthority
   >);
@@ -252,10 +264,12 @@ export async function getUpdateServiceListingInstructionAsync<
 
 export type UpdateServiceListingInput<
   TAccountListing extends string = string,
+  TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountAuthority extends string = string,
 > = {
   listing: Address<TAccountListing>;
+  providerAgent: Address<TAccountProviderAgent>;
   protocolConfig: Address<TAccountProtocolConfig>;
   authority: TransactionSigner<TAccountAuthority>;
   price: UpdateServiceListingInstructionDataArgs["price"];
@@ -271,12 +285,14 @@ export type UpdateServiceListingInput<
 
 export function getUpdateServiceListingInstruction<
   TAccountListing extends string,
+  TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountAuthority extends string,
   TProgramAddress extends Address = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
 >(
   input: UpdateServiceListingInput<
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountAuthority
   >,
@@ -284,6 +300,7 @@ export function getUpdateServiceListingInstruction<
 ): UpdateServiceListingInstruction<
   TProgramAddress,
   TAccountListing,
+  TAccountProviderAgent,
   TAccountProtocolConfig,
   TAccountAuthority
 > {
@@ -294,6 +311,7 @@ export function getUpdateServiceListingInstruction<
   // Original accounts.
   const originalAccounts = {
     listing: { value: input.listing ?? null, isWritable: true },
+    providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: false },
   };
@@ -309,6 +327,7 @@ export function getUpdateServiceListingInstruction<
   return Object.freeze({
     accounts: [
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("authority", accounts.authority),
     ],
@@ -319,6 +338,7 @@ export function getUpdateServiceListingInstruction<
   } as UpdateServiceListingInstruction<
     TProgramAddress,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountAuthority
   >);
@@ -331,8 +351,9 @@ export type ParsedUpdateServiceListingInstruction<
   programAddress: Address<TProgram>;
   accounts: {
     listing: TAccountMetas[0];
-    protocolConfig: TAccountMetas[1];
-    authority: TAccountMetas[2];
+    providerAgent: TAccountMetas[1];
+    protocolConfig: TAccountMetas[2];
+    authority: TAccountMetas[3];
   };
   data: UpdateServiceListingInstructionData;
 };
@@ -345,12 +366,12 @@ export function parseUpdateServiceListingInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedUpdateServiceListingInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 3) {
+  if (instruction.accounts.length < 4) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 3,
+        expectedAccountMetas: 4,
       },
     );
   }
@@ -364,6 +385,7 @@ export function parseUpdateServiceListingInstruction<
     programAddress: instruction.programAddress,
     accounts: {
       listing: getNextAccount(),
+      providerAgent: getNextAccount(),
       protocolConfig: getNextAccount(),
       authority: getNextAccount(),
     },

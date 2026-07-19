@@ -89,11 +89,21 @@ async function setupTask(w, { taskType = 2, maxWorkers = 3, reward = 9_000_007, 
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
     .instruction(), [w.buyer]), "fixround:create_task");
   if (mode !== null) {
-    const rw = mode === 1 ? reviewWindow : 0;
+    // New quorum entry is disabled. Configure the supported CreatorReview mode,
+    // then inject mode 2 only when testing the grandfathered quorum exit.
     expectOk(send(w.svm, await w.buyerProg.methods
-      .configureTaskValidation(mode, new BN(rw), validatorQuorum, null)
+      .configureTaskValidation(1, new BN(reviewWindow), 0, null)
       .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
       .instruction(), [w.buyer]), "fixround:configure validation");
+    if (mode === 2) {
+      const account = w.svm.getAccount(validation);
+      const config = coder.accounts.decode("TaskValidationConfig", Buffer.from(account.data));
+      config.mode = { ValidatorQuorum: {} };
+      config.review_window_secs = new BN(0);
+      config._reserved[0] = validatorQuorum;
+      const data = await coder.accounts.encode("TaskValidationConfig", config);
+      w.svm.setAccount(validation, { ...account, data });
+    }
   }
   return { task, escrow, validation, attestor, hireRecord, reward, deadline, ghostAt: deadline + SELECTION_WINDOW_SECS };
 }
@@ -111,14 +121,18 @@ async function publishJobSpec(w, { task }) {
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/fixround", w.modAuth.publicKey)
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "fixround:job-spec");
-  return { jobSpec, taskMod };
+  return { jobSpec, jobHash, taskMod };
 }
 
 async function enterContest(w, m, entrant, { submit = true } = {}) {
   const [claim] = pda([enc("claim"), m.task.toBuffer(), entrant.agentPda.toBuffer()]);
   expectOk(send(w.svm, await entrant.prog.methods
     .claimTaskWithJobSpec()
-    .accounts({ task: m.task, taskJobSpec: m.jobSpec, claim, protocolConfig: w.protocolPda, worker: entrant.agentPda, authority: entrant.kp.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task: m.task, taskJobSpec: m.jobSpec,
+      hireRecord: pda([enc("hire"), m.task.toBuffer()])[0], legacyListing: null,
+      moderationBlock: moderationBlockPda(m.jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: entrant.agentPda,
+      authority: entrant.kp.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [entrant.kp]), "fixround:claim");
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   if (submit) {
@@ -166,6 +180,7 @@ async function rejectIx(w, m, entrant, entry) {
       task: m.task, claim: entry.claim, taskValidationConfig: m.validation,
       taskSubmission: entry.submission, worker: entrant.agentPda, protocolConfig: w.protocolPda,
       creator: w.buyer.publicKey, workerAuthority: entrant.kp.publicKey, agentStats: null,
+      workerCompletionBond: pda([enc("completion_bond"), m.task.toBuffer(), entrant.kp.publicKey.toBuffer()])[0],
     })
     .instruction();
 }
@@ -191,7 +206,7 @@ async function reclaimIx(w, m, entrant, entry, callerKp) {
     .reclaimTerminalClaim()
     .accounts({
       authority: callerKp.publicKey, task: m.task, claim: entry.claim,
-      taskSubmission: entry.submission, worker: entrant.agentPda,
+      taskSubmission: entry.submission, taskValidationConfig: null, worker: entrant.agentPda,
       protocolConfig: w.protocolPda, treasury: w.admin.publicKey,
       rentRecipient: entrant.kp.publicKey,
     })
@@ -368,11 +383,12 @@ test("FIX 1b: ghost lifecycle with a no-show claim -> reclaim_terminal_claim -> 
   const again = send(w.svm, await reclaimIx(w, m, ghost, eg, cranker), [cranker]);
   assert.ok(again.constructor.name.includes("Failed"), "re-reclaim fails");
 
-  // close_task now succeeds — the Task PDA rent is recovered. (The earlier
+  // close_task now succeeds while retaining the durable Task parent. (The earlier
   // bricked attempt was byte-identical; rotate the blockhash past litesvm dedup.)
   w.svm.expireBlockhash();
   expectOk(send(w.svm, await closeTaskIx(w, m), [w.buyer]), "close_task after reclaim");
-  assert.ok(isClosed(w.svm, m.task), "task account closed");
+  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
+  assert.ok(decode(w.svm, "Task", m.task).status.Completed !== undefined, "terminal state remains decodable");
 });
 
 test("FIX 1b: accept-path variant — winner accepted, no-show reclaimed, close_task succeeds", async () => {
@@ -398,7 +414,7 @@ test("FIX 1b: accept-path variant — winner accepted, no-show reclaimed, close_
   assert.equal(decode(w.svm, "Task", m.task).current_workers, 0);
 
   expectOk(send(w.svm, await closeTaskIx(w, m), [w.buyer]), "close_task after accept-path reclaim");
-  assert.ok(isClosed(w.svm, m.task), "task account closed");
+  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
 });
 
 // ===========================================================================
@@ -507,13 +523,18 @@ test("FIX 3: an AUTO-validation schema-1 Competitive task keeps dispute recourse
 // FIX 5 — close_task straggler with a deregistered worker agent
 // ===========================================================================
 
-test("FIX 5: straggler submission rent routes to the TREASURY when the worker agent is provably deregistered (never the creator)", async () => {
+test("FIX 5: a retired identity tombstone still proves the worker rent recipient", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   // ValidatorQuorum reject leaves the TaskSubmission alive with the claim closed
   // — the canonical straggler (same setup as the §1 fail-closed test).
   const m = await setupTask(w, { taskType: 0, maxWorkers: 1, mode: 2, validatorQuorum: 1, reward: 2_000_000 });
   Object.assign(m, await publishJobSpec(w, m));
   const workerA = await registerAgent(w);
+  // Identity continuity is intentionally strict: a registration timestamp equal
+  // to the submission timestamp is ambiguous because revision 4 allowed a
+  // close-and-recreate bundle in the same second. Model an actual pre-existing
+  // worker here so the later RETD tombstone proves the original authority.
+  warpTo(w, Number(w.svm.getClock().unixTimestamp) + 1);
   const entry = await enterContest(w, m, workerA);
 
   const validator = await registerAgent(w, CAP_VALIDATOR);
@@ -542,7 +563,9 @@ test("FIX 5: straggler submission rent routes to the TREASURY when the worker ag
     .accounts({ agent: workerA.agentPda, protocolConfig: w.protocolPda, reputationStake: pda([enc("reputation_stake"), workerA.agentPda.toBuffer()])[0], authority: workerA.kp.publicKey })
     .remainingAccounts(deregisterRemaining(workerA.agentPda))
     .instruction(), [workerA.kp]), "deregister the straggler's agent");
-  assert.ok(isClosed(w.svm, workerA.agentPda), "agent PDA provably closed");
+  const retired = decode(w.svm, "AgentRegistration", workerA.agentPda);
+  assert.ok(!isClosed(w.svm, workerA.agentPda), "retired identity tombstone remains");
+  assert.deepEqual(Buffer.from(retired._reserved), Buffer.from("RETD"), "worker is provably retired");
 
   expectOk(send(w.svm, await w.buyerProg.methods
     .cancelTask()
@@ -571,22 +594,18 @@ test("FIX 5: straggler submission rent routes to the TREASURY when the worker ag
     send(w.svm, await closeTaskIx(w, m, triple(w.buyer.publicKey), { protocolConfig: w.protocolPda }), [w.buyer]),
     "SubmissionRentAccountsRequired", "deregistered-agent straggler with the CREATOR as payee",
   );
-  // The original worker wallet is also rejected — with the agent closed there is
-  // no stored authority to validate it against; only the treasury is safe.
-  expectFail(
-    send(w.svm, await closeTaskIx(w, m, triple(workerA.kp.publicKey), { protocolConfig: w.protocolPda }), [w.buyer]),
-    "SubmissionRentAccountsRequired", "deregistered-agent straggler with the (unprovable) worker wallet",
-  );
-
-  const treasuryBefore = balance(w, w.admin.publicKey);
+  // The durable tombstone retains the immutable authority, so the worker remains
+  // a provable rent recipient even after retirement. Treasury fallback is only
+  // needed for historical registrations that were actually closed.
+  const workerBefore = balance(w, workerA.kp.publicKey);
   const subRent = balance(w, entry.submission);
   expectOk(
-    send(w.svm, await closeTaskIx(w, m, triple(w.admin.publicKey), { protocolConfig: w.protocolPda }), [w.buyer]),
-    "REVERT-SENSITIVE (FIX 5): close_task with the treasury as the straggler payee",
+    send(w.svm, await closeTaskIx(w, m, triple(workerA.kp.publicKey), { protocolConfig: w.protocolPda }), [w.buyer]),
+    "close_task with the tombstone-proven worker payee",
   );
   assert.ok(isClosed(w.svm, entry.submission), "straggler submission closed");
-  assert.equal(balance(w, w.admin.publicKey) - treasuryBefore, subRent, "straggler rent went to the TREASURY");
-  assert.ok(isClosed(w.svm, m.task), "task account closed");
+  assert.equal(balance(w, workerA.kp.publicKey) - workerBefore, subRent, "straggler rent returned to the worker");
+  assert.ok(!isClosed(w.svm, m.task), "durable terminal Task anchor remains");
 });
 
 // ===========================================================================

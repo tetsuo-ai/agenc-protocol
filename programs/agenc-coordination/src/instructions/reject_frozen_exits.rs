@@ -3,16 +3,15 @@
 //! strand. Both are exit paths (money-never-locks): they call
 //! `check_version_compatible_for_exit` so a paused protocol still settles.
 //!
-//! A frozen task is ALWAYS a manual (CreatorReview) task, and hired tasks cannot be
-//! manual-validated (HiredTaskValidationUnsupported), so `task.operator` is always
-//! default here — the worker payout is the plain SOL 2-way split (operator_leg=None),
-//! identical to `accept_task_result`.
+//! A frozen task is ALWAYS a manual (CreatorReview) task. Humanless listing hires
+//! create that validation mode directly, so both worker-payout exits must honor the
+//! same immutable operator/referrer terms as normal accept and auto-accept paths.
 
 use crate::errors::CoordinationError;
 use crate::events::{RejectFrozenExpired, RejectFrozenResolved};
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::completion_helpers::{
-    calculate_fee_with_reputation, execute_completion_rewards,
+    build_marketplace_fee_legs, calculate_fee_with_reputation, execute_completion_rewards,
 };
 use crate::instructions::task_validation_helpers::release_claim_slot;
 use crate::state::{
@@ -93,6 +92,22 @@ pub struct ResolveRejectFrozen<'info> {
     )]
     pub worker_authority: UncheckedAccount<'info>,
 
+    /// CHECK: canonical hire link. Always supplied; direct tasks pass the empty
+    /// system-owned PDA. A legacy live record carries fee terms not stamped on Task.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+
+    /// CHECK: immutable operator payee, validated from Task/HireRecord when completion wins.
+    #[account(mut)]
+    pub operator: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: immutable referrer payee, validated from Task/HireRecord when completion wins.
+    #[account(mut)]
+    pub referrer: Option<UncheckedAccount<'info>>,
+
     /// Multisig review authority; `remaining_accounts` carries the co-signers.
     pub authority: Signer<'info>,
 
@@ -144,11 +159,24 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
     let treasury_info = ctx.accounts.treasury.to_account_info();
 
     if approve_completion {
-        // Worker vindicated: pay the worker (SOL 2-way, no operator leg on a manual task).
+        // Worker vindicated: pay the worker and every snapshotted marketplace leg.
         let protocol_fee_bps = calculate_fee_with_reputation(
             ctx.accounts.task.protocol_fee_bps,
             ctx.accounts.worker.reputation,
         );
+        let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+            ctx.accounts.task.as_ref(),
+            task_key,
+            &ctx.accounts.hire_record.to_account_info(),
+            ctx.accounts
+                .operator
+                .as_ref()
+                .map(|account| account.as_ref()),
+            ctx.accounts
+                .referrer
+                .as_ref()
+                .map(|account| account.as_ref()),
+        )?;
         ctx.accounts.claim.proof_hash = ctx.accounts.task_submission.proof_hash;
         ctx.accounts.claim.result_data = ctx.accounts.task_submission.result_data;
         ctx.accounts.claim.is_completed = true;
@@ -169,8 +197,8 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
             Some(ctx.accounts.task_submission.result_data),
             &clock,
             None,
-            None, // operator leg: reject-frozen partial payout is the plain 2-way SOL split
-            None, // referrer leg: same
+            operator_leg,
+            referrer_leg,
         )?;
 
         ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
@@ -247,8 +275,11 @@ pub fn resolve_handler(ctx: Context<ResolveRejectFrozen>, approve_completion: bo
         });
     }
 
-    // Return the claim rent to the worker who funded it.
-    ctx.accounts.claim.close(worker_auth_info)?;
+    // Return both worker-funded lifecycle accounts. The task is terminal on
+    // either branch, so leaving the submission alive would strand its rent and
+    // force creator cooperation through a later cleanup instruction.
+    ctx.accounts.claim.close(worker_auth_info.clone())?;
+    ctx.accounts.task_submission.close(worker_auth_info)?;
 
     Ok(())
 }
@@ -323,6 +354,22 @@ pub struct ExpireRejectFrozen<'info> {
     )]
     pub worker_authority: UncheckedAccount<'info>,
 
+    /// CHECK: canonical hire link. Always supplied; direct tasks pass the empty
+    /// system-owned PDA. A legacy live record carries fee terms not stamped on Task.
+    #[account(
+        seeds = [b"hire", task.key().as_ref()],
+        bump
+    )]
+    pub hire_record: UncheckedAccount<'info>,
+
+    /// CHECK: immutable operator payee, validated from Task/HireRecord.
+    #[account(mut)]
+    pub operator: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: immutable referrer payee, validated from Task/HireRecord.
+    #[account(mut)]
+    pub referrer: Option<UncheckedAccount<'info>>,
+
     /// Permissionless caller.
     pub authority: Signer<'info>,
 
@@ -378,6 +425,19 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         ctx.accounts.task.protocol_fee_bps,
         ctx.accounts.worker.reputation,
     );
+    let (operator_leg, referrer_leg) = build_marketplace_fee_legs(
+        ctx.accounts.task.as_ref(),
+        task_key,
+        &ctx.accounts.hire_record.to_account_info(),
+        ctx.accounts
+            .operator
+            .as_ref()
+            .map(|account| account.as_ref()),
+        ctx.accounts
+            .referrer
+            .as_ref()
+            .map(|account| account.as_ref()),
+    )?;
     ctx.accounts.claim.proof_hash = ctx.accounts.task_submission.proof_hash;
     ctx.accounts.claim.result_data = ctx.accounts.task_submission.result_data;
     ctx.accounts.claim.is_completed = true;
@@ -398,8 +458,8 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         Some(ctx.accounts.task_submission.result_data),
         &clock,
         None,
-        None, // operator leg: reject-frozen partial payout is the plain 2-way SOL split
-        None, // referrer leg: same
+        operator_leg,
+        referrer_leg,
     )?;
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
@@ -427,7 +487,8 @@ pub fn expire_handler(ctx: Context<ExpireRejectFrozen>) -> Result<()> {
         BondDisposition::Refund,
     )?;
 
-    ctx.accounts.claim.close(worker_auth_info)?;
+    ctx.accounts.claim.close(worker_auth_info.clone())?;
+    ctx.accounts.task_submission.close(worker_auth_info)?;
 
     emit!(RejectFrozenExpired {
         task: task_key,

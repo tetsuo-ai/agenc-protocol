@@ -41,6 +41,7 @@ import {
   findAcceptTaskResultClaimPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
+  findTaskValidationConfigPda,
 } from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
@@ -59,6 +60,7 @@ export type ReclaimTerminalClaimInstruction<
   TAccountTask extends string | AccountMeta<string> = string,
   TAccountClaim extends string | AccountMeta<string> = string,
   TAccountTaskSubmission extends string | AccountMeta<string> = string,
+  TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
   TAccountWorker extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountTreasury extends string | AccountMeta<string> = string,
@@ -81,6 +83,9 @@ export type ReclaimTerminalClaimInstruction<
       TAccountTaskSubmission extends string
         ? WritableAccount<TAccountTaskSubmission>
         : TAccountTaskSubmission,
+      TAccountTaskValidationConfig extends string
+        ? WritableAccount<TAccountTaskValidationConfig>
+        : TAccountTaskValidationConfig,
       TAccountWorker extends string
         ? WritableAccount<TAccountWorker>
         : TAccountWorker,
@@ -134,6 +139,7 @@ export type ReclaimTerminalClaimAsyncInput<
   TAccountTask extends string = string,
   TAccountClaim extends string = string,
   TAccountTaskSubmission extends string = string,
+  TAccountTaskValidationConfig extends string = string,
   TAccountWorker extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
@@ -154,6 +160,12 @@ export type ReclaimTerminalClaimAsyncInput<
    * paths and must not be short-circuited.
    */
   taskSubmission?: Address<TAccountTaskSubmission>;
+  /**
+   * Validation counters for terminal cleanup of a still-Submitted
+   * Collaborative straggler. Omitted for the historical no-submission and
+   * Rejected-submission cleanup forms.
+   */
+  taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   worker: Address<TAccountWorker>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   /**
@@ -170,6 +182,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
   TAccountTask extends string,
   TAccountClaim extends string,
   TAccountTaskSubmission extends string,
+  TAccountTaskValidationConfig extends string,
   TAccountWorker extends string,
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
@@ -181,6 +194,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
     TAccountTask,
     TAccountClaim,
     TAccountTaskSubmission,
+    TAccountTaskValidationConfig,
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -194,6 +208,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
     TAccountTask,
     TAccountClaim,
     TAccountTaskSubmission,
+    TAccountTaskValidationConfig,
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -210,6 +225,10 @@ export async function getReclaimTerminalClaimInstructionAsync<
     task: { value: input.task ?? null, isWritable: true },
     claim: { value: input.claim ?? null, isWritable: true },
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
+      isWritable: true,
+    },
     worker: { value: input.worker ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
@@ -241,6 +260,14 @@ export async function getReclaimTerminalClaimInstructionAsync<
       ),
     });
   }
+  if (!accounts.taskValidationConfig.value) {
+    accounts.taskValidationConfig.value = await findTaskValidationConfigPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
   if (!accounts.protocolConfig.value) {
     accounts.protocolConfig.value = await findProtocolConfigPda();
   }
@@ -252,6 +279,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
       getAccountMeta("task", accounts.task),
       getAccountMeta("claim", accounts.claim),
       getAccountMeta("taskSubmission", accounts.taskSubmission),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("worker", accounts.worker),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
@@ -265,6 +293,7 @@ export async function getReclaimTerminalClaimInstructionAsync<
     TAccountTask,
     TAccountClaim,
     TAccountTaskSubmission,
+    TAccountTaskValidationConfig,
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -277,6 +306,7 @@ export type ReclaimTerminalClaimInput<
   TAccountTask extends string = string,
   TAccountClaim extends string = string,
   TAccountTaskSubmission extends string = string,
+  TAccountTaskValidationConfig extends string = string,
   TAccountWorker extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountTreasury extends string = string,
@@ -297,6 +327,12 @@ export type ReclaimTerminalClaimInput<
    * paths and must not be short-circuited.
    */
   taskSubmission: Address<TAccountTaskSubmission>;
+  /**
+   * Validation counters for terminal cleanup of a still-Submitted
+   * Collaborative straggler. Omitted for the historical no-submission and
+   * Rejected-submission cleanup forms.
+   */
+  taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   worker: Address<TAccountWorker>;
   protocolConfig: Address<TAccountProtocolConfig>;
   /**
@@ -313,6 +349,7 @@ export function getReclaimTerminalClaimInstruction<
   TAccountTask extends string,
   TAccountClaim extends string,
   TAccountTaskSubmission extends string,
+  TAccountTaskValidationConfig extends string,
   TAccountWorker extends string,
   TAccountProtocolConfig extends string,
   TAccountTreasury extends string,
@@ -324,6 +361,7 @@ export function getReclaimTerminalClaimInstruction<
     TAccountTask,
     TAccountClaim,
     TAccountTaskSubmission,
+    TAccountTaskValidationConfig,
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -336,6 +374,7 @@ export function getReclaimTerminalClaimInstruction<
   TAccountTask,
   TAccountClaim,
   TAccountTaskSubmission,
+  TAccountTaskValidationConfig,
   TAccountWorker,
   TAccountProtocolConfig,
   TAccountTreasury,
@@ -351,6 +390,10 @@ export function getReclaimTerminalClaimInstruction<
     task: { value: input.task ?? null, isWritable: true },
     claim: { value: input.claim ?? null, isWritable: true },
     taskSubmission: { value: input.taskSubmission ?? null, isWritable: true },
+    taskValidationConfig: {
+      value: input.taskValidationConfig ?? null,
+      isWritable: true,
+    },
     worker: { value: input.worker ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     treasury: { value: input.treasury ?? null, isWritable: true },
@@ -368,6 +411,7 @@ export function getReclaimTerminalClaimInstruction<
       getAccountMeta("task", accounts.task),
       getAccountMeta("claim", accounts.claim),
       getAccountMeta("taskSubmission", accounts.taskSubmission),
+      getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("worker", accounts.worker),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("treasury", accounts.treasury),
@@ -381,6 +425,7 @@ export function getReclaimTerminalClaimInstruction<
     TAccountTask,
     TAccountClaim,
     TAccountTaskSubmission,
+    TAccountTaskValidationConfig,
     TAccountWorker,
     TAccountProtocolConfig,
     TAccountTreasury,
@@ -409,15 +454,21 @@ export type ParsedReclaimTerminalClaimInstruction<
      * paths and must not be short-circuited.
      */
     taskSubmission: TAccountMetas[3];
-    worker: TAccountMetas[4];
-    protocolConfig: TAccountMetas[5];
+    /**
+     * Validation counters for terminal cleanup of a still-Submitted
+     * Collaborative straggler. Omitted for the historical no-submission and
+     * Rejected-submission cleanup forms.
+     */
+    taskValidationConfig?: TAccountMetas[4] | undefined;
+    worker: TAccountMetas[5];
+    protocolConfig: TAccountMetas[6];
     /**
      * Receives the forfeited contest entry-deposit surplus (never the creator);
      * 0 lamports for non-contest claims.
      */
-    treasury: TAccountMetas[6];
+    treasury: TAccountMetas[7];
     /** worker authority (stored pubkey; no caller-supplied-account trust). */
-    rentRecipient: TAccountMetas[7];
+    rentRecipient: TAccountMetas[8];
   };
   data: ReclaimTerminalClaimInstructionData;
 };
@@ -430,12 +481,12 @@ export function parseReclaimTerminalClaimInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedReclaimTerminalClaimInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 8) {
+  if (instruction.accounts.length < 9) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 8,
+        expectedAccountMetas: 9,
       },
     );
   }
@@ -445,6 +496,12 @@ export function parseReclaimTerminalClaimInstruction<
     accountIndex += 1;
     return accountMeta;
   };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === AGENC_COORDINATION_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
+  };
   return {
     programAddress: instruction.programAddress,
     accounts: {
@@ -452,6 +509,7 @@ export function parseReclaimTerminalClaimInstruction<
       task: getNextAccount(),
       claim: getNextAccount(),
       taskSubmission: getNextAccount(),
+      taskValidationConfig: getNextOptionalAccount(),
       worker: getNextAccount(),
       protocolConfig: getNextAccount(),
       treasury: getNextAccount(),

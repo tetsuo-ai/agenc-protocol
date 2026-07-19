@@ -6,7 +6,7 @@ This file maps the full `agenc-protocol` repo for developers and AI agents.
 
 ```text
 agenc-protocol/
-  programs/agenc-coordination/   Anchor program source of truth (99-ix full surface)
+  programs/agenc-coordination/   Anchor source (97 prod / 100 private-ZK / 25 canary)
   artifacts/anchor/              committed canonical IDL, types, and manifest
   packages/
     protocol/                    @tetsuo-ai/protocol — published IDL/types
@@ -39,11 +39,11 @@ agenc-protocol/
 - `programs/agenc-coordination/src/errors.rs` - protocol error codes
 - `programs/agenc-coordination/src/instructions/` - instruction handlers and helpers
 - `programs/agenc-coordination/src/utils/` - shared utilities
-- `programs/agenc-coordination/fuzz/` - stale model-based proptest harness (retired `vote_dispute` model; not active coverage)
+- `programs/agenc-coordination/fuzz/` - active model/property regression harness (76 tests)
 
 ### Canonical artifacts
 
-- `artifacts/anchor/idl/agenc_coordination.json` (**99** instructions)
+- `artifacts/anchor/idl/agenc_coordination.json` (**97** production-candidate instructions)
 - `artifacts/anchor/types/agenc_coordination.ts`
 - `artifacts/anchor/manifest.json`
 - `scripts/idl/verifier_router.json`

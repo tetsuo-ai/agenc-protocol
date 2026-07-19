@@ -16,7 +16,7 @@ import crypto from "node:crypto";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, hireIx,
+  freshWorld, hireIx, injectAgentStake,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
@@ -48,7 +48,7 @@ test("update_service_listing: provider updates price/capabilities, bumps version
           null,              // operator (leave unchanged via None)
           null,              // operator_fee_bps
         )
-        .accounts({ listing: w.listing, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
+        .accounts({ listing: w.listing, providerAgent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
         .instruction(),
       [w.provider],
     ),
@@ -77,7 +77,7 @@ test("update_service_listing: a non-authority cannot update the listing", async 
       w.svm,
       await w.buyerProg.methods
         .updateServiceListing(new BN(2_000_000), null, null, null, null, null, null, null, null)
-        .accounts({ listing: w.listing, protocolConfig: w.protocolPda, authority: w.buyer.publicKey })
+        .accounts({ listing: w.listing, providerAgent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.buyer.publicKey })
         .instruction(),
       [w.buyer],
     ),
@@ -95,7 +95,7 @@ test("update_service_listing: price below MIN_SKILL_PRICE is rejected", async ()
       w.svm,
       await w.providerProg.methods
         .updateServiceListing(new BN(500) /* < 1_000 MIN_SKILL_PRICE */, null, null, null, null, null, null, null, null)
-        .accounts({ listing: w.listing, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
+        .accounts({ listing: w.listing, providerAgent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
         .instruction(),
       [w.provider],
     ),
@@ -110,18 +110,21 @@ test("update_service_listing: price below MIN_SKILL_PRICE is rejected", async ()
 
 test("set_service_listing_state: Active -> Paused -> Active flips listing.state", async () => {
   const w = await freshWorld({});
-  const setState = async (n, label) =>
-    expectOk(
-      send(
-        w.svm,
-        await w.providerProg.methods
-          .setServiceListingState(n)
-          .accounts({ listing: w.listing, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
-          .instruction(),
-        [w.provider],
-      ),
-      label,
-    );
+  const setState = async (n, label) => {
+    let builder = w.providerProg.methods
+      .setServiceListingState(n)
+      .accounts({
+        listing: w.listing,
+        protocolConfig: w.protocolPda,
+        authority: w.provider.publicKey,
+      });
+    if (n === 0) {
+      builder = builder.remainingAccounts([
+        { pubkey: w.providerAgent, isSigner: false, isWritable: false },
+      ]);
+    }
+    expectOk(send(w.svm, await builder.instruction(), [w.provider]), label);
+  };
 
   assert.ok(decode(w.svm, "ServiceListing", w.listing).state.Active !== undefined, "starts Active");
 
@@ -169,7 +172,7 @@ test("set_service_listing_state: Retired is terminal — no further transitions,
       w.svm,
       await w.providerProg.methods
         .updateServiceListing(new BN(2_000_000), null, null, null, null, null, null, null, null)
-        .accounts({ listing: w.listing, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
+        .accounts({ listing: w.listing, providerAgent: w.providerAgent, protocolConfig: w.protocolPda, authority: w.provider.publicKey })
         .instruction(),
       [w.provider],
     ),
@@ -303,22 +306,35 @@ async function setupActiveDispute(w) {
 
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "dispute:claim");
 
-  // 3) worker (provider) initiates a dispute on their claimed task.
+  // 3) Creator initiates against the claimed worker. This path intentionally
+  // does not require a submitted delivery and restores InProgress on cancel.
+  await injectAgentStake(w.svm, w.buyerAgent, 300_000_000);
+  const fundedCreator = w.svm.getAccount(w.buyerAgent);
+  w.svm.setAccount(w.buyerAgent, {
+    ...fundedCreator,
+    lamports: Number(fundedCreator.lamports) + 300_000_000,
+  });
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [rateLimit] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), 0, "evidence")
-    .accounts({ dispute, task, agent: w.providerAgent, authorityRateLimit: rateLimit, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "dispute:initiate");
+    .accounts({ dispute, task, agent: w.buyerAgent, authorityRateLimit: rateLimit,
+      protocolConfig: w.protocolPda, initiatorClaim: null,
+      workerAgent: w.providerAgent, workerClaim: claim, taskSubmission: null,
+      authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "dispute:initiate");
 
   assert.ok(decode(w.svm, "Task", task).status.Disputed !== undefined, "task is Disputed");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active !== undefined, "dispute is Active");
-  assert.equal(decode(w.svm, "Dispute", dispute).total_voters, 0, "no votes cast yet");
+  assert.equal(decode(w.svm, "Dispute", dispute).total_voters, 255, "retired voter byte carries the initiator-counter provenance sentinel");
 
   return { task, escrow, hireRecord, claim, dispute, defendant: w.providerAgent };
 }
@@ -332,12 +348,12 @@ test("cancel_dispute: initiator cancels an Active (no-vote) dispute -> Cancelled
   expectOk(
     send(
       w.svm,
-      await w.providerProg.methods
+      await w.buyerProg.methods
         .cancelDispute()
-        .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.provider.publicKey })
+        .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.buyer.publicKey })
         .remainingAccounts([{ pubkey: d.defendant, isSigner: false, isWritable: true }])
         .instruction(),
-      [w.provider],
+      [w.buyer],
     ),
     "cancel dispute",
   );
@@ -355,16 +371,16 @@ test("cancel_dispute: a non-initiator cannot cancel the dispute", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const d = await setupActiveDispute(w);
 
-  // The buyer (creator) is a party to the task but NOT the dispute initiator.
+  // The provider is a party to the task but NOT the dispute initiator.
   expectFail(
     send(
       w.svm,
-      await w.buyerProg.methods
+      await w.providerProg.methods
         .cancelDispute()
-        .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.buyer.publicKey })
+        .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.provider.publicKey })
         .remainingAccounts([{ pubkey: d.defendant, isSigner: false, isWritable: true }])
         .instruction(),
-      [w.buyer],
+      [w.provider],
     ),
     "UnauthorizedResolver",
     "non-initiator cancel",
@@ -378,16 +394,16 @@ test("cancel_dispute: cancelling an already-Cancelled dispute is rejected (Dispu
   const d = await setupActiveDispute(w);
 
   const buildCancel = async () =>
-    w.providerProg.methods
+    w.buyerProg.methods
       .cancelDispute()
-      .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.provider.publicKey })
+      .accounts({ protocolConfig: w.protocolPda, dispute: d.dispute, task: d.task, authority: w.buyer.publicKey })
       .remainingAccounts([{ pubkey: d.defendant, isSigner: false, isWritable: true }])
       .instruction();
 
-  expectOk(send(w.svm, await buildCancel(), [w.provider]), "first cancel");
+  expectOk(send(w.svm, await buildCancel(), [w.buyer]), "first cancel");
   assert.ok(decode(w.svm, "Dispute", d.dispute).status.Cancelled !== undefined, "dispute Cancelled after first cancel");
 
   // A second cancel hits the Active-only account constraint.
   w.svm.expireBlockhash();
-  expectFail(send(w.svm, await buildCancel(), [w.provider]), "DisputeNotActive", "double cancel");
+  expectFail(send(w.svm, await buildCancel(), [w.buyer]), "DisputeNotActive", "double cancel");
 });

@@ -1,4 +1,4 @@
-//! Cancel a dispute before any votes are cast
+//! Cancel an active dispute at the initiator's request.
 //!
 //! This allows dispute initiators to cancel their disputes early if:
 //! - They realize they made a mistake
@@ -8,7 +8,8 @@
 //! Constraints:
 //! - Only the initiator can cancel
 //! - Only active disputes can be cancelled
-//! - No votes must have been cast yet (total_voters == 0)
+//! - The retired voter-count byte is either historical zero or the current
+//!   `0xff` initiator-outcome provenance marker
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeCancelled;
@@ -67,8 +68,9 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
     let task = &mut ctx.accounts.task;
     let clock = Clock::get()?;
 
-    // Can only cancel if no votes have been cast
-    require!(dispute.total_voters == 0, CoordinationError::VotingEnded);
+    // Fail closed on retired voter-era/corrupt state. Historical disputes keep
+    // zero; current disputes carry the initiator-counter provenance sentinel.
+    dispute.initiator_outcome_counter_tracked()?;
 
     // Update dispute status
     dispute.status = DisputeStatus::Cancelled;
@@ -105,8 +107,7 @@ pub fn handler(ctx: Context<CancelDispute>) -> Result<()> {
                 .ok_or(CoordinationError::TaskValidationConfigRequired)?;
             validate_account_owner(config_info)?;
             let config_data = config_info.try_borrow_data()?;
-            let validation_config =
-                TaskValidationConfig::try_deserialize(&mut &config_data[..])?;
+            let validation_config = TaskValidationConfig::try_deserialize(&mut &config_data[..])?;
             require!(
                 validation_config.task == task.key(),
                 CoordinationError::TaskValidationConfigRequired

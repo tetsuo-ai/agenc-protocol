@@ -2,7 +2,8 @@
 
 use crate::instructions::constants::{
     DEFAULT_DISPUTE_INITIATION_COOLDOWN, DEFAULT_MAX_DISPUTES_PER_24H, DEFAULT_MAX_TASKS_PER_24H,
-    DEFAULT_TASK_CREATION_COOLDOWN,
+    DEFAULT_TASK_CREATION_COOLDOWN, MAX_REPUTATION, MIN_GOVERNANCE_DISTINCT_VOTERS,
+    MIN_GOVERNANCE_VOTER_REPUTATION, MIN_GOVERNANCE_VOTER_STAKE_LAMPORTS,
 };
 use anchor_lang::prelude::*;
 
@@ -98,7 +99,7 @@ pub enum TaskStatus {
     Disputed = 5,
     /// Batch 3 §8: a terminally-rejected submission frozen for review. Non-terminal —
     /// exits via resolve_reject_frozen (multisig) or expire_reject_frozen (timeout).
-    /// Highest discriminant keeps 0-5 stable for the 149 live tasks (no layout change).
+    /// Highest discriminant keeps 0-5 stable for historical task accounts (no layout change).
     RejectFrozen = 6,
 }
 
@@ -220,6 +221,18 @@ pub enum TaskBidState {
     #[default]
     Active = 0,
     Accepted = 1,
+    /// Active bid whose bidder signed an exact TaskJobSpec content/version
+    /// commitment. Legacy `Active` bids remain cancellable/expirable, but must be
+    /// refreshed through `update_bid` before they can be accepted.
+    BoundActive = 2,
+}
+
+impl TaskBidState {
+    /// Both legacy and content-bound bids remain open for bidder-owned exit
+    /// paths. Only `BoundActive` is safe for creator acceptance.
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::Active | Self::BoundActive)
+    }
 }
 
 /// Weight configuration used when a bid book declares `WeightedScore`.
@@ -300,11 +313,14 @@ pub struct ProtocolConfig {
     /// Treasury address for protocol fees
     /// Can be updated via multisig-gated `update_treasury`.
     pub treasury: Pubkey,
-    /// Minimum votes needed to resolve dispute (percentage, 1-100)
+    /// Approval-percentage threshold used to interpret persisted dispute outcomes.
+    /// Current resolver rulings encode approved/rejected as 100%/0%; historical
+    /// disputes may contain vote totals from the retired arbiter model.
     pub dispute_threshold: u8,
     /// Protocol fee in basis points (1/100th of a percent)
     pub protocol_fee_bps: u16,
-    /// Minimum stake required to register as arbiter
+    /// Governance vote-weight basis retained under its historical field name.
+    /// Agent registration uses `min_agent_stake`.
     pub min_arbiter_stake: u64,
     /// Minimum stake required to register as agent
     pub min_agent_stake: u64,
@@ -316,9 +332,10 @@ pub struct ProtocolConfig {
     pub total_agents: u64,
     /// Total tasks created
     pub total_tasks: u64,
-    /// Total tasks completed
+    /// Total tasks completed (saturating telemetry)
     pub completed_tasks: u64,
-    /// Total value distributed
+    /// Total SOL value distributed, in lamports (excludes SPL-token base units;
+    /// saturating telemetry)
     pub total_value_distributed: u64,
     /// Bump seed for PDA
     pub bump: u8,
@@ -341,7 +358,8 @@ pub struct ProtocolConfig {
     pub slash_percentage: u8,
     /// Cooldown between state updates per agent (seconds, 0 = disabled) (fix #415)
     pub state_update_cooldown: i64,
-    /// Voting period for disputes in seconds (default: 24 hours)
+    /// Initial resolver-action window for disputes in seconds (default: 24 hours).
+    /// No dispute voting occurs on the current assigned-resolver path.
     pub voting_period: i64,
     // === Versioning fields ===
     /// Current protocol version (for upgrades)
@@ -366,8 +384,8 @@ pub struct ProtocolConfig {
     /// Deployed instruction-surface revision stamp.
     ///
     /// APPEND-ONLY: this is the only field after `multisig_owners`, so the 349-byte
-    /// pre-P6.5 prefix (the live mainnet config account) stays valid. The live
-    /// account is migrated up to the new size by `migrate_protocol` (realloc +
+    /// historical pre-P6.5 prefix stays valid. A legacy account is migrated up to
+    /// the new size by `migrate_protocol` (realloc +
     /// zero-init), which lands this at `0` = "surface not yet stamped". An operator
     /// then sets the real revision via `update_launch_controls` (the existing
     /// multisig-gated config-update authority path).
@@ -396,8 +414,8 @@ impl Default for ProtocolConfig {
             // `initialize_protocol` already enforces (`min_stake >= MIN_REASONABLE_STAKE`),
             // so a fresh init can never go below it anyway — the default now matches.
             // NOTE: this only affects FRESH initialize_protocol (devnet/localnet/new
-            // deploys); the already-initialized live mainnet config is unaffected. Raising
-            // mainnet's min_agent_stake is a [HUMAN] deploy-time config update — and see
+            // deploys); an already-initialized config is unaffected. Raising an existing
+            // deployment's min_agent_stake is a [HUMAN] config update — and see
             // P6.7 in PLAN.md: there is currently NO config-update instruction that mutates
             // min_agent_stake (only initialize_protocol sets it).
             min_agent_stake: 1_000_000,
@@ -415,7 +433,9 @@ impl Default for ProtocolConfig {
             max_tasks_per_24h: DEFAULT_MAX_TASKS_PER_24H,
             dispute_initiation_cooldown: DEFAULT_DISPUTE_INITIATION_COOLDOWN,
             max_disputes_per_24h: DEFAULT_MAX_DISPUTES_PER_24H,
-            min_stake_for_dispute: 100_000_000, // 0.1 SOL default for anti-griefing
+            // Keep the default internally valid under the shared dispute-access
+            // invariant: every minimally staked agent must remain able to dispute.
+            min_stake_for_dispute: 1_000_000, // 0.001 SOL, equal to min_agent_stake
             slash_percentage: ProtocolConfig::DEFAULT_SLASH_PERCENTAGE,
             state_update_cooldown: 60, // 60 seconds between state updates (fix #415)
             voting_period: ProtocolConfig::DEFAULT_VOTING_PERIOD,
@@ -428,10 +448,9 @@ impl Default for ProtocolConfig {
             // P6.5: a freshly initialized config has the full surface available
             // (init only runs on dev/devnet/localnet — the mainnet canary config
             // already exists and is brought forward by migrate_protocol). Stamp it
-            // to the CURRENT batch revision so a fresh full-surface deploy
-            // advertises every capability without a manual stamp (batch 4: the
-            // default full build now IS the batch-4 goods surface).
-            surface_revision: ProtocolConfig::SURFACE_REVISION_BATCH4,
+            // to the CURRENT revision so a fresh full-surface deploy advertises
+            // the exact wire contract without a manual stamp.
+            surface_revision: ProtocolConfig::SURFACE_REVISION_CURRENT,
         }
     }
 }
@@ -460,14 +479,14 @@ impl ProtocolConfig {
     /// Increased from 10% to 25% to provide stronger deterrence against bad actors
     /// while remaining proportionate to typical violation severity.
     pub const DEFAULT_SLASH_PERCENTAGE: u8 = 25;
-    /// Default voting period for disputes.
+    /// Default initial resolver-action window for disputes.
     pub const DEFAULT_VOTING_PERIOD: i64 = PROTOCOL_DEFAULT_VOTING_PERIOD;
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // multisig owners
 
-    /// On-chain byte size of the pre-P6.5 `ProtocolConfig` (8-byte discriminator +
-    /// 341 INIT_SPACE = 349). The single live mainnet config account is at this
-    /// size; `migrate_protocol` reallocs it up to `SIZE` and zero-inits the appended
-    /// `surface_revision`. Do NOT change — it is the migration precondition.
+    /// On-chain byte size of the historical pre-P6.5 `ProtocolConfig` (8-byte
+    /// discriminator + 341 INIT_SPACE = 349). `migrate_protocol` accepts this
+    /// exact legacy size and reallocs it to `SIZE`; current deployments may already
+    /// be migrated. Do NOT change — it is a historical migration precondition.
     pub const OLD_CONFIG_SIZE: usize = 349;
 
     /// `surface_revision` value meaning the base full-surface capabilities are live.
@@ -513,6 +532,17 @@ impl ProtocolConfig {
     /// `docs/VERSIONING.md` deprecation policy).
     pub const SURFACE_REVISION_BATCH4: u16 = 4;
 
+    /// `surface_revision` value for the 2026-07 audit-hardening release.
+    ///
+    /// This release hardens required account conventions, adds explicit historical
+    /// recovery, and tightens finalizer behavior. The revision lets first-party
+    /// clients distinguish this wire contract from the deployed batch-4 binary.
+    pub const SURFACE_REVISION_AUDIT_HARDENING: u16 = 5;
+
+    /// Highest surface revision implemented by this binary. Deployment tooling
+    /// stamps this value only after the matching artifact has been verified live.
+    pub const SURFACE_REVISION_CURRENT: u16 = Self::SURFACE_REVISION_AUDIT_HARDENING;
+
     /// Validates that launch control bytes do not contain unknown task-type bits.
     /// Kept under the old name so existing migration tests remain source-compatible.
     pub fn validate_padding_fields(&self) -> bool {
@@ -522,12 +552,13 @@ impl ProtocolConfig {
 
 /// Compile-time pin for the P6.5 surface-versioning migration: a layout drift
 /// (field add/reorder changing INIT_SPACE) fails the build instead of silently
-/// bricking the single-account `migrate_protocol` realloc of the live config.
+/// bricking `migrate_protocol` for any remaining legacy config account.
 const _: () = assert!(ProtocolConfig::SIZE == 351);
 const _: () = assert!(ProtocolConfig::OLD_CONFIG_SIZE + 2 == ProtocolConfig::SIZE);
 
 /// ZK verifier configuration account
 /// PDA seeds: ["zk_config"]
+#[cfg(feature = "private-zk")]
 #[account]
 #[derive(InitSpace)]
 pub struct ZkConfig {
@@ -539,6 +570,7 @@ pub struct ZkConfig {
     pub _reserved: [u8; 31],
 }
 
+#[cfg(feature = "private-zk")]
 impl Default for ZkConfig {
     fn default() -> Self {
         Self {
@@ -549,6 +581,7 @@ impl Default for ZkConfig {
     }
 }
 
+#[cfg(feature = "private-zk")]
 impl ZkConfig {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 
@@ -588,9 +621,10 @@ pub struct AgentRegistration {
     pub registered_at: i64,
     /// Last activity timestamp
     pub last_active: i64,
-    /// Total tasks completed
+    /// Total tasks completed (saturating telemetry)
     pub tasks_completed: u64,
-    /// Total rewards earned
+    /// Total SOL rewards earned, in lamports (excludes SPL-token base units;
+    /// saturating telemetry)
     pub total_earned: u64,
     /// Agent reputation score (0-10000)
     /// Initial value: 3000 (probationary starting point)
@@ -598,28 +632,38 @@ pub struct AgentRegistration {
     pub reputation: u16,
     /// Active task count
     pub active_tasks: u16,
-    /// Stake amount (for arbiters)
+    /// Slashable stake used for protocol eligibility and governance weight
     pub stake: u64,
     /// Bump seed
     pub bump: u8,
-    // === Agent-scoped rate limiting fields ===
-    // Used for actions that remain bound to a specific agent identity.
-    // Wallet-scoped task/dispute throttles live in `AuthorityRateLimit`.
-    /// Timestamp of last task creation
+    // === Legacy agent-scoped rate-limit layout fields ===
+    // Task/dispute throttles now live in `AuthorityRateLimit`. These fields remain
+    // persisted for wire compatibility; `last_dispute_initiated` is also activity
+    // telemetry written by dispute initiation.
+    /// Historical timestamp of last task creation
     pub last_task_created: i64,
     /// Timestamp of last dispute initiated
     pub last_dispute_initiated: i64,
-    /// Number of tasks created in current 24h window
+    /// Historical agent-scoped task count
     pub task_count_24h: u8,
-    /// Number of disputes initiated in current 24h window
+    /// Historical agent-scoped dispute count
     pub dispute_count_24h: u8,
-    /// Start of current rate limit window (unix timestamp)
+    /// Historical agent-scoped rate-limit window start
     pub rate_limit_window_start: i64,
-    /// DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so nothing
-    /// increments this. The `deregister_agent` gate (`active_dispute_votes == 0`) is now a
-    /// permanent no-op. Retained (not removed) to keep the AgentRegistration layout stable.
+    /// Number of disputes initiated by this agent whose initiator outcome has not
+    /// yet been finalized by `apply_initiator_slash`.
+    ///
+    /// P6.3 retired the arbiter-vote model that originally used this byte. Reusing
+    /// it as a pending-outcome counter preserves the deployed AgentRegistration
+    /// layout while making deregistration wait for every initiator liability (or
+    /// no-fault outcome) to be finalized. The historical field name is retained
+    /// deliberately so account layouts and generated decoders remain compatible.
     pub active_dispute_votes: u8,
-    /// DEPRECATED (P6.3): always 0 — no agent ever votes on a dispute anymore.
+    /// Governance registration-stake lock anchor. Governance voting stores the
+    /// proposal voting deadline here; deregistration then enforces its 24-hour
+    /// post-vote cooldown after that deadline. Legacy dispute-vote timestamps
+    /// remain valid conservative anchors. The field is retained in place so the
+    /// AgentRegistration layout does not change.
     pub last_vote_timestamp: i64,
     /// Timestamp of last state update
     pub last_state_update: i64,
@@ -634,10 +678,52 @@ pub struct AgentRegistration {
 impl AgentRegistration {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // reserved
 
-    /// Validates that reserved bytes are zeroed.
-    /// Called during migration to ensure no data corruption.
+    /// Permanent identity-retirement marker stored in the existing reserved tail.
+    ///
+    /// Agent PDAs are identity addresses, and several durable child accounts (skills,
+    /// listings, delegations, verification history) are seeded from that address. A
+    /// closed AgentRegistration could therefore be re-created by an unrelated wallet
+    /// and inherit those children. Deregistration now leaves the full account as a
+    /// rent-exempt tombstone and stamps this marker, making `agent_id` ownership
+    /// permanent without changing the deployed account layout.
+    pub const RETIRED_IDENTITY_MARKER: [u8; 4] = *b"RETD";
+
+    pub fn is_retired_identity(&self) -> bool {
+        self._reserved == Self::RETIRED_IDENTITY_MARKER
+    }
+
+    pub fn mark_identity_retired(&mut self) {
+        self.status = AgentStatus::Inactive;
+        self._reserved = Self::RETIRED_IDENTITY_MARKER;
+    }
+
+    /// Record one newly initiated dispute whose initiator outcome is pending.
+    /// Checked arithmetic fails the new entry atomically rather than allowing the
+    /// byte to wrap and release an agent with outstanding liabilities.
+    pub fn note_dispute_initiated(&mut self) -> Result<()> {
+        self.active_dispute_votes = self
+            .active_dispute_votes
+            .checked_add(1)
+            .ok_or(crate::errors::CoordinationError::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    /// Record one permissionlessly finalized, provenance-tagged initiator outcome.
+    /// A tracked dispute with no corresponding counter unit is corrupt state;
+    /// fail closed instead of silently marking the outcome applied and allowing
+    /// a later liability to be released early.
+    pub fn note_initiator_outcome_finalized(&mut self) -> Result<()> {
+        self.active_dispute_votes = self
+            .active_dispute_votes
+            .checked_sub(1)
+            .ok_or(crate::errors::CoordinationError::CorruptedData)?;
+        Ok(())
+    }
+
+    /// Validates that reserved bytes are either unused or contain the recognized
+    /// permanent-retirement marker.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved == [0u8; 4]
+        self._reserved == [0u8; 4] || self.is_retired_identity()
     }
 }
 
@@ -914,6 +1000,19 @@ pub struct TaskJobSpec {
 
 impl TaskJobSpec {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
+
+    /// One-way lock stored in the existing reserved tail. The creator stamps it
+    /// when initializing the bid book, explicitly freezing the contract before
+    /// any bidder can price or accept work against it.
+    pub const BID_LOCKED_FLAG: u8 = 1;
+
+    pub fn is_bid_locked(&self) -> bool {
+        self._reserved[0] & Self::BID_LOCKED_FLAG != 0
+    }
+
+    pub fn lock_for_bids(&mut self) {
+        self._reserved[0] |= Self::BID_LOCKED_FLAG;
+    }
 }
 
 /// Global task moderation configuration.
@@ -947,8 +1046,8 @@ impl ModerationConfig {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 
     /// P1.3 liveness window in seconds, carved from `_reserved[0..4]`.
-    /// 0 = "use `DEFAULT_MODERATION_LIVENESS_WINDOW_SECS`" (the live mainnet config
-    /// has zeroed reserved bytes, so it reads the default with no migration).
+    /// 0 = "use `DEFAULT_MODERATION_LIVENESS_WINDOW_SECS`" (legacy configs with
+    /// zeroed reserved bytes read the default with no migration).
     pub fn liveness_window_secs(&self) -> u32 {
         u32::from_le_bytes([
             self._reserved[0],
@@ -1081,14 +1180,16 @@ pub struct Task {
     ///     see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).
     ///   * `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with
     ///     status `Submitted`; maintained ONLY for schema-1 tasks).
-    /// Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields).
+    ///   * `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker
+    ///     slash, 1 = the defendant claim is reserved for apply_dispute_slash).
+    /// Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
     // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
     /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
     /// `Pubkey::default()` means no referrer leg (the common case). Snapshotted from
     /// the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields
-    /// exceed the 16B `_reserved`, so this is a size-extending migration of the 149
-    /// live tasks (see `migrate_task`).
+    /// exceed the 16B `_reserved`, so this is a size-extending migration for
+    /// historical task layouts (see `migrate_task`).
     pub referrer: Pubkey,
     /// Referrer fee in basis points, snapshotted at hire/create time. 0 = no referrer
     /// leg. Combined with protocol + operator, capped so the worker keeps ≥60%.
@@ -1135,21 +1236,21 @@ impl Task {
     /// This manual constant is kept for backwards compatibility.
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // reward_mint (Option<Pubkey>: 1 byte discriminator + 32 bytes pubkey)
 
-    /// On-chain byte size of the pre-Batch-2 `Task` (8-byte discriminator + 374
-    /// INIT_SPACE). The 149 live mainnet tasks are at this size; `migrate_task`
-    /// reallocs them up to `SIZE`. Do NOT change — it is the migration precondition.
+    /// On-chain byte size of the historical pre-Batch-2 `Task` (8-byte
+    /// discriminator + 374 INIT_SPACE). `migrate_task` accepts this exact legacy
+    /// size and reallocs it to `SIZE`. Do NOT change — it is a migration precondition.
     pub const OLD_TASK_SIZE: usize = 382;
 
     /// On-chain byte size of the intermediate Batch-2 `Task` (operator leg added,
     /// pre-P6.2). A task already grown to this size by a Batch-2 `migrate_task` run
     /// is a SECOND valid migration precondition — `migrate_task` accepts EITHER the
     /// pre-Batch-2 (382B) OR the Batch-2 (432B) layout and reallocs straight up to
-    /// `SIZE`, so the sweep is correct regardless of whether the live tasks were ever
-    /// migrated to 432 before this P6.2 deploy (on mainnet today they are still 382).
+    /// `SIZE`, so the sweep is correct regardless of whether a legacy task was first
+    /// migrated to 432 bytes.
     pub const BATCH2_TASK_SIZE: usize = 432;
 
-    /// `task_schema` value for every pre-batch-3 task account (the zero default the
-    /// live mainnet tasks read back). Pre-batch-3 tasks keep today's EXACT semantics:
+    /// `task_schema` value for every pre-batch-3 task account (the zero default in
+    /// the historical layout). Pre-batch-3 tasks keep their legacy semantics:
     /// none of the contest behavior changes (ghost-split, auto-accept disable, cancel
     /// guard, live-submission accounting) applies to them.
     pub const TASK_SCHEMA_PRE_BATCH3: u8 = 0;
@@ -1183,6 +1284,21 @@ impl Task {
         self._reserved[1] = count;
     }
 
+    /// True while a resolved worker-loss is waiting for the permissionless
+    /// `apply_dispute_slash` finalizer. This durable flag makes the safety gate
+    /// omission-proof: callers cannot hide the Dispute account from reclaim or
+    /// close paths to destroy the claim/Task needed by the finalizer.
+    pub fn worker_slash_pending(&self) -> bool {
+        self._reserved[2] != 0
+    }
+
+    /// Stamp or clear the deferred worker-slash invariant in reserved space.
+    /// This is a value-only change; the deployed Task layout and size are
+    /// unchanged and legacy tasks read `false` from the zero-filled byte.
+    pub fn set_worker_slash_pending(&mut self, pending: bool) {
+        self._reserved[2] = u8::from(pending);
+    }
+
     /// A contest task: schema-1 (contest-aware) AND `Competitive`. Every batch-3
     /// behavior change gates on this predicate, so schema-0 tasks and every other
     /// task type keep byte-identical semantics.
@@ -1193,15 +1309,15 @@ impl Task {
 
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
-    /// Batch 3 carves `_reserved[0..2]` (task_schema + live_submissions), so only
-    /// the remaining tail `[2..16]` is validated.
+    /// Batch 3 and the deferred-slash guard carve `_reserved[0..3]`. The slash
+    /// byte is a canonical boolean and the remaining tail must stay zeroed.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved[2..] == [0u8; 14]
+        self._reserved[2] <= 1 && self._reserved[3..] == [0u8; 13]
     }
 }
 
 /// Compile-time pin: a layout drift (field add/reorder changing INIT_SPACE)
-/// fails the build instead of silently bricking the 149-task migration.
+/// fails the build instead of silently bricking the legacy-task migration.
 /// P6.2 appends `referrer` (32B) + `referrer_fee_bps` (2B) = 34B onto the Batch-2
 /// layout, taking the Task from 432B to 466B.
 const _: () = assert!(Task::SIZE == 466);
@@ -1331,20 +1447,24 @@ pub struct Dispute {
     pub votes_for: u64,
     /// DEPRECATED (P6.3): see `votes_for`. Reused as the reject side of the ruling bit.
     pub votes_against: u64,
-    /// DEPRECATED (P6.3): always 0 — the arbiter vote/quorum model is retired, so no
-    /// voter is ever recorded. Retained (not shrunk) to keep the account layout stable.
+    /// DEPRECATED (P6.3): the arbiter vote/quorum model is retired. New disputes
+    /// store `Dispute::INITIATOR_OUTCOME_COUNTER_MARKER` here to prove that their
+    /// initiator's AgentRegistration pending-outcome counter was incremented.
+    /// Historical disputes retain zero. No value represents an actual voter count.
+    /// The field is retained (not shrunk) to keep the account layout stable.
     pub total_voters: u8,
-    /// DEPRECATED (P6.3): no longer gates resolution — an assigned resolver decides
-    /// directly with no voting-period wait. Still stamped at initiation for back-compat.
-    /// voting_deadline = created_at + voting_period
+    /// Legacy voting deadline, now reused as the first liveness deadline: an
+    /// assigned resolver may rule immediately, but permissionless expiry opens
+    /// after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`.
     pub voting_deadline: i64,
-    /// Dispute expiration - after this, can call expire_dispute
+    /// Hard dispute expiration; after this, only expire_dispute may unwind it.
     /// expires_at = created_at + max_dispute_duration
     /// Note: expires_at >= voting_deadline, allowing resolution after voting ends
     pub expires_at: i64,
     /// Whether worker slashing has been applied
     pub slash_applied: bool,
-    /// Whether initiator slashing has been applied (for rejected disputes)
+    /// Whether the initiator outcome finalizer has run. Rejected/cancelled
+    /// outcomes apply a penalty; approved/expired outcomes are bookkeeping-only.
     pub initiator_slash_applied: bool,
     /// Snapshot of worker's stake at dispute initiation (prevents stake withdrawal attacks)
     pub worker_stake_at_dispute: u64,
@@ -1363,12 +1483,12 @@ pub struct Dispute {
     /// zero/empty on a dispute that has not been resolved through `resolve_dispute`
     /// (e.g. an expired dispute), which is a valid "no ruling recorded" state.
     ///
-    /// LAYOUT NOTE: appending these grows `Dispute::SIZE`. This is a layout change,
-    /// but NOT a migration: `Dispute` is compiled OUT of the live mainnet canary
-    /// surface (the 25-instruction allowlist contains no dispute instructions), so
-    /// ZERO live mainnet `Dispute` accounts exist to migrate. On devnet/full-surface
-    /// this is treated as append-only (any pre-existing dispute prefix stays valid;
-    /// the new fields read back as zero/empty). See `test_dispute_size_p64_append`.
+    /// LAYOUT NOTE: these fields were appended while mainnet still ran the
+    /// 25-instruction canary (which exposed no dispute instructions), before the
+    /// full surface created mainnet Dispute accounts. The append remains pinned for
+    /// any historical devnet/full-surface prefix; deployment preflight inventories
+    /// every live account size and blocks an active legacy layout. See
+    /// `test_dispute_size_p64_append`.
     pub rationale_hash: [u8; 32],
     /// Bounded off-chain pointer to the ruling rationale (e.g. `agenc://ruling/...`).
     /// Empty string = no URI (the hash may still carry the rationale).
@@ -1383,15 +1503,55 @@ impl Dispute {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // defendant (fix #827) + P6.4 rationale/resolver
     /// Maximum byte length of `rationale_uri` (matches the `#[max_len(256)]` reserve).
     pub const MAX_RATIONALE_URI_LEN: usize = 256;
+    /// Provenance sentinel stored in the retired `total_voters` byte for every
+    /// dispute whose initiation incremented AgentRegistration's pending-outcome
+    /// counter. Historical zero-valued disputes predate that counter and must
+    /// never decrement it, or an old no-fault outcome could consume a newer
+    /// dispute's liability and release registration stake early.
+    pub const INITIATOR_OUTCOME_COUNTER_MARKER: u8 = u8::MAX;
+    /// Short priority window after the legacy voting deadline before expiry opens.
+    pub const VOTING_DEADLINE_GRACE: i64 = 120;
+
+    /// True only while a resolver is still allowed to rule. At the instant the
+    /// permissionless expiry path opens, resolution closes, eliminating a race
+    /// where an arbitrarily stale ruling could recreate slash obligations after
+    /// the target's lifecycle guard had elapsed.
+    pub fn resolution_window_open(&self, now: i64) -> bool {
+        now <= self.expires_at
+            && now
+                < self
+                    .voting_deadline
+                    .saturating_add(Self::VOTING_DEADLINE_GRACE)
+    }
+
+    /// True at exactly the complementary liveness boundary used by expire_dispute.
+    pub fn expiry_window_open(&self, now: i64) -> bool {
+        now > self.expires_at
+            || now
+                >= self
+                    .voting_deadline
+                    .saturating_add(Self::VOTING_DEADLINE_GRACE)
+    }
+
+    /// Return whether this dispute owns one unit of its initiator's pending
+    /// outcome counter. Zero is the only accepted historical representation;
+    /// all other values are retired voter-era/corrupt state and fail closed.
+    pub fn initiator_outcome_counter_tracked(&self) -> Result<bool> {
+        match self.total_voters {
+            0 => Ok(false),
+            Self::INITIATOR_OUTCOME_COUNTER_MARKER => Ok(true),
+            _ => Err(crate::errors::CoordinationError::CorruptedData.into()),
+        }
+    }
 }
 
 // P6.3: the `DisputeVote` (["vote", dispute, voter]) and `AuthorityDisputeVote`
 // (["authority_vote", dispute, authority]) PDA account types are RETIRED. They were
 // only ever minted by `vote_dispute` (now removed) and closed by the arbiter-pair
 // cleanup loops in resolve/expire (also removed). Disputes are decided by an assigned
-// resolver, so no vote PDA is ever created. The types are deleted; no existing account
-// layout is changed (disputes are compiled out of the live mainnet canary, so no live
-// mainnet dispute-vote accounts exist to migrate).
+// resolver, so the current program creates no vote PDA. The types were deleted before
+// the full surface reached mainnet; deployment inventory remains the authoritative
+// check that no legacy vote account needs recovery.
 
 /// Task escrow account
 /// PDA seeds: ["escrow", task]
@@ -1495,50 +1655,19 @@ pub struct TaskBid {
     pub state: TaskBidState,
     pub bond_lamports: u64,
     pub bump: u8,
+    /// Immutable no-show penalty agreed when the bidder funded this bid.
+    /// Appended so all pre-existing field offsets remain stable.
+    pub accepted_no_show_slash_bps: u16,
 }
 
 impl TaskBid {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
 }
 
-/// Agent's speculation bond account
-/// PDA seeds: ["speculation_bond", agent]
-#[account]
-#[derive(Default, InitSpace)]
-pub struct SpeculationBond {
-    pub agent: Pubkey,
-    pub total_bonded: u64,
-    pub available: u64,
-    pub total_deposited: u64,
-    pub total_slashed: u64,
-    pub bump: u8,
-}
-
-impl SpeculationBond {
-    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8);
-}
-
-/// On-chain record of a speculative commitment
-#[account]
-#[derive(Default, InitSpace)]
-pub struct SpeculativeCommitment {
-    pub task: Pubkey,
-    pub producer: Pubkey,
-    pub result_hash: [u8; 32],
-    pub confirmed: bool,
-    pub expires_at: i64,
-    pub bonded_stake: u64,
-    pub created_at: i64,
-    pub bump: u8,
-}
-
-impl SpeculativeCommitment {
-    pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // 130 bytes
-}
-
 /// Binding spend account to prevent statement replay for the same
 /// task/authority/commitment context.
 /// PDA seeds: ["binding_spend", binding]
+#[cfg(feature = "private-zk")]
 #[account]
 #[derive(Default, InitSpace)]
 pub struct BindingSpend {
@@ -1554,12 +1683,14 @@ pub struct BindingSpend {
     pub bump: u8,
 }
 
+#[cfg(feature = "private-zk")]
 impl BindingSpend {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
 }
 
 /// Nullifier spend account to prevent global proof/knowledge replay.
 /// PDA seeds: ["nullifier_spend", nullifier]
+#[cfg(feature = "private-zk")]
 #[account]
 #[derive(Default, InitSpace)]
 pub struct NullifierSpend {
@@ -1575,6 +1706,7 @@ pub struct NullifierSpend {
     pub bump: u8,
 }
 
+#[cfg(feature = "private-zk")]
 impl NullifierSpend {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
 }
@@ -1596,7 +1728,8 @@ pub struct GovernanceConfig {
     pub voting_period: i64,
     /// Execution delay after voting ends (timelock) in seconds
     pub execution_delay: i64,
-    /// Quorum in basis points of total agents' stake
+    /// Quorum in basis points of the bounded two-voter vote-weight capacity.
+    /// New proposals also enforce `2 * min_proposal_stake` as an absolute floor.
     pub quorum_bps: u16,
     /// Approval threshold in basis points (e.g., 5000 = simple majority)
     pub approval_threshold_bps: u16,
@@ -1702,6 +1835,114 @@ pub struct Proposal {
 
 impl Proposal {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // _reserved
+
+    /// Governance rules schema stored canonically in `_reserved` without changing
+    /// the 333-byte Proposal account layout.
+    pub const GOVERNANCE_RULES_SCHEMA_V1: u8 = 1;
+
+    /// Stamp immutable election requirements on a newly created proposal.
+    /// Every unused byte remains zero so there is only one canonical encoding.
+    pub fn set_governance_rules(&mut self, rules: ProposalGovernanceRules) -> Result<()> {
+        rules.validate()?;
+        self._reserved = [0u8; 64];
+        self._reserved[0] = Self::GOVERNANCE_RULES_SCHEMA_V1;
+        self._reserved[1..9].copy_from_slice(&rules.min_voter_stake.to_le_bytes());
+        self._reserved[9..11].copy_from_slice(&rules.min_voter_reputation.to_le_bytes());
+        self._reserved[11..19].copy_from_slice(&rules.max_vote_weight.to_le_bytes());
+        self._reserved[19..21].copy_from_slice(&rules.min_distinct_voters.to_le_bytes());
+        self._reserved[21..23].copy_from_slice(&rules.approval_threshold_bps.to_le_bytes());
+        Ok(())
+    }
+
+    /// Load the immutable rules for a revision-5 proposal. Legacy proposals have
+    /// an all-zero reserved region and intentionally fail this accessor: the
+    /// cutover requires zero legacy Active proposals, and execute_proposal marks
+    /// any legacy/corrupt Active account Defeated instead of applying old rules.
+    pub fn governance_rules(&self) -> Result<ProposalGovernanceRules> {
+        require!(
+            self._reserved[0] == Self::GOVERNANCE_RULES_SCHEMA_V1,
+            crate::errors::CoordinationError::InvalidGovernanceParam
+        );
+        require!(
+            self._reserved[23..].iter().all(|byte| *byte == 0),
+            crate::errors::CoordinationError::CorruptedData
+        );
+
+        let rules = ProposalGovernanceRules {
+            min_voter_stake: u64::from_le_bytes(
+                self._reserved[1..9]
+                    .try_into()
+                    .map_err(|_| error!(crate::errors::CoordinationError::CorruptedData))?,
+            ),
+            min_voter_reputation: u16::from_le_bytes(
+                self._reserved[9..11]
+                    .try_into()
+                    .map_err(|_| error!(crate::errors::CoordinationError::CorruptedData))?,
+            ),
+            max_vote_weight: u64::from_le_bytes(
+                self._reserved[11..19]
+                    .try_into()
+                    .map_err(|_| error!(crate::errors::CoordinationError::CorruptedData))?,
+            ),
+            min_distinct_voters: u16::from_le_bytes(
+                self._reserved[19..21]
+                    .try_into()
+                    .map_err(|_| error!(crate::errors::CoordinationError::CorruptedData))?,
+            ),
+            approval_threshold_bps: u16::from_le_bytes(
+                self._reserved[21..23]
+                    .try_into()
+                    .map_err(|_| error!(crate::errors::CoordinationError::CorruptedData))?,
+            ),
+        };
+        rules.validate()?;
+        Ok(rules)
+    }
+
+    pub fn has_legacy_governance_rules(&self) -> bool {
+        self._reserved.iter().all(|byte| *byte == 0)
+    }
+}
+
+/// Immutable election rules carried inside `Proposal._reserved` schema v1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProposalGovernanceRules {
+    pub min_voter_stake: u64,
+    pub min_voter_reputation: u16,
+    pub max_vote_weight: u64,
+    pub min_distinct_voters: u16,
+    pub approval_threshold_bps: u16,
+}
+
+impl ProposalGovernanceRules {
+    pub fn voter_is_eligible(&self, stake: u64, reputation: u16) -> bool {
+        stake >= self.min_voter_stake
+            && (self.min_voter_reputation..=MAX_REPUTATION).contains(&reputation)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        require!(
+            self.min_voter_stake >= MIN_GOVERNANCE_VOTER_STAKE_LAMPORTS,
+            crate::errors::CoordinationError::InvalidGovernanceParam
+        );
+        require!(
+            (MIN_GOVERNANCE_VOTER_REPUTATION..=MAX_REPUTATION).contains(&self.min_voter_reputation),
+            crate::errors::CoordinationError::InvalidGovernanceParam
+        );
+        require!(
+            self.max_vote_weight >= self.min_voter_stake,
+            crate::errors::CoordinationError::InvalidGovernanceParam
+        );
+        require!(
+            self.min_distinct_voters >= MIN_GOVERNANCE_DISTINCT_VOTERS,
+            crate::errors::CoordinationError::InvalidGovernanceParam
+        );
+        require!(
+            (1..10_000).contains(&self.approval_threshold_bps),
+            crate::errors::CoordinationError::InvalidGovernanceParam
+        );
+        Ok(())
+    }
 }
 
 /// Governance vote record
@@ -1895,13 +2136,12 @@ pub struct HireRecord {
     pub operator_fee_bps: u16,
     /// PDA bump.
     pub bump: u8,
-    /// Reserved for future hire metadata.
-    pub _reserved: [u8; 32],
-    // === P6.2 demand-side referral leg (APPEND-ONLY) ===
-    /// Referrer (embedder) payee snapshot for the §4 4-way split
-    /// (`Pubkey::default()` = none). Mirrors the operator snapshot. HireRecords have
-    /// NO live mainnet accounts (`hire_from_listing` is full-module only), so this is
-    /// a fresh-init size bump — no realloc migration needed for HireRecord.
+    /// The provider agent designated by the listing at hire time. Only this
+    /// registration may claim the resulting one-shot task. This carves the
+    /// original 32-byte reserved region without changing the account layout.
+    pub designated_provider: Pubkey,
+    /// Referrer (embedder) payee snapshot for the four-way split
+    /// (`Pubkey::default()` = none).
     pub referrer: Pubkey,
     /// Referrer fee in basis points, snapshotted at hire time.
     pub referrer_fee_bps: u16,
@@ -1969,7 +2209,7 @@ impl HireRating {
 /// `AgentRegistration` only tracks success-side stats (`tasks_completed`,
 /// `total_earned`) and has just FOUR reserved bytes, so the negative counters
 /// (rejections, dispute outcomes, expirations, cancellations) do NOT fit there.
-/// Rather than a size-extending migration of every live mainnet agent account,
+/// Rather than a size-extending migration of every existing agent account,
 /// these live in a SEPARATE aggregate PDA `["agent_stats", agent]` that is created
 /// lazily on first write (`init_if_needed`), keyed on the agent's
 /// `AgentRegistration` PDA. No `AgentRegistration` layout change / migration is
@@ -2470,12 +2710,23 @@ pub struct PurchaseRecord {
     pub timestamp: i64,
     /// Bump seed
     pub bump: u8,
-    /// Reserved for future use
+    /// Purchase metadata carved from the existing reserved tail:
+    /// `_reserved[0]` snapshots the purchased `SkillRegistration::version`;
+    /// bytes `[1..4]` remain reserved and must stay zero.
     pub _reserved: [u8; 4],
 }
 
 impl PurchaseRecord {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // _reserved
+
+    pub fn content_version(&self) -> u8 {
+        self._reserved[0]
+    }
+
+    pub fn snapshot_content_version(&mut self, version: u8) {
+        self._reserved = [0u8; 4];
+        self._reserved[0] = version;
+    }
 }
 
 // ============================================================================
@@ -2723,7 +2974,7 @@ pub const STORE_HANDLE_MAX_LEN: usize = 20;
 /// wallet is the identity; `handle` is DISPLAY-ONLY and not unique on-chain
 /// (uniqueness is a surface concern — see `docs/P5_2_STORE_IDENTITY_SPEC.md` §6).
 /// Fee fields are advertised DEFAULTS, not enforcement: listings and hires keep
-/// snapshotting terms exactly as today (`ServiceListing` / `HireRecord`); NO money
+/// snapshotting terms in `ServiceListing` / `HireRecord`; NO money
 /// path reads this account in v1 (spec §8 Q6, ratified).
 ///
 /// PDA seeds: ["store", owner]
@@ -2830,6 +3081,14 @@ pub fn validate_store_handle(handle: &[u8; 32]) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hire_record_layout_matches_live_mainnet_accounts() {
+        // 8 discriminator + task/listing/operator (96) + fee (2) + bump (1)
+        // + the size-identical designated-provider carve-out (32)
+        // + referrer (32) + referrer fee (2).
+        assert_eq!(HireRecord::SIZE, 173);
+    }
+
     /// Helper: SIZE should equal INIT_SPACE (borsh serialized) + 8-byte discriminator.
     /// Note: std::mem::size_of doesn't work here because Rust adds alignment padding
     /// that borsh serialization doesn't include.
@@ -2854,10 +3113,33 @@ mod tests {
     }
 
     #[test]
+    fn agent_pending_initiator_outcomes_are_checked_and_legacy_safe() {
+        let mut agent = AgentRegistration::default();
+
+        agent.note_dispute_initiated().unwrap();
+        agent.note_dispute_initiated().unwrap();
+        assert_eq!(agent.active_dispute_votes, 2);
+
+        agent.note_initiator_outcome_finalized().unwrap();
+        assert_eq!(agent.active_dispute_votes, 1);
+        agent.note_initiator_outcome_finalized().unwrap();
+        assert_eq!(agent.active_dispute_votes, 0);
+
+        // A provenance-tagged dispute cannot finalize without its exact unit.
+        assert!(agent.note_initiator_outcome_finalized().is_err());
+        assert_eq!(agent.active_dispute_votes, 0);
+
+        agent.active_dispute_votes = u8::MAX;
+        assert!(agent.note_dispute_initiated().is_err());
+        assert_eq!(agent.active_dispute_votes, u8::MAX);
+    }
+
+    #[test]
     fn test_authority_rate_limit_size() {
         test_size_constant!(AuthorityRateLimit);
     }
 
+    #[cfg(feature = "private-zk")]
     #[test]
     fn test_zk_config_size() {
         test_size_constant!(ZkConfig);
@@ -2871,6 +3153,16 @@ mod tests {
     #[test]
     fn test_task_job_spec_size() {
         test_size_constant!(TaskJobSpec);
+    }
+
+    #[test]
+    fn test_task_job_spec_bid_lock_uses_existing_reserved_bit() {
+        let mut spec = TaskJobSpec::default();
+        assert!(!spec.is_bid_locked());
+        spec.lock_for_bids();
+        assert!(spec.is_bid_locked());
+        assert_eq!(spec._reserved, [1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(TaskJobSpec::SIZE, 388);
     }
 
     #[test]
@@ -2906,9 +3198,9 @@ mod tests {
     }
 
     /// P6.4: pins the `Dispute` layout APPEND (rationale_hash + rationale_uri +
-    /// resolved_by). This is a layout change, NOT a migration: no live mainnet
-    /// `Dispute` accounts exist (disputes are compiled out of the 25-instruction
-    /// canary surface), so there is nothing to migrate; on devnet it is append-only.
+    /// resolved_by). Historical terminal disputes can exist on full deployments;
+    /// deployment preflight must prove there is no live legacy dispute that still
+    /// needs an old-layout exit. The field order remains append-only.
     /// If a future edit reorders or drops one of the three appended fields, this guard
     /// fails loudly. The delta is computed from the field reserves themselves so it
     /// stays correct if `MAX_RATIONALE_URI_LEN` is re-tuned.
@@ -2946,6 +3238,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_dispute_resolution_and_expiry_windows_partition_time() {
+        let dispute = Dispute {
+            voting_deadline: 1_000,
+            expires_at: 2_000,
+            ..Dispute::default()
+        };
+        let grace_boundary = 1_000 + Dispute::VOTING_DEADLINE_GRACE;
+
+        assert!(dispute.resolution_window_open(grace_boundary - 1));
+        assert!(!dispute.expiry_window_open(grace_boundary - 1));
+        assert!(!dispute.resolution_window_open(grace_boundary));
+        assert!(dispute.expiry_window_open(grace_boundary));
+
+        // When the hard timestamp is the earlier boundary, resolution owns the
+        // exact second and expiry opens on the next one. No overlap and no gap.
+        let hard_first = Dispute {
+            voting_deadline: 10_000,
+            expires_at: 2_000,
+            ..Dispute::default()
+        };
+        assert!(hard_first.resolution_window_open(2_000));
+        assert!(!hard_first.expiry_window_open(2_000));
+        assert!(!hard_first.resolution_window_open(2_001));
+        assert!(hard_first.expiry_window_open(2_001));
+    }
+
     // P6.3: `test_dispute_vote_size` / `test_authority_dispute_vote_size` removed with
     // the `DisputeVote` / `AuthorityDisputeVote` account types (vote machinery retired).
 
@@ -2975,20 +3294,29 @@ mod tests {
     }
 
     #[test]
-    fn test_speculation_bond_size() {
-        test_size_constant!(SpeculationBond);
+    fn test_task_bid_state_wire_values_and_offset_are_append_only() {
+        assert_eq!(TaskBidState::Active as u8, 0);
+        assert_eq!(TaskBidState::Accepted as u8, 1);
+        assert_eq!(TaskBidState::BoundActive as u8, 2);
+
+        let bid = TaskBid {
+            state: TaskBidState::BoundActive,
+            ..TaskBid::default()
+        };
+        let mut serialized = Vec::new();
+        bid.try_serialize(&mut serialized).unwrap();
+        assert_eq!(serialized.len(), TaskBid::SIZE);
+        assert_eq!(TaskBid::SIZE, 252);
+        assert_eq!(serialized[240], TaskBidState::BoundActive as u8);
     }
 
-    #[test]
-    fn test_speculative_commitment_size() {
-        test_size_constant!(SpeculativeCommitment);
-    }
-
+    #[cfg(feature = "private-zk")]
     #[test]
     fn test_binding_spend_size() {
         test_size_constant!(BindingSpend);
     }
 
+    #[cfg(feature = "private-zk")]
     #[test]
     fn test_nullifier_spend_size() {
         test_size_constant!(NullifierSpend);
@@ -3002,6 +3330,50 @@ mod tests {
     #[test]
     fn test_proposal_size() {
         test_size_constant!(Proposal);
+    }
+
+    #[test]
+    fn proposal_governance_rules_use_canonical_reserved_schema() {
+        let mut proposal = Proposal {
+            proposer: Pubkey::new_unique(),
+            proposer_authority: Pubkey::new_unique(),
+            nonce: 1,
+            proposal_type: ProposalType::FeeChange,
+            title_hash: [1u8; 32],
+            description_hash: [2u8; 32],
+            payload: [0u8; 64],
+            status: ProposalStatus::Active,
+            created_at: 1,
+            voting_deadline: 2,
+            execution_after: 3,
+            executed_at: 0,
+            votes_for: 0,
+            votes_against: 0,
+            total_voters: 0,
+            quorum: crate::instructions::constants::MIN_GOVERNANCE_QUORUM_WEIGHT,
+            bump: 1,
+            _reserved: [0u8; 64],
+        };
+        assert!(proposal.has_legacy_governance_rules());
+        assert!(proposal.governance_rules().is_err());
+
+        let rules = ProposalGovernanceRules {
+            min_voter_stake: MIN_GOVERNANCE_VOTER_STAKE_LAMPORTS,
+            min_voter_reputation: MIN_GOVERNANCE_VOTER_REPUTATION,
+            max_vote_weight: 100_000_000,
+            min_distinct_voters: MIN_GOVERNANCE_DISTINCT_VOTERS,
+            approval_threshold_bps: 5_000,
+        };
+        proposal.set_governance_rules(rules).unwrap();
+        assert_eq!(proposal.governance_rules().unwrap(), rules);
+        assert!(!rules.voter_is_eligible(33_333_334, 3_000));
+        assert!(rules.voter_is_eligible(10_000_000, 5_000));
+        assert_eq!(proposal._reserved[0], Proposal::GOVERNANCE_RULES_SCHEMA_V1);
+        assert!(proposal._reserved[23..].iter().all(|byte| *byte == 0));
+        assert!(!proposal.has_legacy_governance_rules());
+
+        proposal._reserved[63] = 1;
+        assert!(proposal.governance_rules().is_err());
     }
 
     #[test]
@@ -3152,7 +3524,10 @@ mod tests {
     #[test]
     fn test_moderation_block_default_is_cleared() {
         let block = ModerationBlock::default();
-        assert!(!block.is_blocked(), "default status must not read as blocked");
+        assert!(
+            !block.is_blocked(),
+            "default status must not read as blocked"
+        );
         assert!(block.validate_reserved_fields());
     }
 
@@ -3241,6 +3616,23 @@ mod tests {
     }
 
     #[test]
+    fn test_purchase_record_content_version_snapshot_preserves_layout() {
+        let mut record = PurchaseRecord {
+            skill: Pubkey::default(),
+            buyer: Pubkey::default(),
+            price_paid: 0,
+            timestamp: 0,
+            bump: 0,
+            _reserved: [0xFF; 4],
+        };
+
+        record.snapshot_content_version(7);
+        assert_eq!(record.content_version(), 7);
+        assert_eq!(record._reserved, [7, 0, 0, 0]);
+        test_size_constant!(PurchaseRecord);
+    }
+
+    #[test]
     fn test_feed_post_size() {
         test_size_constant!(FeedPost);
     }
@@ -3307,6 +3699,13 @@ mod tests {
         let config = ProtocolConfig::default();
         assert!(!config.protocol_paused);
         assert_eq!(config.disabled_task_type_mask, 0);
+        assert!(
+            crate::instructions::rate_limit_helpers::is_valid_dispute_stake_limit(
+                config.min_stake_for_dispute,
+                config.min_agent_stake,
+            ),
+            "ProtocolConfig::default must satisfy the same dispute-access invariant as init/update",
+        );
     }
 
     #[test]
@@ -3323,6 +3722,21 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_retired_identity_marker_is_layout_compatible() {
+        let mut agent = AgentRegistration {
+            status: AgentStatus::Active,
+            ..AgentRegistration::default()
+        };
+        agent.mark_identity_retired();
+
+        assert!(agent.is_retired_identity());
+        assert!(matches!(agent.status, AgentStatus::Inactive));
+        assert_eq!(agent._reserved, *b"RETD");
+        assert!(agent.validate_reserved_fields());
+        assert_eq!(AgentRegistration::SIZE, 566);
+    }
+
+    #[test]
     fn test_config_validate_padding_fields_ok() {
         let config = ProtocolConfig::default();
         assert!(config.validate_padding_fields());
@@ -3330,8 +3744,10 @@ mod tests {
 
     #[test]
     fn test_config_validate_padding_fields_corrupted() {
-        let mut config = ProtocolConfig::default();
-        config.protocol_paused = true;
+        let mut config = ProtocolConfig {
+            protocol_paused: true,
+            ..ProtocolConfig::default()
+        };
         assert!(config.validate_padding_fields());
 
         config.protocol_paused = false;
@@ -3339,18 +3755,21 @@ mod tests {
         assert!(!config.validate_padding_fields());
     }
 
+    #[cfg(feature = "private-zk")]
     #[test]
     fn test_zk_config_reserved_fields_default_to_zero() {
         let config = ZkConfig::default();
         assert_eq!(config._reserved, [0u8; 31]);
     }
 
+    #[cfg(feature = "private-zk")]
     #[test]
     fn test_zk_config_validate_reserved_fields_ok() {
         let config = ZkConfig::default();
         assert!(config.validate_reserved_fields());
     }
 
+    #[cfg(feature = "private-zk")]
     #[test]
     fn test_zk_config_validate_reserved_fields_corrupted() {
         let mut config = ZkConfig::default();
@@ -3363,7 +3782,7 @@ mod tests {
     #[test]
     fn test_task_size_pins() {
         // Runtime guard mirroring the compile-time const_assert. If a field add
-        // changes the layout, the 149-task realloc (OLD_TASK_SIZE -> SIZE) breaks;
+        // changes the layout, the legacy-task realloc (OLD_TASK_SIZE -> SIZE) breaks;
         // this fails loudly rather than silently bricking live accounts.
         assert_eq!(
             Task::OLD_TASK_SIZE,
@@ -3398,7 +3817,7 @@ mod tests {
     fn test_protocol_config_size_pins() {
         // Runtime guard mirroring the compile-time const_assert. If a field add
         // changes the layout, the single-account realloc (OLD_CONFIG_SIZE -> SIZE)
-        // breaks; this fails loudly rather than silently bricking the live config.
+        // breaks; this fails loudly rather than silently bricking a legacy config.
         assert_eq!(
             ProtocolConfig::OLD_CONFIG_SIZE,
             349,
@@ -3419,21 +3838,34 @@ mod tests {
     #[test]
     fn test_protocol_config_surface_revision_default_is_current_batch() {
         // A freshly initialized config (full-surface deploy) advertises the CURRENT
-        // batch revision; the live mainnet config is brought to 0 by migrate_protocol
-        // and stamped later by an operator. Revisions are monotonic + additive:
+        // batch revision; a legacy config is brought to 0 by migrate_protocol and
+        // stamped later by an operator. Revisions are monotonic + additive:
         // each batch must sit strictly above its predecessor.
         let config = ProtocolConfig::default();
         assert_eq!(
             config.surface_revision,
-            ProtocolConfig::SURFACE_REVISION_BATCH4
+            ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
         );
         assert_eq!(ProtocolConfig::SURFACE_REVISION_FULL, 1);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH2, 2);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH3, 3);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH4, 4);
-        assert!(ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL);
-        assert!(ProtocolConfig::SURFACE_REVISION_BATCH3 > ProtocolConfig::SURFACE_REVISION_BATCH2);
-        assert!(ProtocolConfig::SURFACE_REVISION_BATCH4 > ProtocolConfig::SURFACE_REVISION_BATCH3);
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING, 5);
+        const {
+            assert!(
+                ProtocolConfig::SURFACE_REVISION_BATCH2 > ProtocolConfig::SURFACE_REVISION_FULL
+            );
+            assert!(
+                ProtocolConfig::SURFACE_REVISION_BATCH3 > ProtocolConfig::SURFACE_REVISION_BATCH2
+            );
+            assert!(
+                ProtocolConfig::SURFACE_REVISION_BATCH4 > ProtocolConfig::SURFACE_REVISION_BATCH3
+            );
+            assert!(
+                ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
+                    > ProtocolConfig::SURFACE_REVISION_BATCH4
+            );
+        }
     }
 
     #[test]
@@ -3452,7 +3884,7 @@ mod tests {
 
     #[test]
     fn test_task_validate_reserved_fields_corrupted() {
-        // Batch 3 carves _reserved[0..2]; the guard now protects the TAIL [2..16].
+        // The pending-slash byte is a canonical boolean; other values are corruption.
         let mut task = Task::default();
         task._reserved[2] = 0xFF;
         assert!(!task.validate_reserved_fields());
@@ -3484,6 +3916,22 @@ mod tests {
     }
 
     #[test]
+    fn test_worker_slash_pending_carveout_round_trip() {
+        let mut task = Task::default();
+        assert!(!task.worker_slash_pending());
+
+        task.set_worker_slash_pending(true);
+        assert!(task.worker_slash_pending());
+        assert_eq!(task._reserved[2], 1);
+        assert!(task.validate_reserved_fields());
+
+        task.set_worker_slash_pending(false);
+        assert!(!task.worker_slash_pending());
+        assert_eq!(task._reserved[2], 0);
+        assert!(task.validate_reserved_fields());
+    }
+
+    #[test]
     fn test_task_is_contest_task_requires_schema_and_type() {
         // Schema-1 Competitive is a contest…
         let mut contest = Task {
@@ -3493,8 +3941,8 @@ mod tests {
         contest.set_task_schema(Task::TASK_SCHEMA_CONTEST_AWARE);
         assert!(contest.is_contest_task());
 
-        // …but schema-0 Competitive (a live pre-batch-3 task) is NOT — it keeps
-        // today's exact semantics (backward-compatibility rule, spec §2).
+        // …but schema-0 Competitive (a pre-batch-3 task) is NOT — it keeps
+        // its legacy semantics (backward-compatibility rule, spec §2).
         let legacy = Task {
             task_type: TaskType::Competitive,
             ..Task::default()
@@ -3549,7 +3997,9 @@ mod tests {
     fn test_store_handle_rejects_bad_handles() {
         // Too short / too long (21 chars).
         assert!(!validate_store_handle(&handle_bytes("ab")));
-        assert!(!validate_store_handle(&handle_bytes("abcdefghij0123456789x")));
+        assert!(!validate_store_handle(&handle_bytes(
+            "abcdefghij0123456789x"
+        )));
         // Empty / all-zero.
         assert!(!validate_store_handle(&[0u8; 32]));
         // Uppercase, underscore, dot, space.
@@ -3582,7 +4032,7 @@ mod tests {
     #[test]
     fn test_moderation_config_liveness_window_accessor_round_trip() {
         let mut c = ModerationConfig::default();
-        // Zeroed reserved bytes (the live mainnet config) read as 0 = default.
+        // Zeroed reserved bytes in a legacy config read as 0 = default.
         assert_eq!(c.liveness_window_secs(), 0);
         c.set_liveness_window_secs(7_776_000);
         assert_eq!(c.liveness_window_secs(), 7_776_000);

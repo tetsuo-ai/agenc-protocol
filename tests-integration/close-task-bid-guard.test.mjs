@@ -46,19 +46,20 @@ async function setupBidTask(w, { bidExpiresIn = 1800, minBond = 100_000 } = {}) 
     .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bidguard", w.modAuth.publicKey)
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "bid:publish");
+  const lockedJobSpec = decode(w.svm, "TaskJobSpec", jobSpec);
 
   const bidMarket = await injectBidMarketplace(w.svm, w.admin, { minBond });
   const [bidBook] = pda([enc("bid_book"), task.toBuffer()]);
   expectOk(send(w.svm, await w.buyerProg.methods
     .initializeBidBook(0, 0, 0, 0, 0)
-    .accounts({ task, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "bid:init-book");
 
   const [bid] = pda([enc("bid"), task.toBuffer(), w.providerAgent.toBuffer()]);
   const [bidderMarket] = pda([enc("bidder_market"), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
-    .createBid(new BN(reward), 3600, 5000, arr(Buffer.alloc(32, 4)), arr(Buffer.alloc(32, 5)), new BN(now + bidExpiresIn))
-    .accounts({ protocolConfig: w.protocolPda, bidMarketplace: bidMarket, task, bidBook, bid, bidderMarketState: bidderMarket, bidder: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .createBid(new BN(reward), 900, 5000, arr(Buffer.alloc(32, 4)), arr(Buffer.alloc(32, 5)), new BN(now + bidExpiresIn), arr(jobHash), lockedJobSpec.updated_at)
+    .accounts({ protocolConfig: w.protocolPda, bidMarketplace: bidMarket, task, taskJobSpec: jobSpec, bidBook, bid, bidderMarketState: bidderMarket, bidder: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "bid:create_bid");
 
   return { task, escrow, jobSpec, bidBook, bid, bidMarket, bidderMarket, reward };
@@ -130,7 +131,8 @@ test("close_task refuses to brick live bids on a BidExclusive task", async () =>
   const bookRent = Number(w.svm.getBalance(r.bidBook));
   const creatorBefore = Number(w.svm.getBalance(w.buyer.publicKey));
   expectOk(send(w.svm, await closeTaskIx(w, r, true), [w.buyer]), "close_task after all bids withdrawn");
-  assert.ok(isClosed(w.svm, r.task), "task PDA closed cleanly");
+  assert.ok(!isClosed(w.svm, r.task), "durable terminal Task anchor remains");
+  assert.ok(decode(w.svm, "Task", r.task).status.Cancelled !== undefined, "terminal state remains decodable");
 
   // Audit C8: the book is swept in the same transaction — its creator-funded
   // rent returns to the creator instead of stranding on the terminal task.

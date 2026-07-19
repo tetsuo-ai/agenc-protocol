@@ -13,9 +13,9 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
 /// Protocol-config migration to the P6.5 surface-versioning layout AND the version
-/// bump. The single live mainnet `ProtocolConfig` is at `OLD_CONFIG_SIZE` (349B);
-/// this reallocs it up to `SIZE` (351B) and zero-fills the appended
-/// `surface_revision` (so the live surface reads as "unstamped" / 0 until an
+/// bump. A historical pre-P6.5 `ProtocolConfig` is exactly `OLD_CONFIG_SIZE`
+/// (349B); this reallocs it up to `SIZE` (351B) and zero-fills the appended
+/// `surface_revision` (so the migrated surface reads as "unstamped" / 0 until an
 /// operator declares it via `update_launch_controls`). Multisig/upgrade-authority
 /// gated, NOT permissionless.
 ///
@@ -71,8 +71,9 @@ pub(crate) fn classify_config_migration(len: usize) -> Result<ConfigMigrationAct
 
 /// Validate an operator-supplied `surface_revision`: only `0` (unstamped),
 /// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`,
-/// `SURFACE_REVISION_BATCH3`, or `SURFACE_REVISION_BATCH4` are accepted.
-/// Pure, unit-testable. NOTE (batch 4): stamping BATCH4 is ENFORCING — it
+/// `SURFACE_REVISION_BATCH3`, `SURFACE_REVISION_BATCH4`, or
+/// `SURFACE_REVISION_AUDIT_HARDENING` are accepted. Pure, unit-testable.
+/// NOTE (batch 4): stamping BATCH4 or any later revision is ENFORCING — it
 /// turns the goods market on (`require_goods_enabled`); rolling back to
 /// BATCH3 turns it off (the coarse kill switch).
 pub(crate) fn is_valid_surface_revision(surface_revision: u16) -> bool {
@@ -81,6 +82,7 @@ pub(crate) fn is_valid_surface_revision(surface_revision: u16) -> bool {
         || surface_revision == ProtocolConfig::SURFACE_REVISION_BATCH2
         || surface_revision == ProtocolConfig::SURFACE_REVISION_BATCH3
         || surface_revision == ProtocolConfig::SURFACE_REVISION_BATCH4
+        || surface_revision == ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
 }
 
 /// Migrate protocol configuration: realloc to the P6.5 surface-versioning layout
@@ -91,7 +93,7 @@ pub(crate) fn is_valid_surface_revision(surface_revision: u16) -> bool {
 ///
 /// # Migration Flow
 /// 1. Verify caller has upgrade authority (multisig)
-/// 2. Realloc the live 349B config up to 351B + zero-init `surface_revision`
+/// 2. Realloc a legacy 349B config up to 351B + zero-init `surface_revision`
 ///    (idempotent: already-grown config is realloc-skipped)
 /// 3. Validate source and target versions
 /// 4. Apply version-specific migrations
@@ -189,7 +191,7 @@ pub fn handler(ctx: Context<MigrateProtocol>, target_version: u8) -> Result<()> 
     let current_version = config.protocol_version;
 
     // `target_version` bounds. `target_version == current_version` is a VALID
-    // realloc-only call: the size leg above grows the live config while
+    // realloc-only call: the size leg above grows a legacy config while
     // `protocol_version` stays at 1 (the "deploy-first, migrate, version-bump-last"
     // doctrine — bumping the version before all accounts are migrated would brick
     // in-flight paths via the version gate). A LOWER target is a rollback attempt and
@@ -252,8 +254,8 @@ pub fn handler(ctx: Context<MigrateProtocol>, target_version: u8) -> Result<()> 
 ///
 /// Grows each live Task account and zero-fills the appended tail
 /// (operator/operator_fee_bps/_reserved from Batch-2, plus referrer/referrer_fee_bps
-/// from P6.2). Accepts EITHER the pre-Batch-2 size (382B — today's 149 live mainnet
-/// tasks) OR the Batch-2 size (432B), so the sweep is correct regardless of deploy
+/// from P6.2). Accepts EITHER the historical pre-Batch-2 size (382B) OR the
+/// Batch-2 size (432B), so the sweep is correct regardless of deploy
 /// ordering. Multisig/upgrade-authority gated, NOT permissionless. VERSION-UNGATED:
 /// it must run while `protocol_version == 1` so the binary can be deployed first, all
 /// tasks migrated, and the version bumped LAST (the reverse order would brick
@@ -311,9 +313,22 @@ pub(crate) fn classify_task_migration(len: usize) -> Result<TaskMigrationAction>
     }
 }
 
+/// A raw migration account must still be the canonical Task PDA encoded by its
+/// own immutable identity fields. Owner + discriminator checks alone only prove
+/// "some Task-shaped program account"; this closes the remaining substitution
+/// gap before the multisig-funded realloc touches it.
+fn require_canonical_task_address(task_key: Pubkey, task: &Task) -> Result<()> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[b"task", task.creator.as_ref(), task.task_id.as_ref()],
+        &crate::ID,
+    );
+    require_keys_eq!(task_key, expected, CoordinationError::InvalidPda);
+    Ok(())
+}
+
 /// Migrate one Task account to the P6.2 layout. `dry_run` validates the
 /// preconditions + asserts the post-image would deserialize, WITHOUT mutating —
-/// run it across all 149 tasks first to prove the sweep is safe.
+/// run it across the complete legacy-task inventory first to prove the sweep is safe.
 pub fn migrate_task_handler(ctx: Context<MigrateTask>, dry_run: bool) -> Result<()> {
     // Hand-validate the RAW protocol_config exactly like `migrate_protocol`, so the task
     // sweep does NOT require `migrate_protocol` to have grown the config first: a typed
@@ -371,17 +386,18 @@ pub fn migrate_task_handler(ctx: Context<MigrateTask>, dry_run: bool) -> Result<
     let original_len = {
         let data = task_info.try_borrow_data()?;
         let len = data.len();
-        // P6.2: accept EITHER the pre-Batch-2 layout (382B — today's 149 live mainnet
-        // tasks) OR the intermediate Batch-2 layout (432B — a task already grown by a
+        // P6.2: accept EITHER the historical pre-Batch-2 layout (382B) OR the
+        // intermediate Batch-2 layout (432B — a task already grown by a
         // prior Batch-2 sweep). Both realloc straight up to the P6.2 SIZE (466B),
         // zero-filling the appended tail, so the sweep is correct regardless of whether
         // tasks were ever migrated to 432 before this deploy.
         match classify_task_migration(len)? {
             TaskMigrationAction::AlreadyMigrated => {
                 // Idempotent: already migrated (or larger). Confirm it is genuinely a
-                // Task (validates the discriminator) and no-op.
-                Task::try_deserialize(&mut &data[..])
+                // canonical Task (discriminator + self-derived PDA) and no-op.
+                let task = Task::try_deserialize(&mut &data[..])
                     .map_err(|_| CoordinationError::TaskDiscriminatorMismatch)?;
+                require_canonical_task_address(task_info.key(), &task)?;
                 return Ok(());
             }
             TaskMigrationAction::Realloc => {}
@@ -392,8 +408,9 @@ pub fn migrate_task_handler(ctx: Context<MigrateTask>, dry_run: bool) -> Result<
         // This is ALSO the dry-run post-image assertion (no mutation here).
         let mut buf = data.to_vec();
         buf.resize(Task::SIZE, 0);
-        Task::try_deserialize(&mut &buf[..])
+        let task = Task::try_deserialize(&mut &buf[..])
             .map_err(|_| CoordinationError::TaskDiscriminatorMismatch)?;
+        require_canonical_task_address(task_info.key(), &task)?;
         len
     };
 
@@ -605,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_classify_config_old_size_reallocs() {
-        // The live mainnet config (349B) is classified for realloc.
+        // The historical pre-P6.5 config size (349B) is classified for realloc.
         let action = classify_config_migration(ProtocolConfig::OLD_CONFIG_SIZE).unwrap();
         assert_eq!(action, ConfigMigrationAction::Realloc);
         assert_eq!(ProtocolConfig::OLD_CONFIG_SIZE, 349);
@@ -684,10 +701,22 @@ mod tests {
     }
 
     #[test]
+    fn test_surface_revision_audit_hardening_is_valid() {
+        assert!(is_valid_surface_revision(
+            ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
+        ));
+        assert_eq!(ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING, 5);
+        assert_eq!(
+            ProtocolConfig::SURFACE_REVISION_CURRENT,
+            ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
+        );
+    }
+
+    #[test]
     fn test_surface_revision_unknown_rejected() {
         // Unknown revisions are rejected so an operator cannot stamp a surface the SDK
-        // does not understand. (4 = SURFACE_REVISION_BATCH4 became valid in batch-4.)
-        for bad in [5u16, 7, u16::MAX] {
+        // does not understand. (5 is the audit-hardening surface.)
+        for bad in [6u16, 7, u16::MAX] {
             assert!(
                 !is_valid_surface_revision(bad),
                 "revision {bad} must be rejected"
@@ -699,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_classify_task_old_382_reallocs() {
-        // Today's 149 live mainnet tasks (382B) are classified for realloc.
+        // The historical pre-Batch-2 task size (382B) is classified for realloc.
         let action = classify_task_migration(Task::OLD_TASK_SIZE).unwrap();
         assert_eq!(action, TaskMigrationAction::Realloc);
         assert_eq!(Task::OLD_TASK_SIZE, 382);
@@ -734,6 +763,21 @@ mod tests {
                 "len {bad} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn raw_task_migration_requires_its_self_derived_pda() {
+        let task = Task {
+            creator: Pubkey::new_unique(),
+            task_id: [7u8; 32],
+            ..Task::default()
+        };
+        let (canonical, _) = Pubkey::find_program_address(
+            &[b"task", task.creator.as_ref(), task.task_id.as_ref()],
+            &crate::ID,
+        );
+        assert!(require_canonical_task_address(canonical, &task).is_ok());
+        assert!(require_canonical_task_address(Pubkey::new_unique(), &task).is_err());
     }
 
     #[test]

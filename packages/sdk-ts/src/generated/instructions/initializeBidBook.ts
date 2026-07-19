@@ -41,7 +41,11 @@ import {
   getAddressFromResolvedInstructionAccount,
   type ResolvedInstructionAccount,
 } from "@solana/program-client-core";
-import { findBidBookPda, findProtocolConfigPda } from "../pdas";
+import {
+  findBidBookPda,
+  findProtocolConfigPda,
+  findTaskJobSpecPda,
+} from "../pdas";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const INITIALIZE_BID_BOOK_DISCRIMINATOR: ReadonlyUint8Array =
@@ -56,6 +60,7 @@ export function getInitializeBidBookDiscriminatorBytes(): ReadonlyUint8Array {
 export type InitializeBidBookInstruction<
   TProgram extends string = typeof AGENC_COORDINATION_PROGRAM_ADDRESS,
   TAccountTask extends string | AccountMeta<string> = string,
+  TAccountTaskJobSpec extends string | AccountMeta<string> = string,
   TAccountBidBook extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
@@ -69,6 +74,9 @@ export type InitializeBidBookInstruction<
       TAccountTask extends string
         ? WritableAccount<TAccountTask>
         : TAccountTask,
+      TAccountTaskJobSpec extends string
+        ? WritableAccount<TAccountTaskJobSpec>
+        : TAccountTaskJobSpec,
       TAccountBidBook extends string
         ? WritableAccount<TAccountBidBook>
         : TAccountBidBook,
@@ -140,12 +148,19 @@ export function getInitializeBidBookInstructionDataCodec(): FixedSizeCodec<
 
 export type InitializeBidBookAsyncInput<
   TAccountTask extends string = string,
+  TAccountTaskJobSpec extends string = string,
   TAccountBidBook extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   task: Address<TAccountTask>;
+  /**
+   * Exact job contract the creator irrevocably freezes when opening bidding.
+   * This explicit creator-signed transition prevents a bidder from grief-locking
+   * an otherwise editable TaskJobSpec.
+   */
+  taskJobSpec?: Address<TAccountTaskJobSpec>;
   bidBook?: Address<TAccountBidBook>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   creator: TransactionSigner<TAccountCreator>;
@@ -159,6 +174,7 @@ export type InitializeBidBookAsyncInput<
 
 export async function getInitializeBidBookInstructionAsync<
   TAccountTask extends string,
+  TAccountTaskJobSpec extends string,
   TAccountBidBook extends string,
   TAccountProtocolConfig extends string,
   TAccountCreator extends string,
@@ -167,6 +183,7 @@ export async function getInitializeBidBookInstructionAsync<
 >(
   input: InitializeBidBookAsyncInput<
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountProtocolConfig,
     TAccountCreator,
@@ -177,6 +194,7 @@ export async function getInitializeBidBookInstructionAsync<
   InitializeBidBookInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountProtocolConfig,
     TAccountCreator,
@@ -190,6 +208,7 @@ export async function getInitializeBidBookInstructionAsync<
   // Original accounts.
   const originalAccounts = {
     task: { value: input.task ?? null, isWritable: true },
+    taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: true },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     creator: { value: input.creator ?? null, isWritable: true },
@@ -204,6 +223,14 @@ export async function getInitializeBidBookInstructionAsync<
   const args = { ...input };
 
   // Resolve default values.
+  if (!accounts.taskJobSpec.value) {
+    accounts.taskJobSpec.value = await findTaskJobSpecPda({
+      task: getAddressFromResolvedInstructionAccount(
+        "task",
+        accounts.task.value,
+      ),
+    });
+  }
   if (!accounts.bidBook.value) {
     accounts.bidBook.value = await findBidBookPda({
       task: getAddressFromResolvedInstructionAccount(
@@ -224,6 +251,7 @@ export async function getInitializeBidBookInstructionAsync<
   return Object.freeze({
     accounts: [
       getAccountMeta("task", accounts.task),
+      getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("creator", accounts.creator),
@@ -236,6 +264,7 @@ export async function getInitializeBidBookInstructionAsync<
   } as InitializeBidBookInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountProtocolConfig,
     TAccountCreator,
@@ -245,12 +274,19 @@ export async function getInitializeBidBookInstructionAsync<
 
 export type InitializeBidBookInput<
   TAccountTask extends string = string,
+  TAccountTaskJobSpec extends string = string,
   TAccountBidBook extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountCreator extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   task: Address<TAccountTask>;
+  /**
+   * Exact job contract the creator irrevocably freezes when opening bidding.
+   * This explicit creator-signed transition prevents a bidder from grief-locking
+   * an otherwise editable TaskJobSpec.
+   */
+  taskJobSpec: Address<TAccountTaskJobSpec>;
   bidBook: Address<TAccountBidBook>;
   protocolConfig: Address<TAccountProtocolConfig>;
   creator: TransactionSigner<TAccountCreator>;
@@ -264,6 +300,7 @@ export type InitializeBidBookInput<
 
 export function getInitializeBidBookInstruction<
   TAccountTask extends string,
+  TAccountTaskJobSpec extends string,
   TAccountBidBook extends string,
   TAccountProtocolConfig extends string,
   TAccountCreator extends string,
@@ -272,6 +309,7 @@ export function getInitializeBidBookInstruction<
 >(
   input: InitializeBidBookInput<
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountProtocolConfig,
     TAccountCreator,
@@ -281,6 +319,7 @@ export function getInitializeBidBookInstruction<
 ): InitializeBidBookInstruction<
   TProgramAddress,
   TAccountTask,
+  TAccountTaskJobSpec,
   TAccountBidBook,
   TAccountProtocolConfig,
   TAccountCreator,
@@ -293,6 +332,7 @@ export function getInitializeBidBookInstruction<
   // Original accounts.
   const originalAccounts = {
     task: { value: input.task ?? null, isWritable: true },
+    taskJobSpec: { value: input.taskJobSpec ?? null, isWritable: true },
     bidBook: { value: input.bidBook ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     creator: { value: input.creator ?? null, isWritable: true },
@@ -316,6 +356,7 @@ export function getInitializeBidBookInstruction<
   return Object.freeze({
     accounts: [
       getAccountMeta("task", accounts.task),
+      getAccountMeta("taskJobSpec", accounts.taskJobSpec),
       getAccountMeta("bidBook", accounts.bidBook),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("creator", accounts.creator),
@@ -328,6 +369,7 @@ export function getInitializeBidBookInstruction<
   } as InitializeBidBookInstruction<
     TProgramAddress,
     TAccountTask,
+    TAccountTaskJobSpec,
     TAccountBidBook,
     TAccountProtocolConfig,
     TAccountCreator,
@@ -342,10 +384,16 @@ export type ParsedInitializeBidBookInstruction<
   programAddress: Address<TProgram>;
   accounts: {
     task: TAccountMetas[0];
-    bidBook: TAccountMetas[1];
-    protocolConfig: TAccountMetas[2];
-    creator: TAccountMetas[3];
-    systemProgram: TAccountMetas[4];
+    /**
+     * Exact job contract the creator irrevocably freezes when opening bidding.
+     * This explicit creator-signed transition prevents a bidder from grief-locking
+     * an otherwise editable TaskJobSpec.
+     */
+    taskJobSpec: TAccountMetas[1];
+    bidBook: TAccountMetas[2];
+    protocolConfig: TAccountMetas[3];
+    creator: TAccountMetas[4];
+    systemProgram: TAccountMetas[5];
   };
   data: InitializeBidBookInstructionData;
 };
@@ -358,12 +406,12 @@ export function parseInitializeBidBookInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedInitializeBidBookInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 5) {
+  if (instruction.accounts.length < 6) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 5,
+        expectedAccountMetas: 6,
       },
     );
   }
@@ -377,6 +425,7 @@ export function parseInitializeBidBookInstruction<
     programAddress: instruction.programAddress,
     accounts: {
       task: getNextAccount(),
+      taskJobSpec: getNextAccount(),
       bidBook: getNextAccount(),
       protocolConfig: getNextAccount(),
       creator: getNextAccount(),

@@ -73,7 +73,7 @@ export type VoteProposalInstruction<
         ? WritableAccount<TAccountVote>
         : TAccountVote,
       TAccountVoter extends string
-        ? ReadonlyAccount<TAccountVoter>
+        ? WritableAccount<TAccountVoter>
         : TAccountVoter,
       TAccountProtocolConfig extends string
         ? ReadonlyAccount<TAccountProtocolConfig>
@@ -177,7 +177,7 @@ export async function getVoteProposalInstructionAsync<
   const originalAccounts = {
     proposal: { value: input.proposal ?? null, isWritable: true },
     vote: { value: input.vote ?? null, isWritable: true },
-    voter: { value: input.voter ?? null, isWritable: false },
+    voter: { value: input.voter ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
@@ -288,7 +288,7 @@ export function getVoteProposalInstruction<
   const originalAccounts = {
     proposal: { value: input.proposal ?? null, isWritable: true },
     vote: { value: input.vote ?? null, isWritable: true },
-    voter: { value: input.voter ?? null, isWritable: false },
+    voter: { value: input.voter ?? null, isWritable: true },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: false },
     authority: { value: input.authority ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },

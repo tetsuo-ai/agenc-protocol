@@ -103,6 +103,7 @@ describe("e2e: event codecs decode real program logs", () => {
     const hireResult = await send(svm, buyer, [
       await facade.hireFromListing({
         listing,
+        providerAgent,
         creatorAgent: buyerAgent,
         authority: buyer,
         creator: buyer,

@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
-  makeProgram, send, expectOk, decode, isClosed,
+  makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, injectAgentStake,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
@@ -67,7 +67,10 @@ async function setupDisputedReview(w) {
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "claim");
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   const desc2 = Buffer.alloc(64);
@@ -133,7 +136,7 @@ test("F-9: resolve_dispute sweeps the defendant's live submission (counters + re
   assert.ok(decode(w.svm, "Task", r.task).status.Cancelled !== undefined, "task terminal (Cancelled)");
 });
 
-test("F-9: resolve_dispute without the sweep accounts still works (fallback unchanged)", async () => {
+test("F-9: resolve_dispute refuses omitted mandatory submission evidence", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const resolver = Keypair.generate();
   w.svm.airdrop(resolver.publicKey, BigInt(100e9));
@@ -142,7 +145,7 @@ test("F-9: resolve_dispute without the sweep accounts still works (fallback unch
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
-  expectOk(send(w.svm, await makeProgram(resolver).methods
+  expectFail(send(w.svm, await makeProgram(resolver).methods
     .resolveDispute(true, arr(crypto.randomBytes(32)), "agenc://ruling/f9b")
     .accounts({
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
@@ -155,9 +158,9 @@ test("F-9: resolve_dispute without the sweep accounts still works (fallback unch
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey,
       taskSubmission: null, taskValidationConfig: null,
     })
-    .instruction(), [resolver]), "resolve WITHOUT the sweep accounts (omission allowed)");
+    .instruction(), [resolver]), "TaskSubmissionRequired", "resolve without submission evidence fails closed");
 
-  // Omitted = no sweep (documented fallback: close_task is the recovery path there).
-  assert.ok(!isClosed(w.svm, r.submission), "submission NOT swept when accounts omitted");
-  assert.ok(decode(w.svm, "Task", r.task).status.Cancelled !== undefined, "resolve still settles");
+  assert.ok(!isClosed(w.svm, r.submission), "submission remains live after rejected resolve");
+  assert.ok(decode(w.svm, "Dispute", r.dispute).status.Active !== undefined, "dispute remains Active");
+  assert.ok(decode(w.svm, "Task", r.task).status.Disputed !== undefined, "task remains Disputed");
 });

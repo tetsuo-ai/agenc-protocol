@@ -77,6 +77,7 @@ export type HireFromListingHumanlessInstruction<
   TAccountHireRecord extends string | AccountMeta<string> = string,
   TAccountTaskValidationConfig extends string | AccountMeta<string> = string,
   TAccountListing extends string | AccountMeta<string> = string,
+  TAccountProviderAgent extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountListingModeration extends string | AccountMeta<string> = string,
@@ -106,6 +107,9 @@ export type HireFromListingHumanlessInstruction<
       TAccountListing extends string
         ? WritableAccount<TAccountListing>
         : TAccountListing,
+      TAccountProviderAgent extends string
+        ? ReadonlyAccount<TAccountProviderAgent>
+        : TAccountProviderAgent,
       TAccountProtocolConfig extends string
         ? WritableAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
@@ -204,6 +208,7 @@ export type HireFromListingHumanlessAsyncInput<
   TAccountHireRecord extends string = string,
   TAccountTaskValidationConfig extends string = string,
   TAccountListing extends string = string,
+  TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
@@ -227,6 +232,8 @@ export type HireFromListingHumanlessAsyncInput<
   taskValidationConfig?: Address<TAccountTaskValidationConfig>;
   /** Standing listing being hired from. Mutable to record the hire. */
   listing: Address<TAccountListing>;
+  /** Durable listings cannot outlive the provider's permission to take new work. */
+  providerAgent: Address<TAccountProviderAgent>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   /** Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). */
   moderationConfig?: Address<TAccountModerationConfig>;
@@ -271,6 +278,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
   TAccountHireRecord extends string,
   TAccountTaskValidationConfig extends string,
   TAccountListing extends string,
+  TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
@@ -287,6 +295,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
     TAccountHireRecord,
     TAccountTaskValidationConfig,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -305,6 +314,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
     TAccountHireRecord,
     TAccountTaskValidationConfig,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -329,6 +339,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
       isWritable: true,
     },
     listing: { value: input.listing ?? null, isWritable: true },
+    providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
     moderationConfig: {
       value: input.moderationConfig ?? null,
@@ -423,6 +434,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
@@ -443,6 +455,7 @@ export async function getHireFromListingHumanlessInstructionAsync<
     TAccountHireRecord,
     TAccountTaskValidationConfig,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -460,6 +473,7 @@ export type HireFromListingHumanlessInput<
   TAccountHireRecord extends string = string,
   TAccountTaskValidationConfig extends string = string,
   TAccountListing extends string = string,
+  TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
@@ -483,6 +497,8 @@ export type HireFromListingHumanlessInput<
   taskValidationConfig: Address<TAccountTaskValidationConfig>;
   /** Standing listing being hired from. Mutable to record the hire. */
   listing: Address<TAccountListing>;
+  /** Durable listings cannot outlive the provider's permission to take new work. */
+  providerAgent: Address<TAccountProviderAgent>;
   protocolConfig: Address<TAccountProtocolConfig>;
   /** Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). */
   moderationConfig: Address<TAccountModerationConfig>;
@@ -527,6 +543,7 @@ export function getHireFromListingHumanlessInstruction<
   TAccountHireRecord extends string,
   TAccountTaskValidationConfig extends string,
   TAccountListing extends string,
+  TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
@@ -543,6 +560,7 @@ export function getHireFromListingHumanlessInstruction<
     TAccountHireRecord,
     TAccountTaskValidationConfig,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -560,6 +578,7 @@ export function getHireFromListingHumanlessInstruction<
   TAccountHireRecord,
   TAccountTaskValidationConfig,
   TAccountListing,
+  TAccountProviderAgent,
   TAccountProtocolConfig,
   TAccountModerationConfig,
   TAccountListingModeration,
@@ -583,6 +602,7 @@ export function getHireFromListingHumanlessInstruction<
       isWritable: true,
     },
     listing: { value: input.listing ?? null, isWritable: true },
+    providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
     moderationConfig: {
       value: input.moderationConfig ?? null,
@@ -629,6 +649,7 @@ export function getHireFromListingHumanlessInstruction<
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("taskValidationConfig", accounts.taskValidationConfig),
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
@@ -649,6 +670,7 @@ export function getHireFromListingHumanlessInstruction<
     TAccountHireRecord,
     TAccountTaskValidationConfig,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -680,35 +702,37 @@ export type ParsedHireFromListingHumanlessInstruction<
     taskValidationConfig: TAccountMetas[3];
     /** Standing listing being hired from. Mutable to record the hire. */
     listing: TAccountMetas[4];
-    protocolConfig: TAccountMetas[5];
+    /** Durable listings cannot outlive the provider's permission to take new work. */
+    providerAgent: TAccountMetas[5];
+    protocolConfig: TAccountMetas[6];
     /** Global moderation gate. REQUIRED so a hire is fail-closed (spec §6). */
-    moderationConfig: TAccountMetas[6];
+    moderationConfig: TAccountMetas[7];
     /**
      * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
      * P1.2 §4.4: v2-else-legacy slot, manually validated (see `hire_from_listing`).
      *
      * v2/legacy PDA + owner + discriminator + field bindings).
      */
-    listingModeration?: TAccountMetas[7] | undefined;
+    listingModeration?: TAccountMetas[8] | undefined;
     /**
      * OPTIONAL: roster entry unlocking a non-global-authority record. Bound in the
      * handler to the EXPLICIT `moderator` argument via `resolve_listing_attestor`
      * (P1.2: the caller chooses the underwriter). Program-owned + non-revoked is
      * still guaranteed by the `Account` type (fail-closed, preserved from WP-A1).
      */
-    moderationAttestor?: TAccountMetas[8] | undefined;
+    moderationAttestor?: TAccountMetas[9] | undefined;
     /**
      * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`
      * (see `hire_from_listing`; identical semantics).
      *
      * (handler-derived canonical PDA; system-owned/empty = pass).
      */
-    moderationBlock: TAccountMetas[9];
+    moderationBlock: TAccountMetas[10];
     /** Wallet-scoped task/dispute rate limit state (seeded on the buyer wallet; no agent). */
-    authorityRateLimit: TAccountMetas[10];
+    authorityRateLimit: TAccountMetas[11];
     /** The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. */
-    creator: TAccountMetas[11];
-    systemProgram: TAccountMetas[12];
+    creator: TAccountMetas[12];
+    systemProgram: TAccountMetas[13];
   };
   data: HireFromListingHumanlessInstructionData;
 };
@@ -721,12 +745,12 @@ export function parseHireFromListingHumanlessInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedHireFromListingHumanlessInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 13) {
+  if (instruction.accounts.length < 14) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 13,
+        expectedAccountMetas: 14,
       },
     );
   }
@@ -750,6 +774,7 @@ export function parseHireFromListingHumanlessInstruction<
       hireRecord: getNextAccount(),
       taskValidationConfig: getNextAccount(),
       listing: getNextAccount(),
+      providerAgent: getNextAccount(),
       protocolConfig: getNextAccount(),
       moderationConfig: getNextAccount(),
       listingModeration: getNextOptionalAccount(),

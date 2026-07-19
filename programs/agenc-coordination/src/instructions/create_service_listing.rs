@@ -39,6 +39,15 @@ pub(crate) fn validate_listing_deadline(default_deadline_secs: i64) -> Result<()
     Ok(())
 }
 
+/// Service-listing hires are currently SOL-only in both buyer flows. Accepting a
+/// token mint here would create a permanently unhireable listing because the
+/// immutable `price_mint` cannot be cleared by `update_service_listing` and both
+/// hire handlers reject it. Fail at publication instead of minting dead state.
+pub(crate) fn validate_service_listing_price_mint(price_mint: Option<Pubkey>) -> Result<()> {
+    require!(price_mint.is_none(), CoordinationError::InvalidTokenMint);
+    Ok(())
+}
+
 #[derive(Accounts)]
 #[instruction(listing_id: [u8; 32])]
 pub struct CreateServiceListing<'info> {
@@ -111,6 +120,7 @@ pub fn handler(
         price >= MIN_SKILL_PRICE,
         CoordinationError::ListingPriceTooLow
     );
+    validate_service_listing_price_mint(price_mint)?;
     require!(
         required_capabilities != 0,
         CoordinationError::ListingCapabilitiesRequired
@@ -207,5 +217,11 @@ mod tests {
     fn deadline_allows_zero_and_cap() {
         assert!(validate_listing_deadline(0).is_ok());
         assert!(validate_listing_deadline(MAX_DEADLINE_SECONDS).is_ok());
+    }
+
+    #[test]
+    fn rejects_permanently_unhireable_token_pricing_at_publication() {
+        assert!(validate_service_listing_price_mint(None).is_ok());
+        assert!(validate_service_listing_price_mint(Some(Pubkey::new_unique())).is_err());
     }
 }

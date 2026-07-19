@@ -43,7 +43,7 @@ pub const KEEP_SURFACE_REVISION: u16 = u16::MAX;
 ///
 /// Allowed `surface_revision` values: `0` (unstamped / conservative),
 /// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`, `SURFACE_REVISION_BATCH3`,
-/// or `SURFACE_REVISION_BATCH4`. Unknown values are
+/// `SURFACE_REVISION_BATCH4`, or `SURFACE_REVISION_AUDIT_HARDENING`. Unknown values are
 /// rejected so an operator cannot stamp a surface the SDK does not understand.
 ///
 /// BATCH-4 NOTE: stamping `SURFACE_REVISION_BATCH4` is ENFORCING, not advisory —

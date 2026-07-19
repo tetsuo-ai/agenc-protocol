@@ -7,13 +7,13 @@
 // claim_task_with_job_spec (claim_task plain is fail-closed in the program — wrap
 // this instead), submit_task_result, accept/reject/auto_accept/validate result,
 // request_changes, reject_and_freeze, complete_task, cancel_task, close_task,
-// expire_claim, and the Batch-3 contest lifecycle (create_task[Competitive] +
+// reclaim_orphan_task_child, expire_claim, and the Batch-3 contest lifecycle (create_task[Competitive] +
 // configure_task_validation[CreatorReview] via createContestTask,
 // distribute_ghost_share, reclaim_terminal_claim). complete_task_private (ZK) is
 // intentionally out of scope here.
 //
 // Never import from generated/ internals other than its public exports.
-import { AccountRole, type Address } from "@solana/kit";
+import { AccountRole, type AccountMeta, type Address } from "@solana/kit";
 import {
   findModerationAttestorPda,
   findModerationBlockPda,
@@ -32,6 +32,7 @@ import {
   getCompleteTaskInstructionAsync,
   getCancelTaskInstructionAsync,
   getCloseTaskInstructionDataEncoder,
+  getReclaimOrphanTaskChildInstruction,
   getExpireClaimInstructionAsync,
   getConfigureTaskValidationInstructionAsync,
   getDistributeGhostShareInstructionAsync,
@@ -48,6 +49,7 @@ import {
   findTaskValidationConfigPda,
   findCreatorCompletionBondPda,
   findWorkerCompletionBondPda,
+  findBidBookPda,
   type CreateTaskAsyncInput,
   type CreateTaskHumanlessAsyncInput,
   type CreateDependentTaskAsyncInput,
@@ -62,6 +64,7 @@ import {
   type CompleteTaskAsyncInput,
   type CancelTaskAsyncInput,
   type CloseTaskAsyncInput,
+  type ReclaimOrphanTaskChildInput,
   type ExpireClaimAsyncInput,
   type ConfigureTaskValidationAsyncInput,
   type DistributeGhostShareAsyncInput,
@@ -149,12 +152,52 @@ export async function createDependentTask(
 /**
  * Claim a task while pinning its job-spec pointer. Wraps claim_task_with_job_spec
  * (plain claim_task is fail-closed in the program). Auto-derives the task-job-spec
- * pointer, the claim PDA, and protocol config from `task`/`worker`.
+ * pointer, the claim PDA, and protocol config from `task`/`worker`. Proof-dependent
+ * tasks must pass their exact `parentTask`; the facade appends it as the read-only
+ * remaining account required by the on-chain assignment gate.
  */
+export type ClaimTaskWithJobSpecInput = Omit<
+  ClaimTaskWithJobSpecAsyncInput,
+  "moderationBlock"
+> & {
+  /** Job-spec hash used to derive the mandatory assignment-time BLOCK floor. */
+  jobSpecHash?: Uint8Array;
+  /** Override for the canonical [moderation_block, jobSpecHash] PDA. */
+  moderationBlock?: Address;
+  /** Required for every dependent task; omit only for independent tasks. */
+  parentTask?: Address;
+};
+
 export async function claimTaskWithJobSpec(
-  input: ClaimTaskWithJobSpecAsyncInput,
+  input: ClaimTaskWithJobSpecInput,
 ) {
-  return getClaimTaskWithJobSpecInstructionAsync(input);
+  const {
+    jobSpecHash,
+    moderationBlock,
+    parentTask,
+    ...generatedInput
+  } = input;
+  if (!moderationBlock && !jobSpecHash) {
+    throw new Error(
+      "claimTaskWithJobSpec: provide jobSpecHash (or moderationBlock) for the assignment-time BLOCK check",
+    );
+  }
+  const block =
+    moderationBlock ??
+    (await findModerationBlockPda({ contentHash: jobSpecHash! }))[0];
+  const instruction = await getClaimTaskWithJobSpecInstructionAsync({
+    ...generatedInput,
+    moderationBlock: block,
+  });
+  return {
+    ...instruction,
+    accounts: [
+      ...instruction.accounts,
+      ...(parentTask
+        ? [{ address: parentTask, role: AccountRole.READONLY } as const]
+        : []),
+    ],
+  };
 }
 
 /**
@@ -170,15 +213,86 @@ export async function submitTaskResult(input: SubmitTaskResultAsyncInput) {
  * settlement parties (treasury, worker, workerAuthority); claim/escrow/submission/
  * validation/protocol PDAs auto-derive. Pass token accounts only for token tasks.
  */
-export async function acceptTaskResult(input: AcceptTaskResultAsyncInput) {
-  return getAcceptTaskResultInstructionAsync(input);
+export type BidCompletionSettlement = {
+  /** Defaults to the canonical [bid_book, task] PDA. */
+  bidBook?: Address;
+  acceptedBid: Address;
+  bidderMarketState: Address;
+  /** Bidder wallet receiving accepted-bid rent/bond. */
+  bidderAuthority?: Address;
+};
+
+type CompletionRemainingAccounts = {
+  /** Required for every dependent task and always occupies remaining slot 0. */
+  dependencyParent?: Address;
+  /** Required for BidExclusive completion/accept settlement. */
+  bidSettlement?: BidCompletionSettlement;
+};
+
+async function appendCompletionRemainingAccounts<
+  TInstruction extends { readonly accounts: readonly AccountMeta[] },
+>(
+  instruction: TInstruction,
+  task: Address,
+  remaining: CompletionRemainingAccounts,
+  defaultBidderAuthority?: Address,
+) {
+  const accounts: AccountMeta[] = [...instruction.accounts];
+  if (remaining.dependencyParent) {
+    accounts.push({
+      address: remaining.dependencyParent,
+      role: AccountRole.READONLY,
+    });
+  }
+  if (remaining.bidSettlement) {
+    const bidderAuthority =
+      remaining.bidSettlement.bidderAuthority ?? defaultBidderAuthority;
+    if (!bidderAuthority) {
+      throw new Error(
+        "BidExclusive settlement requires bidderAuthority (the accepted bidder wallet)",
+      );
+    }
+    const bidBook =
+      remaining.bidSettlement.bidBook ?? (await findBidBookPda({ task }))[0];
+    accounts.push(
+      { address: bidBook, role: AccountRole.WRITABLE },
+      { address: remaining.bidSettlement.acceptedBid, role: AccountRole.WRITABLE },
+      {
+        address: remaining.bidSettlement.bidderMarketState,
+        role: AccountRole.WRITABLE,
+      },
+      { address: bidderAuthority, role: AccountRole.WRITABLE },
+    );
+  }
+  return { ...instruction, accounts };
+}
+
+export type AcceptTaskResultInput = AcceptTaskResultAsyncInput &
+  CompletionRemainingAccounts;
+
+export async function acceptTaskResult(input: AcceptTaskResultInput) {
+  const { dependencyParent, bidSettlement, ...generatedInput } = input;
+  const hireRecord =
+    input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
+  const instruction = await getAcceptTaskResultInstructionAsync({
+    ...generatedInput,
+    hireRecord,
+  });
+  return appendCompletionRemainingAccounts(
+    instruction,
+    input.task,
+    { dependencyParent, bidSettlement },
+    input.workerAuthority,
+  );
 }
 
 /**
  * Creator rejects a submitted result (with a rejection hash). Auto-derives
  * validation config, submission, and protocol-config PDAs from `task`/`worker`.
  */
-export async function rejectTaskResult(input: RejectTaskResultAsyncInput) {
+export type RejectTaskResultInput = RejectTaskResultAsyncInput;
+
+export async function rejectTaskResult(input: RejectTaskResultInput) {
   return getRejectTaskResultInstructionAsync(input);
 }
 
@@ -195,9 +309,19 @@ export async function rejectTaskResult(input: RejectTaskResultAsyncInput) {
 export async function autoAcceptTaskResult(
   input: AutoAcceptTaskResultInput,
 ) {
+  const { dependencyParent, bidSettlement, ...generatedInput } = input;
   const hireRecord =
     input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
-  return getAutoAcceptTaskResultInstructionAsync({ ...input, hireRecord });
+  const instruction = await getAutoAcceptTaskResultInstructionAsync({
+    ...generatedInput,
+    hireRecord,
+  });
+  return appendCompletionRemainingAccounts(
+    instruction,
+    input.task,
+    { dependencyParent, bidSettlement },
+    input.workerAuthority,
+  );
 }
 
 export type AutoAcceptTaskResultInput = Omit<
@@ -206,15 +330,25 @@ export type AutoAcceptTaskResultInput = Omit<
 > & {
   /** Defaults to the derived [hire, task] PDA (audit F-10). */
   hireRecord?: Address;
-};
+} & CompletionRemainingAccounts;
 
 /**
  * Validator (or validator-quorum) approve/reject of a submitted result. Pass
  * `approved`; on approval it settles the escrow. Auto-derives claim, escrow,
  * validation config/vote, submission, attestor config, and protocol-config PDAs.
  */
-export async function validateTaskResult(input: ValidateTaskResultAsyncInput) {
-  return getValidateTaskResultInstructionAsync(input);
+export type ValidateTaskResultInput = ValidateTaskResultAsyncInput &
+  CompletionRemainingAccounts;
+
+export async function validateTaskResult(input: ValidateTaskResultInput) {
+  const { dependencyParent, bidSettlement, ...generatedInput } = input;
+  const instruction = await getValidateTaskResultInstructionAsync(generatedInput);
+  return appendCompletionRemainingAccounts(
+    instruction,
+    input.task,
+    { dependencyParent, bidSettlement },
+    input.workerAuthority,
+  );
 }
 
 /**
@@ -240,9 +374,44 @@ export async function rejectAndFreeze(input: RejectAndFreezeAsyncInput) {
  * required hire-record address (the derived ["hire", task] PDA even for non-hired
  * tasks). Claim/escrow/protocol PDAs auto-derive.
  */
-export async function completeTask(input: CompleteTaskAsyncInput) {
-  return getCompleteTaskInstructionAsync(input);
+export type CompleteTaskInput = CompleteTaskAsyncInput &
+  CompletionRemainingAccounts;
+
+export async function completeTask(input: CompleteTaskInput) {
+  const { dependencyParent, bidSettlement, ...generatedInput } = input;
+  const instruction = await getCompleteTaskInstructionAsync(generatedInput);
+  return appendCompletionRemainingAccounts(
+    instruction,
+    input.task,
+    { dependencyParent, bidSettlement },
+    input.authority.address,
+  );
 }
+
+export type CancelTaskWorkerAccounts = {
+  /** Canonical TaskClaim PDA; closed by cancel_task. */
+  claim: Address;
+  /** Claimed worker AgentRegistration; active_tasks is decremented. */
+  workerAgent: Address;
+  /** Worker authority receiving claim rent; must match workerAgent.authority. */
+  workerAuthority: Address;
+};
+
+export type CancelTaskBidSettlement =
+  | {
+      /** BidExclusive task with no accepted worker. */
+      kind: "open";
+      /** Defaults to the canonical [bid_book, task] PDA. */
+      bidBook?: Address;
+    }
+  | {
+      /** BidExclusive task with one accepted/no-show worker. */
+      kind: "accepted";
+      /** Defaults to the canonical [bid_book, task] PDA. */
+      bidBook?: Address;
+      acceptedBid: Address;
+      bidderMarketState: Address;
+    };
 
 export type CancelTaskInput = Omit<
   CancelTaskAsyncInput,
@@ -254,6 +423,16 @@ export type CancelTaskInput = Omit<
   creatorCompletionBond?: Address;
   /** Defaults to the derived [completion_bond, task, workerBondAuthority] PDA. */
   workerCompletionBond?: Address;
+  /** One complete claim/agent/wallet triple for every live worker. */
+  workerAccounts?: readonly CancelTaskWorkerAccounts[];
+  /**
+   * Optional canonical parent prefix for dependent-task cancellation. Supplying
+   * a Completed parent proves worker fault; omission keeps the exit live but
+   * forces dependency-related bond disposition to refund/no-slash.
+   */
+  dependencyParent?: Address;
+  /** Required for BidExclusive cancellation; fixes the remaining-account wire. */
+  bidSettlement?: CancelTaskBidSettlement;
 };
 
 /**
@@ -270,8 +449,19 @@ export type CancelTaskInput = Omit<
  * forfeits those deposits to the protocol treasury — pass `treasury` (the
  * `ProtocolConfig.treasury` pubkey) on that path or the call fails closed with
  * ContestForfeitTreasuryRequired. Every other task can omit it.
+ *
+ * Pass one `workerAccounts` triple per live claim. For BidExclusive tasks also
+ * select `bidSettlement`: `open` derives and closes the empty bid book, while
+ * `accepted` appends the book, accepted bid, and bidder market state after the
+ * single worker triple in the exact order required by the program.
  */
 export async function cancelTask(input: CancelTaskInput) {
+  const {
+    workerAccounts = [],
+    dependencyParent,
+    bidSettlement,
+    ...generatedInput
+  } = input;
   const creatorCompletionBond =
     input.creatorCompletionBond ??
     (await findCreatorCompletionBondPda({
@@ -284,11 +474,50 @@ export async function cancelTask(input: CancelTaskInput) {
       task: input.task,
       workerAuthority: input.workerBondAuthority,
     }))[0];
-  return getCancelTaskInstructionAsync({
-    ...input,
+  if (bidSettlement?.kind === "open" && workerAccounts.length !== 0) {
+    throw new Error(
+      "cancelTask: BidExclusive open-book cancellation cannot include worker accounts",
+    );
+  }
+  if (bidSettlement?.kind === "accepted" && workerAccounts.length !== 1) {
+    throw new Error(
+      "cancelTask: accepted BidExclusive cancellation requires exactly one worker account triple",
+    );
+  }
+
+  const instruction = await getCancelTaskInstructionAsync({
+    ...generatedInput,
     creatorCompletionBond,
     workerCompletionBond,
   });
+  const workerMetas = workerAccounts.flatMap((worker) => [
+    { address: worker.claim, role: AccountRole.WRITABLE } as const,
+    { address: worker.workerAgent, role: AccountRole.WRITABLE } as const,
+    { address: worker.workerAuthority, role: AccountRole.WRITABLE } as const,
+  ]);
+  let bidMetas: { address: Address; role: AccountRole }[] = [];
+  if (bidSettlement) {
+    const bidBook =
+      bidSettlement.bidBook ?? (await findBidBookPda({ task: input.task }))[0];
+    bidMetas = [{ address: bidBook, role: AccountRole.WRITABLE }];
+    if (bidSettlement.kind === "accepted") {
+      bidMetas.push(
+        { address: bidSettlement.acceptedBid, role: AccountRole.WRITABLE },
+        { address: bidSettlement.bidderMarketState, role: AccountRole.WRITABLE },
+      );
+    }
+  }
+  return {
+    ...instruction,
+    accounts: [
+      ...instruction.accounts,
+      ...(dependencyParent
+        ? [{ address: dependencyParent, role: AccountRole.READONLY } as const]
+        : []),
+      ...workerMetas,
+      ...bidMetas,
+    ],
+  };
 }
 
 export type CloseTaskInput = Omit<
@@ -311,7 +540,46 @@ export type CloseTaskInput = Omit<
   listing?: Address | null;
   /** Optional live worker bond to liveness-check before close. */
   workerCompletionBond?: Address | null;
+  /**
+   * Set for BidExclusive tasks. The canonical bid book is derived when `true`,
+   * or use an address to supply an explicit pre-derived account.
+   */
+  bidExclusive?: boolean | Address;
+  /** Auxiliary child PDAs to sweep after the optional bid book. */
+  children?: readonly CloseTaskChild[];
 };
+
+export type CloseTaskChild =
+  | {
+      kind: "creatorFunded";
+      account: Address;
+    }
+  | {
+      /** A TaskModeration record; rent returns to its stored moderator. */
+      kind: "namedRecipient";
+      account: Address;
+      recipient: Address;
+    }
+  | ({
+      kind: "workerSubmission";
+      submission: Address;
+      workerAgent: Address;
+    } & (
+      | {
+          /**
+           * Authenticated rent destination: the original worker authority for a
+           * continuous identity, or the canonical treasury for a closed or
+           * discontinuous revision-4 identity.
+           */
+          rentRecipient: Address;
+          workerAuthority?: never;
+        }
+      | {
+          /** @deprecated Use `rentRecipient`; recovery may pay the treasury. */
+          workerAuthority: Address;
+          rentRecipient?: never;
+        }
+    ));
 
 function optionalAddress(value: Address | null | undefined): Address {
   return value ?? AGENC_COORDINATION_PROGRAM_ADDRESS;
@@ -321,7 +589,8 @@ function optionalAddress(value: Address | null | undefined): Address {
  * Close a terminal task and reclaim its rent. Auto-derives the optional job-spec
  * pointer by default, omits the normally-closed escrow by default, and derives
  * the required hire record when omitted. Pass `listing` for hired tasks so
- * their listing capacity is released.
+ * their listing capacity is released. Set `bidExclusive` for BidExclusive tasks;
+ * the facade then derives and prepends the canonical bid book to the child sweep.
  */
 export async function closeTask(input: CloseTaskInput) {
   const taskJobSpec =
@@ -331,6 +600,36 @@ export async function closeTask(input: CloseTaskInput) {
   const hireRecord =
     input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
   const [protocolConfig] = await findProtocolConfigPda();
+
+  const remainingAccounts: { address: Address; role: AccountRole }[] = [];
+  if (input.bidExclusive) {
+    const bidBook =
+      typeof input.bidExclusive === "string"
+        ? input.bidExclusive
+        : (await findBidBookPda({ task: input.task }))[0];
+    remainingAccounts.push({ address: bidBook, role: AccountRole.WRITABLE });
+  }
+  for (const child of input.children ?? []) {
+    if (child.kind === "creatorFunded") {
+      remainingAccounts.push({
+        address: child.account,
+        role: AccountRole.WRITABLE,
+      });
+    } else if (child.kind === "namedRecipient") {
+      remainingAccounts.push(
+        { address: child.account, role: AccountRole.WRITABLE },
+        { address: child.recipient, role: AccountRole.WRITABLE },
+      );
+    } else {
+      const rentRecipient =
+        child.rentRecipient ?? child.workerAuthority;
+      remainingAccounts.push(
+        { address: child.submission, role: AccountRole.WRITABLE },
+        { address: child.workerAgent, role: AccountRole.READONLY },
+        { address: rentRecipient, role: AccountRole.WRITABLE },
+      );
+    }
+  }
 
   return {
     programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
@@ -369,18 +668,115 @@ export async function closeTask(input: CloseTaskInput) {
       // straggler submission's worker agent has been deregistered; harmless
       // (readonly) otherwise.
       { address: protocolConfig, role: AccountRole.READONLY },
+      ...remainingAccounts,
     ],
     data: getCloseTaskInstructionDataEncoder().encode({}),
   };
 }
 
+export type ReclaimOrphanTaskChildFacadeInput = Omit<
+  ReclaimOrphanTaskChildInput,
+  "rentRecipient"
+> &
+  (
+    | {
+        /** Stored creator, moderator, reviewer, or continuous worker authority. */
+        rentRecipient: Address;
+        recovery?: never;
+      }
+    | {
+        rentRecipient?: never;
+        /**
+         * Required only for a terminal submission whose revision-4 worker
+         * identity was closed or re-registered. The facade uses `treasury` for
+         * both the fixed rent-recipient meta and the exact recovery suffix.
+         */
+        recovery: {
+          protocolConfig?: Address;
+          treasury: Address;
+        };
+      }
+  );
+
+/**
+ * Reclaim a historical rent-only child whose Task (or, for a validation vote,
+ * TaskSubmission) was destroyed by an older program. Direct recipients use the
+ * frozen five-meta wire. Closed/discontinuous worker identities append exactly
+ * `[protocolConfig readonly, treasury writable]`; no caller-selected wallet can
+ * receive that rent.
+ */
+export async function reclaimOrphanTaskChild(
+  input: ReclaimOrphanTaskChildFacadeInput,
+) {
+  const rentRecipient = input.recovery
+    ? input.recovery.treasury
+    : input.rentRecipient;
+  const instruction = getReclaimOrphanTaskChildInstruction({
+    child: input.child,
+    parentTask: input.parentTask,
+    workerAgent: input.workerAgent,
+    rentRecipient,
+    authority: input.authority,
+  });
+  if (!input.recovery) return instruction;
+
+  const protocolConfig =
+    input.recovery.protocolConfig ?? (await findProtocolConfigPda())[0];
+  return Object.freeze({
+    ...instruction,
+    accounts: [
+      ...instruction.accounts,
+      { address: protocolConfig, role: AccountRole.READONLY },
+      { address: input.recovery.treasury, role: AccountRole.WRITABLE },
+    ],
+  });
+}
+
 /**
  * Permissionlessly expire a stale claim, freeing the task and paying the caller a
  * cleanup reward. Caller supplies `worker`/`rentRecipient`; escrow, claim,
- * validation config, submission, and protocol-config PDAs auto-derive.
+ * validation config, submission, and protocol-config PDAs auto-derive. Dependent
+ * Exclusive no-shows must pass their canonical parent. BidExclusive expiry also
+ * supplies the accepted-bid settlement suffix in exact Rust order.
  */
-export async function expireClaim(input: ExpireClaimAsyncInput) {
-  return getExpireClaimInstructionAsync(input);
+export type ExpireClaimBidSettlement = {
+  bidBook?: Address;
+  acceptedBid: Address;
+  bidderMarketState: Address;
+  creator: Address;
+};
+
+export type ExpireClaimInput = ExpireClaimAsyncInput & {
+  /** Parent prefix when the Rust exit path requires dependency evidence. */
+  dependencyParent?: Address;
+  /** Required for BidExclusive claim expiry. */
+  bidSettlement?: ExpireClaimBidSettlement;
+};
+
+export async function expireClaim(input: ExpireClaimInput) {
+  const { dependencyParent, bidSettlement, ...generatedInput } = input;
+  const instruction = await getExpireClaimInstructionAsync(generatedInput);
+  const remainingAccounts: { address: Address; role: AccountRole }[] = [];
+  if (dependencyParent) {
+    remainingAccounts.push({
+      address: dependencyParent,
+      role: AccountRole.READONLY,
+    });
+  }
+  if (bidSettlement) {
+    const bidBook =
+      bidSettlement.bidBook ?? (await findBidBookPda({ task: input.task }))[0];
+    remainingAccounts.push(
+      { address: bidBook, role: AccountRole.WRITABLE },
+      { address: bidSettlement.acceptedBid, role: AccountRole.WRITABLE },
+      { address: bidSettlement.bidderMarketState, role: AccountRole.WRITABLE },
+      { address: bidSettlement.creator, role: AccountRole.WRITABLE },
+    );
+  }
+  return {
+    ...instruction,
+    accounts: [...instruction.accounts, ...remainingAccounts],
+  };
 }
 
 /**

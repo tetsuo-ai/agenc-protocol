@@ -16,6 +16,8 @@ import {
   getStructEncoder,
   getU64Decoder,
   getU64Encoder,
+  getU8Decoder,
+  getU8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -125,10 +127,14 @@ export type PurchaseSkillInstruction<
 export type PurchaseSkillInstructionData = {
   discriminator: ReadonlyUint8Array;
   expectedPrice: bigint;
+  expectedVersion: number;
+  expectedContentHash: ReadonlyUint8Array;
 };
 
 export type PurchaseSkillInstructionDataArgs = {
   expectedPrice: number | bigint;
+  expectedVersion: number;
+  expectedContentHash: ReadonlyUint8Array;
 };
 
 export function getPurchaseSkillInstructionDataEncoder(): FixedSizeEncoder<PurchaseSkillInstructionDataArgs> {
@@ -136,6 +142,8 @@ export function getPurchaseSkillInstructionDataEncoder(): FixedSizeEncoder<Purch
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["expectedPrice", getU64Encoder()],
+      ["expectedVersion", getU8Encoder()],
+      ["expectedContentHash", fixEncoderSize(getBytesEncoder(), 32)],
     ]),
     (value) => ({ ...value, discriminator: PURCHASE_SKILL_DISCRIMINATOR }),
   );
@@ -145,6 +153,8 @@ export function getPurchaseSkillInstructionDataDecoder(): FixedSizeDecoder<Purch
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["expectedPrice", getU64Decoder()],
+    ["expectedVersion", getU8Decoder()],
+    ["expectedContentHash", fixDecoderSize(getBytesDecoder(), 32)],
   ]);
 }
 
@@ -195,6 +205,8 @@ export type PurchaseSkillAsyncInput<
   /** SPL Token program (optional) */
   tokenProgram?: Address<TAccountTokenProgram>;
   expectedPrice: PurchaseSkillInstructionDataArgs["expectedPrice"];
+  expectedVersion: PurchaseSkillInstructionDataArgs["expectedVersion"];
+  expectedContentHash: PurchaseSkillInstructionDataArgs["expectedContentHash"];
 };
 
 export async function getPurchaseSkillInstructionAsync<
@@ -391,6 +403,8 @@ export type PurchaseSkillInput<
   /** SPL Token program (optional) */
   tokenProgram?: Address<TAccountTokenProgram>;
   expectedPrice: PurchaseSkillInstructionDataArgs["expectedPrice"];
+  expectedVersion: PurchaseSkillInstructionDataArgs["expectedVersion"];
+  expectedContentHash: PurchaseSkillInstructionDataArgs["expectedContentHash"];
 };
 
 export function getPurchaseSkillInstruction<

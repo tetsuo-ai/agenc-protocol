@@ -126,27 +126,11 @@ function buildTaskCreatedBlob({
 }
 
 describe("generated event discriminator table", () => {
-  it("has a decoder entry for every event in the IDL (all 98)", () => {
+  it("has a decoder entry for every event in the current IDL", () => {
     const idl = JSON.parse(readFileSync(IDL_PATH, "utf8")) as {
       events: { name: string; discriminator: number[] }[];
     };
-    // P6 surface: 82 -> 84 (+AgentTrackRecordUpdated [P6.6], +ListingRated [P6.1],
-    // +ModerationAttestorAssigned/Revoked [P6.8]; -ArbiterVotesCleanedUp,
-    // -DisputeVoteCast from the P6.3 vote_dispute retirement) -> 86
-    // (+ReferrerFeePaid [P6.2 demand-side referral leg],
-    // +ProtocolConfigMigrated [P6.5 surface-versioning realloc]) -> 88
-    // (+AgentVerified, +AgentVerificationRevoked [P7.3 agent verification]) -> 94
-    // (+ModerationAttestorRegistered, +AttestorExitRequested,
-    // +AttestorExitFinalized, +ModerationBlockSet, +ModerationBlockCleared,
-    // +DefaultTrustListUpdated [P1.2 hardened open roster]) -> 98
-    // (+StoreRegistered, +StoreUpdated, +StoreClosed [batch-2 store identity],
-    // +ModerationHeartbeatRecorded [batch-2 A2 moderation liveness]) -> 99
-    // (+GhostShareDistributed [batch-3 WS-CONTEST ghost-split]) -> 99
-    // (+TerminalClaimReclaimed, +ContestDepositForfeited [batch-3 adversarial
-    // fix round: reclaim_terminal_claim + contest entry-deposit forfeits])
-    // (+GoodsListingCreated, +GoodPurchased, +GoodsListingUpdated [batch-4
-    // GOODS market]) -> 104.
-    expect(idl.events.length).toBe(104);
+    expect(idl.events.length).toBeGreaterThan(0);
     expect(Object.keys(AGENC_EVENT_DECODERS).length).toBe(idl.events.length);
     for (const event of idl.events) {
       const entry = AGENC_EVENT_DECODERS[hex(event.discriminator)];

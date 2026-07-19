@@ -155,15 +155,17 @@ export type Task = {
    * see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).
    * * `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with
    * status `Submitted`; maintained ONLY for schema-1 tasks).
-   * Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker
+   * slash, 1 = the defendant claim is reserved for apply_dispute_slash).
+   * Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**
    * Referrer (embedder who brought the buyer) payee for the §4 4-way split.
    * `Pubkey::default()` means no referrer leg (the common case). Snapshotted from
    * the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields
-   * exceed the 16B `_reserved`, so this is a size-extending migration of the 149
-   * live tasks (see `migrate_task`).
+   * exceed the 16B `_reserved`, so this is a size-extending migration for
+   * historical task layouts (see `migrate_task`).
    */
   referrer: Address;
   /**
@@ -258,15 +260,17 @@ export type TaskArgs = {
    * see [`Task::TASK_SCHEMA_CONTEST_AWARE`]).
    * * `_reserved[1]` = `live_submissions` (count of `TaskSubmission`s with
    * status `Submitted`; maintained ONLY for schema-1 tasks).
-   * Bytes `[2..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker
+   * slash, 1 = the defendant claim is reserved for apply_dispute_slash).
+   * Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**
    * Referrer (embedder who brought the buyer) payee for the §4 4-way split.
    * `Pubkey::default()` means no referrer leg (the common case). Snapshotted from
    * the hire / create-task args, EXACTLY like `operator` — the 34B referrer fields
-   * exceed the 16B `_reserved`, so this is a size-extending migration of the 149
-   * live tasks (see `migrate_task`).
+   * exceed the 16B `_reserved`, so this is a size-extending migration for
+   * historical task layouts (see `migrate_task`).
    */
   referrer: Address;
   /**

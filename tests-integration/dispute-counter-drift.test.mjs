@@ -13,15 +13,15 @@ import assert from "node:assert/strict";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, expectOk, decode, isClosed,
-  freshWorld, hireIx, injectAgentStake,
+  freshWorld, hireIx,
   listingModV2Pda, taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
 // Same shape as expire-refund-default.test.mjs: hired task -> worker claims ->
-// worker self-disputes. Returns the PDAs expire_dispute needs.
-async function setupWorkerSelfDispute(w) {
+// creator disputes the no-show. Returns the PDAs expire_dispute needs.
+async function setupCreatorNoShowDispute(w) {
   const modProg = makeProgram(w.modAuth);
   const [listingMod] = listingModV2Pda(w.listing, w.specHash, w.modAuth.publicKey);
   if (isClosed(w.svm, listingMod)) {
@@ -48,20 +48,23 @@ async function setupWorkerSelfDispute(w) {
     .instruction(), [w.buyer]), "publish");
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "claim");
 
-  await injectAgentStake(w.svm, w.providerAgent, 2_000_000);
   const tid = decode(w.svm, "Task", task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(tid), arr(Buffer.alloc(32, 1)), 0, "evidence")
-    .accounts({ dispute, task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "worker self-dispute");
+    .accounts({ dispute, task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "creator disputes no-show");
 
-  return { task, escrow, hireRecord, claim, dispute };
+  const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
+  return { task, escrow, hireRecord, claim, dispute, submission };
 }
 
 // Directly mutate an AgentRegistration field in place (decode -> mutate ->
@@ -82,16 +85,17 @@ async function injectAgentField(w, agentPda, mutate) {
 
 test("expire_dispute: a drifted active_tasks == 0 cannot brick the unwind (saturating decrement)", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
-  const r = await setupWorkerSelfDispute(w);
+  const r = await setupCreatorNoShowDispute(w);
 
   // Simulate legacy counter drift: the claim is open (task.current_workers == 1)
   // but the worker's active_tasks reads 0. checked_sub(1) reverts here.
   await injectAgentField(w, w.providerAgent, (a) => { a.active_tasks = 0; });
 
-  // Warp past the resolver window: voting_deadline + 120s grace.
+  // Warp past both the resolver window and the claim deadline.
   const votingDeadline = Number(decode(w.svm, "Dispute", r.dispute).voting_deadline);
+  const claimExpiresAt = Number(decode(w.svm, "TaskClaim", r.claim).expires_at);
   const c = w.svm.getClock();
-  c.unixTimestamp = BigInt(votingDeadline) + 121n;
+  c.unixTimestamp = BigInt(Math.max(votingDeadline + 120, claimExpiresAt)) + 1n;
   w.svm.setClock(c);
 
   const crank = Keypair.generate();
@@ -109,7 +113,7 @@ test("expire_dispute: a drifted active_tasks == 0 cannot brick the unwind (satur
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,
       rewardMint: null, tokenProgram: null,
       creatorCompletionBond: creatorBond, workerCompletionBond: workerBond,
-      taskSubmission: null, taskValidationConfig: null,
+      taskSubmission: r.submission, taskValidationConfig: null,
     })
     .instruction(), [crank]), "expire_dispute over a drifted counter");
 

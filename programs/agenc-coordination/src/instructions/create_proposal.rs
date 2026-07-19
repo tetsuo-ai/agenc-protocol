@@ -3,6 +3,8 @@
 use crate::errors::CoordinationError;
 use crate::events::ProposalCreated;
 use crate::instructions::constants::MAX_PROTOCOL_FEE_BPS;
+use crate::instructions::initialize_governance::calculate_new_proposal_requirements;
+use crate::instructions::rate_limit_helpers::is_valid_dispute_stake_limit;
 use crate::state::{
     AgentRegistration, AgentStatus, GovernanceConfig, Proposal, ProposalStatus, ProposalType,
     ProtocolConfig,
@@ -16,10 +18,26 @@ const MAX_RATE_LIMIT: u64 = 1000;
 /// Maximum cooldown value: 1 week in seconds (matches update_rate_limits.rs)
 const MAX_COOLDOWN: i64 = 604_800;
 
-/// Minimum dispute stake floor (must match execute_proposal.rs MIN_DISPUTE_STAKE and
-/// update_rate_limits.rs). Validated at creation so a proposal that would revert at
-/// execution can never be created and stranded as permanently-Active (audit).
-const MIN_DISPUTE_STAKE: u64 = 1000;
+/// Require one canonical byte representation for every currently implemented
+/// proposal type. Ignored trailing bytes are dangerous in signed governance:
+/// clients may display the same effective action differently, and a later
+/// program version could reinterpret bytes that today's executor ignores.
+fn validate_proposal_payload_padding(
+    proposal_type: ProposalType,
+    payload: &[u8; 64],
+) -> Result<()> {
+    let unused = match proposal_type {
+        ProposalType::ProtocolUpgrade => &payload[..],
+        ProposalType::FeeChange => &payload[2..],
+        ProposalType::TreasurySpend => &payload[40..],
+        ProposalType::RateLimitChange => &payload[26..],
+    };
+    require!(
+        unused.iter().all(|byte| *byte == 0),
+        CoordinationError::InvalidProposalPayload
+    );
+    Ok(())
+}
 
 #[derive(Accounts)]
 #[instruction(nonce: u64)]
@@ -92,10 +110,29 @@ pub fn handler(
         CoordinationError::AgentNotActive
     );
 
-    // Require minimum stake to create proposals
+    let (quorum, governance_rules) = calculate_new_proposal_requirements(
+        governance.min_proposal_stake,
+        config.min_arbiter_stake,
+        governance.quorum_bps,
+        governance.approval_threshold_bps,
+    )?;
+
+    // A proposer must be eligible to participate in the election they create.
     require!(
-        proposer.stake >= governance.min_proposal_stake,
+        proposer.stake >= governance_rules.min_voter_stake,
         CoordinationError::ProposalInsufficientStake
+    );
+    require!(
+        proposer.reputation >= governance_rules.min_voter_reputation,
+        CoordinationError::InsufficientReputation
+    );
+    require!(
+        governance_rules.voter_is_eligible(proposer.stake, proposer.reputation),
+        CoordinationError::InvalidGovernanceParam
+    );
+    require!(
+        title_hash != [0u8; 32] && description_hash != [0u8; 32],
+        CoordinationError::InvalidProposalPayload
     );
 
     // Validate proposal type
@@ -106,6 +143,7 @@ pub fn handler(
         3 => ProposalType::RateLimitChange,
         _ => return Err(error!(CoordinationError::InvalidProposalType)),
     };
+    validate_proposal_payload_padding(prop_type, &payload)?;
 
     // Validate payload at creation time for typed proposals
     match prop_type {
@@ -155,38 +193,35 @@ pub fn handler(
                 (max_disputes_per_24h as u64) <= MAX_RATE_LIMIT,
                 CoordinationError::InvalidProposalPayload
             );
-            // payload[18..26] = min_stake_for_dispute (u64 LE). execute_proposal enforces
-            // a MIN_DISPUTE_STAKE floor here too; validating it at creation prevents a
-            // proposal that would revert at execution from being created and stranded
-            // permanently Active (voting closes, the tx reverts on the error, so it can
-            // never be re-tallied or executed) — audit, governance liveness.
+            // Bind the exact shared dispute-stake policy at creation so an
+            // unexecutable payload can never become a stranded Active proposal.
             let min_stake_for_dispute = u64::from_le_bytes(
                 payload[18..26]
                     .try_into()
                     .map_err(|_| error!(CoordinationError::InvalidProposalPayload))?,
             );
             require!(
-                min_stake_for_dispute >= MIN_DISPUTE_STAKE,
+                is_valid_dispute_stake_limit(min_stake_for_dispute, config.min_agent_stake),
                 CoordinationError::InvalidProposalPayload
             );
         }
-        _ => {}
+        ProposalType::TreasurySpend => {
+            let recipient_bytes: [u8; 32] = payload[0..32]
+                .try_into()
+                .map_err(|_| error!(CoordinationError::InvalidProposalPayload))?;
+            let recipient = Pubkey::new_from_array(recipient_bytes);
+            let amount = u64::from_le_bytes(
+                payload[32..40]
+                    .try_into()
+                    .map_err(|_| error!(CoordinationError::InvalidProposalPayload))?,
+            );
+            require!(
+                recipient != Pubkey::default() && amount > 0,
+                CoordinationError::InvalidProposalPayload
+            );
+        }
+        ProposalType::ProtocolUpgrade => {}
     }
-
-    // Compute quorum: min_proposal_stake * max(total_agents * quorum_bps / 10000, 2)
-    // Minimum quorum_factor of 2 ensures at least two independent vote-weights are
-    // needed to pass a proposal, preventing solo proposal execution.
-    let quorum_factor = config
-        .total_agents
-        .checked_mul(governance.quorum_bps as u64)
-        .ok_or(CoordinationError::ArithmeticOverflow)?
-        .checked_div(10000)
-        .unwrap_or(0)
-        .max(2);
-    let quorum = governance
-        .min_proposal_stake
-        .checked_mul(quorum_factor)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
 
     // Voting period: the governance config value is BOTH the default and the floor.
     // A caller-provided period is capped at MAX and floored at the governance
@@ -228,7 +263,7 @@ pub fn handler(
     proposal.total_voters = 0;
     proposal.quorum = quorum;
     proposal.bump = ctx.bumps.proposal;
-    proposal._reserved = [0u8; 64];
+    proposal.set_governance_rules(governance_rules)?;
 
     // Increment governance proposal counter
     governance.total_proposals = governance
@@ -246,4 +281,28 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_governance_payloads_reject_hidden_trailing_bytes() {
+        for (proposal_type, first_unused) in [
+            (ProposalType::ProtocolUpgrade, 0usize),
+            (ProposalType::FeeChange, 2),
+            (ProposalType::TreasurySpend, 40),
+            (ProposalType::RateLimitChange, 26),
+        ] {
+            let mut canonical = [0u8; 64];
+            assert!(validate_proposal_payload_padding(proposal_type, &canonical).is_ok());
+            canonical[first_unused] = 1;
+            assert!(validate_proposal_payload_padding(proposal_type, &canonical).is_err());
+        }
+
+        let mut fee = [0u8; 64];
+        fee[..2].copy_from_slice(&500u16.to_le_bytes());
+        assert!(validate_proposal_payload_padding(ProposalType::FeeChange, &fee).is_ok());
+    }
 }

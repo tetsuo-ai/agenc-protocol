@@ -5,8 +5,12 @@
 
 use crate::invariants::*;
 
+/// Mirrors `Dispute::INITIATOR_OUTCOME_COUNTER_MARKER` without coupling the
+/// lightweight model to the on-chain crate.
+pub const INITIATOR_OUTCOME_COUNTER_MARKER: u8 = u8::MAX;
+
 /// Simulated task state for testing
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SimulatedTask {
     pub task_id: [u8; 32],
     pub status: u8,
@@ -21,7 +25,7 @@ pub struct SimulatedTask {
 }
 
 /// Simulated escrow state for testing
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SimulatedEscrow {
     pub amount: u64,
     pub distributed: u64,
@@ -29,7 +33,7 @@ pub struct SimulatedEscrow {
 }
 
 /// Simulated agent state for testing
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SimulatedAgent {
     pub agent_id: [u8; 32],
     pub capabilities: u64,
@@ -43,31 +47,43 @@ pub struct SimulatedAgent {
 }
 
 /// Simulated dispute state for testing
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SimulatedDispute {
     pub dispute_id: [u8; 32],
     pub status: u8,
     pub resolution_type: u8,
-    pub votes_for: u8,
-    pub votes_against: u8,
+    /// Retained account-layout fields. Resolution writes a one-bit ruling record;
+    /// there is no dispute vote instruction or quorum.
+    pub votes_for: u64,
+    pub votes_against: u64,
     pub total_voters: u8,
     pub voting_deadline: i64,
+    pub expires_at: i64,
+    pub initiator_authority: [u8; 32],
+}
+
+/// Authorization and evidence supplied to the direct resolver path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SimulatedRuling {
+    pub resolver: [u8; 32],
+    pub protocol_authority: [u8; 32],
+    pub resolver_assigned: bool,
+    pub creator_authority: [u8; 32],
+    pub worker_authority: [u8; 32],
+    pub approve: bool,
+    pub rationale_hash: [u8; 32],
 }
 
 /// Simulated protocol config
 #[derive(Debug, Clone)]
 pub struct SimulatedConfig {
-    pub dispute_threshold: u8,
     pub protocol_fee_bps: u16,
-    pub min_arbiter_stake: u64,
 }
 
 impl Default for SimulatedConfig {
     fn default() -> Self {
         Self {
-            dispute_threshold: 51,
             protocol_fee_bps: 100, // 1%
-            min_arbiter_stake: 1_000_000,
         }
     }
 }
@@ -270,26 +286,18 @@ pub fn simulate_complete_task(
     }
 
     // Update worker stats
-    worker.tasks_completed = match worker.tasks_completed.checked_add(1) {
-        Some(c) => c,
-        None => return SimulationResult::Error("ArithmeticOverflow: tasks_completed".to_string()),
-    };
-    worker.total_earned = match worker.total_earned.checked_add(worker_reward) {
-        Some(e) => e,
-        None => return SimulationResult::Error("ArithmeticOverflow: total_earned".to_string()),
-    };
+    // Telemetry saturation must never block settlement.
+    worker.tasks_completed = worker.tasks_completed.saturating_add(1);
+    worker.total_earned = worker.total_earned.saturating_add(worker_reward);
     worker.active_tasks = match worker.active_tasks.checked_sub(1) {
         Some(a) => a,
         None => return SimulationResult::Error("ArithmeticUnderflow: active_tasks".to_string()),
     };
 
-    // R1 & R3: Update reputation (capped at 10000)
+    // R1 & R3: only irreversible SOL protocol fees back reputation.
+    let reputation_gain = protocol_fee.checked_div(100_000).unwrap_or(0).min(100) as u16;
     let old_reputation = worker.reputation;
-    worker.reputation = worker
-        .reputation
-        .checked_add(100)
-        .unwrap_or(10000)
-        .min(10000);
+    worker.reputation = worker.reputation.saturating_add(reputation_gain).min(10000);
 
     // Post-condition invariant checks
 
@@ -327,7 +335,7 @@ pub fn simulate_complete_task(
 
     // R3: Reputation increment
     if let ReputationInvariantResult::IncrementExceedsMax { before, after } =
-        check_reputation_increment(old_reputation, worker.reputation)
+        check_reputation_increment(old_reputation, worker.reputation, reputation_gain)
     {
         return SimulationResult::InvariantViolation(format!(
             "R3: Reputation increment from {} to {} exceeds rules",
@@ -339,89 +347,33 @@ pub fn simulate_complete_task(
 }
 
 // ============================================================================
-// Vote Dispute Simulation
-// ============================================================================
-
-/// Simulate vote_dispute instruction
-pub fn simulate_vote_dispute(
-    dispute: &mut SimulatedDispute,
-    arbiter: &SimulatedAgent,
-    config: &SimulatedConfig,
-    approve: bool,
-    current_time: i64,
-) -> SimulationResult {
-    // Pre-condition checks
-
-    // Check dispute is active
-    if dispute.status != dispute_status::ACTIVE {
-        return SimulationResult::Error("DisputeNotActive".to_string());
-    }
-
-    // D3: Check voting window
-    if current_time >= dispute.voting_deadline {
-        return SimulationResult::Error("VotingEnded".to_string());
-    }
-
-    // Check arbiter is active
-    if arbiter.status != agent_status::ACTIVE {
-        return SimulationResult::Error("AgentNotActive".to_string());
-    }
-
-    // A4: Check arbiter capability
-    if let AuthorityInvariantResult::MissingArbiterCapability =
-        check_arbiter_capability(arbiter.capabilities)
-    {
-        return SimulationResult::Error("NotArbiter".to_string());
-    }
-
-    // S1: Check arbiter stake
-    if let AuthorityInvariantResult::InsufficientArbiterStake { stake, required } =
-        check_arbiter_stake(arbiter.stake, config.min_arbiter_stake)
-    {
-        return SimulationResult::Error(format!("InsufficientStake: {} < {}", stake, required));
-    }
-
-    // Execute the vote
-    if approve {
-        dispute.votes_for = match dispute.votes_for.checked_add(1) {
-            Some(v) => v,
-            None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
-        };
-    } else {
-        dispute.votes_against = match dispute.votes_against.checked_add(1) {
-            Some(v) => v,
-            None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
-        };
-    }
-
-    dispute.total_voters = match dispute.total_voters.checked_add(1) {
-        Some(v) => v,
-        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
-    };
-
-    // Post-condition checks - voting window invariant
-    if let DisputeInvariantResult::VotingAfterDeadline { deadline, voted_at } =
-        check_voting_window(dispute.voting_deadline, current_time, true)
-    {
-        return SimulationResult::InvariantViolation(format!(
-            "D3: Voted at {} after deadline {}",
-            voted_at, deadline
-        ));
-    }
-
-    SimulationResult::Success
-}
-
-// ============================================================================
 // Resolve Dispute Simulation
 // ============================================================================
+
+pub const DISPUTE_RESOLUTION_GRACE: i64 = 120;
+
+pub fn dispute_resolution_window_open(dispute: &SimulatedDispute, now: i64) -> bool {
+    now <= dispute.expires_at
+        && now
+            < dispute
+                .voting_deadline
+                .saturating_add(DISPUTE_RESOLUTION_GRACE)
+}
+
+pub fn dispute_expiry_window_open(dispute: &SimulatedDispute, now: i64) -> bool {
+    now > dispute.expires_at
+        || now
+            >= dispute
+                .voting_deadline
+                .saturating_add(DISPUTE_RESOLUTION_GRACE)
+}
 
 /// Simulate resolve_dispute instruction
 pub fn simulate_resolve_dispute(
     dispute: &mut SimulatedDispute,
     task: &mut SimulatedTask,
     escrow: &mut SimulatedEscrow,
-    config: &SimulatedConfig,
+    ruling: &SimulatedRuling,
     current_time: i64,
 ) -> SimulationResult {
     // Pre-condition checks
@@ -436,27 +388,36 @@ pub fn simulate_resolve_dispute(
         return SimulationResult::Error("TaskNotDisputed".to_string());
     }
 
-    // D3: Check voting period has ended
-    if current_time < dispute.voting_deadline {
-        return SimulationResult::Error("VotingNotEnded".to_string());
+    // The real instruction permits an assigned resolver to rule immediately,
+    // but closes the path exactly when permissionless expiry opens.
+    if !dispute_resolution_window_open(dispute, current_time) {
+        return SimulationResult::Error("DisputeResolutionWindowExpired".to_string());
     }
 
-    // Check we have votes
-    let total_votes = match dispute.votes_for.checked_add(dispute.votes_against) {
-        Some(t) => t,
-        None => return SimulationResult::Error("ArithmeticOverflow: total_votes".to_string()),
-    };
-    if total_votes == 0 {
-        return SimulationResult::Error("InsufficientVotes".to_string());
+    match check_resolver_authorization(
+        &ruling.resolver,
+        &ruling.protocol_authority,
+        ruling.resolver_assigned,
+        &dispute.initiator_authority,
+        &ruling.creator_authority,
+        &ruling.worker_authority,
+    ) {
+        ResolverAuthorizationResult::Authorized => {}
+        ResolverAuthorizationResult::Unauthorized => {
+            return SimulationResult::Error("UnauthorizedResolver".to_string())
+        }
+        ResolverAuthorizationResult::InitiatorConflict => {
+            return SimulationResult::Error("InitiatorCannotResolve".to_string())
+        }
+        ResolverAuthorizationResult::PartyConflict => {
+            return SimulationResult::Error("ResolverConflictOfInterest".to_string())
+        }
+    }
+    if ruling.rationale_hash.iter().all(|byte| *byte == 0) {
+        return SimulationResult::Error("InvalidRationaleHash".to_string());
     }
 
-    // D4: Calculate approval percentage
-    let approval_pct = (dispute.votes_for as u64)
-        .checked_mul(100)
-        .and_then(|v| v.checked_div(total_votes as u64))
-        .unwrap_or(0) as u8;
-
-    let approved = approval_pct >= config.dispute_threshold;
+    let approved = ruling.approve;
 
     // Calculate remaining funds
     let remaining_funds = match escrow.amount.checked_sub(escrow.distributed) {
@@ -494,6 +455,30 @@ pub fn simulate_resolve_dispute(
     }
 
     dispute.status = dispute_status::RESOLVED;
+    if approved {
+        dispute.votes_for = 1;
+        dispute.votes_against = 0;
+    } else {
+        dispute.votes_for = 0;
+        dispute.votes_against = 1;
+    }
+    // Preserve the retired-byte provenance sentinel written at initiation.
+
+    if let DisputeInvariantResult::InvalidRulingRecord {
+        approved,
+        votes_for,
+        votes_against,
+        total_voters,
+    } = check_direct_ruling_record(
+        approved,
+        dispute.votes_for,
+        dispute.votes_against,
+        dispute.total_voters,
+    ) {
+        return SimulationResult::InvariantViolation(format!(
+            "Direct ruling record mismatch: approved={approved}, votes_for={votes_for}, votes_against={votes_against}, total_voters={total_voters}"
+        ));
+    }
     escrow.distributed = match escrow.distributed.checked_add(remaining_funds) {
         Some(d) => d,
         None => {
@@ -695,6 +680,9 @@ pub fn simulate_dispute_open(
 
     // Activate dispute (id and deadlines are assumed to be set by caller)
     dispute.status = dispute_status::ACTIVE;
+    dispute.votes_for = 0;
+    dispute.votes_against = 0;
+    dispute.total_voters = INITIATOR_OUTCOME_COUNTER_MARKER;
 
     // Post-condition invariant checks
     if let TaskInvariantResult::InvalidStateTransition { from, to } =
@@ -709,7 +697,7 @@ pub fn simulate_dispute_open(
     SimulationResult::Success
 }
 
-/// Simulate expiring a dispute after voting deadline passes
+/// Simulate expiring a dispute at the exact boundary complementary to resolution.
 pub fn simulate_expire_dispute(
     dispute: &mut SimulatedDispute,
     current_time: i64,
@@ -719,8 +707,8 @@ pub fn simulate_expire_dispute(
         return SimulationResult::Error("DisputeNotActive".to_string());
     }
 
-    if current_time < dispute.voting_deadline {
-        return SimulationResult::Error("VotingNotEnded".to_string());
+    if !dispute_expiry_window_open(dispute, current_time) {
+        return SimulationResult::Error("DisputeNotExpired".to_string());
     }
 
     let old_status = dispute.status;
@@ -836,12 +824,18 @@ pub mod matching_policy {
 pub mod bid_state {
     pub const ACTIVE: u8 = 0;
     pub const ACCEPTED: u8 = 1;
+    pub const BOUND_ACTIVE: u8 = 2;
 }
 
 const TASK_TYPE_BID_EXCLUSIVE: u8 = 3;
 const BID_WINDOW_SECONDS: i64 = 86_400;
 const MAX_CONFIDENCE_BPS: u16 = 10_000;
 const MAX_ACTIVE_BID_TASKS: u8 = 10;
+const SIMULATED_MIN_AGENT_STAKE: u64 = 1_000_000;
+const MAX_BID_BOND_LAMPORTS: u64 = 1_000_000_000;
+const MAX_BIDS_PER_24H: u16 = 1_000;
+const MAX_ACTIVE_BIDS_PER_TASK: u16 = 20;
+const MAX_BID_LIFETIME_SECS: i64 = 7 * BID_WINDOW_SECONDS;
 
 /// Simulated Marketplace V2 config.
 #[derive(Debug, Clone)]
@@ -867,6 +861,15 @@ impl Default for SimulatedBidMarketplaceConfig {
     }
 }
 
+fn simulated_bid_marketplace_config_is_valid(config: &SimulatedBidMarketplaceConfig) -> bool {
+    (1..=MAX_BID_BOND_LAMPORTS).contains(&config.min_bid_bond_lamports)
+        && (0..=BID_WINDOW_SECONDS).contains(&config.bid_creation_cooldown_secs)
+        && (1..=MAX_BIDS_PER_24H).contains(&config.max_bids_per_24h)
+        && (1..=MAX_ACTIVE_BIDS_PER_TASK).contains(&config.max_active_bids_per_task)
+        && (1..=MAX_BID_LIFETIME_SECS).contains(&config.max_bid_lifetime_secs)
+        && config.accepted_no_show_slash_bps <= MAX_CONFIDENCE_BPS
+}
+
 /// Simulated bidder market state.
 #[derive(Debug, Clone, Default)]
 pub struct SimulatedBidderMarketState {
@@ -885,6 +888,10 @@ pub struct SimulatedBidBook {
     pub task: [u8; 32],
     pub state: u8,
     pub policy: u8,
+    pub price_weight_bps: u16,
+    pub eta_weight_bps: u16,
+    pub confidence_weight_bps: u16,
+    pub reliability_weight_bps: u16,
     pub accepted_bid: Option<[u8; 32]>,
     pub version: u64,
     pub total_bids: u32,
@@ -899,6 +906,10 @@ impl Default for SimulatedBidBook {
             task: [0u8; 32],
             state: bid_book_state::OPEN,
             policy: matching_policy::BEST_PRICE,
+            price_weight_bps: 0,
+            eta_weight_bps: 0,
+            confidence_weight_bps: 0,
+            reliability_weight_bps: 0,
             accepted_bid: None,
             version: 0,
             total_bids: 0,
@@ -923,6 +934,25 @@ pub struct SimulatedBid {
     pub state: u8,
     pub bond_lamports: u64,
     pub is_closed: bool,
+}
+
+/// Exact remaining-account pair supplied for a competing open bid at
+/// acceptance time. The simulated agent id stands in for the canonical
+/// AgentRegistration PDA identity checked by the on-chain instruction.
+#[derive(Debug, Clone)]
+pub struct SimulatedCompetingBidPair {
+    pub bid: SimulatedBid,
+    pub bidder: SimulatedAgent,
+}
+
+/// Read-only acceptance inputs that are evaluated against the mutable bid
+/// lifecycle state. Keeping these values together makes the simulated API
+/// mirror the on-chain selection context without an error-prone parameter list.
+#[derive(Debug, Clone, Copy)]
+pub struct SimulatedBidAcceptanceContext<'a> {
+    pub other_bid_pairs: &'a [SimulatedCompetingBidPair],
+    pub now: i64,
+    pub min_reputation: u16,
 }
 
 fn require_bid_marketplace_task(task: &SimulatedTask) -> Option<SimulationResult> {
@@ -993,6 +1023,17 @@ pub fn simulate_initialize_bid_book(
     bid_book.task = task.task_id;
     bid_book.state = bid_book_state::OPEN;
     bid_book.policy = policy;
+    if policy == matching_policy::WEIGHTED_SCORE {
+        bid_book.price_weight_bps = price_weight_bps;
+        bid_book.eta_weight_bps = eta_weight_bps;
+        bid_book.confidence_weight_bps = confidence_weight_bps;
+        bid_book.reliability_weight_bps = reliability_weight_bps;
+    } else {
+        bid_book.price_weight_bps = 0;
+        bid_book.eta_weight_bps = 0;
+        bid_book.confidence_weight_bps = 0;
+        bid_book.reliability_weight_bps = 0;
+    }
     bid_book.accepted_bid = None;
     bid_book.version = 0;
     bid_book.total_bids = 0;
@@ -1022,6 +1063,9 @@ pub fn simulate_create_bid(
     if let Some(result) = require_bid_marketplace_task(task) {
         return result;
     }
+    if !simulated_bid_marketplace_config_is_valid(config) {
+        return SimulationResult::Error("InvalidBidMarketplaceConfig".to_string());
+    }
 
     if bid.bid_id != [0u8; 32] || bid.task != [0u8; 32] || bid.bond_lamports != 0 {
         return SimulationResult::Error("AlreadyInitialized".to_string());
@@ -1037,6 +1081,10 @@ pub fn simulate_create_bid(
 
     if bidder.status != agent_status::ACTIVE {
         return SimulationResult::Error("AgentNotActive".to_string());
+    }
+
+    if bidder.stake < SIMULATED_MIN_AGENT_STAKE {
+        return SimulationResult::Error("InsufficientStake".to_string());
     }
 
     if (bidder.capabilities & task.required_capabilities) != task.required_capabilities {
@@ -1058,6 +1106,13 @@ pub fn simulate_create_bid(
     if eta_seconds == 0 {
         return SimulationResult::Error("InvalidBidEta".to_string());
     }
+    let promised_completion_at = match now.checked_add(i64::from(eta_seconds)) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    if task.deadline <= now || promised_completion_at > task.deadline {
+        return SimulationResult::Error("InvalidBidEta".to_string());
+    }
 
     if confidence_bps > MAX_CONFIDENCE_BPS {
         return SimulationResult::Error("InvalidBidConfidence".to_string());
@@ -1075,7 +1130,9 @@ pub fn simulate_create_bid(
         return SimulationResult::Error("InvalidBidExpiry".to_string());
     }
 
-    if bid_book.active_bids >= config.max_active_bids_per_task {
+    if bid_book.active_bids >= config.max_active_bids_per_task
+        || bid_book.active_bids >= MAX_ACTIVE_BIDS_PER_TASK
+    {
         return SimulationResult::Error("BidBookCapacityReached".to_string());
     }
 
@@ -1103,7 +1160,7 @@ pub fn simulate_create_bid(
     bid.confidence_bps = confidence_bps;
     bid.reputation_snapshot_bps = bidder.reputation;
     bid.expires_at = expires_at;
-    bid.state = bid_state::ACTIVE;
+    bid.state = bid_state::BOUND_ACTIVE;
     bid.bond_lamports = config.min_bid_bond_lamports;
     bid.is_closed = false;
 
@@ -1154,8 +1211,11 @@ pub fn simulate_update_bid(
     if let Some(result) = require_bid_marketplace_task(task) {
         return result;
     }
+    if !simulated_bid_marketplace_config_is_valid(config) {
+        return SimulationResult::Error("InvalidBidMarketplaceConfig".to_string());
+    }
 
-    if bid.is_closed || bid.state != bid_state::ACTIVE {
+    if bid.is_closed || (bid.state != bid_state::ACTIVE && bid.state != bid_state::BOUND_ACTIVE) {
         return SimulationResult::Error("BidNotActive".to_string());
     }
 
@@ -1167,6 +1227,10 @@ pub fn simulate_update_bid(
         return SimulationResult::Error("TaskNotOpen".to_string());
     }
 
+    if bidder.stake < SIMULATED_MIN_AGENT_STAKE {
+        return SimulationResult::Error("InsufficientStake".to_string());
+    }
+
     if requested_reward_lamports == 0 {
         return SimulationResult::Error("InvalidReward".to_string());
     }
@@ -1176,6 +1240,13 @@ pub fn simulate_update_bid(
     }
 
     if eta_seconds == 0 {
+        return SimulationResult::Error("InvalidBidEta".to_string());
+    }
+    let promised_completion_at = match now.checked_add(i64::from(eta_seconds)) {
+        Some(value) => value,
+        None => return SimulationResult::Error("ArithmeticOverflow".to_string()),
+    };
+    if task.deadline <= now || promised_completion_at > task.deadline {
         return SimulationResult::Error("InvalidBidEta".to_string());
     }
 
@@ -1200,6 +1271,7 @@ pub fn simulate_update_bid(
     bid.confidence_bps = confidence_bps;
     bid.reputation_snapshot_bps = bidder.reputation;
     bid.expires_at = expires_at;
+    bid.state = bid_state::BOUND_ACTIVE;
 
     bid_book.version = match bid_book.version.checked_add(1) {
         Some(value) => value,
@@ -1221,7 +1293,7 @@ pub fn simulate_cancel_bid(
         return result;
     }
 
-    if bid.is_closed || bid.state != bid_state::ACTIVE {
+    if bid.is_closed || (bid.state != bid_state::ACTIVE && bid.state != bid_state::BOUND_ACTIVE) {
         return SimulationResult::Error("BidNotActive".to_string());
     }
 
@@ -1254,15 +1326,222 @@ pub fn simulate_cancel_bid(
     SimulationResult::Success
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SimulatedBidCandidate {
+    bid_id: [u8; 32],
+    requested_reward_lamports: u64,
+    eta_seconds: u32,
+    confidence_bps: u16,
+    reputation_snapshot_bps: u16,
+    weighted_score: u128,
+}
+
+fn simulated_bid_candidate(
+    task: &SimulatedTask,
+    bid_book: &SimulatedBidBook,
+    bid: &SimulatedBid,
+    now: i64,
+) -> Result<Option<SimulatedBidCandidate>, &'static str> {
+    if bid.task != task.task_id
+        || bid.requested_reward_lamports == 0
+        || bid.requested_reward_lamports > task.reward_amount
+        || bid.eta_seconds == 0
+        || bid.confidence_bps > MAX_CONFIDENCE_BPS
+        || bid.reputation_snapshot_bps > MAX_CONFIDENCE_BPS
+        || bid.bond_lamports == 0
+    {
+        return Err("BidBookEnumerationMismatch");
+    }
+    let completion_at = now
+        .checked_add(i64::from(bid.eta_seconds))
+        .ok_or("ArithmeticOverflow")?;
+    if bid.is_closed
+        || bid.state != bid_state::BOUND_ACTIVE
+        || now >= bid.expires_at
+        || task.deadline <= now
+        || completion_at > task.deadline
+    {
+        return Ok(None);
+    }
+
+    let task_budget = u128::from(task.reward_amount);
+    let remaining =
+        u128::try_from(task.deadline.saturating_sub(now)).map_err(|_| "ArithmeticOverflow")?;
+    let price_score = u128::from(
+        task.reward_amount
+            .checked_sub(bid.requested_reward_lamports)
+            .ok_or("ArithmeticOverflow")?,
+    )
+    .checked_mul(u128::from(MAX_CONFIDENCE_BPS))
+    .and_then(|value| value.checked_div(task_budget))
+    .ok_or("ArithmeticOverflow")?;
+    let eta_score = remaining
+        .checked_sub(u128::from(bid.eta_seconds))
+        .and_then(|value| value.checked_mul(u128::from(MAX_CONFIDENCE_BPS)))
+        .and_then(|value| value.checked_div(remaining))
+        .ok_or("ArithmeticOverflow")?;
+    let weighted_score = price_score
+        .checked_mul(u128::from(bid_book.price_weight_bps))
+        .and_then(|value| {
+            value.checked_add(eta_score.checked_mul(u128::from(bid_book.eta_weight_bps))?)
+        })
+        .and_then(|value| {
+            value.checked_add(
+                u128::from(bid.confidence_bps)
+                    .checked_mul(u128::from(bid_book.confidence_weight_bps))?,
+            )
+        })
+        .and_then(|value| {
+            value.checked_add(
+                u128::from(bid.reputation_snapshot_bps)
+                    .checked_mul(u128::from(bid_book.reliability_weight_bps))?,
+            )
+        })
+        .ok_or("ArithmeticOverflow")?;
+
+    Ok(Some(SimulatedBidCandidate {
+        bid_id: bid.bid_id,
+        requested_reward_lamports: bid.requested_reward_lamports,
+        eta_seconds: bid.eta_seconds,
+        confidence_bps: bid.confidence_bps,
+        reputation_snapshot_bps: bid.reputation_snapshot_bps,
+        weighted_score,
+    }))
+}
+
+fn simulated_lower_price_tie_break(
+    candidate: &SimulatedBidCandidate,
+    incumbent: &SimulatedBidCandidate,
+) -> bool {
+    candidate.requested_reward_lamports < incumbent.requested_reward_lamports
+        || (candidate.requested_reward_lamports == incumbent.requested_reward_lamports
+            && (candidate.eta_seconds < incumbent.eta_seconds
+                || (candidate.eta_seconds == incumbent.eta_seconds
+                    && (candidate.confidence_bps > incumbent.confidence_bps
+                        || (candidate.confidence_bps == incumbent.confidence_bps
+                            && (candidate.reputation_snapshot_bps
+                                > incumbent.reputation_snapshot_bps
+                                || (candidate.reputation_snapshot_bps
+                                    == incumbent.reputation_snapshot_bps
+                                    && candidate.bid_id < incumbent.bid_id)))))))
+}
+
+fn simulated_lower_eta_tie_break(
+    candidate: &SimulatedBidCandidate,
+    incumbent: &SimulatedBidCandidate,
+) -> bool {
+    candidate.eta_seconds < incumbent.eta_seconds
+        || (candidate.eta_seconds == incumbent.eta_seconds
+            && (candidate.requested_reward_lamports < incumbent.requested_reward_lamports
+                || (candidate.requested_reward_lamports == incumbent.requested_reward_lamports
+                    && (candidate.confidence_bps > incumbent.confidence_bps
+                        || (candidate.confidence_bps == incumbent.confidence_bps
+                            && (candidate.reputation_snapshot_bps
+                                > incumbent.reputation_snapshot_bps
+                                || (candidate.reputation_snapshot_bps
+                                    == incumbent.reputation_snapshot_bps
+                                    && candidate.bid_id < incumbent.bid_id)))))))
+}
+
+fn simulated_candidate_is_better(
+    candidate: &SimulatedBidCandidate,
+    incumbent: &SimulatedBidCandidate,
+    policy: u8,
+) -> bool {
+    match policy {
+        matching_policy::BEST_PRICE => simulated_lower_price_tie_break(candidate, incumbent),
+        matching_policy::BEST_ETA => simulated_lower_eta_tie_break(candidate, incumbent),
+        matching_policy::WEIGHTED_SCORE => {
+            candidate.weighted_score > incumbent.weighted_score
+                || (candidate.weighted_score == incumbent.weighted_score
+                    && simulated_lower_price_tie_break(candidate, incumbent))
+        }
+        _ => false,
+    }
+}
+
+pub fn simulate_validate_bid_selection(
+    task: &SimulatedTask,
+    bid_book: &SimulatedBidBook,
+    selected_bid: &SimulatedBid,
+    other_bid_pairs: &[SimulatedCompetingBidPair],
+    now: i64,
+    min_reputation: u16,
+) -> SimulationResult {
+    let weights_total = bid_book
+        .price_weight_bps
+        .checked_add(bid_book.eta_weight_bps)
+        .and_then(|value| value.checked_add(bid_book.confidence_weight_bps))
+        .and_then(|value| value.checked_add(bid_book.reliability_weight_bps));
+    let policy_valid = match bid_book.policy {
+        matching_policy::BEST_PRICE | matching_policy::BEST_ETA => weights_total == Some(0),
+        matching_policy::WEIGHTED_SCORE => weights_total == Some(MAX_CONFIDENCE_BPS),
+        _ => false,
+    };
+    if !policy_valid
+        || !(1..=MAX_ACTIVE_BIDS_PER_TASK).contains(&bid_book.active_bids)
+        || other_bid_pairs.len() != usize::from(bid_book.active_bids.saturating_sub(1))
+    {
+        return SimulationResult::Error("BidBookEnumerationMismatch".to_string());
+    }
+
+    let mut best = match simulated_bid_candidate(task, bid_book, selected_bid, now) {
+        Ok(Some(candidate)) => candidate,
+        Ok(None) => return SimulationResult::Error("BidDoesNotSatisfyMatchingPolicy".to_string()),
+        Err(error) => return SimulationResult::Error(error.to_string()),
+    };
+    let mut seen_bids = vec![selected_bid.bid_id];
+    let mut seen_bidders = vec![selected_bid.bidder];
+    for pair in other_bid_pairs {
+        let other_bid = &pair.bid;
+        if seen_bids.contains(&other_bid.bid_id)
+            || seen_bidders.contains(&pair.bidder.agent_id)
+            || other_bid.bidder != pair.bidder.agent_id
+            || (other_bid.state != bid_state::ACTIVE && other_bid.state != bid_state::BOUND_ACTIVE)
+        {
+            return SimulationResult::Error("BidBookEnumerationMismatch".to_string());
+        }
+        seen_bids.push(other_bid.bid_id);
+        seen_bidders.push(pair.bidder.agent_id);
+        let candidate = match simulated_bid_candidate(task, bid_book, other_bid, now) {
+            Ok(candidate) => candidate,
+            Err(error) => return SimulationResult::Error(error.to_string()),
+        };
+        let bidder_is_currently_eligible = pair.bidder.status == agent_status::ACTIVE
+            && (pair.bidder.capabilities & task.required_capabilities)
+                == task.required_capabilities
+            && (min_reputation == 0 || pair.bidder.reputation >= min_reputation)
+            && pair.bidder.stake >= SIMULATED_MIN_AGENT_STAKE
+            && pair.bidder.active_tasks < MAX_ACTIVE_BID_TASKS;
+        if bidder_is_currently_eligible {
+            if let Some(candidate) = candidate {
+                if simulated_candidate_is_better(&candidate, &best, bid_book.policy) {
+                    best = candidate;
+                }
+            }
+        }
+    }
+
+    if best.bid_id != selected_bid.bid_id {
+        return SimulationResult::Error("BidDoesNotSatisfyMatchingPolicy".to_string());
+    }
+    SimulationResult::Success
+}
+
 pub fn simulate_accept_bid(
     task: &mut SimulatedTask,
     bid_book: &mut SimulatedBidBook,
     bid: &mut SimulatedBid,
     bidder: &mut SimulatedAgent,
     bidder_state: &mut SimulatedBidderMarketState,
-    now: i64,
-    min_reputation: u16,
+    context: SimulatedBidAcceptanceContext<'_>,
 ) -> SimulationResult {
+    let SimulatedBidAcceptanceContext {
+        other_bid_pairs,
+        now,
+        min_reputation,
+    } = context;
+
     if let Some(result) = require_bid_marketplace_task(task) {
         return result;
     }
@@ -1279,7 +1558,7 @@ pub fn simulate_accept_bid(
         return SimulationResult::Error("BidBookNotOpen".to_string());
     }
 
-    if bid.is_closed || bid.state != bid_state::ACTIVE {
+    if bid.is_closed || bid.state != bid_state::BOUND_ACTIVE {
         return SimulationResult::Error("BidNotActive".to_string());
     }
 
@@ -1287,8 +1566,16 @@ pub fn simulate_accept_bid(
         return SimulationResult::Error("TaskExpired".to_string());
     }
 
+    if bid.bidder != bidder.agent_id {
+        return SimulationResult::Error("BidBookEnumerationMismatch".to_string());
+    }
+
     if bidder.status != agent_status::ACTIVE {
         return SimulationResult::Error("AgentNotActive".to_string());
+    }
+
+    if bidder.stake < SIMULATED_MIN_AGENT_STAKE {
+        return SimulationResult::Error("InsufficientStake".to_string());
     }
 
     if (bidder.capabilities & task.required_capabilities) != task.required_capabilities {
@@ -1301,6 +1588,12 @@ pub fn simulate_accept_bid(
 
     if bidder.active_tasks >= MAX_ACTIVE_BID_TASKS {
         return SimulationResult::Error("MaxActiveTasksReached".to_string());
+    }
+
+    let selection_result =
+        simulate_validate_bid_selection(task, bid_book, bid, other_bid_pairs, now, min_reputation);
+    if !selection_result.is_success() {
+        return selection_result;
     }
 
     let old_status = task.status;
@@ -1349,7 +1642,7 @@ pub fn simulate_expire_bid(
         return result;
     }
 
-    if bid.is_closed || bid.state != bid_state::ACTIVE {
+    if bid.is_closed || (bid.state != bid_state::ACTIVE && bid.state != bid_state::BOUND_ACTIVE) {
         return SimulationResult::Error("BidNotActive".to_string());
     }
 
@@ -1457,7 +1750,10 @@ mod tests {
         assert!(result.is_success());
         assert_eq!(task.status, task_status::COMPLETED);
         assert!(escrow.is_closed);
-        assert!(worker.reputation > 5000);
+        assert_eq!(
+            worker.reputation, 5000,
+            "a dust protocol fee must not mint reputation"
+        );
     }
 
     #[test]
@@ -1507,7 +1803,6 @@ mod tests {
             let mut worker = build_valid_worker_fixture();
             let config = SimulatedConfig {
                 protocol_fee_bps: fee_bps,
-                ..Default::default()
             };
 
             let result = simulate_complete_task(

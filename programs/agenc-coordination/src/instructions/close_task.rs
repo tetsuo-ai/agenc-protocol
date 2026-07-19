@@ -1,19 +1,20 @@
-//! Reclaim a terminal task's account rent (embeddable marketplace, Batch 1).
+//! Clean up a terminal task without destroying its durable liveness anchor.
 //!
-//! Neither `complete_task` (via completion_helpers) nor `cancel_task` closes the
-//! `Task` PDA itself — they close the escrow + claims and set a terminal status,
-//! leaving the `Task` account (and its rent) stranded. `close_task` lets the task
-//! creator reclaim that rent once the task is terminal (`Completed` or
-//! `Cancelled`), and also closes the leftover `TaskJobSpec` pointer in the same
-//! transaction.
+//! A task can have children whose addresses are not enumerable from the `Task`
+//! account (historical submissions and per-hash/per-moderator attestations). If
+//! the parent PDA is destroyed while one of those children is omitted, every
+//! child exit that loads `Account<Task>` is permanently bricked. `close_task`
+//! therefore retains the full rent-exempt terminal `Task` as a tombstone/liveness
+//! anchor. It still closes every supplied child, frees hired-listing capacity,
+//! and refunds any Task lamports above the rent-exempt minimum.
 //!
-//! Escrow handling: most terminal paths (`cancel_task`, completion, and
-//! `resolve_dispute`) fully close the escrow PDA before the task becomes terminal,
-//! so the caller passes `escrow = None`. The one exception is `expire_dispute`,
-//! which marks `escrow.is_closed = true` and drains the funds but does NOT close
-//! the escrow account — leaving its rent stranded. For that path the caller passes
-//! the still-alive escrow and `close_task` reclaims its rent too (only ever an
-//! already-settled `is_closed` escrow, never one still holding funds).
+//! Escrow handling: SOL terminal paths and `expire_dispute` close the escrow PDA,
+//! so the caller normally passes `escrow = None`. `resolve_dispute` deliberately
+//! retains a token task's `TaskEscrow` state while token-slash settlement is being
+//! distinguished from an already-settled token outcome. Once that account is
+//! drained and marked `is_closed = true`, the caller may pass it here to reclaim
+//! its rent. A pending reserve remains `is_closed = false` and cannot be reclaimed
+//! until the required slash finalizer has settled it.
 //!
 //! Hire/capacity handling: the `hire_record` PDA is ALWAYS a required account (the
 //! caller passes the derived `["hire", task]` address even for non-hired tasks,
@@ -33,7 +34,11 @@ use anchor_lang::prelude::*;
 
 /// Pure guard: a task is closable only in a terminal state with no live workers.
 /// Extracted so the terminal-only rule is unit-testable and revert-sensitive.
-pub(crate) fn validate_task_closable(status: TaskStatus, current_workers: u8) -> Result<()> {
+pub(crate) fn validate_task_closable(
+    status: TaskStatus,
+    current_workers: u8,
+    worker_slash_pending: bool,
+) -> Result<()> {
     require!(
         matches!(status, TaskStatus::Completed | TaskStatus::Cancelled),
         CoordinationError::TaskNotClosable
@@ -41,14 +46,23 @@ pub(crate) fn validate_task_closable(status: TaskStatus, current_workers: u8) ->
     // Defensive: a terminal task should never still reference a live worker; on
     // both terminal paths current_workers is driven to 0 before settlement.
     require!(current_workers == 0, CoordinationError::TaskNotClosable);
+    require!(!worker_slash_pending, CoordinationError::ClaimSlashPending);
     Ok(())
+}
+
+/// A live HireRecord consumes exactly one listing-capacity slot. Underflow is
+/// state corruption, not an idempotent cleanup condition: silently clamping to
+/// zero would close the only durable link and permanently hide the mismatch.
+fn decrement_listing_open_jobs(open_jobs: u16) -> Result<u16> {
+    open_jobs
+        .checked_sub(1)
+        .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
 }
 
 #[derive(Accounts)]
 pub struct CloseTask<'info> {
     #[account(
         mut,
-        close = authority,
         seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
         bump = task.bump,
         constraint = task.creator == authority.key() @ CoordinationError::UnauthorizedTaskAction
@@ -72,9 +86,11 @@ pub struct CloseTask<'info> {
     )]
     pub task_job_spec: Option<Box<Account<'info, TaskJobSpec>>>,
 
-    /// Optional still-alive escrow PDA. Only `expire_dispute` leaves the escrow
-    /// account open (drained, `is_closed = true`) on a terminal task; provide it
-    /// here to reclaim its rent. Bound to this task by seeds + constraint.
+    /// Optional already-settled escrow PDA. `resolve_dispute` can leave a token
+    /// task's state escrow open after draining it and setting `is_closed = true`;
+    /// provide it here to reclaim its rent. A pending token reserve is still marked
+    /// open and is rejected until its slash finalizer runs. Bound to this task by
+    /// seeds + constraint.
     // Boxed for the same SBF stack-frame reason as `task_job_spec` above — moves the
     // deserialized escrow off the stack; constraints and close behavior unchanged.
     #[account(
@@ -133,7 +149,7 @@ pub struct CloseTask<'info> {
     #[account(mut)]
     pub worker_completion_bond: Option<UncheckedAccount<'info>>,
 
-    /// Task creator; receives the reclaimed rent. Mutable to credit lamports.
+    /// Task creator; receives child rent and any Task balance above rent minimum.
     #[account(mut)]
     pub authority: Signer<'info>,
 
@@ -164,13 +180,16 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
     let clock = Clock::get()?;
     let task_key = ctx.accounts.task.key();
     let task = &ctx.accounts.task;
-    require!(task.bump > 0, CoordinationError::CorruptedData);
-    // Terminal status is the safety boundary: every path that reaches Completed or
-    // Cancelled (cancel_task, completion_helpers, and dispute resolution) closes the
-    // escrow + claims first, so a closable task never has an open escrow/claim to
-    // orphan. close_task therefore does not take the escrow account (it is already
-    // gone) and only reclaims the leftover Task (+ optional TaskJobSpec).
-    validate_task_closable(task.status, task.current_workers)?;
+    // The account constraint already validates the canonical task PDA using the
+    // stored bump. Bump 0 is valid and cannot be treated as corruption.
+    // Terminal status and zero live workers are the cleanup boundary. The Task
+    // itself remains alive because omitted auxiliary children cannot be enumerated
+    // or proven absent from this instruction.
+    validate_task_closable(
+        task.status,
+        task.current_workers,
+        task.worker_slash_pending(),
+    )?;
 
     // Audit F12: never close the Task PDA while a completion bond is still live, because
     // reclaim_completion_bond needs a live Task to refund it — closing first would strand
@@ -202,27 +221,28 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
             .remaining_accounts
             .first()
             .ok_or(CoordinationError::BidSettlementAccountsRequired)?;
-        require!(
-            book_info.owner == &crate::ID,
-            CoordinationError::InvalidAccountOwner
-        );
-        let (expected_book, _) = Pubkey::find_program_address(
-            &[b"bid_book", task_key.as_ref()],
-            &crate::ID,
-        );
+        let (expected_book, _) =
+            Pubkey::find_program_address(&[b"bid_book", task_key.as_ref()], &crate::ID);
         require!(
             book_info.key() == expected_book,
             CoordinationError::InvalidInput
         );
-        let book = {
-            let data = book_info.try_borrow_data()?;
-            crate::state::TaskBidBook::try_deserialize(&mut &data[..])?
-        };
-        require!(
-            book.active_bids == 0,
-            CoordinationError::TaskNotClosable
-        );
-        (1, Some(book_info.clone()))
+        if book_info.owner == &crate::ID {
+            let book = {
+                let data = book_info.try_borrow_data()?;
+                crate::state::TaskBidBook::try_deserialize(&mut &data[..])?
+            };
+            require!(book.active_bids == 0, CoordinationError::TaskNotClosable);
+            (1, Some(book_info.clone()))
+        } else {
+            // `close_task` is intentionally repeatable. After an earlier cleanup
+            // swept the canonical book, the same PDA is an empty system account.
+            require!(
+                book_info.owner == &anchor_lang::system_program::ID && book_info.data_is_empty(),
+                CoordinationError::InvalidAccountOwner
+            );
+            (1, None)
+        }
     } else {
         (0, None)
     };
@@ -245,8 +265,8 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
 
     let authority_info = ctx.accounts.authority.to_account_info();
 
-    // Close the optional children in-handler; the Task PDA itself is closed via the
-    // `close = authority` account constraint after this returns Ok.
+    // Close the optional children in-handler. The Task PDA deliberately survives
+    // as the durable parent needed by any child omitted from this cleanup pass.
     if let Some(job_spec) = ctx.accounts.task_job_spec.as_ref() {
         job_spec.close(authority_info.clone())?;
     }
@@ -283,8 +303,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
             listing.key() == hire.listing,
             CoordinationError::InvalidInput
         );
-        // saturating_sub: a capacity counter must never underflow.
-        listing.open_jobs = listing.open_jobs.saturating_sub(1);
+        listing.open_jobs = decrement_listing_open_jobs(listing.open_jobs)?;
         listing.updated_at = clock.unix_timestamp;
 
         // Close the hire link: drain rent to the creator, then zero + tombstone the
@@ -301,10 +320,9 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         data[..8].copy_from_slice(&[255u8; 8]);
     }
 
-    // Reclaim rent from any auxiliary child PDAs (task_moderation / task_validation /
-    // task_submission / task_attestor) passed via remaining_accounts. Each is bound to
-    // THIS task by its stored `task` field, so a caller cannot close an unrelated
-    // account; the task is already terminal, so these records are no longer needed.
+    // Reclaim rent from explicitly supplied auxiliary child PDAs. Each child is
+    // bound to THIS task by stored state. Third-party-funded records are paid only
+    // to their stored funder; a creator can never harvest another party's rent.
     //
     // Batch 3 WS-CONTEST §1 (submission-rent return): a straggler `TaskSubmission`
     // was funded by its WORKER, so its rent goes back to the submission's stored
@@ -320,9 +338,26 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         idx = idx
             .checked_add(1)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
-        match classify_task_child(child, &task_key)? {
+        match classify_task_child(child, &task_key, task.live_submissions())? {
             TaskChild::CreatorFunded => close_child_to(child, &authority_info)?,
-            TaskChild::WorkerSubmission { worker_agent } => {
+            TaskChild::NamedRecipient { recipient } => {
+                let recipient_info = ctx
+                    .remaining_accounts
+                    .get(idx)
+                    .ok_or(CoordinationError::TaskChildRentRecipientRequired)?;
+                idx = idx
+                    .checked_add(1)
+                    .ok_or(CoordinationError::ArithmeticOverflow)?;
+                require!(
+                    recipient_info.key() == recipient && recipient_info.is_writable,
+                    CoordinationError::TaskChildRentRecipientRequired
+                );
+                close_child_to(child, recipient_info)?;
+            }
+            TaskChild::WorkerSubmission {
+                worker_agent,
+                submitted_at,
+            } => {
                 let agent_info = ctx
                     .remaining_accounts
                     .get(idx)
@@ -340,6 +375,7 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
                 close_submission_child_to_worker(
                     child,
                     &worker_agent,
+                    submitted_at,
                     agent_info,
                     worker_wallet_info,
                     ctx.accounts
@@ -351,40 +387,84 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, CloseTask<'info>>) -> Resu
         }
     }
 
+    // Keep the complete Task account rent exempt so every omitted child retains a
+    // usable parent. Direct transfers or historical excess above the rent floor are
+    // still recoverable by the creator; only the minimum liveness deposit remains.
+    let task_info = ctx.accounts.task.to_account_info();
+    let rent_minimum = Rent::get()?.minimum_balance(task_info.data_len());
+    require!(
+        task_info.lamports() >= rent_minimum,
+        CoordinationError::TaskNotRentExempt
+    );
+    let surplus = task_info.lamports() - rent_minimum;
+    if surplus > 0 {
+        **task_info.try_borrow_mut_lamports()? = rent_minimum;
+        **authority_info.try_borrow_mut_lamports()? = authority_info
+            .lamports()
+            .checked_add(surplus)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
+    }
+
     Ok(())
 }
 
 /// A recognized auxiliary child of a terminal task, classified by who funded it —
 /// which decides who gets its rent back.
 enum TaskChild {
-    /// Creator-funded records (`TaskModeration` / `TaskValidationConfig` /
-    /// `TaskAttestorConfig`): rent returns to the creator, as before.
+    /// Creator-funded records (`TaskValidationConfig` / `TaskAttestorConfig`).
     CreatorFunded,
+    /// A record funded by a stored wallet (currently `TaskModeration`). The next
+    /// remaining account must be this writable recipient.
+    NamedRecipient { recipient: Pubkey },
     /// A worker-funded `TaskSubmission` straggler: rent returns to the submission's
     /// stored worker (Batch 3 WS-CONTEST §1). Carries the stored worker AGENT PDA
     /// the payee accounts must be validated against.
-    WorkerSubmission { worker_agent: Pubkey },
+    WorkerSubmission {
+        worker_agent: Pubkey,
+        submitted_at: i64,
+    },
 }
 
 /// Identify a child by trying each known type's discriminator, validate it is bound
 /// to THIS task, and classify its rent destination. An unrecognized program-owned
 /// account (or another task's record) is rejected so a caller cannot close an
 /// unrelated account.
-fn classify_task_child(child: &AccountInfo, task_key: &Pubkey) -> Result<TaskChild> {
+fn classify_task_child(
+    child: &AccountInfo,
+    task_key: &Pubkey,
+    task_live_submissions: u8,
+) -> Result<TaskChild> {
     require!(
         child.owner == &crate::ID,
         CoordinationError::InvalidAccountOwner
     );
     let data = child.try_borrow_data()?;
     let (bound_task, child_kind) = if let Ok(m) = TaskModeration::try_deserialize(&mut &data[..]) {
-        (m.task, TaskChild::CreatorFunded)
+        (
+            m.task,
+            TaskChild::NamedRecipient {
+                recipient: m.moderator,
+            },
+        )
     } else if let Ok(v) = TaskValidationConfig::try_deserialize(&mut &data[..]) {
+        require!(
+            v.pending_submission_count() == 0 && task_live_submissions == 0,
+            CoordinationError::TaskChildRequiresDedicatedCleanup
+        );
         (v.task, TaskChild::CreatorFunded)
     } else if let Ok(s) = TaskSubmission::try_deserialize(&mut &data[..]) {
+        require!(
+            matches!(
+                s.status,
+                crate::state::SubmissionStatus::Accepted | crate::state::SubmissionStatus::Rejected
+            ),
+            CoordinationError::TaskChildRequiresDedicatedCleanup
+        );
         (
             s.task,
             TaskChild::WorkerSubmission {
                 worker_agent: s.worker,
+                submitted_at: s.submitted_at,
             },
         )
     } else if let Ok(a) = TaskAttestorConfig::try_deserialize(&mut &data[..]) {
@@ -398,10 +478,7 @@ fn classify_task_child(child: &AccountInfo, task_key: &Pubkey) -> Result<TaskChi
 
 /// Drain a child's rent to `recipient` and tombstone the account (mirrors the
 /// cancel_task claim-close pattern; the 0-lamport account is GC'd at end of tx).
-fn close_child_to<'info>(
-    child: &AccountInfo<'info>,
-    recipient: &AccountInfo<'info>,
-) -> Result<()> {
+fn close_child_to<'info>(child: &AccountInfo<'info>, recipient: &AccountInfo<'info>) -> Result<()> {
     let lamports = child.lamports();
     **child.try_borrow_mut_lamports()? = 0;
     **recipient.try_borrow_mut_lamports()? = recipient
@@ -418,6 +495,10 @@ fn close_child_to<'info>(
 /// against program-owned stored pubkeys (spec invariant 2 — no cranker-supplied
 /// account trust): the supplied agent account must BE the submission's stored
 /// worker agent, and the writable wallet must BE that agent's stored authority.
+/// A program-owned account at the expected PDA is not sufficient by itself:
+/// revision 4 could close and re-create the identity. Strict timestamp continuity
+/// (`registered_at < submitted_at`) proves the registration predates the child;
+/// equality is deliberately discontinuous because same-second bundles existed.
 ///
 /// FIX 5 (deregistered-agent orphan): the worker's `AgentRegistration` may have
 /// been legitimately closed (`deregister_agent` is allowed once
@@ -430,6 +511,7 @@ fn close_child_to<'info>(
 fn close_submission_child_to_worker<'info>(
     child: &AccountInfo<'info>,
     stored_worker_agent: &Pubkey,
+    submission_submitted_at: i64,
     agent_info: &AccountInfo<'info>,
     worker_wallet_info: &AccountInfo<'info>,
     treasury: Option<Pubkey>,
@@ -439,10 +521,32 @@ fn close_submission_child_to_worker<'info>(
         CoordinationError::SubmissionRentAccountsRequired
     );
     let expected_payee = if agent_info.owner == &crate::ID {
+        require!(
+            agent_info.data_len() == AgentRegistration::SIZE,
+            CoordinationError::CorruptedData
+        );
         let data = agent_info.try_borrow_data()?;
-        AgentRegistration::try_deserialize(&mut &data[..])
-            .map_err(|_| error!(CoordinationError::SubmissionRentAccountsRequired))?
-            .authority
+        let worker = AgentRegistration::try_deserialize(&mut &data[..])
+            .map_err(|_| error!(CoordinationError::CorruptedData))?;
+        let (expected_agent, expected_bump) =
+            Pubkey::find_program_address(&[b"agent", worker.agent_id.as_ref()], &crate::ID);
+        require!(
+            expected_agent == agent_info.key()
+                && worker.bump == expected_bump
+                && worker.authority != Pubkey::default(),
+            CoordinationError::SubmissionRentAccountsRequired
+        );
+        require!(
+            worker.validate_reserved_fields(),
+            CoordinationError::CorruptedData
+        );
+        if worker.registered_at < submission_submitted_at {
+            worker.authority
+        } else {
+            // A same-time or later registration is an unauthenticated clone. The
+            // original wallet is unrecoverable; never pay the clone.
+            treasury.ok_or(CoordinationError::SubmissionRentAccountsRequired)?
+        }
     } else if agent_info.owner == &anchor_lang::system_program::ID && agent_info.data_is_empty() {
         // Provably-closed agent at the stored address: the only safe payee is
         // the protocol treasury (fail-closed if protocol_config was omitted).
@@ -467,8 +571,8 @@ mod tests {
 
     #[test]
     fn accepts_terminal_with_no_workers() {
-        assert!(validate_task_closable(TaskStatus::Completed, 0).is_ok());
-        assert!(validate_task_closable(TaskStatus::Cancelled, 0).is_ok());
+        assert!(validate_task_closable(TaskStatus::Completed, 0, false).is_ok());
+        assert!(validate_task_closable(TaskStatus::Cancelled, 0, false).is_ok());
     }
 
     // Revert-sensitive: removing the terminal-status require! turns these red.
@@ -480,13 +584,25 @@ mod tests {
             TaskStatus::PendingValidation,
             TaskStatus::Disputed,
         ] {
-            assert!(validate_task_closable(status, 0).is_err());
+            assert!(validate_task_closable(status, 0, false).is_err());
         }
     }
 
     // Revert-sensitive: removing the current_workers require! turns this red.
     #[test]
     fn rejects_terminal_with_live_worker() {
-        assert!(validate_task_closable(TaskStatus::Completed, 1).is_err());
+        assert!(validate_task_closable(TaskStatus::Completed, 1, false).is_err());
+    }
+
+    #[test]
+    fn rejects_terminal_with_pending_worker_slash() {
+        assert!(validate_task_closable(TaskStatus::Cancelled, 0, true).is_err());
+    }
+
+    #[test]
+    fn listing_capacity_decrement_fails_closed_on_underflow() {
+        assert_eq!(decrement_listing_open_jobs(2).unwrap(), 1);
+        assert_eq!(decrement_listing_open_jobs(1).unwrap(), 0);
+        assert!(decrement_listing_open_jobs(0).is_err());
     }
 }

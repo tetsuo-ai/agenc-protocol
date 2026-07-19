@@ -18,7 +18,40 @@ use anchor_lang::prelude::*;
 
 use crate::errors::CoordinationError;
 use crate::instructions::constants::DEFAULT_MODERATION_LIVENESS_WINDOW_SECS;
-use crate::state::{ListingModeration, ModerationBlock, ModerationConfig, TaskModeration, HASH_SIZE};
+use crate::state::{
+    moderation_block_status, ListingModeration, ModerationBlock, ModerationConfig, TaskModeration,
+    HASH_SIZE,
+};
+
+fn validate_moderation_block_record(
+    block: &ModerationBlock,
+    expected_content_hash: &[u8; HASH_SIZE],
+) -> Result<()> {
+    let (_, expected_bump) = Pubkey::find_program_address(
+        &[b"moderation_block", expected_content_hash.as_ref()],
+        &crate::ID,
+    );
+    require!(
+        block.content_hash == *expected_content_hash,
+        CoordinationError::InvalidModerationBlockAccount
+    );
+    require!(
+        block.bump == expected_bump,
+        CoordinationError::InvalidModerationBlockAccount
+    );
+    require!(
+        matches!(
+            block.status,
+            moderation_block_status::CLEARED | moderation_block_status::BLOCKED
+        ),
+        CoordinationError::InvalidModerationBlockAccount
+    );
+    require!(
+        block.validate_reserved_fields(),
+        CoordinationError::InvalidModerationBlockAccount
+    );
+    Ok(())
+}
 
 /// P1.3 liveness deadman (batch-2 A2, `docs/MODERATION_LIVENESS.md`): `true` when
 /// the moderation authority has been silent — no `configure_task_moderation` /
@@ -89,7 +122,8 @@ fn deserialize_program_record<T: AccountDeserialize>(info: &AccountInfo) -> Resu
     let data = info.try_borrow_data()?;
     // `try_deserialize` enforces the 8-byte account discriminator, so a
     // program-owned account of a DIFFERENT type cannot masquerade as a record.
-    T::try_deserialize(&mut data.as_ref()).map_err(|_| error!(CoordinationError::InvalidModerationRecord))
+    T::try_deserialize(&mut data.as_ref())
+        .map_err(|_| error!(CoordinationError::InvalidModerationRecord))
 }
 
 /// Load the task-side moderation record from the v2-else-legacy slot and re-check
@@ -104,7 +138,7 @@ pub fn load_task_moderation_record(
     job_spec_hash: &[u8; HASH_SIZE],
     moderator: &Pubkey,
 ) -> Result<TaskModeration> {
-    let (v2, _) = Pubkey::find_program_address(
+    let (v2, v2_bump) = Pubkey::find_program_address(
         &[
             b"task_moderation_v2",
             task_key.as_ref(),
@@ -113,13 +147,25 @@ pub fn load_task_moderation_record(
         ],
         &crate::ID,
     );
-    let (legacy, _) = Pubkey::find_program_address(
-        &[b"task_moderation", task_key.as_ref(), job_spec_hash.as_ref()],
+    let (legacy, legacy_bump) = Pubkey::find_program_address(
+        &[
+            b"task_moderation",
+            task_key.as_ref(),
+            job_spec_hash.as_ref(),
+        ],
         &crate::ID,
     );
-    classify_moderation_record_address(record_info.key, &v2, &legacy)?;
+    let slot = classify_moderation_record_address(record_info.key, &v2, &legacy)?;
 
     let record: TaskModeration = deserialize_program_record(record_info)?;
+    let expected_bump = match slot {
+        ModerationRecordSlot::V2 => v2_bump,
+        ModerationRecordSlot::Legacy => legacy_bump,
+    };
+    require!(
+        record.bump == expected_bump,
+        CoordinationError::InvalidModerationRecord
+    );
     // The record must have been authored by the presented moderator — on the v2 slot
     // this re-confirms the seed, on the legacy slot it binds the caller's `moderator`
     // argument to the stored author (so the attestor sub-binding checks the right key).
@@ -149,7 +195,7 @@ pub fn load_listing_moderation_record(
     listing_spec_hash: &[u8; HASH_SIZE],
     moderator: &Pubkey,
 ) -> Result<ListingModeration> {
-    let (v2, _) = Pubkey::find_program_address(
+    let (v2, v2_bump) = Pubkey::find_program_address(
         &[
             b"listing_moderation_v2",
             listing_key.as_ref(),
@@ -158,7 +204,7 @@ pub fn load_listing_moderation_record(
         ],
         &crate::ID,
     );
-    let (legacy, _) = Pubkey::find_program_address(
+    let (legacy, legacy_bump) = Pubkey::find_program_address(
         &[
             b"listing_moderation",
             listing_key.as_ref(),
@@ -166,9 +212,17 @@ pub fn load_listing_moderation_record(
         ],
         &crate::ID,
     );
-    classify_moderation_record_address(record_info.key, &v2, &legacy)?;
+    let slot = classify_moderation_record_address(record_info.key, &v2, &legacy)?;
 
     let record: ListingModeration = deserialize_program_record(record_info)?;
+    let expected_bump = match slot {
+        ModerationRecordSlot::V2 => v2_bump,
+        ModerationRecordSlot::Legacy => legacy_bump,
+    };
+    require!(
+        record.bump == expected_bump,
+        CoordinationError::InvalidModerationRecord
+    );
     require!(
         record.moderator == *moderator,
         CoordinationError::UnauthorizedTaskModerator
@@ -211,6 +265,7 @@ pub fn require_content_not_blocked(
         let data = block_info.try_borrow_data()?;
         let block = ModerationBlock::try_deserialize(&mut data.as_ref())
             .map_err(|_| error!(CoordinationError::InvalidModerationBlockAccount))?;
+        validate_moderation_block_record(&block, content_hash)?;
         require!(!block.is_blocked(), CoordinationError::ContentBlocked);
     } else {
         require!(
@@ -263,6 +318,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn block_records_fail_closed_on_unknown_status_hash_or_reserved_bytes() {
+        let hash = [7u8; HASH_SIZE];
+        let (_, bump) =
+            Pubkey::find_program_address(&[b"moderation_block", hash.as_ref()], &crate::ID);
+        let mut block = ModerationBlock {
+            content_hash: hash,
+            status: moderation_block_status::CLEARED,
+            bump,
+            ..ModerationBlock::default()
+        };
+        assert!(validate_moderation_block_record(&block, &hash).is_ok());
+
+        block.status = 2;
+        assert!(validate_moderation_block_record(&block, &hash).is_err());
+        block.status = moderation_block_status::CLEARED;
+        assert!(validate_moderation_block_record(&block, &[8u8; HASH_SIZE]).is_err());
+        block._reserved[0] = 1;
+        assert!(validate_moderation_block_record(&block, &hash).is_err());
+    }
+
     // === P1.3 liveness deadman (batch-2 A2) ===
     use crate::instructions::constants::MIN_MODERATION_LIVENESS_WINDOW_SECS;
 
@@ -277,10 +353,22 @@ mod tests {
         let window = DEFAULT_MODERATION_LIVENESS_WINDOW_SECS as i64;
         // Inside the window (incl. the exact boundary): STRICT.
         assert!(!moderation_liveness_relaxed(heartbeat, 0, heartbeat));
-        assert!(!moderation_liveness_relaxed(heartbeat, 0, heartbeat + window - 1));
-        assert!(!moderation_liveness_relaxed(heartbeat, 0, heartbeat + window));
+        assert!(!moderation_liveness_relaxed(
+            heartbeat,
+            0,
+            heartbeat + window - 1
+        ));
+        assert!(!moderation_liveness_relaxed(
+            heartbeat,
+            0,
+            heartbeat + window
+        ));
         // One past the boundary: RELAXED.
-        assert!(moderation_liveness_relaxed(heartbeat, 0, heartbeat + window + 1));
+        assert!(moderation_liveness_relaxed(
+            heartbeat,
+            0,
+            heartbeat + window + 1
+        ));
     }
 
     #[test]
@@ -293,10 +381,22 @@ mod tests {
     fn liveness_respects_a_configured_window() {
         let heartbeat = 1_700_000_000i64;
         let window: u32 = 7 * DAY as u32;
-        assert!(!moderation_liveness_relaxed(heartbeat, window, heartbeat + 7 * DAY));
-        assert!(moderation_liveness_relaxed(heartbeat, window, heartbeat + 7 * DAY + 1));
+        assert!(!moderation_liveness_relaxed(
+            heartbeat,
+            window,
+            heartbeat + 7 * DAY
+        ));
+        assert!(moderation_liveness_relaxed(
+            heartbeat,
+            window,
+            heartbeat + 7 * DAY + 1
+        ));
         // A configured window overrides the default entirely (7d << 90d).
-        assert!(moderation_liveness_relaxed(heartbeat, window, heartbeat + 8 * DAY));
+        assert!(moderation_liveness_relaxed(
+            heartbeat,
+            window,
+            heartbeat + 8 * DAY
+        ));
     }
 
     // A never-written heartbeat (0) or corrupt negative timestamp stays STRICT —

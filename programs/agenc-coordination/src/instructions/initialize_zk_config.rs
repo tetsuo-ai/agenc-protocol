@@ -1,14 +1,13 @@
-//! Initialize trusted ZK image ID configuration.
+//! Initialize trusted ZK image ID configuration (release-disabled).
 //!
-//! M-of-N multisig gated (audit H-5): the initial active ZK image ID is the root of trust
-//! for the private-completion settlement path, and init is one-shot. Gating it with the
-//! same multisig threshold as the rotation (update_zk_image_id) prevents a single
-//! compromised authority from seeding a malicious guest image at initialization — which
-//! would enable escrow theft across every ZK-private task until the multisig rotated it.
+//! Authorization is still checked with the M-of-N multisig, but this release always
+//! returns `PrivateTaskCreationDisabled` before writing the trust root. The verifier
+//! IDs compiled into the private completion path are not deployed on mainnet and the
+//! repository does not contain an auditable guest, so accepting an image ID would
+//! falsely imply that private settlement is ready.
 
 use crate::errors::CoordinationError;
-use crate::events::ZkConfigInitialized;
-use crate::instructions::zk_config_helpers::require_nonzero_image_id;
+use crate::instructions::zk_config_helpers::reject_zk_activation;
 use crate::state::{ProtocolConfig, ZkConfig, HASH_SIZE};
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use anchor_lang::prelude::*;
@@ -42,7 +41,7 @@ pub struct InitializeZkConfig<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<InitializeZkConfig>, active_image_id: [u8; HASH_SIZE]) -> Result<()> {
+pub fn handler(ctx: Context<InitializeZkConfig>, _active_image_id: [u8; HASH_SIZE]) -> Result<()> {
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::UnauthorizedProtocolAuthority
@@ -69,18 +68,9 @@ pub fn handler(ctx: Context<InitializeZkConfig>, active_image_id: [u8; HASH_SIZE
         ctx.accounts.zk_config.key(),
         CoordinationError::InvalidInput
     );
-    require_nonzero_image_id(&active_image_id)?;
 
-    let zk_config = &mut ctx.accounts.zk_config;
-    zk_config.active_image_id = active_image_id;
-    zk_config.bump = ctx.bumps.zk_config;
-    zk_config._reserved = [0u8; 31];
-
-    emit!(ZkConfigInitialized {
-        image_id: active_image_id,
-        authority: ctx.accounts.authority.key(),
-        timestamp: Clock::get()?.unix_timestamp,
-    });
-
-    Ok(())
+    // Do not write ZkConfig in this release. The `init` account creation is
+    // transactionally rolled back with this error, so no misleading trust-root
+    // account survives and private task creation remains disabled.
+    reject_zk_activation()
 }

@@ -5,6 +5,8 @@ import {
   findTaskPda,
   findClaimPda,
   findDisputePda,
+  findModerationBlockPda,
+  findTaskSubmissionPda,
   getDisputeDecoder,
   getTaskDecoder,
   DisputeStatus,
@@ -19,6 +21,10 @@ import {
   accountData,
 } from "./harness.js";
 
+async function moderationBlockFor(contentHash: Uint8Array) {
+  return (await findModerationBlockPda({ contentHash }))[0];
+}
+
 // REAL on-chain execution of the dispute -> resolve flow against the compiled
 // agenc-coordination program in litesvm, driven entirely by SDK-built (@solana/kit)
 // instructions.
@@ -29,7 +35,7 @@ import {
 // votes, no voting-period wait, and NO (vote, arbiter) remaining accounts. P6.4 also
 // makes a reasoned ruling (`rationaleHash` + `rationaleUri`) REQUIRED on resolve.
 //
-//   reach a claimed InProgress task (the proven hire+claim port, verbatim)
+//   reach a submitted CreatorReview task (hire -> claim -> submit)
 //     -> worker initiates a COMPLETE dispute        (facade.initiateDispute, resolutionType 1)
 //     -> the protocol authority assigns a resolver  (facade.assignDisputeResolver)
 //     -> the assigned resolver resolves (approve)    (facade.resolveDispute + rationale)
@@ -55,9 +61,10 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
 
     await seedModerationConfig(svm, admin.address, moderator.address, true);
 
-    // ---- Reach a claimed InProgress task (the proven hire+claim port, verbatim) ----
+    // ---- Reach a submitted CreatorReview task ----
 
-    // 1) Register the provider (worker) agent and the buyer (hiring) agent.
+    // 1) Register the provider (worker) agent. The buyer uses the humanless
+    // storefront path, which configures CreatorReview without a buyer agent.
     const providerAgentId = new Uint8Array(32).fill(11);
     await send(svm, provider, [
       await facade.registerAgent({
@@ -70,19 +77,6 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
       }),
     ]);
     const [providerAgent] = await findAgentPda({ agentId: providerAgentId });
-
-    const buyerAgentId = new Uint8Array(32).fill(22);
-    await send(svm, buyer, [
-      await facade.registerAgent({
-        authority: buyer,
-        agentId: buyerAgentId,
-        capabilities: 1n,
-        endpoint: "http://buyer.test",
-        metadataUri: null,
-        stakeAmount: 0n,
-      }),
-    ]);
-    const [buyerAgent] = await findAgentPda({ agentId: buyerAgentId });
 
     // 2) Provider creates a standing service listing.
     const listingId = new Uint8Array(32).fill(33);
@@ -124,17 +118,17 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
       }),
     ]);
 
-    // 4) Buyer hires the listing -> mints an Open Task + escrow + HireRecord.
+    // 4) Human buyer hires the listing -> Open CreatorReview Task + escrow + HireRecord.
     const taskId = new Uint8Array(32).fill(44);
     await send(svm, buyer, [
-      await facade.hireFromListing({
+      await facade.hireFromListingHumanless({
         listing,
-        creatorAgent: buyerAgent,
-        authority: buyer,
+        providerAgent,
         creator: buyer,
         taskId,
         expectedPrice: price,
         expectedVersion: 1n,
+        reviewWindowSecs: 3600n,
         listingSpecHash,
         moderator: moderator.address,
       }),
@@ -169,22 +163,38 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
       }),
     ]);
 
-    // 7) Worker claims the published task -> task is now InProgress, with a live claim.
+    // 7) Worker claims and submits a delivery. Worker-initiated disputes require
+    // both the live claim and its Submitted record, preventing no-shows from
+    // self-disputing to evade expiry penalties.
     await send(svm, provider, [
       await facade.claimTaskWithJobSpec({
         task,
         worker: providerAgent,
         authority: provider,
+        moderationBlock: await moderationBlockFor(jobHash),
+        jobSpecHash: jobHash,
       }),
     ]);
     // The worker's claim PDA is seeded by [task, worker-agent] (bidder == the agent PDA).
     const [workerClaim] = await findClaimPda({ task, bidder: providerAgent });
+    await send(svm, provider, [
+      await facade.submitTaskResult({
+        task,
+        worker: providerAgent,
+        authority: provider,
+        proofHash: new Uint8Array(32).fill(56),
+        resultData: new Uint8Array(64).fill(57),
+      }),
+    ]);
+    const [taskSubmission] = await findTaskSubmissionPda({ claim: workerClaim });
 
-    // Sanity: the task really reached InProgress before we dispute it.
+    // Sanity: the task reached review with a live submitted delivery.
     {
       const tBytes = accountData(svm, task);
       expect(tBytes).not.toBeNull();
-      expect(getTaskDecoder().decode(tBytes!).status).toBe(TaskStatus.InProgress);
+      expect(getTaskDecoder().decode(tBytes!).status).toBe(
+        TaskStatus.PendingValidation,
+      );
     }
 
     // ---- Dispute -> resolve flow ----
@@ -199,6 +209,7 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
         agent: providerAgent,
         authority: provider,
         initiatorClaim: workerClaim,
+        taskSubmission,
         disputeId,
         taskId,
         evidenceHash,
@@ -228,11 +239,11 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
       resolver: resolver.address,
     });
 
-    // Sanity: the dispute recorded ZERO voters (the vote machinery is gone).
+    // Sanity: the retired voter byte carries counter provenance; it is not a tally.
     {
       const dBytes = accountData(svm, dispute);
       const d = getDisputeDecoder().decode(dBytes!);
-      expect(d.totalVoters).toBe(0);
+      expect(d.totalVoters).toBe(255);
     }
 
     // Snapshot the worker authority balance right before resolution so the delta is
@@ -258,6 +269,7 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
         workerClaim,
         worker: providerAgent,
         workerWallet: provider.address,
+        taskSubmission,
         bondTreasury: admin.address,
         // creator/worker completion bonds derive from task+creator / task+workerWallet
       }),
@@ -265,15 +277,15 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
 
     // ---- REAL on-chain assertions ----
 
-    // (a) The Dispute account decodes to Resolved (no longer Active) with ZERO voters and
-    //     the P6.3 ruling bit set: APPROVE -> votesFor == 1, votesAgainst == 0. (These
-    //     fields are no longer a tally — they are the 1-bit ruling the slash finalizers
-    //     read.)
+    // (a) The Dispute account decodes to Resolved (no longer Active) with the
+    //     initiator-counter provenance sentinel and the P6.3 ruling bit set:
+    //     APPROVE -> votesFor == 1, votesAgainst == 0. None of these retired
+    //     fields is an arbiter tally.
     const disputeBytes = accountData(svm, dispute);
     expect(disputeBytes).not.toBeNull();
     const decodedDispute = getDisputeDecoder().decode(disputeBytes!);
     expect(decodedDispute.status).toBe(DisputeStatus.Resolved);
-    expect(decodedDispute.totalVoters).toBe(0);
+    expect(decodedDispute.totalVoters).toBe(255);
     expect(decodedDispute.votesFor).toBe(1n);
     expect(decodedDispute.votesAgainst).toBe(0n);
 

@@ -19,6 +19,7 @@ import {
   getCompleteTaskInstructionDataDecoder,
   getCancelTaskInstructionDataDecoder,
   getCloseTaskInstructionDataDecoder,
+  getReclaimOrphanTaskChildInstructionDataDecoder,
   getExpireClaimInstructionDataDecoder,
   getConfigureTaskValidationInstructionDataDecoder,
   getDistributeGhostShareInstructionDataDecoder,
@@ -26,6 +27,9 @@ import {
   getSetTaskJobSpecInstructionDataDecoder,
   findTaskPda,
   findHireRecordPda,
+  findProtocolConfigPda,
+  findBidBookPda,
+  findWorkerCompletionBondPda,
 } from "../src/index.js";
 import {
   createTask,
@@ -42,6 +46,7 @@ import {
   completeTask,
   cancelTask,
   closeTask,
+  reclaimOrphanTaskChild,
   expireClaim,
   configureTaskValidation,
   setTaskJobSpec,
@@ -180,24 +185,53 @@ describe("createDependentTask facade instruction", () => {
 
 describe("claimTaskWithJobSpec facade instruction", () => {
   it("targets the program, orders accounts, and round-trips data", async () => {
+    const [moderationBlock] = await findModerationBlockPda({
+      contentHash: HASH32,
+    });
     const ix = await claimTaskWithJobSpec({
       task: A,
       worker: B,
       authority: signerA,
+      moderationBlock,
+      jobSpecHash: HASH32,
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     const names = ix.accounts.map((a) => a.address);
     expect(names[0]).toBe(A); // task
-    // taskJobSpec, claim, protocolConfig auto-derived (1..3).
-    expect(names[4]).toBe(B); // worker
-    expect(names[5]).toBe(signerA.address); // authority
-    expect(names[6]).toBe(SYSTEM_PROGRAM);
+    const [hireRecord] = await findHireRecordPda({ task: A });
+    expect(names[2]).toBe(hireRecord);
+    expect(names[3]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS); // no legacy listing
+    expect(names[4]).toBe(moderationBlock);
+    // claim + protocolConfig are auto-derived at 5..6.
+    expect(names[7]).toBe(B); // worker
+    expect(names[8]).toBe(signerA.address); // authority
+    expect(names[9]).toBe(SYSTEM_PROGRAM);
 
     // Empty-args instruction: data is just the 8-byte discriminator.
     const decoded =
       getClaimTaskWithJobSpecInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
+  });
+
+  it("appends the Proof parent as a read-only remaining account", async () => {
+    const [moderationBlock] = await findModerationBlockPda({
+      contentHash: HASH32,
+    });
+    const ix = await claimTaskWithJobSpec({
+      task: A,
+      worker: B,
+      authority: signerA,
+      moderationBlock,
+      jobSpecHash: HASH32,
+      parentTask: C,
+    });
+
+    expect(ix.accounts.at(-1)).toEqual({
+      address: C,
+      role: AccountRole.READONLY,
+    });
+    expect(ix.accounts).toHaveLength(11);
   });
 });
 
@@ -243,9 +277,34 @@ describe("acceptTaskResult facade instruction", () => {
     expect(names[7]).toBe(C); // treasury
     expect(names[8]).toBe(signerA.address); // creator
     expect(names[9]).toBe(D); // workerAuthority
+    const [hireRecord] = await findHireRecordPda({ task: A });
+    expect(names[10]).toBe(hireRecord);
 
     const decoded = getAcceptTaskResultInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
+  });
+
+  it("appends dependency evidence before accepted-bid settlement state", async () => {
+    const ix = await acceptTaskResult({
+      task: A,
+      worker: B,
+      treasury: C,
+      creator: signerA,
+      workerAuthority: D,
+      dependencyParent: B,
+      bidSettlement: {
+        acceptedBid: C,
+        bidderMarketState: D,
+      },
+    });
+    const [bidBook] = await findBidBookPda({ task: A });
+    expect(ix.accounts.slice(-5).map((account) => account.address)).toEqual([
+      B,
+      bidBook,
+      C,
+      D,
+      D,
+    ]);
   });
 });
 
@@ -269,6 +328,12 @@ describe("rejectTaskResult facade instruction", () => {
     // protocolConfig auto-derived (5).
     expect(names[6]).toBe(signerA.address); // creator
     expect(names[7]).toBe(D); // workerAuthority
+    const [workerBond] = await findWorkerCompletionBondPda({
+      task: A,
+      workerAuthority: D,
+    });
+    expect(names.at(-1)).toBe(workerBond);
+    expect(ix.accounts.at(-1)?.role).toBe(AccountRole.WRITABLE);
 
     const decoded = getRejectTaskResultInstructionDataDecoder().decode(ix.data);
     expect(Array.from(decoded.rejectionHash)).toEqual(Array.from(HASH32));
@@ -429,6 +494,61 @@ describe("cancelTask facade instruction", () => {
     const decoded = getCancelTaskInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
   });
+
+  it("appends the canonical BidExclusive open-book settlement account", async () => {
+    const ix = await cancelTask({
+      task: A,
+      authority: signerA,
+      workerBondAuthority: signerB.address,
+      bidSettlement: { kind: "open" },
+    });
+    const [bidBook] = await findBidBookPda({ task: A });
+    expect(ix.accounts.at(-1)?.address).toBe(bidBook);
+    expect(ix.accounts.at(-1)?.role).toBe(AccountRole.WRITABLE);
+  });
+
+  it("appends worker triple before accepted-bid settlement accounts", async () => {
+    const ix = await cancelTask({
+      task: A,
+      authority: signerA,
+      workerBondAuthority: signerB.address,
+      workerAccounts: [
+        { claim: B, workerAgent: C, workerAuthority: signerB.address },
+      ],
+      dependencyParent: A,
+      bidSettlement: {
+        kind: "accepted",
+        acceptedBid: C,
+        bidderMarketState: D,
+      },
+    });
+    const [bidBook] = await findBidBookPda({ task: A });
+    expect(ix.accounts.slice(-7).map((account) => account.address)).toEqual([
+      A,
+      B,
+      C,
+      signerB.address,
+      bidBook,
+      C,
+      D,
+    ]);
+    expect(ix.accounts.slice(-6).every((account) => account.role === AccountRole.WRITABLE)).toBe(true);
+  });
+
+  it("rejects accepted-bid settlement without exactly one worker triple", async () => {
+    await expect(
+      cancelTask({
+        task: A,
+        authority: signerA,
+        workerBondAuthority: signerB.address,
+        bidSettlement: {
+          kind: "accepted",
+          acceptedBid: C,
+          bidderMarketState: D,
+        },
+      }),
+    ).rejects.toThrow(/exactly one worker/);
+  });
 });
 
 describe("closeTask facade instruction", () => {
@@ -458,6 +578,101 @@ describe("closeTask facade instruction", () => {
     const decoded = getCloseTaskInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
   });
+
+  it("puts the BidExclusive book before structured child-sweep accounts", async () => {
+    const ix = await closeTask({
+      task: A,
+      hireRecord: B,
+      creatorCompletionBond: D,
+      authority: signerA,
+      bidExclusive: true,
+      children: [
+        { kind: "creatorFunded", account: B },
+        { kind: "namedRecipient", account: A, recipient: C },
+        {
+          kind: "workerSubmission",
+          submission: C,
+          workerAgent: D,
+          rentRecipient: signerB.address,
+        },
+      ],
+    });
+    const [bidBook] = await findBidBookPda({ task: A });
+    expect(ix.accounts.slice(-7).map((account) => account.address)).toEqual([
+      bidBook,
+      B,
+      A,
+      C,
+      C,
+      D,
+      signerB.address,
+    ]);
+    expect(ix.accounts.at(-2)?.role).toBe(AccountRole.READONLY);
+    expect(ix.accounts.at(-1)?.role).toBe(AccountRole.WRITABLE);
+  });
+
+});
+
+describe("reclaimOrphanTaskChild facade instruction", () => {
+  it("uses the frozen five-meta wire for a directly authenticated recipient", async () => {
+    const ix = await reclaimOrphanTaskChild({
+      child: A,
+      parentTask: B,
+      workerAgent: C,
+      rentRecipient: D,
+      authority: signerA,
+    });
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.accounts.map((account) => account.address)).toEqual([
+      A,
+      B,
+      C,
+      D,
+      signerA.address,
+    ]);
+    expect(ix.accounts.map((account) => account.role)).toEqual([
+      AccountRole.WRITABLE,
+      AccountRole.READONLY,
+      AccountRole.READONLY,
+      AccountRole.WRITABLE,
+      AccountRole.READONLY_SIGNER,
+    ]);
+    expect(
+      getReclaimOrphanTaskChildInstructionDataDecoder().decode(ix.data)
+        .discriminator,
+    ).toHaveLength(8);
+  });
+
+  it("aliases the fixed recipient to treasury and appends the exact recovery suffix", async () => {
+    const ix = await reclaimOrphanTaskChild({
+      child: A,
+      parentTask: B,
+      workerAgent: C,
+      authority: signerA,
+      recovery: { treasury: D },
+    });
+    const [protocolConfig] = await findProtocolConfigPda();
+
+    expect(ix.accounts.map((account) => account.address)).toEqual([
+      A,
+      B,
+      C,
+      D,
+      signerA.address,
+      protocolConfig,
+      D,
+    ]);
+    expect(ix.accounts.map((account) => account.role)).toEqual([
+      AccountRole.WRITABLE,
+      AccountRole.READONLY,
+      AccountRole.READONLY,
+      AccountRole.WRITABLE,
+      AccountRole.READONLY_SIGNER,
+      AccountRole.READONLY,
+      AccountRole.WRITABLE,
+    ]);
+  });
 });
 
 describe("expireClaim facade instruction", () => {
@@ -480,6 +695,29 @@ describe("expireClaim facade instruction", () => {
 
     const decoded = getExpireClaimInstructionDataDecoder().decode(ix.data);
     expect(decoded.discriminator).toHaveLength(8);
+  });
+
+  it("orders a dependency parent before the four-account BidExclusive suffix", async () => {
+    const ix = await expireClaim({
+      authority: signerA,
+      task: A,
+      worker: B,
+      rentRecipient: C,
+      dependencyParent: D,
+      bidSettlement: {
+        acceptedBid: C,
+        bidderMarketState: B,
+        creator: signerA.address,
+      },
+    });
+    const [bidBook] = await findBidBookPda({ task: A });
+    expect(ix.accounts.slice(-5).map((account) => account.address)).toEqual([
+      D,
+      bidBook,
+      C,
+      B,
+      signerA.address,
+    ]);
   });
 });
 
@@ -683,11 +921,11 @@ describe("reclaimTerminalClaim facade instruction", () => {
     const names = ix.accounts.map((a) => a.address);
     expect(names[0]).toBe(signerA.address); // authority (permissionless signer)
     expect(names[1]).toBe(A); // task
-    // claim, submission auto-derived (2..3).
-    expect(names[4]).toBe(B); // worker
-    // protocolConfig auto-derived (5).
-    expect(names[6]).toBe(C); // treasury (forfeited deposit surplus, never creator)
-    expect(names[7]).toBe(D); // rentRecipient
+    // claim, submission, optional validation config auto-derived (2..4).
+    expect(names[5]).toBe(B); // worker
+    // protocolConfig auto-derived (6).
+    expect(names[7]).toBe(C); // treasury (forfeited deposit surplus, never creator)
+    expect(names[8]).toBe(D); // rentRecipient
 
     const decoded = getReclaimTerminalClaimInstructionDataDecoder().decode(
       ix.data,

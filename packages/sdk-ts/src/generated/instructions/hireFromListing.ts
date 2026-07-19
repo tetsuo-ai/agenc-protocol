@@ -74,6 +74,7 @@ export type HireFromListingInstruction<
   TAccountEscrow extends string | AccountMeta<string> = string,
   TAccountHireRecord extends string | AccountMeta<string> = string,
   TAccountListing extends string | AccountMeta<string> = string,
+  TAccountProviderAgent extends string | AccountMeta<string> = string,
   TAccountProtocolConfig extends string | AccountMeta<string> = string,
   TAccountModerationConfig extends string | AccountMeta<string> = string,
   TAccountListingModeration extends string | AccountMeta<string> = string,
@@ -102,6 +103,9 @@ export type HireFromListingInstruction<
       TAccountListing extends string
         ? WritableAccount<TAccountListing>
         : TAccountListing,
+      TAccountProviderAgent extends string
+        ? ReadonlyAccount<TAccountProviderAgent>
+        : TAccountProviderAgent,
       TAccountProtocolConfig extends string
         ? WritableAccount<TAccountProtocolConfig>
         : TAccountProtocolConfig,
@@ -199,6 +203,7 @@ export type HireFromListingAsyncInput<
   TAccountEscrow extends string = string,
   TAccountHireRecord extends string = string,
   TAccountListing extends string = string,
+  TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
@@ -222,6 +227,12 @@ export type HireFromListingAsyncInput<
    * (`total_hires`, `updated_at`).
    */
   listing: Address<TAccountListing>;
+  /**
+   * Provider identity behind the standing listing. A listing is durable,
+   * but a suspended or permanently retired provider must not receive new
+   * hires. Existing hires settle independently through their Task/HireRecord.
+   */
+  providerAgent: Address<TAccountProviderAgent>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   /**
    * Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured
@@ -286,6 +297,7 @@ export async function getHireFromListingInstructionAsync<
   TAccountEscrow extends string,
   TAccountHireRecord extends string,
   TAccountListing extends string,
+  TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
@@ -303,6 +315,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -322,6 +335,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -344,6 +358,7 @@ export async function getHireFromListingInstructionAsync<
     escrow: { value: input.escrow ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: true },
     listing: { value: input.listing ?? null, isWritable: true },
+    providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
     moderationConfig: {
       value: input.moderationConfig ?? null,
@@ -430,6 +445,7 @@ export async function getHireFromListingInstructionAsync<
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
@@ -451,6 +467,7 @@ export async function getHireFromListingInstructionAsync<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -469,6 +486,7 @@ export type HireFromListingInput<
   TAccountEscrow extends string = string,
   TAccountHireRecord extends string = string,
   TAccountListing extends string = string,
+  TAccountProviderAgent extends string = string,
   TAccountProtocolConfig extends string = string,
   TAccountModerationConfig extends string = string,
   TAccountListingModeration extends string = string,
@@ -492,6 +510,12 @@ export type HireFromListingInput<
    * (`total_hires`, `updated_at`).
    */
   listing: Address<TAccountListing>;
+  /**
+   * Provider identity behind the standing listing. A listing is durable,
+   * but a suspended or permanently retired provider must not receive new
+   * hires. Existing hires settle independently through their Task/HireRecord.
+   */
+  providerAgent: Address<TAccountProviderAgent>;
   protocolConfig: Address<TAccountProtocolConfig>;
   /**
    * Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured
@@ -556,6 +580,7 @@ export function getHireFromListingInstruction<
   TAccountEscrow extends string,
   TAccountHireRecord extends string,
   TAccountListing extends string,
+  TAccountProviderAgent extends string,
   TAccountProtocolConfig extends string,
   TAccountModerationConfig extends string,
   TAccountListingModeration extends string,
@@ -573,6 +598,7 @@ export function getHireFromListingInstruction<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -591,6 +617,7 @@ export function getHireFromListingInstruction<
   TAccountEscrow,
   TAccountHireRecord,
   TAccountListing,
+  TAccountProviderAgent,
   TAccountProtocolConfig,
   TAccountModerationConfig,
   TAccountListingModeration,
@@ -612,6 +639,7 @@ export function getHireFromListingInstruction<
     escrow: { value: input.escrow ?? null, isWritable: true },
     hireRecord: { value: input.hireRecord ?? null, isWritable: true },
     listing: { value: input.listing ?? null, isWritable: true },
+    providerAgent: { value: input.providerAgent ?? null, isWritable: false },
     protocolConfig: { value: input.protocolConfig ?? null, isWritable: true },
     moderationConfig: {
       value: input.moderationConfig ?? null,
@@ -659,6 +687,7 @@ export function getHireFromListingInstruction<
       getAccountMeta("escrow", accounts.escrow),
       getAccountMeta("hireRecord", accounts.hireRecord),
       getAccountMeta("listing", accounts.listing),
+      getAccountMeta("providerAgent", accounts.providerAgent),
       getAccountMeta("protocolConfig", accounts.protocolConfig),
       getAccountMeta("moderationConfig", accounts.moderationConfig),
       getAccountMeta("listingModeration", accounts.listingModeration),
@@ -680,6 +709,7 @@ export function getHireFromListingInstruction<
     TAccountEscrow,
     TAccountHireRecord,
     TAccountListing,
+    TAccountProviderAgent,
     TAccountProtocolConfig,
     TAccountModerationConfig,
     TAccountListingModeration,
@@ -711,13 +741,19 @@ export type ParsedHireFromListingInstruction<
      * (`total_hires`, `updated_at`).
      */
     listing: TAccountMetas[3];
-    protocolConfig: TAccountMetas[4];
+    /**
+     * Provider identity behind the standing listing. A listing is durable,
+     * but a suspended or permanently retired provider must not receive new
+     * hires. Existing hires settle independently through their Task/HireRecord.
+     */
+    providerAgent: TAccountMetas[4];
+    protocolConfig: TAccountMetas[5];
     /**
      * Global moderation gate. REQUIRED so a hire is fail-closed: an unconfigured
      * gate (account absent) makes the hire fail = marketplace halt (spec §6). When
      * `enabled`, a valid `listing_moderation` is required (checked in the handler).
      */
-    moderationConfig: TAccountMetas[5];
+    moderationConfig: TAccountMetas[6];
     /**
      * Listing/spec-keyed moderation attestation. Required iff `moderation_config.enabled`.
      * P1.2 §4.4: the v2 moderator-keyed seed cannot be expressed declaratively (the
@@ -727,7 +763,7 @@ export type ParsedHireFromListingInstruction<
      * `owner == crate::ID`, discriminator, and the listing/hash/moderator bindings.
      *
      */
-    listingModeration?: TAccountMetas[6] | undefined;
+    listingModeration?: TAccountMetas[7] | undefined;
     /**
      * OPTIONAL: a registered moderation-attestor roster entry that unlocks the hire
      * gate when the record was authored by a non-global-authority attestor. The
@@ -738,7 +774,7 @@ export type ParsedHireFromListingInstruction<
      * PDA is closed and fails to load — the WP-A1 fail-closed property, preserved).
      * Only needed for the roster path; the global-authority path passes with `None`.
      */
-    moderationAttestor?: TAccountMetas[7] | undefined;
+    moderationAttestor?: TAccountMetas[8] | undefined;
     /**
      * P1.2 §5.2 — the REQUIRED BLOCK-floor slot for the listing's pinned `spec_hash`.
      * The handler derives `["moderation_block", listing.spec_hash]` itself and
@@ -749,19 +785,19 @@ export type ParsedHireFromListingInstruction<
      *
      * (handler-derived canonical PDA; system-owned/empty = pass).
      */
-    moderationBlock: TAccountMetas[8];
+    moderationBlock: TAccountMetas[9];
     /** Buyer's agent registration for identity/authorization (mirrors create_task). */
-    creatorAgent: TAccountMetas[9];
+    creatorAgent: TAccountMetas[10];
     /** Wallet-scoped task/dispute rate limit state shared across all agents. */
-    authorityRateLimit: TAccountMetas[10];
+    authorityRateLimit: TAccountMetas[11];
     /** The authority that owns the buyer's agent. */
-    authority: TAccountMetas[11];
+    authority: TAccountMetas[12];
     /**
      * The buyer who pays for and owns the hired task.
      * Must match authority to prevent social-engineering attacks (#375).
      */
-    creator: TAccountMetas[12];
-    systemProgram: TAccountMetas[13];
+    creator: TAccountMetas[13];
+    systemProgram: TAccountMetas[14];
   };
   data: HireFromListingInstructionData;
 };
@@ -774,12 +810,12 @@ export function parseHireFromListingInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedHireFromListingInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 14) {
+  if (instruction.accounts.length < 15) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 14,
+        expectedAccountMetas: 15,
       },
     );
   }
@@ -802,6 +838,7 @@ export function parseHireFromListingInstruction<
       escrow: getNextAccount(),
       hireRecord: getNextAccount(),
       listing: getNextAccount(),
+      providerAgent: getNextAccount(),
       protocolConfig: getNextAccount(),
       moderationConfig: getNextAccount(),
       listingModeration: getNextOptionalAccount(),

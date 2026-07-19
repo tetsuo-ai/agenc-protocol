@@ -2,12 +2,14 @@
 //!
 //! # Parameters
 //!
-//! - `dispute_threshold`: Minimum percentage of arbiter votes needed to resolve a dispute.
-//!   Must be in range 1-99 (inclusive). A value of 50 means majority vote required.
-//!   100% is disallowed as it makes disputes impossible to approve.
+//! - `dispute_threshold`: Approval-percentage threshold used when terminal dispute
+//!   outcomes are interpreted by slash finalizers. Must be in range 1-99 (inclusive).
+//!   Current resolver rulings are stored as binary 100%/0% outcomes; historical
+//!   disputes may contain vote totals under the retired arbiter model.
 //! - `protocol_fee_bps`: Fee charged on task completions in basis points (max 2000 = 20%).
-//! - `min_stake`: Minimum stake required for agent/arbiter registration.
-//! - `min_stake_for_dispute`: Minimum stake required to initiate a dispute (must be > 0).
+//! - `min_stake`: Minimum stake required for agent registration. It also initializes
+//!   the historically named `min_arbiter_stake` governance weight basis.
+//! - `min_stake_for_dispute`: Minimum stake required to initiate a dispute (at least 1,000 lamports).
 //! - `multisig_threshold`: Number of signatures required for multisig operations.
 //! - `multisig_owners`: List of authorized multisig signers.
 
@@ -17,6 +19,7 @@ use crate::instructions::constants::{
     DEFAULT_DISPUTE_INITIATION_COOLDOWN, DEFAULT_MAX_DISPUTES_PER_24H, DEFAULT_MAX_TASKS_PER_24H,
     DEFAULT_TASK_CREATION_COOLDOWN, MAX_PROTOCOL_FEE_BPS,
 };
+use crate::instructions::rate_limit_helpers::is_valid_dispute_stake_limit;
 use crate::state::{ProtocolConfig, CURRENT_PROTOCOL_VERSION, MIN_SUPPORTED_VERSION};
 use crate::utils::multisig::validate_multisig_owners;
 use anchor_lang::prelude::*;
@@ -33,7 +36,15 @@ pub struct InitializeProtocol<'info> {
     )]
     pub protocol_config: Account<'info, ProtocolConfig>,
 
-    /// CHECK: Treasury account to receive protocol fees
+    /// Treasury account to receive protocol fees. Production clients must request
+    /// the custody key's signature in generated account metas.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub treasury: Signer<'info>,
+
+    /// CHECK: The frozen canary IDL historically marks treasury as a non-signer.
+    /// The handler still requires this account to be a system-owned signer, so
+    /// transactions must explicitly promote the meta and provide its signature.
+    #[cfg(feature = "mainnet-canary")]
     pub treasury: UncheckedAccount<'info>,
 
     #[account(mut)]
@@ -52,23 +63,32 @@ pub struct InitializeProtocol<'info> {
 /// Minimum reasonable stake value (0.001 SOL in lamports)
 const MIN_REASONABLE_STAKE: u64 = 1_000_000;
 
+/// `UpgradeableLoaderState::ProgramData`'s stable bincode enum discriminant.
+///
+/// The upgradeable loader stores this little-endian `u32` before the slot and
+/// upgrade-authority fields. Checking the owner and canonical PDA alone is not
+/// sufficient before interpreting bytes at the ProgramData offsets: a different
+/// loader-state variant must fail closed instead of being parsed as ProgramData.
+const PROGRAM_DATA_STATE_TAG: u32 = 3;
+
 /// Initialize the protocol configuration with the given parameters.
 ///
 /// # Arguments
 ///
-/// * `dispute_threshold` - Minimum percentage of arbiter votes needed to resolve a dispute.
-///   Valid range: 1-99 (inclusive). For example, 50 requires majority consensus,
-///   67 requires supermajority. 100% is disallowed as it makes disputes impossible to approve.
+/// * `dispute_threshold` - Approval-percentage threshold used by terminal dispute
+///   slash finalizers. Valid range: 1-99 (inclusive). Current resolver rulings encode
+///   approved/rejected as 100%/0%; historical disputes may contain vote totals.
 /// * `protocol_fee_bps` - Protocol fee in basis points (0-2000, where 2000 = 20%).
-/// * `min_stake` - Minimum stake required for registration (must be >= 0.001 SOL).
-/// * `min_stake_for_dispute` - Minimum stake required to initiate a dispute (must be > 0).
+/// * `min_stake` - Minimum agent-registration stake and governance weight basis
+///   (must be >= 0.001 SOL).
+/// * `min_stake_for_dispute` - Minimum stake required to initiate a dispute (at least 1,000 lamports).
 /// * `multisig_threshold` - Number of signatures required for multisig operations.
 /// * `multisig_owners` - List of authorized multisig signers.
 ///
 /// # Errors
 ///
 /// Returns [`CoordinationError::InvalidDisputeThreshold`] if dispute_threshold is 0 or >= 100.
-/// Returns [`CoordinationError::InvalidMinStake`] if min_stake_for_dispute is 0.
+/// Returns [`CoordinationError::InvalidMinStake`] below the dispute anti-spam floor.
 pub fn handler(
     ctx: Context<InitializeProtocol>,
     dispute_threshold: u8,
@@ -103,11 +123,21 @@ pub fn handler(
         CoordinationError::InvalidAccountOwner
     );
 
-    // Deserialize ProgramData and verify upgrade authority matches signer
+    // Deserialize ProgramData and verify upgrade authority matches signer.
     let data = program_data_info.try_borrow_data()?;
-    // ProgramData layout: 4 bytes (enum tag) + 8 bytes (slot) + 1 byte (option tag) + 32 bytes (authority)
-    // Total offset to authority option: 12, authority pubkey at: 13
+    // ProgramData layout: 4 bytes (enum tag) + 8 bytes (slot) + 1 byte
+    // (option tag) + 32 bytes (authority). Validate the loader-state variant
+    // before interpreting the variant-specific offsets below.
     require!(data.len() >= 45, CoordinationError::CorruptedData);
+    let state_tag = u32::from_le_bytes(
+        data[0..4]
+            .try_into()
+            .map_err(|_| error!(CoordinationError::CorruptedData))?,
+    );
+    require!(
+        state_tag == PROGRAM_DATA_STATE_TAG,
+        CoordinationError::CorruptedData
+    );
     let has_authority = data[12];
     require!(has_authority == 1, CoordinationError::UnauthorizedUpgrade); // Must have upgrade authority
     let authority_bytes: [u8; 32] = data[13..45]
@@ -120,8 +150,16 @@ pub fn handler(
     );
     drop(data);
 
-    // Threshold must be 1-99, not 100
-    // 100% makes disputes impossible to approve (fixes #484)
+    // Runtime multisig validation accepts only system-owned signer wallets. Apply
+    // the same rule at bootstrap so a PDA signer cannot help initialize a
+    // threshold that no permitted runtime signer set can ever satisfy.
+    require!(
+        ctx.accounts.authority.owner == &anchor_lang::system_program::ID
+            && ctx.accounts.second_signer.owner == &anchor_lang::system_program::ID,
+        CoordinationError::MultisigInvalidSigners
+    );
+
+    // Preserve the deployed threshold domain: 1-99 inclusive.
     require!(
         dispute_threshold > 0 && dispute_threshold < 100,
         CoordinationError::InvalidDisputeThreshold
@@ -135,9 +173,11 @@ pub fn handler(
         min_stake >= MIN_REASONABLE_STAKE,
         CoordinationError::StakeTooLow
     );
-    // Require min_stake_for_dispute > 0 (fixes #499)
+    // Match every post-init mutation path: a fresh deployment must neither begin
+    // below the anti-spam floor nor set a value that excludes every minimally
+    // registered worker from dispute access.
     require!(
-        min_stake_for_dispute > 0,
+        is_valid_dispute_stake_limit(min_stake_for_dispute, min_stake),
         CoordinationError::InvalidMinStake
     );
     require!(
@@ -208,23 +248,17 @@ pub fn handler(
         ctx.accounts.treasury.key() != Pubkey::default(),
         CoordinationError::InvalidTreasury
     );
-    // Hardening: treasury must be either protocol-owned (PDA/account owned by this
-    // program) or a system account. This prevents misconfiguration to arbitrary
-    // third-party program accounts that cannot be governed by this protocol.
-    let treasury_is_program_owned = ctx.accounts.treasury.owner == &crate::ID;
+    // Custody isolation: an arbitrary protocol-owned account may contain escrow,
+    // stake, bond principal, or critical state. Configuring one as the treasury
+    // would let TreasurySpend governance drain and delete it. Until a dedicated
+    // typed vault exists, only an explicitly consenting system-owned signer is a
+    // valid treasury.
     let treasury_is_system_owned = ctx.accounts.treasury.owner == &anchor_lang::system_program::ID;
+    require!(treasury_is_system_owned, CoordinationError::InvalidTreasury);
     require!(
-        treasury_is_program_owned || treasury_is_system_owned,
-        CoordinationError::InvalidTreasury
+        ctx.accounts.treasury.is_signer,
+        CoordinationError::TreasuryNotSpendable
     );
-    // System-account treasuries are only valid if they sign at initialization,
-    // guaranteeing the configured address is actively controlled.
-    if treasury_is_system_owned {
-        require!(
-            ctx.accounts.treasury.is_signer,
-            CoordinationError::TreasuryNotSpendable
-        );
-    }
 
     // Now safe to write config
     let config = &mut ctx.accounts.protocol_config;
@@ -253,9 +287,9 @@ pub fn handler(
     // must not be 0 has to be set explicitly. state_update_cooldown was missed (audit):
     // it landed at 0 on every fresh deploy, and update_state treats 0 as "disabled", so
     // the fix-#415 per-agent anti-spam cooldown was permanently off with no instruction
-    // able to enable it. Match ProtocolConfig::default() (60s). NOTE: the LIVE mainnet
-    // ProtocolConfig already exists with this field at 0 — this init fix only covers
-    // fresh deploys; enabling it on the live config needs a migration (flagged in report).
+    // able to enable it. Match ProtocolConfig::default() (60s). This initializer
+    // only affects newly created configs; it does not retroactively mutate an
+    // existing deployment.
     config.state_update_cooldown = 60;
     // Compile-time assertion: DEFAULT_SLASH_PERCENTAGE must not exceed 100%
     const _: () = assert!(ProtocolConfig::DEFAULT_SLASH_PERCENTAGE <= 100);
@@ -267,17 +301,17 @@ pub fn handler(
     config.protocol_paused = false;
     config.disabled_task_type_mask = 0;
     // P6.5: stamp the deployed surface this binary actually exposes.
-    // - Full build  -> base full-surface capabilities are live: stamp SURFACE_REVISION_FULL
-    //   so a fresh dev/devnet/localnet deploy advertises `listings: true` without a
-    //   manual `update_launch_controls` step.
+    // - Full build  -> stamp the exact current wire contract, so a fresh
+    //   dev/devnet/localnet deploy advertises every capability this binary exposes
+    //   without a manual `update_launch_controls` step.
     // - Canary build -> only the restricted 25-ix surface is live: stamp 0
     //   (unstamped/conservative) so a fresh canary cluster never claims the full
-    //   surface. The live mainnet canary config already exists and is NOT re-init'd
-    //   here; it is brought forward by `migrate_protocol` (surface_revision = 0) and
-    //   stamped by an operator if/when the full surface is actually deployed.
+    //   surface. An existing config is not re-initialized here; legacy layouts are
+    //   brought forward by `migrate_protocol` (surface_revision = 0) and stamped by
+    //   an operator if/when the corresponding surface is deployed.
     #[cfg(not(feature = "mainnet-canary"))]
     {
-        config.surface_revision = ProtocolConfig::SURFACE_REVISION_FULL;
+        config.surface_revision = ProtocolConfig::SURFACE_REVISION_CURRENT;
     }
     #[cfg(feature = "mainnet-canary")]
     {
@@ -298,4 +332,34 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use anchor_lang::prelude::Pubkey;
+    use anchor_lang::ToAccountMetas;
+
+    #[test]
+    fn treasury_signer_meta_matches_the_deployed_surface() {
+        let treasury = Pubkey::new_unique();
+        let accounts = crate::__client_accounts_initialize_protocol::InitializeProtocol {
+            protocol_config: Pubkey::new_unique(),
+            treasury,
+            authority: Pubkey::new_unique(),
+            second_signer: Pubkey::new_unique(),
+            system_program: Pubkey::new_unique(),
+        };
+
+        let treasury_meta = accounts
+            .to_account_metas(None)
+            .into_iter()
+            .find(|meta| meta.pubkey == treasury)
+            .expect("treasury meta should be present");
+
+        assert_eq!(
+            treasury_meta.is_signer,
+            !cfg!(feature = "mainnet-canary"),
+            "production must request treasury consent in the IDL while the canary wire flags stay frozen",
+        );
+    }
 }

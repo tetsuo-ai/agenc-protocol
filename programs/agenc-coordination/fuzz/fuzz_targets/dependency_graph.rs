@@ -31,7 +31,7 @@ proptest! {
 
     #[test]
     fn fuzz_dependency_graph(input in any::<DependencyGraphInput>()) {
-        let task_count = input.task_count.max(1).min(10) as usize;
+        let task_count = input.task_count.clamp(1, 10) as usize;
 
         let mut tasks: Vec<SimulatedTask> = (0..task_count)
             .map(|i| SimulatedTask {

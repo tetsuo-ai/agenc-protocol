@@ -4,10 +4,10 @@ How to prove that the on-chain `agenc-coordination` program deployed at
 `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` was built from this source.
 
 > This is PLAN.md **P8.3 — SHIPPED**. The repo is **public**, and as of
-> 2026-07-03 the deployed program carries a **live OtterSec verified-build
+> 2026-07-10 the deployed program carries a **live OtterSec verified-build
 > registration**: <https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK>
 > reports `is_verified: true` against this repo at the deployed commit
-> (`aad4c0d`, the P1.2 90-instruction surface). The program custodies escrow,
+> (`097ded1`, the revision-4 99-instruction surface). The program custodies escrow,
 > completion bonds, and agent stakes; the reproducible, hash-pinned build is the
 > supply-chain control on the money path. **Keeping the badge across upgrades is
 > a deploy invariant** — see
@@ -25,12 +25,12 @@ How to prove that the on-chain `agenc-coordination` program deployed at
 | Anyone can confirm the **deployed** program hash matches the **locally built** hash (`get-program-hash` vs `get-executable-hash`) | ✅ Works | — |
 | A **third party** can independently verify the deployed program against the source (`solana-verify verify-from-repo`) | ✅ **Works — repo public** | executed 2026-07-03 |
 | An **on-chain verification PDA** + OtterSec (osec.io) public registration | ✅ **LIVE** (`is_verified: true`) | PDA written by the Squads upgrade-authority vault; runbook §2.5 |
-| npm **publish provenance** (`--provenance`) | ❌ Not yet enabled | one-edit activation in `release.yml` (see checklist below) |
+| npm **publish provenance** (`--provenance`) | ✅ Enabled | tag-triggered publishes use GitHub OIDC |
 
-The honest one-line summary: **the deployed program is third-party verifiable
-today** — reproduce it yourself with `verify-from-repo`, or read the OtterSec
-registry entry that already attests it. The remaining open item is npm
-`--provenance` on the TypeScript package publishes.
+The honest one-line summary: **the deployed revision-4 program is third-party
+verifiable today** — reproduce deployed commit `097ded1` with
+`verify-from-repo`, or read the OtterSec registry entry that already attests it.
+Current HEAD remains a distinct candidate until an approved upgrade.
 
 ---
 
@@ -54,27 +54,32 @@ embedder verifying "the program is the program" without trusting tetsuo-ai.
 
 ---
 
-## The two surfaces (read this before you compare hashes)
+## Build surfaces and deployed revisions (read this before comparing hashes)
 
-`lib.rs` defines **two** `#[program]` modules, selected by a Cargo feature. They
-produce **different bytecode and different hashes**:
+`lib.rs` defines **two** `#[program]` modules, and the full module also has an
+explicit `private-zk` feature variant. These configurations produce **different
+bytecode and different hashes**:
 
 | Surface | Cargo build args | What it is |
 |---------|------------------|------------|
-| **full / default** (**99** instructions as of batch-4) | *(default features)* | The complete surface — **live** at `HJsZ…` on mainnet (`surface_revision = 4`, last slot **431918664** as of 2026-07-09). Growth: 84 (Phase 9) → 90 (P1.2) → 94/96/99 (batches 2–4). Verify the OtterSec registry entry names the commit you build. |
+| **production / default** (**97** instructions at current HEAD) | *(default features)* | The pending revision-5 production candidate. It is not live until an approved upgrade is confirmed. |
+| **private-ZK development** (**100** instructions at current HEAD) | `--features private-zk` | Adds three quarantined proof instructions. Development/testing only; production preflight rejects this surface. |
+| **deployed revision 4** (**99** instructions at `097ded1`) | *(default features at the deployed commit)* | The build live at `HJsZ…` on mainnet (`surface_revision = 4`, last slot **431918664**). |
 | **mainnet-canary** (25 instructions) | `--no-default-features --features mainnet-canary` | The conservative restricted BUILD. Still in source, but **no longer live on mainnet** (it was the surface live before 2026-06-11). |
 
-> **Critical:** since 2026-06-11 the mainnet program runs the **full / default**
-> surface — to match the *deployed* mainnet program you MUST build the default
-> (full) surface **at the deployed commit** (the OtterSec registry entry names
-> it). Building the `mainnet-canary` surface produces a different, smaller
-> program and a **non-matching** hash. (Before the 2026-06-11 upgrade the
-> opposite was true — mainnet ran the canary build.) Current HEAD source is the
-> 99-ix batch-4 surface; older deploy commits had intermediate counts.
+> **Critical:** since 2026-06-11 the mainnet program runs a **full / default**
+> surface, but feature names do not identify a source revision. To match the
+> *currently deployed* program you MUST build default features at deployed commit
+> `097ded1`. Current HEAD is the different, 97-instruction revision-5 candidate
+> and must not be described as live before an upgrade. Building `private-zk` or
+> `mainnet-canary` also produces different bytecode and a non-matching hash;
+> `private-zk` must never be substituted for a production artifact.
 
-The `verify.yml` workflow builds and hashes **both** surfaces on every
-`protocol-v*` tag so the live surface can be checked and the full surface has a
-reproducible hash on record before it is ever deployed.
+The `verify.yml` workflow builds and hashes **both release surfaces** (production
+and frozen canary, not the private development variant) on every `protocol-v*`
+tag so the production candidate and frozen canary each have a
+reproducible hash. A candidate hash becomes a live-program claim only after an
+approved upgrade and an on-chain hash comparison.
 
 ---
 
@@ -109,9 +114,8 @@ Requires Docker and Rust. Targets **solana-verify v0.5.x**
 # 1. Install the pinned verifier (the version verify.yml uses).
 cargo install solana-verify --version 0.5.0 --locked
 
-# 2. Build the LIVE (full / default) surface deterministically, from the
-#    program crate directory. As of 2026-06-11 the full surface is what is
-#    deployed on mainnet, so this is the build to match the live program.
+# 2. Build the production/default surface deterministically from the program
+#    crate directory. At current HEAD this is the revision-5 candidate.
 cd programs/agenc-coordination
 solana-verify build --library-name agenc_coordination
 
@@ -130,7 +134,9 @@ solana-verify get-executable-hash target/deploy/agenc_coordination.so
 ```
 
 The hash from step 3 must equal the corresponding entry in the release's
-`verifiable-build-hashes.txt`.
+`verifiable-build-hashes.txt`. To reproduce the binary live today, first check
+out deployed commit `097ded1`; current HEAD intentionally produces a different
+candidate hash.
 
 ---
 
@@ -140,23 +146,22 @@ The hash from step 3 must equal the corresponding entry in the release's
 way — **no signing, read-only, no wallet**:
 
 ```bash
-# Mainnet. Compare this to the full/default-surface hash from step 3 above.
+# Mainnet. Compare this to a default-feature build of the DEPLOYED commit.
 solana-verify get-program-hash \
   -u https://api.mainnet-beta.solana.com \
   HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK
 ```
 
-If the deployed-program hash equals your locally reproduced **full/default**
-surface hash, you have proven the live program matches this source tree at this
-commit. (Before 2026-06-11 the live program was the `mainnet-canary` build; the
-full surface went live with the Phase 9 upgrade.)
+If the deployed-program hash equals your locally reproduced **default-feature**
+hash, you have proven the live program matches that source commit. It is expected
+not to match current HEAD until revision 5 is actually deployed.
 
 ---
 
-## Full third-party verification — EXECUTED (2026-07-03, badge live)
+## Full third-party verification — EXECUTED (2026-07-10, badge live)
 
-The repo is public, so all of the below works for anyone. It was executed on
-2026-07-03 (after the P1.2 deploy): the verification PDA is written by the
+The repo is public, so all of the below works for anyone. It was last executed on
+2026-07-10 for revision 4: the verification PDA is written by the
 Squads upgrade-authority vault and the OtterSec registry reports
 `is_verified: true`. One wrinkle vs. the vanilla flow: since the upgrade
 authority is a Squads vault, the PDA transaction is routed through a vault
@@ -176,14 +181,14 @@ solana-verify verify-from-repo \
   https://github.com/tetsuo-ai/agenc-protocol
 ```
 
-(Since the 2026-06-11 upgrade the deployed surface is the full / default build,
-so verify against the default features — drop the `--no-default-features
+(Since the 2026-06-11 upgrade the deployed surface is a full / default build,
+verify default features at the deployed commit — drop the `--no-default-features
 --features mainnet-canary` args that were required when mainnet ran the canary.
 Use the deployed commit for `--commit-hash`; the OtterSec registry entry for the
-program names the currently-verified one.)
+program currently names `097ded1`.)
 
 PLAN.md P8.3 done-criterion: **this command passes against the deployed
-program** — satisfied since 2026-07-03.
+program** — satisfied for revision 4 since 2026-07-10.
 
 ### 2. On-chain verification PDA
 
@@ -219,8 +224,8 @@ solana-verify remote get-job --job-id <JOB_ID>
 ```
 
 After this, `HJsZ…` shows a green "verified" badge in explorers that read the
-OtterSec registry — the trustless, third-party property P8.3 is after.
-**Executed 2026-07-03; the badge is live.** Note that because the upgrade
+OtterSec registry — the third-party verification property in P8.3 is live.
+**Last executed 2026-07-10; the revision-4 badge is live.** Note that because the upgrade
 authority is the Squads vault, the export-pda-tx transaction needs the
 ComputeBudget instruction dropped and must be wrapped as a Squads vault
 transaction — the exact as-executed steps are in
@@ -234,30 +239,55 @@ On every `protocol-v*` tag (and on manual dispatch):
 
 1. Installs the pinned `solana-verify` (`SOLANA_VERIFY_VERSION`, currently
    `0.5.0`).
-2. Reproducibly builds **both** surfaces (mainnet-canary and full) in the
-   pinned Docker image.
+2. Reproducibly builds **both** current source surfaces (mainnet-canary and
+   production) in the pinned Docker image.
 3. Emits `get-executable-hash` for each into `verifiable-build-hashes.txt`,
    stamped with the program ID, tag, commit, verifier version, and timestamp.
 4. Uploads that file as a workflow artifact **and** attaches it to the GitHub
    Release created by `release.yml`.
 
+`verify.yml` is also a reusable `workflow_call` job. For a `protocol-v*` tag,
+`release.yml` cannot enter publication unless that job succeeds. The release
+rail verifies that the tag commit is on `main`, validates the semantic version
+and both executable hashes, and passes tag-derived package/hash values to shell
+through environment variables rather than direct workflow-expression
+interpolation. External Actions are pinned to immutable full commit SHAs. Before
+each GitHub/npm mutation, the workflow re-resolves the remote tag and requires
+both its peeled source commit and exact fetched tag object to remain unchanged.
+That second identity rejects replacement of an annotated tag/signature even when
+the replacement still points at the same commit. A pre-existing npm version
+fails closed rather than being treated as a successful rerun without an integrity
+and provenance match.
+
+Publication is ordered fail-closed: prepare a draft GitHub release, attach the
+required hash manifest, publish the npm package with provenance, then make the
+GitHub release public. A verifier, attachment, or npm failure therefore cannot
+leave a public protocol release that lacks its build evidence.
+
 The `verify-from-repo` / OtterSec submission step is still present in
-`verify.yml` **commented out**; the 2026-07-03 verification was executed
+`verify.yml` **commented out**; the 2026-07-10 verification was executed
 manually (the Squads vault path in the runbook §2.5). Activating the CI step is
 an open item below.
 
 ---
 
-## Activation checklist (P0.6 shipped — status as of 2026-07-03)
+## Activation checklist (P0.6 shipped — status as of 2026-07-18)
 
 - [ ] Uncomment the `verify-from-repo` step in `.github/workflows/verify.yml`
       (and wire `MAINNET_RPC_URL`). *(Still commented out; the manual runbook
       §2.5 path is what keeps the badge alive today.)*
-- [ ] Add `--provenance` to both `npm publish` commands in
-      `.github/workflows/release.yml` (per the note already there — the repo is
-      public now, so this is unblocked).
+- [x] Require `--provenance` on the tag-triggered npm publish command in
+      `.github/workflows/release.yml` (GitHub OIDC, public repository).
+- [x] Re-resolve the remote release tag before each external mutation and fail
+      closed on a pre-existing npm version that the current run cannot verify.
+- [ ] Protect release tags from update/deletion in repository settings and enable
+      GitHub immutable releases. A read-only settings check on 2026-07-18 found no
+      inherited repository ruleset, no organization ruleset targeting repositories,
+      and immutable releases disabled. Workflow checks narrow the race window;
+      repository policy is the durable control.
 - [x] Run `verify-from-repo` against mainnet for the live tag; create the PDA
-      (export-and-multisig-sign via the Squads vault — done 2026-07-03).
+      (export-and-multisig-sign via the Squads vault — current revision-4
+      record verified 2026-07-10).
 - [x] Submit the OtterSec remote job; confirm the verified badge
       (`is_verified: true` live).
 - [x] Update this doc's TL;DR table to mark the third-party rows ✅.

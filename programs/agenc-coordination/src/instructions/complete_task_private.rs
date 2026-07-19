@@ -1,4 +1,7 @@
 //! Private task completion with RISC Zero verifier-router verification.
+//!
+//! This module is compiled only when `private-zk` is explicitly enabled; the
+//! production-default program excludes the private completion instruction.
 
 use crate::errors::CoordinationError;
 use crate::instructions::bid_settlement_helpers::{
@@ -9,8 +12,12 @@ use crate::instructions::completion_helpers::{
     calculate_fee_with_reputation, execute_completion_rewards, load_task_claim_or_not_claimed,
     validate_completion_prereqs, validate_task_dependency,
 };
+use crate::instructions::program_account_helpers::close_program_account;
 use crate::instructions::task_validation_helpers::is_manual_validation_task;
-use crate::instructions::token_helpers::{validate_token_account, validate_unchecked_token_mint};
+use crate::instructions::token_helpers::{
+    validate_token_account, validate_token_escrow_account, validate_unchecked_token_mint,
+};
+use crate::private_completion_payload::PrivateCompletionPayload;
 use crate::state::{
     AgentRegistration, BindingSpend, NullifierSpend, ProtocolConfig, Task, TaskClaim, TaskEscrow,
     ZkConfig, HASH_SIZE, RESULT_DATA_SIZE,
@@ -52,15 +59,6 @@ const TRUSTED_RISC0_ROUTER_PROGRAM_ID: Pubkey =
     Pubkey::from_str_const("E9ZiqfCdr6gGeB2UhBbkWnFP9vGnRYQwqnDsS1LM3NJZ");
 const TRUSTED_RISC0_VERIFIER_PROGRAM_ID: Pubkey =
     Pubkey::from_str_const("3ZrAHZKjk24AKgXFekpYeG7v3Rz7NucLXTB3zxGGTjsc");
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
-pub struct PrivateCompletionPayload {
-    pub seal_bytes: Vec<u8>,
-    pub journal: Vec<u8>,
-    pub image_id: [u8; RISC0_IMAGE_ID_LEN],
-    pub binding_seed: [u8; HASH_SIZE],
-    pub nullifier_seed: [u8; HASH_SIZE],
-}
 
 #[derive(Accounts)]
 #[instruction(task_id: u64, proof: PrivateCompletionPayload)]
@@ -295,7 +293,11 @@ fn complete_task_private_impl<'info>(
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
         );
-        validate_token_account(token_escrow, &mint.key(), &accounts.escrow.key())?;
+        validate_token_escrow_account(
+            &token_escrow.to_account_info(),
+            &mint.key(),
+            &accounts.escrow.key(),
+        )?;
         validate_token_account(treasury_ta, &mint.key(), &accounts.protocol_config.treasury)?;
         let token_escrow_starting_amount =
             anchor_spl::token::accessor::amount(&token_escrow.to_account_info())
@@ -345,7 +347,8 @@ fn complete_task_private_impl<'info>(
             clock.unix_timestamp,
         )?;
     }
-    claim.close(accounts.authority.to_account_info())?;
+    let authority_info = accounts.authority.to_account_info();
+    close_program_account(accounts.claim.as_ref(), &authority_info)?;
     Ok(())
 }
 
@@ -731,7 +734,7 @@ fn record_private_spends<'info>(
 #[inline(never)]
 fn finalize_private_completion<'info>(
     task: &mut Account<'info, Task>,
-    claim: &mut Account<'info, TaskClaim>,
+    claim: &mut TaskClaim,
     escrow: &mut Account<'info, TaskEscrow>,
     worker: &mut Account<'info, AgentRegistration>,
     protocol_config: &mut Account<'info, ProtocolConfig>,

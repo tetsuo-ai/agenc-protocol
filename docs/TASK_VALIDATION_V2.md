@@ -8,7 +8,7 @@ The live implementation keeps the original `Task` and `TaskClaim` layouts stable
 
 - standard public tasks can stay on the existing auto-settlement path
 - public tasks can be switched to manual validation before any worker claims them
-- private zk tasks are not eligible for manual validation
+- private zk tasks in the explicit development build are not eligible for manual validation
 - competitive tasks are not eligible for manual validation
 - bid-exclusive tasks remain single-worker flows; review still happens on the accepted claim
 
@@ -92,6 +92,12 @@ PDA seeds: `["task_validation_vote", task_submission, reviewer]`
 
 Stores one reviewer vote or attestation for a specific submission round.
 
+If a vote survives after its exact `TaskSubmission` parent is gone, the pending
+revision-5 `reclaim_orphan_task_child` path can close only the canonical
+`["task_validation_vote", submission, reviewer]` PDA and returns rent to the
+reviewer stored in the vote. A permissionless cranker cannot substitute the
+parent, reviewer, address, bump, or rent recipient.
+
 ## Instruction Flow
 
 ### 1. Configure review
@@ -156,6 +162,10 @@ The completion surface is now intentionally split:
 
 - `complete_task`: immediate settlement for normal public tasks
 - `submit_task_result`: reviewed settlement for manual-validation public tasks
-- `complete_task_private`: zk-backed private completion
+- `complete_task_private`: zk-backed private completion in the explicit,
+  unsupported 100-instruction `private-zk` development build; it is absent from
+  the 97-instruction production candidate
 
-Private tasks stay on the zk path and are not eligible for Task Validation V2.
+In the explicit `private-zk` development build, private tasks stay on the zk path
+and are not eligible for Task Validation V2. The production candidate rejects
+private-task creation and does not expose the private-completion instructions.

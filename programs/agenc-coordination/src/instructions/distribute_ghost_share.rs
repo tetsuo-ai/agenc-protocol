@@ -28,6 +28,7 @@ use crate::events::{
 use crate::instructions::completion_helpers::{
     build_referrer_leg, calculate_combined_fees, calculate_fee_with_reputation,
     calculate_reward_split_for_amount, transfer_rewards, update_claim_state, update_worker_state,
+    RewardDenomination,
 };
 use crate::instructions::task_validation_helpers::{
     contest_ghost_at, decrement_pending_submission_count, ensure_validation_config,
@@ -249,7 +250,11 @@ pub fn handler(ctx: Context<DistributeGhostShare>) -> Result<()> {
             let (op_fee, ref_fee) = calculate_combined_fees(
                 slice_total,
                 protocol_fee_bps,
-                if operator_leg_active { operator_fee_bps } else { 0 },
+                if operator_leg_active {
+                    operator_fee_bps
+                } else {
+                    0
+                },
                 referrer_fee_bps,
             )?;
             let total_legs = op_fee
@@ -320,6 +325,8 @@ pub fn handler(ctx: Context<DistributeGhostShare>) -> Result<()> {
     let (old_rep, new_rep) = update_worker_state(
         &mut ctx.accounts.worker,
         worker_reward,
+        protocol_fee,
+        RewardDenomination::Sol,
         clock.unix_timestamp,
     )?;
     if old_rep != new_rep {
@@ -331,12 +338,13 @@ pub fn handler(ctx: Context<DistributeGhostShare>) -> Result<()> {
             timestamp: clock.unix_timestamp,
         });
     }
+    // SOL-denominated telemetry must not be able to block settlement if a legacy
+    // counter has reached its integer ceiling.
     ctx.accounts.protocol_config.total_value_distributed = ctx
         .accounts
         .protocol_config
         .total_value_distributed
-        .checked_add(slice_total)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+        .saturating_add(slice_total);
 
     ctx.accounts.task_submission.status = SubmissionStatus::Accepted;
     ctx.accounts.task_submission.accepted_at = clock.unix_timestamp;
@@ -356,8 +364,7 @@ pub fn handler(ctx: Context<DistributeGhostShare>) -> Result<()> {
             .accounts
             .protocol_config
             .completed_tasks
-            .checked_add(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
+            .saturating_add(1);
     }
 
     // Event hygiene (fix round): TaskCompleted fires ONLY on the final slice —

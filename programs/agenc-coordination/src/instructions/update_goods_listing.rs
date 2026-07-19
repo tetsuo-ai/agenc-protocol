@@ -13,9 +13,7 @@
 use crate::errors::CoordinationError;
 use crate::events::GoodsListingUpdated;
 use crate::instructions::constants::MIN_GOOD_PRICE;
-use crate::instructions::create_goods_listing::{
-    validate_goods_metadata, validate_operator_terms,
-};
+use crate::instructions::create_goods_listing::{validate_goods_metadata, validate_operator_terms};
 use crate::instructions::launch_controls::require_goods_enabled;
 use crate::state::{AgentRegistration, AgentStatus, GoodsListing, ProtocolConfig};
 use crate::utils::version::check_version_compatible;
@@ -114,9 +112,13 @@ pub fn handler(
             .total_supply
             .checked_add(delta)
             .ok_or(CoordinationError::ArithmeticOverflow)?;
-        // Transparency counter only — saturate rather than brick the restock
-        // path at u16::MAX restocks (SUPPLY-L2); total_supply stays checked.
-        good.restock_count = good.restock_count.saturating_add(1);
+        // The counter is part of the listing's scarcity/provenance record. Do
+        // not mutate supply once that record can no longer advance: saturating
+        // here would make later restocks indistinguishable on-chain.
+        good.restock_count = good
+            .restock_count
+            .checked_add(1)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
     }
 
     // Operator terms: apply whichever side(s) were provided, then validate the

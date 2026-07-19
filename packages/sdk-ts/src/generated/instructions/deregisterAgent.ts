@@ -119,9 +119,7 @@ export type DeregisterAgentAsyncInput<
    * it to dodge the "stake must be withdrawn first" guard (audit). For an agent that
    * never staked this is an empty system-owned PDA (the handler treats it as zero
    * stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve
-   * `slash_count` history — so the agent must withdraw its stake before deregistering;
-   * otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the
-   * `agent_id` becomes re-registerable by anyone, withdrawable by a new owner.
+   * `slash_count` history — so the agent must withdraw its stake before retirement.
    */
   reputationStake?: Address<TAccountReputationStake>;
   authority: TransactionSigner<TAccountAuthority>;
@@ -214,9 +212,7 @@ export type DeregisterAgentInput<
    * it to dodge the "stake must be withdrawn first" guard (audit). For an agent that
    * never staked this is an empty system-owned PDA (the handler treats it as zero
    * stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve
-   * `slash_count` history — so the agent must withdraw its stake before deregistering;
-   * otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the
-   * `agent_id` becomes re-registerable by anyone, withdrawable by a new owner.
+   * `slash_count` history — so the agent must withdraw its stake before retirement.
    */
   reputationStake: Address<TAccountReputationStake>;
   authority: TransactionSigner<TAccountAuthority>;
@@ -294,9 +290,7 @@ export type ParsedDeregisterAgentInstruction<
      * it to dodge the "stake must be withdrawn first" guard (audit). For an agent that
      * never staked this is an empty system-owned PDA (the handler treats it as zero
      * stake). It is NOT closed here — `ReputationStake` is intentionally kept to preserve
-     * `slash_count` history — so the agent must withdraw its stake before deregistering;
-     * otherwise the staked SOL would be stranded (the agent PDA is gone) and, because the
-     * `agent_id` becomes re-registerable by anyone, withdrawable by a new owner.
+     * `slash_count` history — so the agent must withdraw its stake before retirement.
      */
     reputationStake: TAccountMetas[2];
     authority: TAccountMetas[3];

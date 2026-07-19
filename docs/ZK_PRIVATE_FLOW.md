@@ -4,18 +4,24 @@ This file documents the protocol-owned private-completion and zk-config surfaces
 
 ## Launch Scope
 
-- The private zk completion path is part of the protocol surface, but it is not live on
-  mainnet: as of 2026-07-17 `ZkConfig` is **NOT initialized** there, so
-  `complete_task_private` is off (deferred until the H200-backed prover path and the
-  zk image-id rotation procedure are validated end to end).
+- Deployed revision 4 contains the three private-ZK entrypoints, but they are not
+  usable on mainnet: `ZkConfig` is **NOT initialized** there.
+- The pending revision-5 production build goes further and removes
+  `complete_task_private`, `initialize_zk_config`, and `update_zk_image_id` from
+  its 97-instruction IDL. They exist only in the explicit, unsupported
+  100-instruction `private-zk` development build; release preflight rejects that
+  feature for production.
 - Mainnet settlement uses the public and reviewed (Task Validation V2) flows only.
-- `initialize_zk_config` is now **multisig-gated** (audit H-5), matching the authority
-  model of `update_zk_image_id` — bringing the zk path up is a multisig action, not a
-  single-key one.
+- `initialize_zk_config` is **multisig-gated** (audit H-5), matching
+  `update_zk_image_id`, inside the quarantined development surface. That guard is
+  necessary defense in depth; it is not permission to deploy the feature. A future
+  mainnet ZK launch requires a new reviewed production revision, verifier/prover
+  policy, coordinated clients, and a separately approved upgrade.
 
 ## DV-03E Runner Inputs
 
-Use the protocol-owned rehearsal entrypoint when prover infrastructure is available:
+Use the protocol-owned rehearsal entrypoint with an explicit `private-zk`
+validation deployment when prover infrastructure is available:
 
 `npm run devnet:marketplace:scenario -- --scenario DV-03E --config scripts/marketplace-devnet.config.example.json`
 
@@ -23,8 +29,9 @@ Use the protocol-owned rehearsal entrypoint when prover infrastructure is availa
 - use `scenarioRunner.prover.apiKeyEnvVar` when operators want a DV-03E-specific secret name
 - keep in mind that `AGENC_PROVER_ENDPOINT`, `AGENC_PROVER_API_KEY`,
   `AGENC_PROVER_HEADERS_JSON`, and `AGENC_PROVER_TIMEOUT_MS` override config values
-- do not mark DV-03E green until the captured artifact bundle proves `complete_task_private`
-  against the active validation deployment image ID
+- do not mark DV-03E green until the captured artifact bundle proves
+  `complete_task_private` against the active private-ZK validation deployment
+  image ID; this evidence does not make the build production-releasable
 
 ## Repo-Owned Pieces
 
@@ -49,7 +56,7 @@ Use the protocol-owned rehearsal entrypoint when prover infrastructure is availa
 
 ## Protocol Responsibilities
 
-- define the on-chain private-completion instruction surface
+- define the quarantined development-only private-completion instruction surface
 - define the zk-config state that pins trusted image data
 - publish verifier-router support artifacts needed by downstream consumers
 

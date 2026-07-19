@@ -33,6 +33,7 @@ import {
   // generated: PDA helpers used to pre-derive addresses the flow mints/uses
   findCreatorCompletionBondPda,
   findHireRecordPda,
+  findModerationBlockPda,
   findTaskPda,
 } from "../src/index.js";
 // values: domain-value helpers — random 32-byte ids, NFC description hashing,
@@ -163,6 +164,7 @@ export async function main() {
   // task claimable; activation happens in the next signed action.
   const hireIx = await facade.hireFromListingHumanless({
     listing,
+    providerAgent,
     creator: buyerAuthority,
     taskId,
     expectedPrice: 1_000_000n,
@@ -201,10 +203,15 @@ export async function main() {
   // -- 5. Provider claims the activated task -------------------------------
   // claim_task_with_job_spec ties the claim to the pinned job-spec pointer
   // (plain claim_task is fail-closed).
+  const [moderationBlock] = await findModerationBlockPda({
+    contentHash: jobSpecHash,
+  });
   const claimIx = await facade.claimTaskWithJobSpec({
     task,
     worker: providerAgent,
     authority: providerAuthority,
+    moderationBlock,
+    jobSpecHash,
   });
 
   // -- 6. Worker submits an artifact proof --------------------------------
@@ -241,9 +248,11 @@ export async function main() {
     reviewUri: "agenc://review/sha256/example",
   });
 
-  // close_task reclaims terminal task rent and decrements listing open_jobs.
-  // Pass `listing` for hired tasks and `creatorCompletionBond` even when no
-  // creator bond was posted; the program seeds-checks that PDA.
+  // close_task closes the supplied children, decrements listing open_jobs, and
+  // retains the terminal Task as the durable liveness anchor for any child not
+  // enumerable here. Pass `listing` for hired tasks and
+  // `creatorCompletionBond` even when no creator bond was posted; the program
+  // seeds-checks that PDA.
   const closeIx = await facade.closeTask({
     task,
     hireRecord,

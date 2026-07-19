@@ -11,10 +11,11 @@
 use crate::errors::CoordinationError;
 use crate::instructions::slash_helpers::{
     apply_reputation_penalty, calculate_approval_percentage, calculate_slash_amount,
-    transfer_slash_to_treasury, SLASH_WINDOW,
+    transfer_slash_to_treasury, worker_lost_dispute, SLASH_WINDOW,
 };
 use crate::instructions::token_helpers::{
     close_token_escrow, transfer_tokens_from_escrow, validate_token_account,
+    validate_token_escrow_account,
 };
 use crate::state::{
     AgentRegistration, Dispute, DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim,
@@ -23,6 +24,52 @@ use crate::state::{
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkerSlashFinalizerPolicy {
+    /// A candidate-era ruling stamped the durable Task pending bit. These
+    /// rulings use the current policy: only an approved Refund slashes.
+    Current,
+    /// A ruling produced by the deployed program before the pending bit existed.
+    /// That program zeroed `current_workers`, left the losing claim open, and
+    /// treated both approved Refund and approved Split as worker losses.
+    Legacy,
+}
+
+/// Select the only two unambiguous worker-slash finalizer shapes across the
+/// upgrade boundary.
+///
+/// The canonical live claim is enforced by the account constraints and handler
+/// bindings before this predicate is called. A zero pending bit alone is never
+/// enough: the legacy branch additionally requires the deployed program's exact
+/// terminal fingerprint (`Resolved`, unapplied, `current_workers == 0`) and its
+/// historical adverse ruling (approved Refund or Split).
+fn worker_slash_finalizer_policy(
+    status: DisputeStatus,
+    slash_applied: bool,
+    durable_pending: bool,
+    current_workers: u8,
+    approved: bool,
+    resolution_type: ResolutionType,
+) -> Option<WorkerSlashFinalizerPolicy> {
+    if status != DisputeStatus::Resolved {
+        return None;
+    }
+
+    if durable_pending {
+        return worker_lost_dispute(approved, resolution_type)
+            .then_some(WorkerSlashFinalizerPolicy::Current);
+    }
+
+    (!slash_applied
+        && current_workers == 0
+        && approved
+        && matches!(
+            resolution_type,
+            ResolutionType::Refund | ResolutionType::Split
+        ))
+    .then_some(WorkerSlashFinalizerPolicy::Legacy)
+}
 
 #[derive(Accounts)]
 pub struct ApplyDisputeSlash<'info> {
@@ -168,26 +215,25 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
     // Determine if the dispute was approved (ruling bit reads >= threshold percentage)
     let approved = approval_pct >= config.dispute_threshold as u64;
 
-    // Determine if the worker lost the dispute and should be slashed:
-    // - If dispute is APPROVED:
-    //   - Refund: Worker failed, creator gets money back -> worker lost (slash)
-    //   - Split: Partial failure, funds split -> worker lost (slash)
-    //   - Complete: Worker vindicated, gets paid -> worker won (no slash)
-    // - If dispute is REJECTED (not approved):
-    //   - The resolver ruled in the worker's favor -> worker won (no slash)
-    //
-    // Fix for issue #136: Previously, rejected disputes incorrectly set worker_lost=true,
-    // causing innocent workers to be slashed even when the dispute was ruled against the
-    // initiator.
-    let worker_lost = if approved {
-        // Dispute approved: slash worker unless resolution favors them (Complete)
-        dispute.resolution_type != ResolutionType::Complete
-    } else {
-        // Dispute rejected: worker was vindicated, do NOT slash
-        false
-    };
-
-    require!(worker_lost, CoordinationError::InvalidInput);
+    // Candidate-era rulings use the durable pending bit and the current Refund-only
+    // worker-loss policy. Deployed rulings predate that bit: recognize only their
+    // exact, unambiguous pending fingerprint and preserve the historical policy in
+    // which an approved Split was also slashable. The live canonical claim required
+    // above is the final piece of evidence; a newly resolved Split closes its claim
+    // immediately and therefore cannot enter this compatibility branch.
+    let finalizer_policy = worker_slash_finalizer_policy(
+        dispute.status,
+        dispute.slash_applied,
+        ctx.accounts.task.worker_slash_pending(),
+        ctx.accounts.task.current_workers,
+        approved,
+        dispute.resolution_type,
+    )
+    .ok_or(CoordinationError::ClaimSlashPending)?;
+    let worker_lost = matches!(
+        finalizer_policy,
+        WorkerSlashFinalizerPolicy::Current | WorkerSlashFinalizerPolicy::Legacy
+    );
 
     let is_token_task = ctx.accounts.task.reward_mint.is_some();
 
@@ -326,7 +372,7 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
             mint.key() == expected_mint,
             CoordinationError::InvalidTokenMint
         );
-        validate_token_account(token_escrow, &mint.key(), &escrow.key())?;
+        validate_token_escrow_account(&token_escrow.to_account_info(), &mint.key(), &escrow.key())?;
         validate_token_account(
             treasury_ta,
             &mint.key(),
@@ -377,12 +423,12 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         escrow.close(rent_recipient)?;
     }
 
-    // If neither lamports nor token reserves can be slashed, fail explicitly — UNLESS the
-    // slash window lapsed with nothing to settle (audit M-3 `finalize_only`), where we
-    // intentionally apply no slash and fall through solely to clear the defendant
-    // bookkeeping so the worker's stake cannot lock forever.
+    // A zero-lamport slash can still be a real finalization: while the window is
+    // open, `apply_stake_slash` also applies the fixed reputation penalty. Do
+    // not reject that reputation-only path. After the window, `finalize_only`
+    // remains the liveness escape that clears bookkeeping without a late slash.
     require!(
-        slash_amount > 0 || token_task_requires_settlement || finalize_only,
+        apply_stake_slash || slash_amount > 0 || token_task_requires_settlement || finalize_only,
         CoordinationError::InvalidSlashAmount
     );
 
@@ -407,6 +453,7 @@ pub fn handler(ctx: Context<ApplyDisputeSlash>) -> Result<()> {
         // active_tasks on the worker (kept consistent by the resolve-side change).
         // saturating_sub for legacy disputes (their counts were zeroed at resolve).
         ctx.accounts.task.current_workers = ctx.accounts.task.current_workers.saturating_sub(1);
+        ctx.accounts.task.set_worker_slash_pending(false);
         worker_agent.active_tasks = worker_agent.active_tasks.saturating_sub(1);
     }
 
@@ -454,13 +501,120 @@ fn should_apply_stake_slash(slash_applied: bool, slash_window_open: bool) -> boo
 /// "finalize-only, no slash" case; every other case runs a real slash or token settlement.
 /// Safe for token tasks now: `token_task_requires_settlement` is true whenever a reserve
 /// is live, so this path can never close the worker_claim over an unsettled reserve.
-fn finalize_only_after_window(slash_window_open: bool, token_task_requires_settlement: bool) -> bool {
+fn finalize_only_after_window(
+    slash_window_open: bool,
+    token_task_requires_settlement: bool,
+) -> bool {
     !slash_window_open && !token_task_requires_settlement
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_slash_policy_separates_current_and_deployed_rulings() {
+        let current = |approved, resolution| {
+            worker_slash_finalizer_policy(
+                DisputeStatus::Resolved,
+                false,
+                true,
+                1,
+                approved,
+                resolution,
+            )
+        };
+        assert_eq!(
+            current(true, ResolutionType::Refund),
+            Some(WorkerSlashFinalizerPolicy::Current)
+        );
+        assert_eq!(current(true, ResolutionType::Split), None);
+        assert_eq!(current(true, ResolutionType::Complete), None);
+        assert_eq!(current(false, ResolutionType::Refund), None);
+
+        let legacy = |status, slash_applied, workers, approved, resolution| {
+            worker_slash_finalizer_policy(
+                status,
+                slash_applied,
+                false,
+                workers,
+                approved,
+                resolution,
+            )
+        };
+        assert_eq!(
+            legacy(
+                DisputeStatus::Resolved,
+                false,
+                0,
+                true,
+                ResolutionType::Refund,
+            ),
+            Some(WorkerSlashFinalizerPolicy::Legacy)
+        );
+        assert_eq!(
+            legacy(
+                DisputeStatus::Resolved,
+                false,
+                0,
+                true,
+                ResolutionType::Split,
+            ),
+            Some(WorkerSlashFinalizerPolicy::Legacy)
+        );
+
+        // Every element of the deployed fingerprint is load-bearing.
+        assert_eq!(
+            legacy(
+                DisputeStatus::Active,
+                false,
+                0,
+                true,
+                ResolutionType::Refund,
+            ),
+            None
+        );
+        assert_eq!(
+            legacy(
+                DisputeStatus::Resolved,
+                true,
+                0,
+                true,
+                ResolutionType::Refund,
+            ),
+            None
+        );
+        assert_eq!(
+            legacy(
+                DisputeStatus::Resolved,
+                false,
+                1,
+                true,
+                ResolutionType::Refund,
+            ),
+            None
+        );
+        assert_eq!(
+            legacy(
+                DisputeStatus::Resolved,
+                false,
+                0,
+                false,
+                ResolutionType::Refund,
+            ),
+            None
+        );
+        assert_eq!(
+            legacy(
+                DisputeStatus::Resolved,
+                false,
+                0,
+                true,
+                ResolutionType::Complete,
+            ),
+            None
+        );
+    }
 
     // Audit M-3 (revert-sensitive on the predicate): only a lapsed window with nothing to
     // settle is finalize-only. Widening it would skip real slashes; narrowing it back to

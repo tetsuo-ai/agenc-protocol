@@ -1,97 +1,373 @@
 #!/usr/bin/env node
-// Audit (2026-07 swarm, C6 re-open) preflight: revoke_delegation now requires
-// STRICT identity continuity (delegator.registered_at < delegation.created_at)
-// after delegate_reputation gained a registration-age gate. Equality
-// (registered_at == created_at) is the attacker's single-slot
-// [delegate, deregister, register] clone — but it is ALSO the shape of an
-// honest legacy delegation created in the same second as its registration
-// (before the delegate-time gate existed). Those legacy delegations become
-// unrevocable under the strict check, so any hit must be handled (e.g. by
-// having the delegator NOT deregister and revoking before the upgrade ships)
-// BEFORE deploying the upgrade.
+// Revision-5 mainnet cutover scan for ReputationDelegation accounts.
 //
-// Expected result on mainnet today: ZERO delegations at all (the feature is
-// young), so zero same-second delegations.
+//   delegator.registered_at < delegation.created_at
 //
-// Usage:
-//   RPC_URL=https://your-mainnet-rpc node scripts/preflight-delegation-scan.mjs
-//
-// Exit code 0 = no same-second delegations. Exit 1 = hits found (or RPC failure).
+// Revision 5 disables new delegation and makes retirement permissionless and
+// reputation-neutral. The cutover still requires ZERO delegation accounts: even
+// a canonical/continuous record is a blocker until retired. For every canonical
+// record this scanner emits the continuity, recorded authority, rent route, and
+// exact identity keys needed to construct that cleanup without sending it. The
+// scan is mainnet-only and fails closed on owner/layout/PDA/identity ambiguity.
 
-import { Connection, PublicKey } from "@solana/web3.js";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PROGRAM_ID = new PublicKey("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
-const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
+const { Connection, PublicKey, SystemProgram } = require("@solana/web3.js");
 
-// ReputationDelegation layout (state.rs), after the 8-byte discriminator:
-// delegator[32]@8 delegatee[32]@40 amount(u16)@72 expires_at(i64)@74
-// created_at(i64)@82 bump(u8)@90
+export const PROGRAM_ID = new PublicKey(
+  "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+);
+export const MAINNET_GENESIS =
+  "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+
+const AGENT_DISCRIMINATOR = createHash("sha256")
+  .update("account:AgentRegistration")
+  .digest()
+  .subarray(0, 8);
+const DELEGATION_DISCRIMINATOR = createHash("sha256")
+  .update("account:ReputationDelegation")
+  .digest()
+  .subarray(0, 8);
+
+// ReputationDelegation, including Anchor's discriminator:
+// delegator@8, delegatee@40, amount@72, expires_at@74, created_at@82.
+const DELEGATION_SIZE = 99;
+const AGENT_SIZE = 566;
 const CREATED_AT_OFFSET = 82;
+const DELEGATION_BUMP_OFFSET = 90;
+const MAX_REPUTATION = 10_000;
 
-// AgentRegistration layout (state.rs), after the 8-byte discriminator:
-// agent_id[32]@8 authority[32]@40 endpoint(String: u32 len @72, bytes @76)
-// capabilities(u64) reputation(u16) status(u8) completed_tasks(u32)
-// total_earnings(u64) active_tasks(u8) disputes_as_defendant(u8)
-// disputes_as_initiator(u8) active_dispute_votes(u8) last_active(i64)
-// registered_at(i64)  <- parsed by walking the variable-length endpoint string.
-function agentRegisteredAt(data) {
-  const endpointLen = data.readUInt32LE(72);
-  let off = 76 + endpointLen;
-  off += 8; // capabilities
-  off += 2; // reputation
-  off += 1; // status
-  off += 4; // completed_tasks
-  off += 8; // total_earnings
-  off += 1; // active_tasks
-  off += 1; // disputes_as_defendant
-  off += 1; // disputes_as_initiator
-  off += 1; // active_dispute_votes
-  off += 8; // last_active
-  return Number(data.readBigInt64LE(off));
+function requireBytes(data, offset, length, field) {
+  if (!Buffer.isBuffer(data)) throw new Error(`${field}: expected Buffer`);
+  if (offset < 0 || length < 0 || offset + length > data.length) {
+    throw new Error(
+      `${field}: truncated account (${data.length} bytes; need ${offset + length})`,
+    );
+  }
 }
 
-const discriminator = createHash("sha256").update("account:ReputationDelegation").digest().subarray(0, 8);
+function assertDiscriminator(data, expected, accountType) {
+  requireBytes(data, 0, 8, `${accountType} discriminator`);
+  if (!data.subarray(0, 8).equals(expected)) {
+    throw new Error(`${accountType}: discriminator mismatch`);
+  }
+}
 
-async function main() {
-  const connection = new Connection(RPC_URL, "confirmed");
-  console.log(`Scanning ReputationDelegation accounts on ${RPC_URL.replace(/\/\/.*@/, "//***@")} (program ${PROGRAM_ID.toBase58()})`);
+function readBorshStringEnd(data, offset, field, maxLength) {
+  requireBytes(data, offset, 4, `${field} length`);
+  const length = data.readUInt32LE(offset);
+  if (length > maxLength) {
+    throw new Error(`${field}: encoded length ${length} exceeds maximum ${maxLength}`);
+  }
+  const end = offset + 4 + length;
+  requireBytes(data, offset + 4, length, field);
+  return end;
+}
+
+/** Decode the identity fields needed from the actual state.rs Borsh order. */
+export function decodeAgentRegistration(dataLike) {
+  const data = Buffer.from(dataLike);
+  if (data.length !== AGENT_SIZE) {
+    throw new Error(
+      `AgentRegistration: unexpected account size ${data.length}; expected exactly ${AGENT_SIZE}`,
+    );
+  }
+  assertDiscriminator(data, AGENT_DISCRIMINATOR, "AgentRegistration");
+
+  requireBytes(data, 8, 32, "AgentRegistration.agent_id");
+  const agentId = Buffer.from(data.subarray(8, 40));
+  const authority = new PublicKey(data.subarray(40, 72));
+  if (authority.equals(PublicKey.default)) {
+    throw new Error("AgentRegistration.authority: default pubkey");
+  }
+
+  // discriminator(8) + agent_id(32) + authority(32) + capabilities(u64)
+  // + status(unit enum/u8) = endpoint String prefix at byte 81.
+  const status = data[80];
+  if (status > 3) {
+    throw new Error(`AgentRegistration.status: invalid enum variant ${status}`);
+  }
+
+  let offset = 81;
+  offset = readBorshStringEnd(data, offset, "AgentRegistration.endpoint", 256);
+  offset = readBorshStringEnd(
+    data,
+    offset,
+    "AgentRegistration.metadata_uri",
+    128,
+  );
+  requireBytes(data, offset, 8, "AgentRegistration.registered_at");
+  const registeredAt = data.readBigInt64LE(offset);
+  if (registeredAt <= 0n) {
+    throw new Error(
+      `AgentRegistration.registered_at: invalid timestamp ${registeredAt}`,
+    );
+  }
+  requireBytes(data, offset, 93, "AgentRegistration fixed tail");
+  const bump = data[offset + 44];
+  const identityMarker = data.subarray(offset + 89, offset + 93);
+  const retired = identityMarker.equals(Buffer.from("RETD", "ascii"));
+  if (!retired && !identityMarker.equals(Buffer.alloc(4))) {
+    throw new Error("AgentRegistration: invalid reserved identity marker");
+  }
+  return { agentId, authority, registeredAt, bump, retired };
+}
+
+export function decodeDelegation(dataLike) {
+  const data = Buffer.from(dataLike);
+  if (data.length !== DELEGATION_SIZE) {
+    throw new Error(
+      `ReputationDelegation: unexpected account size ${data.length}; expected exactly ${DELEGATION_SIZE}`,
+    );
+  }
+  assertDiscriminator(data, DELEGATION_DISCRIMINATOR, "ReputationDelegation");
+  const delegator = new PublicKey(data.subarray(8, 40));
+  const delegatee = new PublicKey(data.subarray(40, 72));
+  const amount = data.readUInt16LE(72);
+  const expiresAt = data.readBigInt64LE(74);
+  const createdAt = data.readBigInt64LE(CREATED_AT_OFFSET);
+  if (
+    delegator.equals(PublicKey.default) ||
+    delegatee.equals(PublicKey.default) ||
+    delegator.equals(delegatee)
+  ) {
+    throw new Error("ReputationDelegation: invalid delegator/delegatee identity");
+  }
+  if (amount === 0 || amount > MAX_REPUTATION) {
+    throw new Error(`ReputationDelegation.amount: invalid ${amount}`);
+  }
+  if (createdAt <= 0n) {
+    throw new Error(
+      `ReputationDelegation.created_at: invalid timestamp ${createdAt}`,
+    );
+  }
+  if (expiresAt !== 0n && expiresAt <= createdAt) {
+    throw new Error(
+      `ReputationDelegation.expires_at ${expiresAt} is not zero or after created_at ${createdAt}`,
+    );
+  }
+  if (!data.subarray(91, 99).equals(Buffer.alloc(8))) {
+    throw new Error("ReputationDelegation: reserved bytes are non-zero");
+  }
+  return {
+    delegator,
+    delegatee,
+    amount,
+    expiresAt,
+    createdAt,
+    bump: data[DELEGATION_BUMP_OFFSET],
+  };
+}
+
+export function classifyContinuity(registeredAt, createdAt) {
+  if (registeredAt < createdAt) return "safe";
+  if (registeredAt === createdAt) return "same-second";
+  return "clone";
+}
+
+export function redactRpcText(value) {
+  // RPC endpoints routinely carry secrets in hostnames, paths, query strings, or
+  // userinfo. Do not attempt partial masking: never emit any part of the URL.
+  const text = String(value);
+  return text.replace(/(?:https?|wss?):\/\/\S+/giu, "<redacted-rpc>");
+}
+
+export async function scanDelegations(connection) {
+  const genesisHash = await connection.getGenesisHash();
+  if (genesisHash !== MAINNET_GENESIS) {
+    throw new Error(
+      `wrong cluster genesis ${genesisHash}; expected mainnet-beta ${MAINNET_GENESIS}`,
+    );
+  }
 
   const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
-    filters: [{ memcmp: { offset: 0, bytes: discriminator.toString("base64"), encoding: "base64" } }],
+    filters: [
+      {
+        memcmp: {
+          offset: 0,
+          bytes: DELEGATION_DISCRIMINATOR.toString("base64"),
+          encoding: "base64",
+        },
+      },
+    ],
   });
-  console.log(`ReputationDelegation accounts: ${accounts.length}`);
 
-  let sameSecond = 0;
-  let orphaned = 0;
+  const blockers = [];
+  const records = [];
   for (const { pubkey, account } of accounts) {
-    const data = Buffer.from(account.data);
-    const delegator = new PublicKey(data.subarray(8, 40));
-    const createdAt = Number(data.readBigInt64LE(CREATED_AT_OFFSET));
-    const agentInfo = await connection.getAccountInfo(delegator, "confirmed");
-    if (!agentInfo || !agentInfo.owner.equals(PROGRAM_ID)) {
-      orphaned += 1;
-      console.log(`  ORPHANED (delegator closed): ${pubkey.toBase58()} created_at=${createdAt}`);
+    if (!account.owner.equals(PROGRAM_ID)) {
+      blockers.push({ kind: "invalid-owner", delegation: pubkey });
       continue;
     }
-    const registeredAt = agentRegisteredAt(Buffer.from(agentInfo.data));
-    if (registeredAt === createdAt) {
-      sameSecond += 1;
-      console.log(`  SAME-SECOND: ${pubkey.toBase58()} delegator=${delegator.toBase58()} t=${createdAt}`);
-    } else if (registeredAt > createdAt) {
-      console.log(`  CLONE (registered_at > created_at): ${pubkey.toBase58()} delegator=${delegator.toBase58()} registered=${registeredAt} created=${createdAt}`);
+
+    let delegation;
+    try {
+      delegation = decodeDelegation(account.data);
+    } catch (error) {
+      blockers.push({
+        kind: "decode-error",
+        delegation: pubkey,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    const [expectedDelegation, expectedBump] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("reputation_delegation"),
+        delegation.delegator.toBuffer(),
+        delegation.delegatee.toBuffer(),
+      ],
+      PROGRAM_ID,
+    );
+    if (
+      !expectedDelegation.equals(pubkey) ||
+      expectedBump !== delegation.bump
+    ) {
+      blockers.push({
+        kind: "invalid-delegation-pda",
+        delegation: pubkey,
+        ...delegation,
+      });
+      continue;
+    }
+
+    const agentInfo = await connection.getAccountInfo(
+      delegation.delegator,
+      "confirmed",
+    );
+    if (
+      !agentInfo ||
+      (agentInfo.owner.equals(SystemProgram.programId) &&
+        !agentInfo.executable &&
+        Buffer.from(agentInfo.data).length === 0)
+    ) {
+      const record = {
+        delegation: pubkey,
+        ...delegation,
+        continuity: "absent",
+        authority: null,
+        retired: false,
+        cleanupRoute: "treasury",
+        remainingAccountsRequired: true,
+      };
+      records.push(record);
+      blockers.push({ kind: "orphaned", ...record });
+      continue;
+    }
+    if (!agentInfo.owner.equals(PROGRAM_ID) || agentInfo.executable) {
+      blockers.push({
+        kind: "invalid-agent-owner",
+        delegation: pubkey,
+        ...delegation,
+      });
+      continue;
+    }
+
+    try {
+      const agent = decodeAgentRegistration(agentInfo.data);
+      const [expectedAgent, expectedAgentBump] = PublicKey.findProgramAddressSync(
+        [Buffer.from("agent"), agent.agentId],
+        PROGRAM_ID,
+      );
+      if (
+        !expectedAgent.equals(delegation.delegator) ||
+        expectedAgentBump !== agent.bump
+      ) {
+        blockers.push({
+          kind: "invalid-agent-pda",
+          delegation: pubkey,
+          ...delegation,
+        });
+        continue;
+      }
+      const kind = classifyContinuity(agent.registeredAt, delegation.createdAt);
+      const record = {
+        delegation: pubkey,
+        ...delegation,
+        continuity: kind === "safe" ? "continuous" : kind,
+        authority: agent.authority,
+        registeredAt: agent.registeredAt,
+        retired: agent.retired,
+        cleanupRoute: kind === "safe" ? "authority" : "treasury",
+        remainingAccountsRequired: kind !== "safe",
+      };
+      records.push(record);
+      if (kind !== "safe") {
+        blockers.push({
+          kind,
+          ...record,
+        });
+      } else {
+        blockers.push({
+          kind: "live-delegation-cutover",
+          ...record,
+        });
+      }
+    } catch (error) {
+      blockers.push({
+        kind: "decode-error",
+        delegation: pubkey,
+        ...delegation,
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   }
-  console.log(`same-second delegations: ${sameSecond}; orphaned (delegator closed): ${orphaned}`);
 
-  if (sameSecond > 0) {
-    console.error("\nPREFLIGHT FAIL: legacy same-second delegations exist — they become unrevocable under the strict identity check. Revoke them BEFORE deploying.");
-    process.exit(1);
-  }
-  console.log("PREFLIGHT OK: no same-second delegations on-chain; the strict identity check is free to ship.");
+  return { accountCount: accounts.length, records, blockers };
 }
 
-main().catch((e) => {
-  console.error(`scan failed: ${e?.message ?? e}`);
-  process.exit(1);
-});
+async function main() {
+  const rpcUrl = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+  console.log(
+    `Scanning mainnet ReputationDelegation accounts via <redacted-rpc> (program ${PROGRAM_ID.toBase58()})`,
+  );
+  const connection = new Connection(rpcUrl, "confirmed");
+  const result = await scanDelegations(connection);
+  console.log(`ReputationDelegation accounts: ${result.accountCount}`);
+
+  for (const record of result.records) {
+    console.log(
+      `  CLEANUP delegation=${record.delegation.toBase58()} ` +
+        `delegator=${record.delegator.toBase58()} ` +
+        `delegatee=${record.delegatee.toBase58()} ` +
+        `continuity=${record.continuity} ` +
+        `authority=${record.authority?.toBase58() ?? "none"} ` +
+        `route=${record.cleanupRoute} ` +
+        `remaining_accounts=${record.remainingAccountsRequired ? "protocol,treasury" : "none"}`,
+    );
+  }
+
+  for (const blocker of result.blockers) {
+    const delegation = blocker.delegation.toBase58();
+    const created = blocker.createdAt?.toString() ?? "unknown";
+    const registered = blocker.registeredAt?.toString() ?? "unknown";
+    console.error(
+      `  BLOCKER ${blocker.kind}: delegation=${delegation} created_at=${created} registered_at=${registered}`,
+    );
+  }
+
+  if (result.blockers.length > 0) {
+    throw new Error(
+      `${result.blockers.length} delegation cutover blocker(s) found; retire every delegation and remediate ambiguity before deployment`,
+    );
+  }
+  console.log(
+    "PREFLIGHT OK: no ReputationDelegation account exists.",
+  );
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(
+      `PREFLIGHT FAIL: ${redactRpcText(error instanceof Error ? error.message : error)}`,
+    );
+    process.exitCode = 1;
+  });
+}

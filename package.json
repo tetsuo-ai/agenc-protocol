@@ -37,12 +37,19 @@
     "canary:idl": "anchor idl build -p agenc_coordination -o target/idl/agenc_coordination.canary.json -- --no-default-features --features mainnet-canary",
     "canary:check-idl": "node scripts/check-canary-idl.mjs",
     "canary:test": "cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary",
-    "check:stack": "node scripts/check-stack-frames.mjs"
+    "check:stack": "node scripts/check-stack-frames.mjs",
+    "test:deployment-scripts": "node --test scripts/preflight-*.test.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
     "@types/node": "^25.4.0",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yaml": "^2.9.0"
+  },
+  "overrides": {
+    "tsup": {
+      "esbuild": "^0.28.1"
+    }
   }
 }

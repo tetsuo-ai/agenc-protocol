@@ -17,10 +17,12 @@
 
 use crate::errors::CoordinationError;
 use crate::events::{ServiceListingHired, TaskCreated};
-use crate::instructions::completion_helpers::resolve_referrer_snapshot;
+use crate::instructions::completion_helpers::{
+    resolve_referrer_snapshot, validate_marketplace_payee_destinations,
+};
 use crate::instructions::hire_from_listing::{
-    hire_deadline_offset, resolve_listing_attestor, validate_hire_terms,
-    validate_listing_capacity, validate_listing_moderation_for_hire, validate_listing_spec_hash,
+    hire_deadline_offset, resolve_listing_attestor, validate_hire_terms, validate_listing_capacity,
+    validate_listing_moderation_for_hire, validate_listing_spec_hash,
 };
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::moderation_gate_helpers::{
@@ -32,9 +34,9 @@ use crate::instructions::task_init_helpers::{
 };
 use crate::instructions::task_validation_helpers::validate_review_window_for_mode;
 use crate::state::{
-    AuthorityRateLimit, HireRecord, ModerationAttestor, ModerationConfig, ProtocolConfig,
-    ServiceListing, Task, TaskEscrow, TaskType, TaskValidationConfig, ValidationMode,
-    MANUAL_VALIDATION_SENTINEL,
+    AgentRegistration, AgentStatus, AuthorityRateLimit, HireRecord, ModerationAttestor,
+    ModerationConfig, ProtocolConfig, ServiceListing, Task, TaskEscrow, TaskType,
+    TaskValidationConfig, ValidationMode, MANUAL_VALIDATION_SENTINEL,
 };
 use crate::utils::version::check_version_compatible;
 use anchor_lang::prelude::*;
@@ -90,6 +92,14 @@ pub struct HireFromListingHumanless<'info> {
         bump = listing.bump
     )]
     pub listing: Box<Account<'info, ServiceListing>>,
+
+    /// Durable listings cannot outlive the provider's permission to take new work.
+    #[account(
+        seeds = [b"agent", provider_agent.agent_id.as_ref()],
+        bump = provider_agent.bump,
+        constraint = provider_agent.key() == listing.provider_agent @ CoordinationError::InvalidInput
+    )]
+    pub provider_agent: Box<Account<'info, AgentRegistration>>,
 
     #[account(
         mut,
@@ -161,6 +171,11 @@ pub fn handler(
 
     check_version_compatible(config)?;
     require_task_type_index_enabled(config, TaskType::Exclusive as u8)?;
+    require!(
+        ctx.accounts.provider_agent.status == AgentStatus::Active
+            && !ctx.accounts.provider_agent.is_retired_identity(),
+        CoordinationError::AgentNotActive
+    );
     // Forced CreatorReview ⇒ the review window must be valid for that mode.
     validate_review_window_for_mode(ValidationMode::CreatorReview, review_window_secs)?;
 
@@ -205,7 +220,10 @@ pub fn handler(
     // instantly re-arms the strict path.
     let mut unlocking_attestor: Option<Pubkey> = None;
     if ctx.accounts.moderation_config.enabled
-        && !moderation_gate_relaxed(ctx.accounts.moderation_config.as_ref(), clock.unix_timestamp)
+        && !moderation_gate_relaxed(
+            ctx.accounts.moderation_config.as_ref(),
+            clock.unix_timestamp,
+        )
     {
         let record_info = ctx
             .accounts
@@ -213,7 +231,10 @@ pub fn handler(
             .as_ref()
             .ok_or(CoordinationError::TaskModerationRequired)?;
         unlocking_attestor = resolve_listing_attestor(
-            ctx.accounts.moderation_attestor.as_ref().map(|a| a.attestor),
+            ctx.accounts
+                .moderation_attestor
+                .as_ref()
+                .map(|a| a.attestor),
             ctx.accounts.moderation_attestor.as_ref().map(|a| a.key()),
             moderator,
         )?;
@@ -309,6 +330,15 @@ pub fn handler(
     task.referrer = referrer_key;
     task.referrer_fee_bps = referrer_bps;
     let task_key = task.key();
+    validate_marketplace_payee_destinations(
+        task_key,
+        escrow_key,
+        creator_key,
+        task.operator,
+        task.operator_fee_bps,
+        referrer_key,
+        referrer_bps,
+    )?;
 
     let escrow = ctx.accounts.escrow.as_mut();
     init_escrow_fields(escrow, task_key, reward_amount, ctx.bumps.escrow);
@@ -349,7 +379,7 @@ pub fn handler(
     hire_record.operator = listing_operator;
     hire_record.operator_fee_bps = listing_operator_fee_bps;
     hire_record.bump = ctx.bumps.hire_record;
-    hire_record._reserved = [0u8; 32];
+    hire_record.designated_provider = provider_agent;
     hire_record.referrer = referrer_key;
     hire_record.referrer_fee_bps = referrer_bps;
 

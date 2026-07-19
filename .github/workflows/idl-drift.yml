@@ -15,27 +15,28 @@
 #      --require-build, which HARD-FAILS (instead of silently passing) if the
 #      freshly built artifacts are ever absent. The gate can no longer pass
 #      vacuously.
-#   4. Runs `npm run canary:idl` + `npm run canary:check-idl` — the frozen
-#      25-instruction canary surface gate (name allowlist + wire-shape
-#      baseline vs scripts/canary-idl-baseline.json).
+#   4. Builds the restricted canary SBF + IDL, checks the frozen 25-instruction
+#      wire shape, and executes its opt-in LiteSVM timeout-settlement regression.
+#      This happens only after every production artifact comparison, because the
+#      canary build intentionally overwrites the shared deploy `.so` path.
 #
 # COST: the anchor-cli install (~10-15 min) and anchor build are heavy on a
 # cold cache; both are cached below, so warm runs are dominated by the
 # incremental build. This is comparable to the cargo build-sbf job sdk.yml
 # already runs.
 #
-# NOTE: sandbox-nightly.yml says "GitHub Actions is currently disabled
-# repo-wide", but the live repo setting reported enabled when this gate was
-# added (actions/permissions: {"enabled":true}, checked 2026-07-16) — that
-# comment is stale, and this workflow runs on the next push/PR to main. The
-# same gate can always be run locally:
-#   anchor build && npm run artifacts:check:built && npm run canary:idl && npm run canary:check-idl
+# The same gate can always be run locally:
+#   anchor build && npm run artifacts:check:built && npm run canary:build && npm run canary:idl && npm run canary:check-idl && AGENC_CANARY_LITESVM=1 node --test tests-integration/canary-timeout-accept.test.mjs
 
 name: IDL Drift
 
 # Least privilege (F-19): this job only reads the repo and writes build caches.
 permissions:
   contents: read
+
+env:
+  AGAVE_VERSION: v3.0.13
+  AGAVE_INSTALL_INIT_SHA256: 1a4e96d884a4df7f204240ea8a0e2ce5a4ca71257bc5ce32ae140e1f6bc140d8
 
 on:
   workflow_dispatch:
@@ -49,22 +50,25 @@ on:
 jobs:
   idl-drift:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache anchor CLI binary
         id: cache-anchor
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/anchor
           key: anchor-cli-0.32.1-${{ runner.os }}
@@ -80,11 +84,16 @@ jobs:
       # [toolchain].solana_version and the sdk.yml e2e job.
       - name: Install Solana platform tools
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.13/install)"
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Cache cargo registry + build target
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -100,15 +109,26 @@ jobs:
       - name: Anchor build (full surface, default features)
         run: anchor build
 
+      - name: Reject SBF stack-frame overflows
+        run: npm run check:stack
+
       # HARD drift gate: --require-build makes the check fail (exit 1) if the
       # built artifacts are missing, so this step can never pass vacuously.
       - name: Verify committed protocol artifacts against the fresh build
         run: npm run artifacts:check:built
 
-      # Canary freeze gate: rebuild the restricted-surface IDL (host-side
-      # cargo, no sbf needed) and pin it against the frozen wire-shape baseline.
+      # Canary gates run after every production artifact comparison because this
+      # restricted build overwrites the shared program deploy `.so` path.
+      - name: Build mainnet-canary SBF
+        run: npm run canary:build
+
       - name: Build mainnet-canary IDL
         run: npm run canary:idl
 
       - name: Verify frozen canary IDL surface
         run: npm run canary:check-idl
+
+      - name: Compiled mainnet-canary LiteSVM regression
+        env:
+          AGENC_CANARY_LITESVM: "1"
+        run: node --test tests-integration/canary-timeout-accept.test.mjs

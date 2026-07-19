@@ -24,8 +24,8 @@
 #           forwarded to the test below and passed through to
 #           requestSandboxAttestation as the attestation endpoint, so no SDK
 #           release is needed to repoint the nightly.
-#      Until then the workflow is inert. (GitHub Actions is currently disabled
-#      repo-wide anyway — this file just makes the canary ready to switch on.)
+#      Until then the workflow is inert; the repository variable is the
+#      authoritative enable switch.
 #   2. The test itself is env-gated: tests-e2e/devnet-nightly.test.ts only
 #      executes when SANDBOX_NIGHTLY=1, so ordinary `npm test` runs skip it.
 #
@@ -40,20 +40,26 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   devnet-first-hire-canary:
     if: ${{ vars.SANDBOX_NIGHTLY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: packages/sdk-ts
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       # Node 24 to match the SDK CI matrix (see sdk.yml).
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm

@@ -1,199 +1,118 @@
-//! Fuzz target for dispute timing boundaries
+//! Timing properties for direct dispute resolution and permissionless expiry.
 //!
-//! Tests timing-sensitive invariants:
-//! - Vote exactly at deadline boundary (timestamp == voting_deadline) must fail
-//! - Vote after deadline must fail
-//! - Resolution before deadline must fail
-//! - Expiration timing boundaries
-//! - Claim expiry timing boundaries
-//!
-//! Run with: cargo test --release -p agenc-coordination-fuzz dispute_timing
+//! Resolution is available immediately and remains open only while both the
+//! hard expiry and legacy-deadline grace permit it. Expiry is its exact logical
+//! complement, so no timestamp permits both paths or strands the dispute.
 
 use crate::*;
 use proptest::prelude::*;
+
+fn active_dispute(voting_deadline: i64, expires_at: i64) -> SimulatedDispute {
+    SimulatedDispute {
+        status: dispute_status::ACTIVE,
+        resolution_type: 1,
+        voting_deadline,
+        expires_at,
+        initiator_authority: DISPUTE_INITIATOR,
+        ..Default::default()
+    }
+}
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
     #[test]
-    fn fuzz_dispute_timing(input in any::<DisputeTimingInput>()) {
-        let mut dispute = SimulatedDispute {
-            dispute_id: [0u8; 32],
-            status: dispute_status::ACTIVE,
-            resolution_type: 1,
-            votes_for: 0,
-            votes_against: 0,
-            total_voters: 0,
-            voting_deadline: input.voting_deadline,
-        };
+    fn fuzz_resolution_expiry_partition(input in any::<DisputeTimingInput>()) {
+        let template = active_dispute(input.voting_deadline, input.expires_at);
 
-        let arbiter = SimulatedAgent {
-            agent_id: [1u8; 32],
-            capabilities: 1 << 7, // ARBITER
-            status: agent_status::ACTIVE,
-            active_tasks: 0,
-            reputation: 5000,
-            stake: 1_000_000,
-            tasks_completed: 0,
-            total_earned: 0,
-        };
+        for &timestamp in &input.timestamps {
+            let resolution_open = dispute_resolution_window_open(&template, timestamp);
+            let expiry_open = dispute_expiry_window_open(&template, timestamp);
 
-        let config = SimulatedConfig {
-            min_arbiter_stake: 0,
-            ..Default::default()
-        };
-
-        for &vote_ts in &input.vote_timestamps {
-            let result = simulate_vote_dispute(
-                &mut dispute,
-                &arbiter,
-                &config,
-                true,
-                vote_ts,
-            );
-
-            prop_assert!(
-                !result.is_invariant_violation(),
-                "Invariant violation on vote: {:?}\nInput: {:?}",
-                result,
+            prop_assert_eq!(
+                check_dispute_window_partition(resolution_open, expiry_open),
+                DisputeInvariantResult::Valid,
+                "window partition failed at {}: {:?}",
+                timestamp,
                 input
             );
 
-            // Votes at/after deadline must fail
-            if vote_ts >= input.voting_deadline {
-                prop_assert!(
-                    result.is_error(),
-                    "Vote succeeded at/after deadline. ts={}, deadline={}\nInput: {:?}",
-                    vote_ts,
-                    input.voting_deadline,
-                    input
-                );
-            }
-        }
+            let mut resolution_dispute = template.clone();
+            let mut task = SimulatedTask {
+                status: task_status::DISPUTED,
+                current_workers: 1,
+                max_workers: 1,
+                required_completions: 1,
+                ..Default::default()
+            };
+            let mut escrow = SimulatedEscrow {
+                amount: 1_000_000,
+                ..Default::default()
+            };
+            let ruling = direct_ruling(ResolverRole::AssignedResolver, true, true);
+            let resolution_result = simulate_resolve_dispute(
+                &mut resolution_dispute,
+                &mut task,
+                &mut escrow,
+                &ruling,
+                timestamp,
+            );
+            prop_assert_eq!(
+                resolution_result.is_success(),
+                resolution_open,
+                "resolution result disagreed with window at {}: {:?}",
+                timestamp,
+                input
+            );
 
-        // Attempt resolution
-        let mut task = SimulatedTask {
-            task_id: [2u8; 32],
-            status: task_status::DISPUTED,
-            reward_amount: 1_000_000,
-            max_workers: 1,
-            current_workers: 1,
-            required_capabilities: 0,
-            deadline: 0,
-            completions: 0,
-            required_completions: 1,
-            task_type: 0,
-        };
-
-        let mut escrow = SimulatedEscrow {
-            amount: 1_000_000,
-            distributed: 0,
-            is_closed: false,
-        };
-
-        let resolve_result = simulate_resolve_dispute(
-            &mut dispute,
-            &mut task,
-            &mut escrow,
-            &config,
-            input.resolution_timestamp,
-        );
-
-        prop_assert!(
-            !resolve_result.is_invariant_violation(),
-            "Invariant violation on resolve: {:?}\nInput: {:?}",
-            resolve_result,
-            input
-        );
-
-        if input.resolution_timestamp < input.voting_deadline {
-            prop_assert!(
-                resolve_result.is_error(),
-                "Resolution succeeded before deadline. ts={}, deadline={}\nInput: {:?}",
-                input.resolution_timestamp,
-                input.voting_deadline,
+            let mut expiry_dispute = template.clone();
+            let expiry_result = simulate_expire_dispute(&mut expiry_dispute, timestamp);
+            prop_assert_eq!(
+                expiry_result.is_success(),
+                expiry_open,
+                "expiry result disagreed with window at {}: {:?}",
+                timestamp,
                 input
             );
         }
+    }
+}
 
-        // Attempt expiry (only enforce timing assertion if dispute is still ACTIVE)
-        let was_active = dispute.status == dispute_status::ACTIVE;
-        let expiry_result = simulate_expire_dispute(&mut dispute, input.expiry_timestamp);
+#[cfg(test)]
+mod boundaries {
+    use super::*;
 
-        prop_assert!(
-            !expiry_result.is_invariant_violation(),
-            "Invariant violation on expiry: {:?}\nInput: {:?}",
-            expiry_result,
-            input
-        );
+    #[test]
+    fn grace_boundary_is_complementary() {
+        let dispute = active_dispute(1_000, 2_000);
+        let grace_boundary = 1_000 + DISPUTE_RESOLUTION_GRACE;
+        assert!(dispute_resolution_window_open(&dispute, grace_boundary - 1));
+        assert!(!dispute_expiry_window_open(&dispute, grace_boundary - 1));
+        assert!(!dispute_resolution_window_open(&dispute, grace_boundary));
+        assert!(dispute_expiry_window_open(&dispute, grace_boundary));
+    }
 
-        if was_active && input.expiry_timestamp < input.voting_deadline {
-            prop_assert!(
-                expiry_result.is_error(),
-                "Dispute expired before deadline. ts={}, deadline={}\nInput: {:?}",
-                input.expiry_timestamp,
-                input.voting_deadline,
-                input
-            );
-        }
+    #[test]
+    fn hard_expiry_is_inclusive_for_resolution_then_exclusive() {
+        let dispute = active_dispute(10_000, 2_000);
+        assert!(dispute_resolution_window_open(&dispute, 2_000));
+        assert!(!dispute_expiry_window_open(&dispute, 2_000));
+        assert!(!dispute_resolution_window_open(&dispute, 2_001));
+        assert!(dispute_expiry_window_open(&dispute, 2_001));
+    }
 
-        // Claim expiry timing
-        let mut claim_task = SimulatedTask {
-            task_id: [3u8; 32],
-            status: task_status::IN_PROGRESS,
-            reward_amount: 1,
-            max_workers: 1,
-            current_workers: 1,
-            required_capabilities: 0,
-            deadline: input.claim_deadline,
-            completions: 0,
-            required_completions: 1,
-            task_type: 0,
-        };
+    #[test]
+    fn resolution_is_immediate_not_vote_deadline_gated() {
+        let dispute = active_dispute(1_000, 2_000);
+        assert!(dispute_resolution_window_open(&dispute, 100));
+    }
 
-        let mut worker = SimulatedAgent {
-            agent_id: [4u8; 32],
-            capabilities: 0xFF,
-            status: agent_status::ACTIVE,
-            active_tasks: 1,
-            reputation: 5000,
-            stake: 0,
-            tasks_completed: 0,
-            total_earned: 0,
-        };
-
-        let claim_expiry_result = simulate_expire_claim(
-            &mut claim_task,
-            &mut worker,
-            input.claim_expiry_timestamp,
-        );
-
-        prop_assert!(
-            !claim_expiry_result.is_invariant_violation(),
-            "Invariant violation on claim expiry: {:?}\nInput: {:?}",
-            claim_expiry_result,
-            input
-        );
-
-        let should_expire_claim = input.claim_deadline > 0
-            && input.claim_expiry_timestamp >= input.claim_deadline;
-
-        if should_expire_claim {
-            prop_assert!(
-                claim_expiry_result.is_success(),
-                "Claim expiry should succeed. expiry_ts={}, deadline={}\nInput: {:?}",
-                input.claim_expiry_timestamp,
-                input.claim_deadline,
-                input
-            );
-        } else {
-            prop_assert!(
-                claim_expiry_result.is_error(),
-                "Claim expiry should fail. expiry_ts={}, deadline={}\nInput: {:?}",
-                input.claim_expiry_timestamp,
-                input.claim_deadline,
-                input
-            );
-        }
+    #[test]
+    fn saturating_grace_at_max_timestamp_remains_partitioned() {
+        let dispute = active_dispute(i64::MAX, i64::MAX);
+        assert!(dispute_resolution_window_open(&dispute, i64::MAX - 1));
+        assert!(!dispute_expiry_window_open(&dispute, i64::MAX - 1));
+        assert!(!dispute_resolution_window_open(&dispute, i64::MAX));
+        assert!(dispute_expiry_window_open(&dispute, i64::MAX));
     }
 }

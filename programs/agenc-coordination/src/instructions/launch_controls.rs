@@ -65,8 +65,10 @@ mod tests {
 
     #[test]
     fn task_type_disable_mask_rejects_disabled_type() {
-        let mut config = ProtocolConfig::default();
-        config.disabled_task_type_mask = task_type_mask(TaskType::Exclusive);
+        let config = ProtocolConfig {
+            disabled_task_type_mask: task_type_mask(TaskType::Exclusive),
+            ..ProtocolConfig::default()
+        };
 
         assert!(require_task_type_enabled(&config, TaskType::Collaborative).is_ok());
         assert!(require_task_type_enabled(&config, TaskType::Exclusive).is_err());

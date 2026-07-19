@@ -129,6 +129,7 @@ pub fn handler(
     let task = &ctx.accounts.task;
     require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     validate_task_job_spec_mutable(task)?;
+    validate_task_job_spec_bid_lock(&ctx.accounts.task_job_spec)?;
 
     // §5.2 BLOCK floor first: a multisig takedown hard-rejects the hash regardless of
     // any CLEAN attestation presented below. Handler-derived — cannot be skipped.
@@ -208,6 +209,7 @@ pub fn handler(
     let task = &ctx.accounts.task;
     require_task_type_enabled(&ctx.accounts.protocol_config, task.task_type)?;
     validate_task_job_spec_mutable(task)?;
+    validate_task_job_spec_bid_lock(&ctx.accounts.task_job_spec)?;
 
     validate_task_moderation_for_job_spec(
         &ctx.accounts.moderation_config,
@@ -283,6 +285,18 @@ pub fn validate_task_job_spec_mutable(task: &Task) -> Result<()> {
         CoordinationError::TaskValidationImmutableAfterClaim
     );
 
+    Ok(())
+}
+
+/// Once the creator opens a bid book, they cannot rewrite the shared contract
+/// out from under any current or future bid.
+/// The lock lives in TaskJobSpec's existing reserved bytes, so this invariant
+/// requires no account realloc or migration.
+pub fn validate_task_job_spec_bid_lock(task_job_spec: &TaskJobSpec) -> Result<()> {
+    require!(
+        !task_job_spec.is_bid_locked(),
+        CoordinationError::TaskJobSpecBidLocked
+    );
     Ok(())
 }
 
@@ -395,6 +409,14 @@ mod tests {
         let err = validate_task_job_spec_inputs(&hash, " \t ").unwrap_err();
 
         assert_eq!(err, CoordinationError::InvalidTaskJobSpecUri.into());
+    }
+
+    #[test]
+    fn bid_locked_job_spec_is_immutable() {
+        let mut pointer = TaskJobSpec::default();
+        assert!(validate_task_job_spec_bid_lock(&pointer).is_ok());
+        pointer.lock_for_bids();
+        assert!(validate_task_job_spec_bid_lock(&pointer).is_err());
     }
 
     #[test]
@@ -570,7 +592,13 @@ mod tests {
         moderation.moderator = Pubkey::new_unique();
 
         let err = validate_task_moderation_for_job_spec(
-            &config, &moderation, task_key, &task, &hash, 100, false,
+            &config,
+            &moderation,
+            task_key,
+            &task,
+            &hash,
+            100,
+            false,
         )
         .unwrap_err();
 
@@ -587,7 +615,13 @@ mod tests {
         moderation.moderator = Pubkey::new_unique();
 
         let err = validate_task_moderation_for_job_spec(
-            &config, &moderation, task_key, &task, &hash, 100, true,
+            &config,
+            &moderation,
+            task_key,
+            &task,
+            &hash,
+            100,
+            true,
         )
         .unwrap_err();
 

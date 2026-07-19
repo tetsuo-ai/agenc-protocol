@@ -22,6 +22,7 @@ import {
   FEE_HEADROOM_LAMPORTS,
   readMinAgentStake,
   registrationFundingRequirement,
+  runTickOnce,
   SUBMISSION_ACCOUNT_RENT_LAMPORTS,
   type WorkerContext,
   type WorkerLogEvent,
@@ -140,9 +141,13 @@ async function registrationHarness(options: {
       capabilities: 1n,
       minRewardLamports: 0n,
       maxRewardLamports: null,
+      allowUnboundedReward: true,
       executor: ["true", "{prompt}"],
+      executorMode: "sandboxed",
+      executorEnvAllowlist: [],
       resultUploader: null,
       creatorAllowlist: null,
+      allowAnyCreator: true,
       endpoint: "https://agenc.ag/worker",
       executorTimeoutMs: 60_000,
       pollIntervalMs: 1_000,
@@ -175,6 +180,16 @@ describe("readMinAgentStake", () => {
     await expect(readMinAgentStake(async () => null)).rejects.toThrow(
       /ProtocolConfig .*not found.*refusing to guess/s,
     );
+  });
+});
+
+describe("active worker policy preflight", () => {
+  it("fails before registration when reward/creator risk policy is missing", async () => {
+    const { ctx, registerAgent } = await registrationHarness({});
+    ctx.config.allowUnboundedReward = false;
+    ctx.config.allowAnyCreator = false;
+    await expect(runTickOnce(ctx)).rejects.toThrow(/maxRewardLamports/);
+    expect(registerAgent).not.toHaveBeenCalled();
   });
 });
 

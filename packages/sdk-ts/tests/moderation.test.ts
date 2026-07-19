@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { address, createNoopSigner } from "@solana/kit";
+import { AccountRole, address, createNoopSigner } from "@solana/kit";
 import {
   getConfigureTaskModerationInstruction,
   getConfigureTaskModerationInstructionDataDecoder,
@@ -59,7 +59,6 @@ describe("configureTaskModeration (generated instruction)", () => {
       authority.address,
       SYSTEM_PROGRAM,
     ]);
-
     const decoded = getConfigureTaskModerationInstructionDataDecoder().decode(
       ix.data,
     );
@@ -112,6 +111,8 @@ describe("recordTaskModeration (generated instruction)", () => {
       AGENC_COORDINATION_PROGRAM_ADDRESS,
       SYSTEM_PROGRAM,
     ]);
+    expect(ix.accounts[2]?.role).toBe(AccountRole.WRITABLE_SIGNER);
+    expect(ix.accounts[2]?.signer).toBe(moderator);
 
     const decoded = getRecordTaskModerationInstructionDataDecoder().decode(
       ix.data,
@@ -192,16 +193,18 @@ describe("registerModerationAttestor (P1.2, facade)", () => {
     address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
   );
 
-  it("assembles 3 accounts (derived roster PDA, attestor signer, system program) with no args", async () => {
+  it("assembles the roster, signer, protocol config, and system program", async () => {
     const ix = await registerModerationAttestor({ attestor });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     const [expectedRoster] = await findModerationAttestorPda({
       attestor: attestor.address,
     });
+    const [protocolConfig] = await findProtocolConfigPda();
     expect(ix.accounts.map((a) => a.address)).toEqual([
       expectedRoster,
       attestor.address,
+      protocolConfig,
       SYSTEM_PROGRAM,
     ]);
     // No args: the data is exactly the 8-byte discriminator.

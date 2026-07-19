@@ -3,11 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertActiveWorkerConfig,
   ConfigError,
   configFromEnv,
   DEFAULT_CAPABILITIES,
   DEFAULT_ENDPOINT,
   DEFAULT_EXECUTOR,
+  DEFAULT_EXECUTOR_ENV_ALLOWLIST,
   DEFAULT_EXECUTOR_TIMEOUT_MS,
   DEFAULT_POLL_INTERVAL_MS,
   loadConfigFile,
@@ -22,9 +24,15 @@ describe("resolveWorkerConfig", () => {
     expect(config.capabilities).toBe(DEFAULT_CAPABILITIES);
     expect(config.minRewardLamports).toBe(0n);
     expect(config.maxRewardLamports).toBeNull();
+    expect(config.allowUnboundedReward).toBe(false);
     expect(config.executor).toEqual([...DEFAULT_EXECUTOR]);
+    expect(config.executorMode).toBe("safe");
+    expect(config.executorEnvAllowlist).toEqual([...DEFAULT_EXECUTOR_ENV_ALLOWLIST]);
+    expect(config.executor.at(-2)).toBe("--");
+    expect(config.executor.at(-1)).toBe("{prompt}");
     expect(config.resultUploader).toBeNull();
     expect(config.creatorAllowlist).toBeNull();
+    expect(config.allowAnyCreator).toBe(false);
     expect(config.endpoint).toBe(DEFAULT_ENDPOINT);
     expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
     expect(config.executorTimeoutMs).toBe(DEFAULT_EXECUTOR_TIMEOUT_MS);
@@ -90,6 +98,7 @@ describe("resolveWorkerConfig", () => {
     const config = resolveWorkerConfig({
       ...REQUIRED,
       executor: '["codex","exec","{prompt}"]',
+      executorMode: "sandboxed",
     });
     expect(config.executor).toEqual(["codex", "exec", "{prompt}"]);
     expect(() => resolveWorkerConfig({ ...REQUIRED, executor: "[]" })).toThrow(
@@ -101,6 +110,76 @@ describe("resolveWorkerConfig", () => {
     expect(() =>
       resolveWorkerConfig({ ...REQUIRED, executor: '["ok", 5]' as string }),
     ).toThrow(/executor/);
+  });
+
+  it("rejects a custom executor unless sandboxed or explicitly unsafe", () => {
+    const custom = '["codex","exec","{prompt}"]';
+    expect(() => resolveWorkerConfig({ ...REQUIRED, executor: custom })).toThrow(
+      /custom argv.*safe mode/,
+    );
+    expect(
+      resolveWorkerConfig({
+        ...REQUIRED,
+        executor: custom,
+        executorMode: "sandboxed",
+      }),
+    ).toMatchObject({ executorMode: "sandboxed", executorEnvAllowlist: [] });
+    expect(
+      resolveWorkerConfig({ ...REQUIRED, executor: custom, executorMode: "unsafe" })
+        .executorMode,
+    ).toBe("unsafe");
+  });
+
+  it("limits safe-mode environment inheritance to the API credential", () => {
+    expect(() =>
+      resolveWorkerConfig({
+        ...REQUIRED,
+        executorEnvAllowlist: ["ANTHROPIC_API_KEY", "AGENC_WORKER_WALLET"],
+      }),
+    ).toThrow(/safe mode may inherit only ANTHROPIC_API_KEY/);
+  });
+
+  it("fails safe active startup before claiming when executor auth is absent", () => {
+    const oldKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const config = resolveWorkerConfig({
+        ...REQUIRED,
+        maxRewardLamports: "1000",
+        creatorAllowlist: ["trusted"],
+      });
+      expect(() => assertActiveWorkerConfig(config)).toThrow(/ANTHROPIC_API_KEY.*refusing/s);
+    } finally {
+      if (oldKey !== undefined) process.env.ANTHROPIC_API_KEY = oldKey;
+    }
+  });
+
+  it("fails active startup without an explicit reward cap and creator policy", () => {
+    const defaults = resolveWorkerConfig(REQUIRED);
+    expect(() => assertActiveWorkerConfig(defaults)).toThrow(/maxRewardLamports/);
+
+    const capped = resolveWorkerConfig({ ...REQUIRED, maxRewardLamports: "1000" });
+    expect(() => assertActiveWorkerConfig(capped)).toThrow(/creatorAllowlist/);
+
+    const restricted = resolveWorkerConfig({
+      ...REQUIRED,
+      maxRewardLamports: "1000",
+      creatorAllowlist: ["trusted"],
+      executor: [process.execPath, "-e", "void 0", "{prompt}"],
+      executorMode: "sandboxed",
+      executorEnvAllowlist: [],
+    });
+    expect(() => assertActiveWorkerConfig(restricted)).not.toThrow();
+
+    const explicitOptOut = resolveWorkerConfig({
+      ...REQUIRED,
+      allowUnboundedReward: true,
+      allowAnyCreator: true,
+      executor: [process.execPath, "-e", "void 0", "{prompt}"],
+      executorMode: "sandboxed",
+      executorEnvAllowlist: [],
+    });
+    expect(() => assertActiveWorkerConfig(explicitOptOut)).not.toThrow();
   });
 
   it("requires the result uploader to be https", () => {

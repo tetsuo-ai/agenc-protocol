@@ -16,6 +16,7 @@ import {
   getUpvotePostInstructionAsync,
   findReputationStakePda,
   findDelegationPda,
+  findProtocolConfigPda,
   findSkillPda,
   findRatingAccountPda,
   findRateSkillPurchaseRecordPda,
@@ -25,7 +26,6 @@ import {
   type StakeReputationAsyncInput,
   type WithdrawReputationStakeAsyncInput,
   type DelegateReputationAsyncInput,
-  type RevokeDelegationInput,
   type RegisterSkillAsyncInput,
   type UpdateSkillAsyncInput,
   type RateSkillAsyncInput,
@@ -33,7 +33,7 @@ import {
   type PostToFeedAsyncInput,
   type UpvotePostAsyncInput,
 } from "../generated/index.js";
-import { type Address, type TransactionSigner } from "@solana/kit";
+import { AccountRole, type Address, type TransactionSigner } from "@solana/kit";
 
 // Re-export the PDA helpers used by this domain so callers can derive accounts
 // without reaching into generated/.
@@ -52,8 +52,10 @@ export {
 // Reputation staking & delegation
 // ---------------------------------------------------------------------------
 
-/** Stake reputation for an agent; the reputationStake PDA is auto-derived from agent. */
-export async function stakeReputation(input: StakeReputationAsyncInput) {
+export type StakeReputationInput = StakeReputationAsyncInput;
+
+/** Stake reputation for an agent; canonical stake/config PDAs auto-derive. */
+export async function stakeReputation(input: StakeReputationInput) {
   return getStakeReputationInstructionAsync(input);
 }
 
@@ -69,31 +71,68 @@ export async function delegateReputation(input: DelegateReputationAsyncInput) {
   return getDelegateReputationInstructionAsync(input);
 }
 
+export type RevokeDelegationFacadeInput = {
+  /**
+   * Recorded authority address used only as the authenticated rent recipient.
+   * A TransactionSigner remains accepted for source compatibility, but revision
+   * 5 deliberately does not require this account to sign.
+   */
+  authority: Address | TransactionSigner;
+  delegatorAgent: Address;
+  /**
+   * Supply this pair when the original AgentRegistration may have been closed or
+   * re-registered by revision 4. The facade appends the frozen remaining-account
+   * ABI `[protocolConfig, treasury]`; the program uses it only for the orphan path.
+   */
+  recovery?: {
+    protocolConfig?: Address;
+    treasury: Address;
+  };
+} &
+  (
+    | { delegation: Address; delegateeAgent?: never }
+    | { delegation?: never; delegateeAgent: Address }
+  );
+
 /**
- * Revoke a reputation delegation. The generated client has no async builder for
- * this instruction, so the delegation PDA is derived here (from the delegator /
- * delegatee agent pair) unless an explicit `delegation` address is supplied.
+ * Permanently retire a legacy reputation delegation. This never restores the
+ * delegated reputation: restoration after a dispute slash would recreate the
+ * retired slash-shelter primitive. The exit is permissionless, while rent can
+ * only reach the recorded authority (continuous identity) or canonical treasury
+ * (closed/re-registered identity).
  */
 export async function revokeDelegation(
-  input:
-    | RevokeDelegationInput
-    | {
-        authority: TransactionSigner;
-        delegatorAgent: Address;
-        delegateeAgent: Address;
-      },
+  input: RevokeDelegationFacadeInput,
 ) {
-  if ("delegation" in input) {
-    return getRevokeDelegationInstruction(input);
-  }
-  const [delegation] = await findDelegationPda({
-    delegatorAgent: input.delegatorAgent,
-    delegateeAgent: input.delegateeAgent,
-  });
-  return getRevokeDelegationInstruction({
-    authority: input.authority,
+  const authority =
+    typeof input.authority === "string"
+      ? input.authority
+      : input.authority.address;
+  const delegation =
+    input.delegation ??
+    (
+      await findDelegationPda({
+        delegatorAgent: input.delegatorAgent,
+        delegateeAgent: input.delegateeAgent,
+      })
+    )[0];
+  const instruction = getRevokeDelegationInstruction({
+    authority,
     delegatorAgent: input.delegatorAgent,
     delegation,
+  });
+
+  if (!input.recovery) return instruction;
+
+  const protocolConfig =
+    input.recovery.protocolConfig ?? (await findProtocolConfigPda())[0];
+  return Object.freeze({
+    ...instruction,
+    accounts: [
+      ...instruction.accounts,
+      { address: protocolConfig, role: AccountRole.READONLY },
+      { address: input.recovery.treasury, role: AccountRole.WRITABLE },
+    ],
   });
 }
 
@@ -152,9 +191,13 @@ export async function rateSkill(
 /**
  * Purchase a skill. purchaseRecord, protocolConfig, systemProgram, and
  * tokenProgram are auto-derived/defaulted. SPL-token accounts are optional and
- * only needed for token-denominated skills.
+ * only needed for token-denominated skills. The price, version, and content hash
+ * form one compare-and-swap snapshot; any intervening skill edit fails before
+ * payment.
  */
-export async function purchaseSkill(input: PurchaseSkillAsyncInput) {
+export type PurchaseSkillInput = PurchaseSkillAsyncInput;
+
+export async function purchaseSkill(input: PurchaseSkillInput) {
   return getPurchaseSkillInstructionAsync(input);
 }
 

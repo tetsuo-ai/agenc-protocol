@@ -14,7 +14,9 @@
 
 use crate::errors::CoordinationError;
 use crate::events::TaskCreated;
-use crate::instructions::completion_helpers::resolve_referrer_snapshot;
+use crate::instructions::completion_helpers::{
+    resolve_referrer_snapshot, validate_marketplace_payee_destinations,
+};
 use crate::instructions::launch_controls::require_task_type_index_enabled;
 use crate::instructions::rate_limit_helpers::check_authority_task_creation_rate_limits;
 use crate::instructions::task_init_helpers::{
@@ -166,6 +168,15 @@ pub fn handler(
     task.referrer = referrer_key;
     task.referrer_fee_bps = referrer_bps;
     let task_key = task.key();
+    validate_marketplace_payee_destinations(
+        task_key,
+        escrow_key,
+        creator_key,
+        task.operator,
+        task.operator_fee_bps,
+        referrer_key,
+        referrer_bps,
+    )?;
 
     let escrow = ctx.accounts.escrow.as_mut();
     init_escrow_fields(escrow, task_key, reward_amount, ctx.bumps.escrow);

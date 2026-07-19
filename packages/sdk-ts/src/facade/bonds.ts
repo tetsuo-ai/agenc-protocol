@@ -2,10 +2,14 @@
 // the generated client already resolves PDAs and encodes data; the facade adds friendly
 // signatures, defaults, and (for multi-PDA flows) bundling. Never import from generated/
 // internals other than its public exports.
+import { AccountRole, type Address } from "@solana/kit";
 import {
-  getPostCompletionBondInstructionAsync,
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
+  getPostCompletionBondInstructionDataEncoder,
   getReclaimCompletionBondInstructionAsync,
   findCompletionBondPda,
+  findClaimPda,
+  findProtocolConfigPda,
   type PostCompletionBondAsyncInput,
   type ReclaimCompletionBondAsyncInput,
 } from "../generated/index.js";
@@ -31,8 +35,101 @@ export {
  * protection today is the escrow refund on a failed review plus the worker's
  * skin in the game; phase 2 redirects forfeiture to the harmed party.
  */
-export async function postCompletionBond(input: PostCompletionBondAsyncInput) {
-  return getPostCompletionBondInstructionAsync(input);
+type PostCompletionBondBase = Omit<
+  PostCompletionBondAsyncInput,
+  "role" | "protocolConfig" | "worker" | "workerClaim"
+> & {
+  /** Defaults to the canonical [protocol] PDA. */
+  protocolConfig?: Address;
+  /** Required for every dependent task; appended at remaining account slot 0. */
+  dependencyParent?: Address;
+};
+
+export type PostCreatorCompletionBondInput = PostCompletionBondBase & {
+  role: 0;
+  worker?: never;
+  workerClaim?: never;
+};
+
+export type PostWorkerCompletionBondInput = PostCompletionBondBase & {
+  role: 1;
+  /** Canonical AgentRegistration for the signing worker authority. */
+  worker: Address;
+  /** Defaults to [claim, task, worker]. */
+  workerClaim?: Address;
+};
+
+export type PostCompletionBondInput =
+  | PostCreatorCompletionBondInput
+  | PostWorkerCompletionBondInput;
+
+const SYSTEM_PROGRAM_ADDRESS =
+  "11111111111111111111111111111111" as Address;
+
+export async function postCompletionBond(input: PostCompletionBondInput) {
+  if (input.role !== 0 && input.role !== 1) {
+    throw new Error("postCompletionBond: role must be 0 (creator) or 1 (worker)");
+  }
+  if (input.role === 0 && (input.worker || input.workerClaim)) {
+    throw new Error(
+      "postCompletionBond: creator role must omit worker and workerClaim",
+    );
+  }
+  if (input.role === 1 && !input.worker) {
+    throw new Error(
+      "postCompletionBond: worker role requires the worker AgentRegistration address",
+    );
+  }
+
+  const protocolConfig =
+    input.protocolConfig ?? (await findProtocolConfigPda())[0];
+  const completionBond =
+    input.completionBond ??
+    (
+      await findCompletionBondPda({
+        task: input.task,
+        party: input.authority.address,
+      })
+    )[0];
+  const worker =
+    input.role === 1 ? input.worker : AGENC_COORDINATION_PROGRAM_ADDRESS;
+  const workerClaim =
+    input.role === 1
+      ? (input.workerClaim ??
+        (await findClaimPda({ task: input.task, bidder: input.worker }))[0])
+      : AGENC_COORDINATION_PROGRAM_ADDRESS;
+
+  return {
+    programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
+    accounts: [
+      // Revision 5: Task is read-only; protocol config entry-gates new custody.
+      { address: input.task, role: AccountRole.READONLY },
+      { address: protocolConfig, role: AccountRole.READONLY },
+      { address: completionBond, role: AccountRole.WRITABLE },
+      { address: worker, role: AccountRole.READONLY },
+      { address: workerClaim, role: AccountRole.READONLY },
+      {
+        address: input.authority.address,
+        role: AccountRole.WRITABLE_SIGNER,
+        signer: input.authority,
+      },
+      {
+        address: input.systemProgram ?? SYSTEM_PROGRAM_ADDRESS,
+        role: AccountRole.READONLY,
+      },
+      ...(input.dependencyParent
+        ? [
+            {
+              address: input.dependencyParent,
+              role: AccountRole.READONLY,
+            } as const,
+          ]
+        : []),
+    ],
+    data: getPostCompletionBondInstructionDataEncoder().encode({
+      role: input.role,
+    }),
+  };
 }
 
 /**

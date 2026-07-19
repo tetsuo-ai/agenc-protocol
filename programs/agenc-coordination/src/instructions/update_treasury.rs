@@ -19,10 +19,15 @@ pub struct UpdateTreasury<'info> {
     )]
     pub protocol_config: Account<'info, ProtocolConfig>,
 
-    /// CHECK: Validated in handler.
-    /// Must be either:
-    /// - program-owned (preferred), or
-    /// - a system-owned signer account (legacy compatibility).
+    /// Must be a system-owned signer. Production clients request the new custody
+    /// key's signature through this typed account in generated account metas.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub new_treasury: Signer<'info>,
+
+    /// CHECK: The frozen canary IDL historically marks new_treasury as a
+    /// non-signer. The handler retains the system-owner and runtime-signature
+    /// checks, so canary transactions must explicitly promote and sign this meta.
+    #[cfg(feature = "mainnet-canary")]
     pub new_treasury: UncheckedAccount<'info>,
 
     pub authority: Signer<'info>,
@@ -42,11 +47,10 @@ pub fn handler(ctx: Context<UpdateTreasury>) -> Result<()> {
         CoordinationError::InvalidTreasury
     );
 
-    let is_program_owned = new_treasury.owner == &crate::ID;
     let is_system_owned_signer =
         new_treasury.owner == &system_program::ID && new_treasury.is_signer;
     require!(
-        is_program_owned || is_system_owned_signer,
+        is_system_owned_signer,
         CoordinationError::TreasuryNotSpendable
     );
 
@@ -69,4 +73,32 @@ pub fn handler(ctx: Context<UpdateTreasury>) -> Result<()> {
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use anchor_lang::prelude::Pubkey;
+    use anchor_lang::ToAccountMetas;
+
+    #[test]
+    fn new_treasury_signer_meta_matches_the_deployed_surface() {
+        let new_treasury = Pubkey::new_unique();
+        let accounts = crate::__client_accounts_update_treasury::UpdateTreasury {
+            protocol_config: Pubkey::new_unique(),
+            new_treasury,
+            authority: Pubkey::new_unique(),
+        };
+
+        let new_treasury_meta = accounts
+            .to_account_metas(None)
+            .into_iter()
+            .find(|meta| meta.pubkey == new_treasury)
+            .expect("new treasury meta should be present");
+
+        assert_eq!(
+            new_treasury_meta.is_signer,
+            !cfg!(feature = "mainnet-canary"),
+            "production must request treasury consent in the IDL while the canary wire flags stay frozen",
+        );
+    }
 }

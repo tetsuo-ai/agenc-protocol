@@ -18,12 +18,16 @@ import anchorPkg from "@coral-xyz/anchor";
 const { Program, AnchorProvider, BN, Wallet, BorshCoder } = anchorPkg;
 import { Connection, Keypair, PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
 import {
+  ACCOUNT_SIZE,
+  AuthorityType,
   MINT_SIZE,
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  createInitializeAccountInstruction,
   createInitializeMintInstruction,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
+  createSetAuthorityInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 
@@ -33,9 +37,29 @@ import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, sendMany, tokenAmount, expectOk, expectFail, decode, isClosed,
   injectProtocolConfig, setProtocolPaused, injectAgentStake,
-  setMultisig, injectModerationConfig, injectBidMarketplace, freshWorld, hireIx,
+  setMultisig, injectModerationConfig, freshWorld, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
 } from "./harness.mjs";
+import { setupBidExclusiveFixture } from "./bid-fixture.mjs";
+
+function completionBondPostAccounts(
+  w,
+  { task, completionBond, authority, role, workerAgent = null, workerClaim = null },
+) {
+  return {
+    task,
+    protocolConfig: w.protocolPda,
+    completionBond,
+    worker: role === 1 ? workerAgent : null,
+    workerClaim: role === 1 ? workerClaim : null,
+    authority,
+    systemProgram: SystemProgram.programId,
+  };
+}
+
+function taskSubmissionPda(claim) {
+  return pda([enc("task_submission"), claim.toBuffer()])[0];
+}
 test("hire_from_listing: mints task + escrow + hire record, increments capacity", async () => {
   const w = await freshWorld({ price: 2_000_000 });
   const { ix, task, escrow, hireRecord } = await hireIx(w, {});
@@ -62,7 +86,7 @@ test("hire_from_listing: mints task + escrow + hire record, increments capacity"
   assert.equal(l.total_hires.toString(), "1", "total_hires incremented");
 });
 
-test("hire -> cancel -> close: frees capacity, closes task + hire record", async () => {
+test("hire -> cancel -> close: frees capacity, closes hire record, retains task anchor", async () => {
   const w = await freshWorld({ price: 1_500_000 });
   const { ix, task, escrow, hireRecord } = await hireIx(w, {});
   expectOk(send(w.svm, ix, [w.buyer]), "hire");
@@ -93,7 +117,7 @@ test("hire -> cancel -> close: frees capacity, closes task + hire record", async
     .instruction();
   expectOk(send(w.svm, closeIx, [w.buyer]), "close");
 
-  assert.ok(isClosed(w.svm, task), "task PDA closed");
+  assert.ok(!isClosed(w.svm, task), "terminal task retained as the durable child-liveness anchor");
   assert.ok(isClosed(w.svm, hireRecord), "hire record closed");
   assert.equal(decode(w.svm, "ServiceListing", w.listing).open_jobs, 0, "open_jobs decremented back to 0");
 });
@@ -309,6 +333,7 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  const [autoHire] = pda([enc("hire"), task.toBuffer()]);
   const now = Number(w.svm.getClock().unixTimestamp);
   const desc = Buffer.alloc(64);
   desc.set(crypto.randomBytes(32), 0);
@@ -335,7 +360,10 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
   // 4) worker (provider agent) claims the published task
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord: autoHire, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "settle:claim");
 
   // Optionally pause the protocol AFTER the claim. Entry paths are now blocked,
@@ -345,7 +373,6 @@ async function runAutoSettlement(w, { pauseBeforeComplete = false } = {}) {
 
   // 5) worker completes -> payout via execute_completion_rewards. hire_record is a
   //    REQUIRED account; an Auto (non-hired) task passes the empty ["hire", task] PDA.
-  const [autoHire] = pda([enc("hire"), task.toBuffer()]);
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
   const treasuryBalBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await w.providerProg.methods
@@ -411,7 +438,10 @@ async function runHireSettlement(w, { pauseBeforeComplete = false, stopBeforeCom
 
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "hire-settle:claim");
 
   // Stop here so callers can drive complete_task themselves (e.g. negative operator tests).
@@ -601,15 +631,22 @@ test("migrate_task: succeeds against a PRE-migration 349B ProtocolConfig (order-
 });
 
 test("completion bond: creator + worker each post a 25% bond into distinct PDAs (dup + self-deal rejected)", async () => {
-  const w = await freshWorld({ price: 2_000_000 });
-  const { ix, task } = await hireIx(w, {});
-  expectOk(send(w.svm, ix, [w.buyer]), "hire"); // Open Exclusive task, creator == buyer
+  const w = await freshWorld({ moderationEnabled: true, price: 2_000_000 });
+  const r = await runHireSettlement(w, { stopBeforeComplete: true });
+  const task = r.task;
 
   const bondPda = (party) => pda([enc("completion_bond"), task.toBuffer(), party.toBuffer()])[0];
   const post = async (signer, role) =>
     send(w.svm, await makeProgram(signer).methods
       .postCompletionBond(role)
-      .accounts({ task, completionBond: bondPda(signer.publicKey), authority: signer.publicKey, systemProgram: SystemProgram.programId })
+      .accounts(completionBondPostAccounts(w, {
+        task,
+        completionBond: bondPda(signer.publicKey),
+        authority: signer.publicKey,
+        role,
+        workerAgent: w.providerAgent,
+        workerClaim: r.claim,
+      }))
       .instruction(), [signer]);
 
   // creator bond (role 0) posted by the buyer (== task.creator)
@@ -635,6 +672,7 @@ test("completion bond: creator + worker each post a 25% bond into distinct PDAs 
   const stranger = Keypair.generate();
   w.svm.airdrop(stranger.publicKey, BigInt(10e9));
   expectFail(await post(stranger, 0), "BondPartyMismatch", "non-creator cannot post the creator bond");
+  expectFail(await post(stranger, 1), "BondPartyMismatch", "non-claimant cannot post an unenumerable worker bond");
 });
 
 test("completion bond: a no-show worker forfeits their bond to the creator on expire_claim", async () => {
@@ -649,7 +687,8 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
   const [workerBond] = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .postCompletionBond(1)
-    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
+      authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent, workerClaim: r.claim }))
     .instruction(), [w.provider]), "worker posts bond");
   assert.equal(Number(decode(w.svm, "CompletionBond", workerBond).amount), 1_000_000, "bond is 25% of reward");
 
@@ -679,39 +718,27 @@ test("completion bond: a no-show worker forfeits their bond to the creator on ex
   assert.equal(buyerDelta, 1_000_000, `creator received the forfeited bond principal (got ${buyerDelta})`);
 });
 
-test("completion bond (#70): cancelling a task REOPENED after a reject refunds the worker bond (not forfeit to creator)", async () => {
-  // #70 theft: a worker posts a bond, claims, submits, and the creator rejects — which
-  // reopens the task to Open WITHOUT settling the worker's bond. Pre-fix, cancel_task
-  // forfeited any supplied worker bond to the creator regardless of status, so the creator
-  // could then cancel the (Open) task and SEIZE an honest worker's bond. The fix forfeits
-  // only on a genuine no-show (InProgress past deadline); an Open cancel refunds the worker.
-  // Revert-sensitive: drop the is_no_show_cancel gate in cancel_task and the worker delta
-  // below goes to 0 (the bond is forfeited to the creator instead).
+test("completion bond (#70): rejection atomically refunds the worker bond before the claim disappears", async () => {
+  // Once rejection closes the worker claim, no later task instruction can
+  // enumerate that former worker safely. The bond therefore has to close at the
+  // exact same boundary, rather than surviving until a later cancel.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
   const m = await runManualSettlement(w, { decision: "reject", postBonds: true });
 
   assert.ok(decode(w.svm, "Task", m.task).status.Open !== undefined, "task reopened to Open after reject");
-  assert.ok(!isClosed(w.svm, m.workerBond), "worker bond still live after reject");
+  assert.ok(isClosed(w.svm, m.workerBond), "worker bond refunded and closed by reject");
+  assert.ok(Number(w.svm.getBalance(w.provider.publicKey)) > m.workerBalBefore,
+    "worker received bond principal + rent at rejection");
 
-  const workerBefore = Number(w.svm.getBalance(w.provider.publicKey));
-  // Full live balance of the worker bond PDA (principal + rent). A Refund returns ALL of
-  // it to the worker; a Forfeit would send the 1,000,000 principal to the creator and only
-  // the rent back to the worker — so the worker delta cleanly distinguishes the two.
-  const workerBondBal = Number(w.svm.getBalance(m.workerBond));
-  assert.ok(workerBondBal > 1_000_000, "worker bond holds principal + rent before cancel");
+  // Cancellation now receives the canonical empty bond PDA; no former-worker
+  // custody remains for it to classify or accidentally forfeit.
   expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
     .accounts({ task: m.task, escrow: m.escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, rewardMint: null, tokenProgram: null,
       creatorCompletionBond: m.creatorBond, workerCompletionBond: m.workerBond, workerBondAuthority: w.provider.publicKey,
       creatorAgent: null, agentStats: null, treasury: null })
-    .instruction(), [w.buyer]), "cancel reopened task with worker bond present");
-
-  assert.ok(isClosed(w.svm, m.workerBond), "worker bond settled on cancel");
-  const workerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - workerBefore;
-  // Revert-sensitive: the honest worker is REFUNDED the full bond (principal + rent). Drop
-  // the is_no_show_cancel gate and the principal is forfeited to the creator, so the worker
-  // delta drops by 1,000,000 and this fails.
-  assert.equal(workerDelta, workerBondBal, `honest worker fully refunded their bond, not forfeited (got ${workerDelta} of ${workerBondBal})`);
+    .instruction(), [w.buyer]), "cancel reopened task after atomic bond refund");
+  assert.ok(isClosed(w.svm, m.workerBond), "worker bond stays closed after cancel");
 });
 
 test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omitting the bond accounts on self-expire", async () => {
@@ -728,7 +755,8 @@ test("completion bond (#71): a no-show worker CANNOT skip the forfeit by omittin
   const [workerBond] = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .postCompletionBond(1)
-    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
+      authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent, workerClaim: r.claim }))
     .instruction(), [w.provider]), "worker posts bond");
 
   // warp PAST claim expiry but WITHIN the 60s grace window: only the worker authority may
@@ -835,7 +863,7 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
     const w = await freshWorld({ moderationEnabled: true });
     const modProg = makeProgram(w.modAuth);
     const m = await setupManualTask(w, { mode: 1, taskType: type, maxWorkers: 2 });
-    const { task, escrow, validation } = m;
+    const { task, escrow, validation, hireRecord } = m;
 
     const jobHash = id32();
     const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
@@ -851,7 +879,10 @@ for (const { type, name } of [{ type: 1, name: "Collaborative" }]) {
 
     const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
     expectOk(send(w.svm, await w.providerProg.methods.claimTaskWithJobSpec()
-      .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+      .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+        moderationBlock: moderationBlockPda(jobHash)[0], claim,
+        protocolConfig: w.protocolPda, worker: w.providerAgent,
+        authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
       .instruction(), [w.provider]), `${name}:claim`);
     assert.ok(decode(w.svm, "Task", task).status.InProgress !== undefined, `${name} task InProgress after claim`);
 
@@ -883,9 +914,12 @@ test("completion bond: a clean completion refunds BOTH bonds to their posters", 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
-    .accounts({ task: r.task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: creatorBond,
+      authority: w.buyer.publicKey, role: 0 })).instruction(), [w.buyer]), "creator bond");
   expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
-    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "worker bond");
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
+      authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent,
+      workerClaim: r.claim })).instruction(), [w.provider]), "worker bond");
 
   const creatorBondLamports = Number(w.svm.getBalance(creatorBond));
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
@@ -909,10 +943,12 @@ test("completion bond: a clean completion refunds BOTH bonds to their posters", 
     "creator received their refunded bond");
 });
 
-test("completion bond: rejected on a ZK-private task (audit — would strand on complete_task_private)", async () => {
-  // A private task (real constraint_hash) settles via complete_task_private, which
-  // does NOT settle bonds, so a bond there would be permanently stranded. post must
-  // reject it. Revert-sensitive: drop the constraint_hash guard and this posts OK.
+test("create_task: ZK-private creation is release-disabled before escrow state exists", async () => {
+  // The compiled verifier pair is absent on mainnet and there is no audited guest
+  // in this repository. A raw caller must therefore be unable to create a funded
+  // obligation whose only completion path is unavailable. The completion-bond
+  // defense remains in program source for dormant/legacy exits, but no new private
+  // Task can reach it in this release.
   const w = await freshWorld({});
   const taskId = id32();
   const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
@@ -921,14 +957,12 @@ test("completion bond: rejected on a ZK-private task (audit — would strand on 
   const now = Number(w.svm.getClock().unixTimestamp);
   const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
   const constraintHash = crypto.randomBytes(32); // real ZK constraint -> private task
-  expectOk(send(w.svm, await w.buyerProg.methods
+  expectFail(send(w.svm, await w.buyerProg.methods
     .createTask(arr(taskId), new BN(1), arr(desc), new BN(2_000_000), 1, new BN(now + 3600), 0, arr(constraintHash), 0, null, null, 0)
     .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
-    .instruction(), [w.buyer]), "create private task");
-  const bond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
-  expectFail(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
-    .accounts({ task, completionBond: bond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]),
-    "BondUnsupportedTaskType", "bond rejected on a ZK-private task");
+    .instruction(), [w.buyer]), "PrivateTaskCreationDisabled", "private creation release gate");
+  assert.ok(isClosed(w.svm, task), "failed private creation leaves no Task account");
+  assert.ok(isClosed(w.svm, escrow), "failed private creation leaves no escrow account");
 });
 
 test("completion bond (F12): complete_task FORCE-settles the worker bond even when the caller passes null — strand is structurally impossible", async () => {
@@ -943,7 +977,9 @@ test("completion bond (F12): complete_task FORCE-settles the worker bond even wh
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
-    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "worker bond");
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
+      authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent,
+      workerClaim: r.claim })).instruction(), [w.provider]), "worker bond");
   const bondLamports = Number(w.svm.getBalance(workerBond));
   const providerBefore = Number(w.svm.getBalance(w.provider.publicKey));
 
@@ -962,7 +998,7 @@ test("completion bond (F12): complete_task FORCE-settles the worker bond even wh
   expectOk(send(w.svm, await w.buyerProg.methods.closeTask()
     .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction(), [w.buyer]), "close_task after bonds settled");
-  assert.ok(isClosed(w.svm, r.task), "task closed");
+  assert.ok(!isClosed(w.svm, r.task), "terminal task retained as the durable child-liveness anchor");
 });
 
 test("completion bond (F12/F5): cancel settles the creator bond (required+pinned); close_task then succeeds", async () => {
@@ -976,7 +1012,8 @@ test("completion bond (F12/F5): cancel settles the creator bond (required+pinned
   expectOk(send(w.svm, ix, [w.buyer]), "hire"); // Open task, creator == buyer
   const creatorBond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
-    .accounts({ task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
+    .accounts(completionBondPostAccounts(w, { task, completionBond: creatorBond,
+      authority: w.buyer.publicKey, role: 0 })).instruction(), [w.buyer]), "creator bond");
 
   // cancel WITH the required bond PDAs -> the creator bond is refunded + closed on cancel.
   const buyerBefore = Number(w.svm.getBalance(w.buyer.publicKey));
@@ -997,7 +1034,7 @@ test("completion bond (F12/F5): cancel settles the creator bond (required+pinned
   expectOk(send(w.svm, await w.buyerProg.methods.closeTask()
     .accounts({ task, taskJobSpec: null, escrow: null, hireRecord, listing: w.listing, creatorCompletionBond: creatorBond, workerCompletionBond: null, authority: w.buyer.publicKey })
     .instruction(), [w.buyer]), "close_task after the bond settled at cancel");
-  assert.ok(isClosed(w.svm, task), "task PDA closed");
+  assert.ok(!isClosed(w.svm, task), "terminal task retained as the durable child-liveness anchor");
 });
 
 test("completion bond: cancel refunds the creator bond on an Open task", async () => {
@@ -1006,7 +1043,8 @@ test("completion bond: cancel refunds the creator bond on an Open task", async (
   expectOk(send(w.svm, ix, [w.buyer]), "hire"); // Open task, creator == buyer
   const creatorBond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
-    .accounts({ task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
+    .accounts(completionBondPostAccounts(w, { task, completionBond: creatorBond,
+      authority: w.buyer.publicKey, role: 0 })).instruction(), [w.buyer]), "creator bond");
 
   expectOk(send(w.svm, await w.buyerProg.methods.cancelTask()
     .accounts({ task, escrow, authority: w.buyer.publicKey, protocolConfig: w.protocolPda, systemProgram: SystemProgram.programId,
@@ -1090,54 +1128,10 @@ test("exit allow-list (settlement): a worker still completes + is paid while the
 /// When publishJobSpec is true, also record+publish a moderated TaskJobSpec (which
 /// accept_bid now requires). Returns handles for accept_bid.
 async function setupBidTask(w, { publishJobSpec = true } = {}) {
-  const modProg = makeProgram(w.modAuth);
-  const taskId = id32();
-  const reward = 4_000_000;
-  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
-  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
-  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
-  const now = Number(w.svm.getClock().unixTimestamp);
-  const desc = Buffer.alloc(64);
-  desc.set(crypto.randomBytes(32), 0);
-
-  // 1) create a BidExclusive task (task_type = 3).
-  expectOk(send(w.svm, await w.buyerProg.methods
-    .createTask(arr(taskId), new BN(1), arr(desc), new BN(reward), 1, new BN(now + 3600), 3, null, 0, null, null, 0) // task_type=3 (BidExclusive)
-    .accounts({ task, escrow, protocolConfig: w.protocolPda, creatorAgent: w.buyerAgent, authorityRateLimit: rateLimit, authority: w.buyer.publicKey, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId, rewardMint: null, creatorTokenAccount: null, tokenEscrowAta: null, tokenProgram: null, associatedTokenProgram: null })
-    .instruction(), [w.buyer]), "bid:create_task");
-
-  // 2) optionally publish a moderated job spec (required by accept_bid, §6).
-  const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
-  if (publishJobSpec) {
-    const jobHash = id32();
-    const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
-    expectOk(send(w.svm, await modProg.methods
-      .recordTaskModeration(arr(jobHash), 0, 0, new BN(0), arr(Buffer.alloc(32, 1)), arr(Buffer.alloc(32, 2)), new BN(0))
-      .accounts({ moderationConfig: w.modCfg, task, taskModeration: taskMod, moderator: w.modAuth.publicKey, moderationAttestor: null, systemProgram: SystemProgram.programId })
-      .instruction(), [w.modAuth]), "bid:task-mod");
-    expectOk(send(w.svm, await w.buyerProg.methods
-      .setTaskJobSpec(arr(jobHash), "agenc://job-spec/sha256/bid", w.modAuth.publicKey)
-      .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-      .instruction(), [w.buyer]), "bid:publish");
-  }
-
-  // 3) inject the bid marketplace, then init the bid book (creator) + a bid (provider).
-  const bidMarket = await injectBidMarketplace(w.svm, w.admin, {});
-  const [bidBook] = pda([enc("bid_book"), task.toBuffer()]);
-  expectOk(send(w.svm, await w.buyerProg.methods
-    .initializeBidBook(0, 0, 0, 0, 0) // policy 0 = BestPrice (no weight-sum rule)
-    .accounts({ task, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.buyer]), "bid:init-book");
-
-  const [bid] = pda([enc("bid"), task.toBuffer(), w.providerAgent.toBuffer()]);
-  const [bidderMarket] = pda([enc("bidder_market"), w.providerAgent.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
-    .createBid(new BN(reward), 3600, 5000, arr(Buffer.alloc(32, 4)), arr(Buffer.alloc(32, 5)), new BN(now + 1800))
-    .accounts({ protocolConfig: w.protocolPda, bidMarketplace: bidMarket, task, bidBook, bid, bidderMarketState: bidderMarket, bidder: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "bid:create_bid");
-
-  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
-  return { task, escrow, jobSpec, bidBook, bid, bidderMarket, claim, reward };
+  return setupBidExclusiveFixture(w, {
+    publishJobSpec,
+    jobUri: "agenc://job-spec/sha256/bid",
+  });
 }
 
 test("accept_bid moderation gate: succeeds only with a published (moderated) job spec", async () => {
@@ -1145,8 +1139,8 @@ test("accept_bid moderation gate: succeeds only with a published (moderated) job
   const b = await setupBidTask(w, { publishJobSpec: true });
 
   expectOk(send(w.svm, await w.buyerProg.methods
-    .acceptBid()
-    .accounts({ task: b.task, claim: b.claim, protocolConfig: w.protocolPda, bidBook: b.bidBook, bid: b.bid, bidderMarketState: b.bidderMarket, bidder: w.providerAgent, taskJobSpec: b.jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .acceptBid(arr(b.bidTermsHash))
+    .accounts({ task: b.task, claim: b.claim, protocolConfig: w.protocolPda, bidBook: b.bidBook, bid: b.bid, bidderMarketState: b.bidderMarket, bidder: w.providerAgent, taskJobSpec: b.jobSpec, moderationBlock: moderationBlockPda(b.jobHash)[0], creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "accept_bid with job spec");
 
   const t = decode(w.svm, "Task", b.task);
@@ -1155,20 +1149,22 @@ test("accept_bid moderation gate: succeeds only with a published (moderated) job
   assert.equal(claim.worker.toBase58(), w.providerAgent.toBase58(), "claim assigned to the bidder");
 });
 
-test("accept_bid moderation gate: rejected when no job spec was published (§6 entry gate)", async () => {
+test("bid book entry gate: rejected when no job spec was published (§6 entry gate)", async () => {
   const w = await freshWorld({ moderationEnabled: true });
   const b = await setupBidTask(w, { publishJobSpec: false }); // no TaskJobSpec published
+  const [bidBook] = pda([enc("bid_book"), b.task.toBuffer()]);
 
-  // The required task_job_spec PDA does not exist -> accept_bid cannot assign work.
+  // The required task_job_spec PDA does not exist -> bidding cannot open.
   const res = send(w.svm, await w.buyerProg.methods
-    .acceptBid()
-    .accounts({ task: b.task, claim: b.claim, protocolConfig: w.protocolPda, bidBook: b.bidBook, bid: b.bid, bidderMarketState: b.bidderMarket, bidder: w.providerAgent, taskJobSpec: b.jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .initializeBidBook(0, 0, 0, 0, 0)
+    .accounts({ task: b.task, taskJobSpec: b.jobSpec, bidBook, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]);
-  expectFail(res, "AccountNotInitialized", "accept_bid without a published job spec");
+  expectFail(res, "AccountNotInitialized", "initialize_bid_book without a published job spec");
 
-  // The task must remain Open (no worker assigned) since the gate blocked it.
+  // The task remains Open and no book is created.
   const t = decode(w.svm, "Task", b.task);
-  assert.ok(t.status.Open !== undefined, `task stays Open when the gate blocks accept_bid (got ${JSON.stringify(t.status)})`);
+  assert.ok(t.status.Open !== undefined, `task stays Open when the gate blocks bidding (got ${JSON.stringify(t.status)})`);
+  assert.ok(isClosed(w.svm, bidBook), "bid book was not created");
 });
 
 /// Create a plain (non-hired) Auto task and pin it to manual validation (default
@@ -1193,7 +1189,7 @@ async function setupManualTask(w, { mode = 1, reviewWindow = 3600, reward = 2_00
     .configureTaskValidation(mode, new BN(reviewWindow), 0, null)
     .accounts({ task, taskValidationConfig: validation, taskAttestorConfig: attestor, protocolConfig: w.protocolPda, hireRecord, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "manual:configure");
-  return { task, escrow, validation, attestor, reward };
+  return { task, escrow, validation, attestor, hireRecord, reward };
 }
 
 test("operator-fee protection: a hired task cannot be re-routed to manual validation", async () => {
@@ -1235,7 +1231,7 @@ test("configure_task_validation: a non-hired task can still be pinned to manual 
 async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle = false, postBonds = false } = {}) {
   const modProg = makeProgram(w.modAuth);
   const m = await setupManualTask(w, { mode: 1 }); // CreatorReview, non-hired
-  const { task, escrow, validation, reward } = m;
+  const { task, escrow, validation, hireRecord, reward } = m;
 
   // moderate + publish a job spec (required to claim)
   const jobHash = id32();
@@ -1254,7 +1250,10 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "manual:claim");
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   const desc = Buffer.alloc(64);
@@ -1270,9 +1269,12 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
     creatorBond = pda([enc("completion_bond"), task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
     workerBond = pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
     expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
-      .accounts({ task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "manual:creator-bond");
+      .accounts(completionBondPostAccounts(w, { task, completionBond: creatorBond,
+        authority: w.buyer.publicKey, role: 0 })).instruction(), [w.buyer]), "manual:creator-bond");
     expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
-      .accounts({ task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "manual:worker-bond");
+      .accounts(completionBondPostAccounts(w, { task, completionBond: workerBond,
+        authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent,
+        workerClaim: claim })).instruction(), [w.provider]), "manual:worker-bond");
   }
 
   if (pauseBeforeSettle) await setProtocolPaused(w.svm, true);
@@ -1288,7 +1290,7 @@ async function runManualSettlement(w, { decision = "accept", pauseBeforeSettle =
   } else if (decision === "reject") {
     expectOk(send(w.svm, await w.buyerProg.methods
       .rejectTaskResult(arr(id32()))
-      .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, agentStats: null })
+      .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, worker: w.providerAgent, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, agentStats: null, workerCompletionBond: pda([enc("completion_bond"), task.toBuffer(), w.provider.publicKey.toBuffer()])[0] })
       .instruction(), [w.buyer]), "manual:reject");
   }
   return { task, escrow, claim, validation, submission, jobSpec, workerBalBefore, reward, creatorBond, workerBond };
@@ -1332,7 +1334,7 @@ test("manual validation: accept still settles while the protocol is paused (exit
 async function setupSubmittedManual(w, opts = {}) {
   const modProg = makeProgram(w.modAuth);
   const m = await setupManualTask(w, { mode: 1, ...opts });
-  const { task, escrow, validation, reward } = m;
+  const { task, escrow, validation, hireRecord, reward } = m;
   const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
@@ -1342,13 +1344,17 @@ async function setupSubmittedManual(w, opts = {}) {
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "rc:publish");
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods.claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "rc:claim");
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null,
+      moderationBlock: moderationBlockPda(jobHash)[0], claim,
+      protocolConfig: w.protocolPda, worker: w.providerAgent,
+      authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.provider]), "rc:claim");
   const [submission] = pda([enc("task_submission"), claim.toBuffer()]);
   const desc = Buffer.alloc(64); desc.set(crypto.randomBytes(32), 0);
   const submit = async () => send(w.svm, await w.providerProg.methods.submitTaskResult(arr(id32()), arr(desc))
     .accounts({ task, claim, taskValidationConfig: validation, taskSubmission: submission, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]);
   expectOk(await submit(), "rc:submit");
-  return { task, escrow, validation, submission, jobSpec, claim, reward, submit };
+  return { task, escrow, validation, submission, jobSpec, hireRecord, claim, reward, submit };
 }
 
 test("request_changes: non-terminal revision keeps the claim, worker resubmits in place -> accept pays", async () => {
@@ -1470,8 +1476,13 @@ async function setupFrozen(w, { postBonds = false } = {}) {
   if (postBonds) {
     creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
     workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
-    expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0).accounts({ task: r.task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "frozen:creator-bond");
-    expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1).accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "frozen:worker-bond");
+    expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
+      .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: creatorBond,
+        authority: w.buyer.publicKey, role: 0 })).instruction(), [w.buyer]), "frozen:creator-bond");
+    expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
+      .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
+        authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent,
+        workerClaim: r.claim })).instruction(), [w.provider]), "frozen:worker-bond");
   }
   expectOk(send(w.svm, await w.buyerProg.methods.rejectAndFreeze(arr(Buffer.alloc(32, 7)))
     .accounts({ task: r.task, claim: r.claim, taskValidationConfig: r.validation, taskSubmission: r.submission, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, agentStats: null }).instruction(), [w.buyer]), "frozen:freeze");
@@ -1528,7 +1539,7 @@ test("resolve_reject_frozen (approve): pays the worker, refunds worker bond, for
   await setMultisig(w.svm, [w.admin.publicKey, owner2.publicKey], 2);
   const f = await setupFrozen(w, { postBonds: true });
   const signerMetas = [{ pubkey: w.admin.publicKey, isSigner: true, isWritable: false }, { pubkey: owner2.publicKey, isSigner: true, isWritable: false }];
-  const accts = { task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, bondTreasury: w.admin.publicKey, systemProgram: SystemProgram.programId };
+  const accts = { task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId };
 
   // a single signer cannot pass the 2-of-2 gate.
   expectFail(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(true).accounts(accts).remainingAccounts([signerMetas[0]]).instruction(), [w.admin]), "MultisigNotEnoughSigners", "single signer rejected");
@@ -1553,7 +1564,7 @@ test("resolve_reject_frozen (reject): refunds the creator, forfeits worker bond,
   assert.equal(Number(decode(w.svm, "AgentRegistration", w.providerAgent).active_tasks), 1, "worker active_tasks == 1 before resolve");
   assert.equal(Number(decode(w.svm, "Task", f.task).current_workers), 1, "task current_workers == 1 before resolve");
   expectOk(send(w.svm, await makeProgram(w.admin).methods.resolveRejectFrozen(false)
-    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, bondTreasury: w.admin.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: w.admin.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId })
     .remainingAccounts(signerMetas).instruction(), [w.admin, owner2]), "resolve reject");
   assert.ok(decode(w.svm, "Task", f.task).status.Cancelled !== undefined, "task Cancelled (rejection upheld)");
   assert.ok(isClosed(w.svm, f.escrow), "escrow refunded + closed");
@@ -1573,7 +1584,7 @@ test("expire_reject_frozen: after the review window defaults to the worker + ref
   const f = await setupFrozen(w, { postBonds: true });
   const cleaner = Keypair.generate(); w.svm.airdrop(cleaner.publicKey, BigInt(10e9));
   const expireIx = async () => makeProgram(cleaner).methods.expireRejectFrozen()
-    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, authority: cleaner.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId }).instruction();
+    .accounts({ task: f.task, claim: f.claim, escrow: f.escrow, taskSubmission: f.submission, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, creator: w.buyer.publicKey, workerAuthority: w.provider.publicKey, hireRecord: f.hireRecord, operator: null, referrer: null, authority: cleaner.publicKey, creatorCompletionBond: f.creatorBond, workerCompletionBond: f.workerBond, systemProgram: SystemProgram.programId }).instruction();
 
   // before the review window lapses -> rejected.
   expectFail(send(w.svm, await expireIx(), [cleaner]), "RejectFrozenTimeoutNotElapsed", "expire too early");
@@ -1614,37 +1625,149 @@ test("close_task children: a program-owned non-child remaining account is reject
   assert.ok(!isClosed(w.svm, r.task), "task NOT closed (tx reverted)");
 });
 
-test("dispute: initiate -> expire settles the escrow while the protocol is paused (exit-safe)", async () => {
+test("dispute: creator-initiate -> expire settles the escrow while the protocol is paused (exit-safe)", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
 
-  // worker initiates a dispute on their claimed task
+  // A bare no-show worker cannot self-dispute. The creator opens the dispute and
+  // binds the defendant's live claim; expiry later receives the canonical empty
+  // submission PDA as objective no-submission evidence.
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [rateLimit] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const [submission] = pda([enc("task_submission"), r.claim.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 0, "evidence")
-    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: rateLimit, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "initiate_dispute");
+    .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: rateLimit, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "creator initiate_dispute");
   assert.ok(decode(w.svm, "Task", r.task).status.Disputed !== undefined, "task is Disputed");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active !== undefined, "dispute is Active");
 
   // warp past max_dispute_duration, pause, then expire (permissionless last-resort exit).
   const clk = w.svm.getClock();
-  clk.unixTimestamp = clk.unixTimestamp + 604800n + 100n;
+  const votingDeadline = Number(decode(w.svm, "Dispute", dispute).voting_deadline);
+  const claimExpiresAt = Number(decode(w.svm, "TaskClaim", r.claim).expires_at);
+  clk.unixTimestamp = BigInt(Math.max(votingDeadline + 120, claimExpiresAt)) + 1n;
   w.svm.setClock(clk);
   await setProtocolPaused(w.svm, true);
 
   expectOk(send(w.svm, await w.providerProg.methods
     .expireDispute()
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, authority: w.provider.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], taskSubmission: null, taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, creator: w.buyer.publicKey, authority: w.provider.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], taskSubmission: submission, taskValidationConfig: null })
     .instruction(), [w.provider]), "expire_dispute while paused");
 
   // exit-safe: the escrow is settled (closed) and the dispute is no longer Active,
   // despite the protocol being paused (money never locks).
   assert.ok(isClosed(w.svm, r.escrow), "escrow settled by expire_dispute while paused");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute no longer Active");
+});
+
+test("SPL-token ingress rejects a noncanonical escrow account with attacker-retained close authority", async () => {
+  const w = await freshWorld({ moderationEnabled: true });
+  const mint = Keypair.generate();
+  const noncanonicalEscrow = Keypair.generate();
+  const reward = 5_000_000;
+  const taskId = id32();
+  const [task] = pda([enc("task"), w.buyer.publicKey.toBuffer(), Buffer.from(taskId)]);
+  const [escrow] = pda([enc("escrow"), task.toBuffer()]);
+  const [rateLimit] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  const buyerAta = getAssociatedTokenAddressSync(mint.publicKey, w.buyer.publicKey);
+  const mintRent = Number(w.svm.minimumBalanceForRentExemption(BigInt(MINT_SIZE)));
+  const accountRent = Number(w.svm.minimumBalanceForRentExemption(BigInt(ACCOUNT_SIZE)));
+
+  expectOk(sendMany(w.svm, [
+    SystemProgram.createAccount({
+      fromPubkey: w.admin.publicKey,
+      newAccountPubkey: mint.publicKey,
+      lamports: mintRent,
+      space: MINT_SIZE,
+      programId: TOKEN_PROGRAM_ID,
+    }),
+    createInitializeMintInstruction(mint.publicKey, 0, w.admin.publicKey, null),
+    createAssociatedTokenAccountInstruction(
+      w.admin.publicKey,
+      buyerAta,
+      w.buyer.publicKey,
+      mint.publicKey,
+    ),
+    createMintToInstruction(mint.publicKey, buyerAta, w.admin.publicKey, reward),
+  ], [w.admin, mint]), "token:attacker-mint");
+
+  // This is the exact pre-fix trap: initialize an arbitrary account under the
+  // attacker's authority, retain its close authority, then hand token ownership
+  // to the TaskEscrow PDA. Mint/owner-only validation used to accept it.
+  expectOk(sendMany(w.svm, [
+    SystemProgram.createAccount({
+      fromPubkey: w.admin.publicKey,
+      newAccountPubkey: noncanonicalEscrow.publicKey,
+      lamports: accountRent,
+      space: ACCOUNT_SIZE,
+      programId: TOKEN_PROGRAM_ID,
+    }),
+    createInitializeAccountInstruction(
+      noncanonicalEscrow.publicKey,
+      mint.publicKey,
+      w.buyer.publicKey,
+    ),
+    createSetAuthorityInstruction(
+      noncanonicalEscrow.publicKey,
+      w.buyer.publicKey,
+      AuthorityType.CloseAccount,
+      w.buyer.publicKey,
+    ),
+    createSetAuthorityInstruction(
+      noncanonicalEscrow.publicKey,
+      w.buyer.publicKey,
+      AuthorityType.AccountOwner,
+      escrow,
+    ),
+  ], [w.admin, noncanonicalEscrow, w.buyer]), "token:attacker-escrow");
+
+  const now = Number(w.svm.getClock().unixTimestamp);
+  const description = Buffer.alloc(64);
+  description.set(crypto.randomBytes(32), 0);
+  const createIx = await w.buyerProg.methods
+    .createTask(
+      arr(taskId),
+      new BN(1),
+      arr(description),
+      new BN(reward),
+      1,
+      new BN(now + 3600),
+      0,
+      null,
+      0,
+      mint.publicKey,
+      null,
+      0,
+    )
+    .accounts({
+      task,
+      escrow,
+      protocolConfig: w.protocolPda,
+      creatorAgent: w.buyerAgent,
+      authorityRateLimit: rateLimit,
+      authority: w.buyer.publicKey,
+      creator: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId,
+      rewardMint: mint.publicKey,
+      creatorTokenAccount: buyerAta,
+      tokenEscrowAta: noncanonicalEscrow.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+
+  expectFail(
+    send(w.svm, createIx, [w.buyer]),
+    "InvalidTokenEscrow",
+    "noncanonical token escrow ingress",
+  );
+  assert.equal(tokenAmount(w.svm, buyerAta), BigInt(reward), "creator principal is untouched");
+  assert.equal(tokenAmount(w.svm, noncanonicalEscrow.publicKey), 0n, "trap account is unfunded");
+  assert.ok(isClosed(w.svm, task), "failed ingress leaves no task state");
+  assert.ok(isClosed(w.svm, escrow), "failed ingress leaves no escrow PDA");
 });
 
 /// Drive an SPL-token task through Auto settlement: mint a token, fund the buyer,
@@ -1699,13 +1822,13 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
     .accounts({ protocolConfig: w.protocolPda, task, moderationConfig: w.modCfg, taskModeration: taskMod, moderationAttestor: null, moderationBlock: moderationBlockPda(jobHash)[0], taskJobSpec: jobSpec, creator: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "token:publish");
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .claimTaskWithJobSpec()
-    .accounts({ task, taskJobSpec: jobSpec, claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
+    .accounts({ task, taskJobSpec: jobSpec, hireRecord, legacyListing: null, moderationBlock: moderationBlockPda(jobHash)[0], claim, protocolConfig: w.protocolPda, worker: w.providerAgent, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.provider]), "token:claim");
 
   // 5) complete_task with token accounts (operator leg is SOL-only -> none here).
-  const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
   expectOk(send(w.svm, await w.providerProg.methods
     .completeTask(arr(id32()), null)
     .accounts({ task, claim, escrow, creator: w.buyer.publicKey, worker: w.providerAgent, protocolConfig: w.protocolPda, treasury: w.admin.publicKey, authority: w.provider.publicKey, systemProgram: SystemProgram.programId, tokenEscrowAta: escrowAta, workerTokenAccount: workerAta, treasuryTokenAccount: treasuryAta, rewardMint: mint.publicKey, tokenProgram: TOKEN_PROGRAM_ID, hireRecord, operator: null, referrer: null, creatorCompletionBond: null, workerCompletionBond: null })
@@ -1716,6 +1839,8 @@ async function runTokenSettlement(w, { reward = 5_000_000 } = {}) {
 
 test("SPL-token settlement: complete pays worker + treasury in tokens (conservation), closes token escrow", async () => {
   const w = await freshWorld({ moderationEnabled: true });
+  const protocolBefore = decode(w.svm, "ProtocolConfig", w.protocolPda);
+  const workerBefore = decode(w.svm, "AgentRegistration", w.providerAgent);
   const r = await runTokenSettlement(w, { reward: 5_000_000 });
 
   const t = decode(w.svm, "Task", r.task);
@@ -1727,6 +1852,32 @@ test("SPL-token settlement: complete pays worker + treasury in tokens (conservat
   assert.equal(workerTok + treasuryTok, BigInt(r.reward), "worker + treasury == reward (token conservation)");
   assert.ok(isClosed(w.svm, r.escrowAta), "token escrow ATA closed on completion");
   assert.ok(isClosed(w.svm, r.escrow), "escrow PDA closed on completion");
+
+  // Global value and agent earnings are SOL-denominated. Arbitrary token base
+  // units must never poison those counters or mint economically fake reputation.
+  const protocolAfter = decode(w.svm, "ProtocolConfig", w.protocolPda);
+  const workerAfter = decode(w.svm, "AgentRegistration", w.providerAgent);
+  assert.equal(
+    protocolAfter.total_value_distributed.toString(),
+    protocolBefore.total_value_distributed.toString(),
+    "token units excluded from global SOL value",
+  );
+  assert.equal(
+    protocolAfter.completed_tasks.toString(),
+    protocolBefore.completed_tasks.addn(1).toString(),
+    "token completion still increments the denomination-neutral task count",
+  );
+  assert.equal(
+    workerAfter.total_earned.toString(),
+    workerBefore.total_earned.toString(),
+    "token units excluded from worker SOL earnings",
+  );
+  assert.equal(workerAfter.reputation, workerBefore.reputation, "unpriced token fee earns no reputation");
+  assert.equal(
+    workerAfter.tasks_completed.toString(),
+    workerBefore.tasks_completed.addn(1).toString(),
+    "token completion remains visible in the completion counter",
+  );
 });
 
 test("dispute: resolve via assigned resolver settles while the protocol is paused (exit-safe, no votes)", async () => {
@@ -1736,22 +1887,22 @@ test("dispute: resolve via assigned resolver settles while the protocol is pause
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
 
-  // worker opens a dispute
+  // Creator opens a dispute against the claimed worker (there is no submission yet).
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 0, "evidence")
-    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "resolve:initiate");
+    .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "resolve:initiate");
 
   // resolve while paused — exit-safe (money never locks). No voting-period wait is
   // needed anymore: an assigned resolver / the protocol authority decides directly.
   await setProtocolPaused(w.svm, true);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/refund")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: null, taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "resolve_dispute while paused");
 
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute resolved (no longer Active) while paused");
@@ -1767,19 +1918,20 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress, live hire w/ 10% operator fee
 
-  // worker opens a Complete dispute (resolution_type 1 = Complete -> worker is paid).
+  // Creator opens a Complete dispute against the claimed worker.
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 1, "evidence")
-    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "op-resolve:initiate Complete");
+    .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "op-resolve:initiate Complete");
 
   // P6.3: the protocol authority resolves the Complete ruling directly — no arbiters,
   // no votes, no voting-period wait.
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
+  const workerStateBefore = decode(w.svm, "AgentRegistration", w.providerAgent);
   const operatorBalBefore = Number(w.svm.getBalance(operatorKp.publicKey));
   // resolve_dispute also closes the worker_claim and refunds its rent to the worker
   // wallet, so the worker delta = worker_net + claim rent. Capture the rent for an exact check.
@@ -1787,7 +1939,7 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
 
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: operatorKp.publicKey, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: null, taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: operatorKp.publicKey, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "op-resolve:resolve Complete");
 
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed via dispute");
@@ -1800,6 +1952,22 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
   const workerDelta = Number(w.svm.getBalance(w.provider.publicKey)) - workerBalBefore;
   assert.equal(operatorDelta, expectedOpFee, `operator paid its cut on dispute Complete (got ${operatorDelta})`);
   assert.equal(workerDelta, expectedWorkerNet + claimRentBefore, `worker paid reward minus operator fee plus claim rent (got ${workerDelta})`);
+  const workerStateAfter = decode(w.svm, "AgentRegistration", w.providerAgent);
+  assert.equal(
+    BigInt(workerStateAfter.tasks_completed.toString()) - BigInt(workerStateBefore.tasks_completed.toString()),
+    1n,
+    "dispute Complete records one worker completion",
+  );
+  assert.equal(
+    BigInt(workerStateAfter.total_earned.toString()) - BigInt(workerStateBefore.total_earned.toString()),
+    BigInt(expectedWorkerNet),
+    "dispute Complete records the actual SOL payout net of marketplace legs",
+  );
+  assert.equal(
+    workerStateAfter.reputation,
+    workerStateBefore.reputation,
+    "no-fee dispute completion does not mint completion reputation",
+  );
 });
 
 test("completion bond: resolve_dispute Complete refunds the worker bond + forfeits the creator bond to treasury", async () => {
@@ -1811,26 +1979,29 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
-    .accounts({ task: r.task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "creator bond");
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: creatorBond,
+      authority: w.buyer.publicKey, role: 0 })).instruction(), [w.buyer]), "creator bond");
   expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
-    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "worker bond");
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
+      authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent,
+      workerClaim: r.claim })).instruction(), [w.provider]), "worker bond");
   const bondPrincipal = Math.floor(r.reward / 4); // 25% = 1,000,000
 
-  // worker opens a Complete dispute; P6.3: the protocol authority rules directly (no
-  // arbiters, no votes).
+  // Creator opens a Complete dispute against the claimed worker; P6.3: the protocol
+  // authority rules directly (no arbiters, no votes).
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 1, "evidence")
-    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "bond-resolve:initiate");
+    .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "bond-resolve:initiate");
 
   const treasuryBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: null, taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "bond-resolve:resolve Complete");
 
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
@@ -1856,27 +2027,30 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
   expectOk(send(w.svm, await w.buyerProg.methods.postCompletionBond(0)
-    .accounts({ task: r.task, completionBond: creatorBond, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.buyer]), "junk-bond:creator bond");
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: creatorBond,
+      authority: w.buyer.publicKey, role: 0 })).instruction(), [w.buyer]), "junk-bond:creator bond");
   expectOk(send(w.svm, await w.providerProg.methods.postCompletionBond(1)
-    .accounts({ task: r.task, completionBond: workerBond, authority: w.provider.publicKey, systemProgram: SystemProgram.programId }).instruction(), [w.provider]), "junk-bond:worker bond");
+    .accounts(completionBondPostAccounts(w, { task: r.task, completionBond: workerBond,
+      authority: w.provider.publicKey, role: 1, workerAgent: w.providerAgent,
+      workerClaim: r.claim })).instruction(), [w.provider]), "junk-bond:worker bond");
 
-  // worker opens a Complete dispute (worker wins -> creator bond is forfeit-due); P6.3:
-  // the protocol authority rules directly (no arbiters, no votes).
+  // Creator opens a Complete dispute (worker wins -> creator bond is forfeit-due);
+  // P6.3: the protocol authority rules directly (no arbiters, no votes).
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 1, "evidence")
-    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "junk-bond:initiate");
+    .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "junk-bond:initiate");
 
   // Substitute a junk pubkey for the forfeit-due creator bond. Pre-pin this would no-op
   // (forfeit skipped); post-pin it must be rejected.
   const junkBond = Keypair.generate().publicKey;
   expectFail(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: junkBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: null, taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: junkBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "MissingCompletionBondAccount", "junk-bond:resolve must reject non-canonical creator bond");
 
   // Nothing settled: the dispute is still Active and the real creator bond is still open.
@@ -1905,7 +2079,7 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
   // no remaining accounts.
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/refund")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: null, taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "slash:resolve");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "dispute Resolved (worker lost)");
   const stakeBefore = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
@@ -1926,11 +2100,11 @@ async function openCompleteDispute(w, r) {
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
-  const [initRate] = pda([enc("authority_rate_limit"), w.provider.publicKey.toBuffer()]);
-  expectOk(send(w.svm, await w.providerProg.methods
+  const [initRate] = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()]);
+  expectOk(send(w.svm, await w.buyerProg.methods
     .initiateDispute(arr(disputeId), arr(taskId), arr(Buffer.alloc(32, 1)), 1, "evidence") // 1 = Complete
-    .accounts({ dispute, task: r.task, agent: w.providerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: r.claim, workerAgent: null, workerClaim: null, taskSubmission: null, authority: w.provider.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.provider]), "roster:initiate");
+    .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
+    .instruction(), [w.buyer]), "roster:initiate");
   return dispute;
 }
 
@@ -1938,7 +2112,7 @@ async function resolveAsDispute(w, r, dispute, prog, signerPubkey, resolverAssig
   // P6.4 rationale args are required; P6.3: no votes/arbiters/remaining accounts.
   return prog.methods
     .resolveDispute(approve, arr(Buffer.alloc(32, 5)), "agenc://ruling/roster")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: signerPubkey, resolverAssignment, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: null, taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: signerPubkey, resolverAssignment, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction();
 }
 
@@ -2069,11 +2243,14 @@ test("close_task children: reclaims rent from a task_moderation child via remain
   const closeIx = await w.buyerProg.methods
     .closeTask()
     .accounts({ task: r.task, taskJobSpec: r.jobSpec, escrow: null, hireRecord: r.hireRecord, listing: w.listing, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: null, authority: w.buyer.publicKey })
-    .remainingAccounts([{ pubkey: r.taskMod, isSigner: false, isWritable: true }])
+    .remainingAccounts([
+      { pubkey: r.taskMod, isSigner: false, isWritable: true },
+      { pubkey: w.modAuth.publicKey, isSigner: false, isWritable: true },
+    ])
     .instruction();
   expectOk(send(w.svm, closeIx, [w.buyer]), "close_task with moderation child");
 
-  assert.ok(isClosed(w.svm, r.task), "task closed");
+  assert.ok(!isClosed(w.svm, r.task), "terminal task retained as the durable child-liveness anchor");
   assert.ok(isClosed(w.svm, r.jobSpec), "task_job_spec rent reclaimed");
   assert.ok(isClosed(w.svm, r.taskMod), "task_moderation rent reclaimed");
   assert.equal(decode(w.svm, "ServiceListing", w.listing).open_jobs, 0, "listing capacity freed");

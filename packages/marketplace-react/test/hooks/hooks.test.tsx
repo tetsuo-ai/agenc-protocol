@@ -424,6 +424,7 @@ describe("useHumanlessHireFlow", () => {
   const flowJobSpec = { title: "Ship a marketplace audit" };
   const flowHire = {
     listing: PROVIDER_AGENT,
+    providerAgent: PROVIDER_AGENT,
     taskId: flowTaskId,
     expectedPrice: 1_000_000n,
     expectedVersion: 1n,
