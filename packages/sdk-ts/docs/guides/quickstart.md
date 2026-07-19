@@ -48,7 +48,7 @@ import {
 ```
 
 The facade builders return `@solana/kit` instructions. They build instructions
-offline — no RPC is required to *assemble* them. To broadcast, feed each
+offline — no RPC is required to _assemble_ them. To broadcast, feed each
 instruction into a transaction message (`createTransactionMessage`,
 `appendTransactionMessageInstructions`, sign, send). In the example, signers are
 `createNoopSigner(...)` and plain accounts are `address(...)` placeholders; in
@@ -60,7 +60,7 @@ This guide uses the storefront entry point, **`hireFromListingHumanless`**: a
 plain wallet buyer hires a provider's standing service listing, minting the task,
 escrow, and hire record in a single instruction. The buyer then activates the
 funded task with **`setTaskJobSpec`**, which pins a moderated job spec before any
-worker can claim it. That is the normal operator-marketplace path: list, hire,
+claim attempt can pass the job-spec gate. That is the normal operator-marketplace path: list, hire,
 activate, claim, submit, accept, rate, and close.
 
 Registered-agent hire, completion bonds, disputes, bids, governance, reputation,
@@ -123,8 +123,8 @@ derives the listing moderation attestation PDA and the required BLOCK-floor PDA,
 and `moderator` — the pubkey whose CLEAN attestation the hire consumes
 (`moderationAuthority` here is the on-chain `ModerationConfig.moderationAuthority`,
 readable via `findModerationConfigPda` + `getModerationConfigDecoder`). Escrow
-funding alone does not make the task claimable; the buyer activates it in the
-next signed step.
+funding alone does not clear the job-spec gate. The buyer's next signed step
+pins the spec and activates discovery; transaction-time gates remain authoritative.
 
 ```ts
 const hireIx = await facade.hireFromListingHumanless({
@@ -247,7 +247,7 @@ const closeIx = await facade.closeTask({
 
 ## Local sandbox — run the whole flow for real
 
-Everything above assembles instructions offline. To actually *execute* the full
+Everything above assembles instructions offline. To actually _execute_ the full
 flow against the REAL compiled on-chain program — in-process, no validator, no
 RPC, no faucet, no secrets — use the Node-only
 `@tetsuo-ai/marketplace-sdk/testing` subpath. It requires the optional peer
@@ -256,6 +256,9 @@ RPC, no faucet, no secrets — use the Node-only
 ```bash
 npm i -D litesvm
 ```
+
+Importing the `./testing` subpath does not load the optional native peer.
+Invoking a LiteSVM helper without it fails with the install command above.
 
 > Unlike the snippets above, the block below is not from
 > `examples/embeddable-marketplace.ts` — it is the README "Local sandbox"

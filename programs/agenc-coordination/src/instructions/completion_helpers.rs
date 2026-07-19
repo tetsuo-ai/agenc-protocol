@@ -178,8 +178,8 @@ pub fn load_task_claim_or_not_claimed(
 
 /// Transfer tokens from escrow ATA to worker and treasury ATAs via PDA-signed CPI.
 #[cfg(feature = "spl-token-rewards")]
-fn transfer_token_rewards<'a, 'info>(
-    ta: &mut TokenPaymentAccounts<'a, 'info>,
+fn transfer_token_rewards(
+    ta: &mut TokenPaymentAccounts<'_, '_>,
     worker_reward: u64,
     protocol_fee: u64,
 ) -> Result<()> {

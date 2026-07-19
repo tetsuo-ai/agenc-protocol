@@ -1,4 +1,4 @@
-// The worker runtime: ensureRegistered → find claimable (ONE at a time — the
+// The worker runtime: ensureRegistered → find claim candidates (ONE at a time — the
 // worker never holds more than one open claim) → verify the job spec against
 // its on-chain hash → claim → execute via the operator's own coding-agent CLI
 // → sha256(stdout) → submit → track the submission until settlement is
@@ -63,8 +63,10 @@ import {
   bytesToHex,
   hexToBytes,
   loadState,
+  MAX_UNSETTLED_SUBMISSIONS,
   newAgentId,
   saveState,
+  WorkerStateError,
   type ExecutionIntent,
   type OpenClaim,
   type SubmissionIntent,
@@ -119,7 +121,7 @@ export type WorkerContext = {
   /** Injectable fetch for the result uploader (tests). */
   uploadFetch?: typeof fetch;
   /** SDK content-rails transport used to resolve anchored change requests. */
-  taskThreadTransport?: taskThread.ContentTransport;
+  taskThreadTransport?: ReturnType<typeof taskThread.createContentTransport>;
   /**
    * Optional settlement-signature lookup (task PDA → most recent tx signature).
    * When present and a settlement is observed, the receipt URL is printed;
@@ -127,13 +129,18 @@ export type WorkerContext = {
    */
   findSettlementSignature?: (task: Address) => Promise<string | null>;
   /**
-   * Wallet balance lookup, used by the pre-registration funding preflight so
-   * an underfunded new wallet fails with one clear "fund exactly this much"
-   * message BEFORE any transaction instead of a mid-flight on-chain revert.
-   * The CLI always wires this; when absent (programmatic embedding) the
-   * preflight is skipped and registration may revert on-chain if underfunded.
+   * Live wallet balance lookup. The CLI always wires this. Readonly, dry-run,
+   * and recovery-only embedders may omit it, but every path that starts a new
+   * claim fails closed unless this and `getMinimumBalanceForRentExemption` are
+   * both present.
    */
   getBalance?: (address: Address) => Promise<bigint>;
+  /**
+   * Live cluster rent lookup for exact account sizes. Must be supplied with
+   * `getBalance` before registration can be preflighted or a new claim can
+   * start. Static rent guesses are never used for a signed claim.
+   */
+  getMinimumBalanceForRentExemption?: (space: number) => Promise<bigint>;
 };
 
 /** The worker's on-chain identity. */
@@ -147,19 +154,20 @@ export type WorkerAgent = {
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
 
-// Rent-exempt minimums for the accounts a worker pays to create, derived from
-// the program's fixed account layouts ((space + 128) * 6960 lamports):
-//   AgentRegistration 566 bytes — paid once at registration (returned if the
-//   agent is ever deregistered, alongside the stake held in the agent PDA).
-//   TaskClaim 203 bytes + TaskSubmission 273 bytes — paid per worked task.
-/** One-time rent for the worker's AgentRegistration account. */
+/** Exact program account allocations, compile-time pinned in state.rs. */
+export const AGENT_ACCOUNT_SIZE = 566;
+export const CLAIM_ACCOUNT_SIZE = 203;
+export const SUBMISSION_ACCOUNT_SIZE = 273;
+
+// Snapshot estimates retained for backward-compatible planning APIs. Runtime
+// funding safety uses live getMinimumBalanceForRentExemption values instead.
 export const AGENT_ACCOUNT_RENT_LAMPORTS = 4_830_240n;
-/** Per-task rent for the TaskClaim account. */
 export const CLAIM_ACCOUNT_RENT_LAMPORTS = 2_303_760n;
-/** Per-task rent for the TaskSubmission account. */
 export const SUBMISSION_ACCOUNT_RENT_LAMPORTS = 2_790_960n;
 /** Headroom for transaction fees across the register→claim→submit flow. */
 export const FEE_HEADROOM_LAMPORTS = 1_000_000n;
+/** Refundable deposit charged by the program for a contest-task claim. */
+export const CONTEST_ENTRY_DEPOSIT_LAMPORTS = 10_000_000n;
 
 // A recent blockhash can remain valid for roughly 60-90 seconds. When claim
 // broadcast returns an ambiguous transport error, wait beyond that window
@@ -190,16 +198,126 @@ export async function readMinAgentStake(
 /**
  * Lamports a fresh wallet needs before its FIRST transaction: the live
  * registration stake + agent-account rent + one task's claim + submission
- * rents + fee headroom (~0.021 SOL on mainnet with the live 0.01 SOL stake).
+ * rents + the refundable contest-entry deposit + fee headroom (~0.031 SOL on
+ * mainnet with the live 0.01 SOL stake). The worker can claim contest tasks, so
+ * fresh-wallet safety must budget the worst-case first claim.
  */
-export function registrationFundingRequirement(minAgentStake: bigint): bigint {
+export type WorkerAccountRentMinimums = {
+  agent: bigint;
+  claim: bigint;
+  submission: bigint;
+};
+
+/** Live rents the worker must retain before starting another task. */
+export type ClaimAccountRentMinimums = Pick<
+  WorkerAccountRentMinimums,
+  "claim" | "submission"
+>;
+
+function validateRentMinimum(label: string, value: unknown): bigint {
+  if (typeof value !== "bigint" || value < 0n) {
+    throw new Error(
+      `RPC returned an invalid ${label} account rent-exemption minimum`,
+    );
+  }
+  return value;
+}
+
+/** Read the exact live rents needed by a new claim and its submission. */
+export async function readClaimAccountRentMinimums(
+  getMinimumBalanceForRentExemption: (space: number) => Promise<bigint>,
+): Promise<ClaimAccountRentMinimums> {
+  const [claimValue, submissionValue] = await Promise.all([
+    getMinimumBalanceForRentExemption(CLAIM_ACCOUNT_SIZE),
+    getMinimumBalanceForRentExemption(SUBMISSION_ACCOUNT_SIZE),
+  ]);
+  return {
+    claim: validateRentMinimum("claim", claimValue),
+    submission: validateRentMinimum("submission", submissionValue),
+  };
+}
+
+export async function readWorkerAccountRentMinimums(
+  getMinimumBalanceForRentExemption: (space: number) => Promise<bigint>,
+): Promise<WorkerAccountRentMinimums> {
+  const [agentValue, recurring] = await Promise.all([
+    getMinimumBalanceForRentExemption(AGENT_ACCOUNT_SIZE),
+    readClaimAccountRentMinimums(getMinimumBalanceForRentExemption),
+  ]);
+  return {
+    agent: validateRentMinimum("agent", agentValue),
+    ...recurring,
+  };
+}
+
+/**
+ * Live balance required immediately before a fresh claim. The contest deposit
+ * is included for every task because discovery can surface contest work and a
+ * recurring worker must be funded for the worst claim shape it can accept.
+ */
+export function claimFundingRequirement(
+  rents: ClaimAccountRentMinimums = {
+    claim: CLAIM_ACCOUNT_RENT_LAMPORTS,
+    submission: SUBMISSION_ACCOUNT_RENT_LAMPORTS,
+  },
+): bigint {
   return (
-    minAgentStake +
-    AGENT_ACCOUNT_RENT_LAMPORTS +
-    CLAIM_ACCOUNT_RENT_LAMPORTS +
-    SUBMISSION_ACCOUNT_RENT_LAMPORTS +
+    rents.claim +
+    rents.submission +
+    CONTEST_ENTRY_DEPOSIT_LAMPORTS +
     FEE_HEADROOM_LAMPORTS
   );
+}
+
+export function registrationFundingRequirement(
+  minAgentStake: bigint,
+  rents: WorkerAccountRentMinimums = {
+    agent: AGENT_ACCOUNT_RENT_LAMPORTS,
+    claim: CLAIM_ACCOUNT_RENT_LAMPORTS,
+    submission: SUBMISSION_ACCOUNT_RENT_LAMPORTS,
+  },
+): bigint {
+  return (
+    minAgentStake +
+    rents.agent +
+    rents.claim +
+    rents.submission +
+    CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+    FEE_HEADROOM_LAMPORTS
+  );
+}
+
+async function assertFreshClaimFunding(ctx: WorkerContext): Promise<void> {
+  if (
+    ctx.getBalance === undefined ||
+    ctx.getMinimumBalanceForRentExemption === undefined
+  ) {
+    throw new Error(
+      "fresh-claim funding gate requires live getBalance and " +
+        "getMinimumBalanceForRentExemption hooks; refusing to claim without both",
+    );
+  }
+  const rents = await readClaimAccountRentMinimums(
+    ctx.getMinimumBalanceForRentExemption,
+  );
+  const required = claimFundingRequirement(rents);
+  const balance = await ctx.getBalance(ctx.signer.address);
+  if (typeof balance !== "bigint" || balance < 0n) {
+    throw new Error("RPC returned an invalid wallet balance");
+  }
+  if (balance < required) {
+    const shortfall = required - balance;
+    throw new Error(
+      `insufficient funds: wallet ${ctx.signer.address} holds ${balance} lamports ` +
+        `(${lamportsToSol(balance)} SOL) but working another task needs at least ` +
+        `${required} lamports (${lamportsToSol(required)} SOL) — ` +
+        `claim rent ${rents.claim} + submission rent ${rents.submission} + ` +
+        `refundable contest deposit ${CONTEST_ENTRY_DEPOSIT_LAMPORTS} + ` +
+        `fee headroom ${FEE_HEADROOM_LAMPORTS}. ` +
+        `Fund ${ctx.signer.address} with at least ${shortfall} more ` +
+        `lamport${shortfall === 1n ? "" : "s"} and retry.`,
+    );
+  }
 }
 
 /** Format lamports as a SOL decimal string (full precision, trimmed). */
@@ -330,16 +448,31 @@ export async function ensureRegistered(
   // Funding preflight BEFORE the first transaction: a new operator should hit
   // one clear "fund this address with exactly this much" error, never an
   // on-chain revert halfway through their first tick.
-  if (ctx.getBalance !== undefined) {
-    const required = registrationFundingRequirement(minAgentStake);
+  if (
+    ctx.getBalance !== undefined ||
+    ctx.getMinimumBalanceForRentExemption !== undefined
+  ) {
+    if (
+      ctx.getBalance === undefined ||
+      ctx.getMinimumBalanceForRentExemption === undefined
+    ) {
+      throw new Error(
+        "funding preflight requires both getBalance and getMinimumBalanceForRentExemption; refusing to use stale rent estimates",
+      );
+    }
+    const rents = await readWorkerAccountRentMinimums(
+      ctx.getMinimumBalanceForRentExemption,
+    );
+    const required = registrationFundingRequirement(minAgentStake, rents);
     const balance = await ctx.getBalance(ctx.signer.address);
     if (balance < required) {
       throw new Error(
         `insufficient funds: wallet ${ctx.signer.address} holds ${balance} lamports ` +
           `(${lamportsToSol(balance)} SOL) but registering and working one task needs at least ` +
           `${required} lamports (${lamportsToSol(required)} SOL) — registration stake ${minAgentStake} ` +
-          `(live ProtocolConfig.minAgentStake) + agent rent ${AGENT_ACCOUNT_RENT_LAMPORTS} + ` +
-          `claim rent ${CLAIM_ACCOUNT_RENT_LAMPORTS} + submission rent ${SUBMISSION_ACCOUNT_RENT_LAMPORTS} + ` +
+          `(live ProtocolConfig.minAgentStake) + agent rent ${rents.agent} + ` +
+          `claim rent ${rents.claim} + submission rent ${rents.submission} + ` +
+          `refundable contest deposit ${CONTEST_ENTRY_DEPOSIT_LAMPORTS} + ` +
           `fee headroom ${FEE_HEADROOM_LAMPORTS}. ` +
           `Fund ${ctx.signer.address} with at least ${required - balance} more lamports and retry.`,
       );
@@ -415,8 +548,10 @@ function passesLocalFilters(
 }
 
 /**
- * One catch-up sweep: Open tasks ∩ pinned job specs (the exact on-chain claim
- * gate), refined by the local filters, sorted highest reward first.
+ * One catch-up sweep: the task-local discovery set (Open tasks ∩ pinned job
+ * specs), refined by local filters and sorted highest reward first. This yields
+ * candidates, not a claimability guarantee; the transaction enforces worker,
+ * config, moderation, dependency, hire, stake, and prior-claim gates.
  */
 export async function listClaimCandidates(
   ctx: WorkerContext,
@@ -546,11 +681,7 @@ function isMatchingLandedSubmission(
 ): boolean {
   return (
     isLandedSubmission(submission) &&
-    submissionMatchesIntent(
-      submission,
-      intent,
-      priorRevisionSubmissionCount,
-    )
+    submissionMatchesIntent(submission, intent, priorRevisionSubmissionCount)
   );
 }
 
@@ -690,11 +821,23 @@ function commitSubmission(
 ): SubmissionRecord {
   const state = loadState(ctx.stateDir);
   const existing = state.submissions.find((record) => record.task === task);
-  state.openClaim = null;
   if (existing !== undefined) {
+    state.openClaim = null;
     saveState(ctx.stateDir, state);
     return existing;
   }
+  const unsettledCount = state.submissions.reduce(
+    (count, submission) => count + (submission.settled ? 0 : 1),
+    0,
+  );
+  if (unsettledCount >= MAX_UNSETTLED_SUBMISSIONS) {
+    throw new WorkerStateError(
+      `cannot commit another submission: ${MAX_UNSETTLED_SUBMISSIONS} unsettled records require operator reconciliation`,
+    );
+  }
+  // Clear the WAL only after capacity has been established. A capacity error
+  // leaves the exact landed-submission intent available to recovery.
+  state.openClaim = null;
   const record: SubmissionRecord = {
     task: task as string,
     submissionSignature: options.signature,
@@ -1032,6 +1175,13 @@ export async function processCandidate(
     });
     return { status: "dry-run", task };
   }
+
+  // This is deliberately after every recovery path (which never enters
+  // processCandidate) and immediately before the fresh-claim WAL/broadcast.
+  // A depleted recurring worker can still reconcile and submit an already
+  // landed claim, but cannot begin another lifecycle it cannot fund through
+  // submission.
+  await assertFreshClaimFunding(ctx);
 
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
@@ -1622,10 +1772,7 @@ export async function checkSettlements(
       });
       resolved = resolved.filter(
         ({ outcome, solDenominated }) =>
-          !(
-            solDenominated &&
-            (outcome === "accepted" || outcome === "closed")
-          ),
+          !(solDenominated && (outcome === "accepted" || outcome === "closed")),
       );
       paidSolOutcomes = [];
       if (resolved.length === 0) {
@@ -1740,7 +1887,8 @@ export type TickResult = {
 /**
  * One sweep tick (what `agenc-worker once` and the systemd/launchd timers
  * run): ensureRegistered → resume any crash-left claim, else claim + execute
- * + submit the best eligible candidate (ONE task per tick) → reconcile
+ * + submit the best locally filtered candidate that passes the claim transaction
+ * (ONE task per tick) → reconcile
  * settlements.
  */
 export async function runTickOnce(ctx: WorkerContext): Promise<TickResult> {
@@ -1796,7 +1944,7 @@ async function runTickOnceLocked(ctx: WorkerContext): Promise<TickResult> {
 
 /**
  * Long-running mode (`agenc-worker up`): resume any crash-left claim, then
- * watch claimable tasks via the SDK's `watchClaimableTasks`, processing them
+ * watch claim candidates via the SDK's `watchClaimableTasks`, processing them
  * strictly one at a time, with a settlement reconciliation between candidates
  * and on a timer. With the CLI's wiring (an HTTP `Rpc` as the read source and
  * no `rpcSubscriptions`) discovery is `getProgramAccounts` POLLING on

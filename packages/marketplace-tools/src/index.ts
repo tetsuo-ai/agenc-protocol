@@ -35,6 +35,7 @@
 // --- P5.2 tool registry, context, projections, adapters -------------------
 export {
   type JsonSchema,
+  type JsonSchemaFormat,
   type JsonSchemaProperty,
   type MarketplaceTool,
   type MarketplaceToolContext,

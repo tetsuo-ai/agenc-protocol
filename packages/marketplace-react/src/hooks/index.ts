@@ -38,6 +38,7 @@ export {
   useTaskStatus,
   type ObservedEvent,
   type TaskEventsSource,
+  type TaskEventsSourceFactory,
   type TaskReader,
   type UseTaskStatusOptions,
   type UseTaskStatusResult,

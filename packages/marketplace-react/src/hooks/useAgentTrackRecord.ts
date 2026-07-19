@@ -140,11 +140,14 @@ export function useAgentTrackRecord(
   agentPda: Address | string | undefined | null,
   options?: UseAgentTrackRecordOptions,
 ): UseAgentTrackRecordResult {
-  const { read } = useAgencContext();
+  const { read, cacheNamespace } = useAgencContext();
   const enabled = (options?.enabled ?? true) && Boolean(agentPda);
 
   const query = useQuery<AgentTrackRecord, Error>({
-    queryKey: queryKeys.agentTrackRecord(agentPda ? pdaKey(agentPda) : ""),
+    queryKey: queryKeys.agentTrackRecord(
+      agentPda ? pdaKey(agentPda) : "",
+      cacheNamespace,
+    ),
     enabled,
     queryFn: async () => {
       const raw = await read.agentTrackRecord(agentPda as Address | string);

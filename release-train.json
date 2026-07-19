@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "surfaceRevision": 5,
+  "packages": [
+    {
+      "id": "protocol",
+      "tagPrefix": "protocol-v",
+      "name": "@tetsuo-ai/protocol",
+      "directory": "packages/protocol",
+      "expectedVersion": "0.4.0",
+      "expectedIntegrity": "sha512-qnh3uRCJJNm3+XXMY1btLumQYyIlnFmPden3yKTviMlQMJrVAgmgqnPrFpz2FlBzCCPakYcQDerfqRfE5OAV3g==",
+      "requires": []
+    },
+    {
+      "id": "sdk",
+      "tagPrefix": "sdk-v",
+      "name": "@tetsuo-ai/marketplace-sdk",
+      "directory": "packages/sdk-ts",
+      "expectedVersion": "0.12.0",
+      "expectedIntegrity": "sha512-+TGUJQkV+ObET0dZQTWAjC/XczBMtc8cQ6RzpFuM5/MjVpTKeFVX3B8c10lfide4Caqq0uJyG3QvetBbr62e1g==",
+      "requires": ["protocol"]
+    },
+    {
+      "id": "moderation",
+      "tagPrefix": "moderation-v",
+      "name": "@tetsuo-ai/marketplace-moderation",
+      "directory": "packages/marketplace-moderation",
+      "expectedVersion": "0.2.0",
+      "expectedIntegrity": "sha512-Iy08hgiCNxr6k0zWY+qoTrVPI2gh1sjH7z2HNf+GCNWtsNDQffm6VL4KD8hoScBETZVQiCoDLQk56iCad2V4GA==",
+      "requires": ["protocol"]
+    },
+    {
+      "id": "react",
+      "tagPrefix": "react-v",
+      "name": "@tetsuo-ai/marketplace-react",
+      "directory": "packages/marketplace-react",
+      "expectedVersion": "0.4.2",
+      "expectedIntegrity": "sha512-h1skEYSXN5/dOA12M0V4UTQWCSiKMM6PYYNNWiKVsZmlDmy00Zz1QimqFTKtHNMk+WBoCiJKK3EMqTXusmqmmQ==",
+      "requires": ["sdk"]
+    },
+    {
+      "id": "tools",
+      "tagPrefix": "tools-v",
+      "name": "@tetsuo-ai/marketplace-tools",
+      "directory": "packages/marketplace-tools",
+      "expectedVersion": "0.5.0",
+      "expectedIntegrity": "sha512-A1XFCMywLoMGn71v5/JGFsaaRVyo41EDZ6gRJkj1RHRHLsLO3qwy03rAuNTiqAd3EabNt8D+0yVibeppY6Yhpw==",
+      "requires": ["sdk"]
+    },
+    {
+      "id": "worker",
+      "tagPrefix": "worker-v",
+      "name": "@tetsuo-ai/agenc-worker",
+      "directory": "packages/agenc-worker",
+      "expectedVersion": "0.2.0",
+      "expectedIntegrity": "sha512-mCTPhKSPklRykDTe9VR2hu076rysapqFctOEnxx+FHXyEpLHRzsHcYaF+PX7QY/L9PP9kjmnRXxeHD4nLE2AJQ==",
+      "requires": ["sdk"]
+    },
+    {
+      "id": "mcp",
+      "tagPrefix": "mcp-v",
+      "name": "@tetsuo-ai/marketplace-mcp",
+      "directory": "packages/marketplace-mcp",
+      "expectedVersion": "0.5.0",
+      "expectedIntegrity": "sha512-IZxT3MNJ54o36A77W9n4sljp6GFksjmMMs5w3cfbjBNYX9Rlzr7BdSdXgEEhgwbXy3NrTiHCM+HQeve5EFQzmg==",
+      "requires": ["sdk", "tools"]
+    },
+    {
+      "id": "cli",
+      "tagPrefix": "cli-v",
+      "name": "@tetsuo-ai/agenc-cli",
+      "directory": "packages/agenc-cli",
+      "expectedVersion": "0.3.0",
+      "expectedIntegrity": "sha512-mbL/b8ZxUifUsoUZAJ+U4qkMzNIYNfjuZ7yEcgp2VKHPKEp8m7IWBn5zdEDE5eq36+B1rJ7VVJBnT/5nydSLzg==",
+      "requires": ["sdk", "worker"]
+    },
+    {
+      "id": "cli-alias",
+      "tagPrefix": "cli-alias-v",
+      "name": "agenc-cli",
+      "directory": "packages/agenc-cli-alias",
+      "expectedVersion": "0.3.0",
+      "expectedIntegrity": "sha512-EnLFMr4bazmSHwHeV1ZeogfNyy1mhscDojxbXNFzTdOOqrlbh/Qi6Uuq6q/FaCGhtonzBIgWhx8x3nTsS36GOA==",
+      "requires": ["cli"]
+    }
+  ]
+}

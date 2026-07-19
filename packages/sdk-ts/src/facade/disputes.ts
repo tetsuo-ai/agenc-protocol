@@ -5,14 +5,15 @@
 // Never import from generated/ internals other than its public exports.
 import {
   AccountRole,
+  type AccountMeta,
   type Address,
   type TransactionSigner,
 } from "@solana/kit";
 import {
   // builders
   getInitiateDisputeInstructionAsync,
-  // P6.3: `getVoteDisputeInstructionAsync` retired — the arbiter vote/quorum model is
-  // gone; disputes are decided by an assigned resolver (the dispute-resolver roster).
+  // P6.3: `getVoteDisputeInstructionAsync` retired — the per-case arbiter vote/quorum
+  // model is gone; a threshold-approved authority or threshold-seated resolver decides.
   getResolveDisputeInstructionAsync,
   getExpireDisputeInstructionAsync,
   getCancelDisputeInstructionAsync,
@@ -84,18 +85,33 @@ type DisputeRemainingAccounts = {
   bidSettlement?: DisputeBidSettlement;
 };
 
+type RequiredMultisigApprovals = {
+  /** ProtocolConfig owner approvals appended as readonly-signer remaining accounts. */
+  readonly multisigSigners: readonly TransactionSigner[];
+};
+
+type ResolveDisputeAuthorization =
+  | {
+      /** Roster PDA proving the signer is an assigned resolver. */
+      resolverAssignment: Address;
+      /** Assigned resolvers do not use protocol-owner approvals. */
+      readonly multisigSigners?: never;
+    }
+  | ({
+      /** Omit the roster PDA when the protocol authority rules directly. */
+      resolverAssignment?: undefined;
+    } & RequiredMultisigApprovals);
+
 async function appendDisputeRemainingAccounts<
   TInstruction extends {
-    readonly accounts: readonly { address: Address; role: AccountRole }[];
+    readonly accounts: readonly AccountMeta[];
   },
 >(
   instruction: TInstruction,
   task: Address,
   remaining: DisputeRemainingAccounts,
 ) {
-  const accounts: { address: Address; role: AccountRole }[] = [
-    ...instruction.accounts,
-  ];
+  const accounts: AccountMeta[] = [...instruction.accounts];
   if (remaining.dependencyParent) {
     accounts.push({
       address: remaining.dependencyParent,
@@ -114,11 +130,13 @@ async function appendDisputeRemainingAccounts<
   }
   if (remaining.bidSettlement) {
     const bidBook =
-      remaining.bidSettlement.bidBook ??
-      (await findBidBookPda({ task }))[0];
+      remaining.bidSettlement.bidBook ?? (await findBidBookPda({ task }))[0];
     accounts.push(
       { address: bidBook, role: AccountRole.WRITABLE },
-      { address: remaining.bidSettlement.acceptedBid, role: AccountRole.WRITABLE },
+      {
+        address: remaining.bidSettlement.acceptedBid,
+        role: AccountRole.WRITABLE,
+      },
       {
         address: remaining.bidSettlement.bidderMarketState,
         role: AccountRole.WRITABLE,
@@ -129,8 +147,8 @@ async function appendDisputeRemainingAccounts<
 }
 
 // P6.3: the `voteDispute` facade wrapper is removed. `vote_dispute` no longer exists on
-// the program — the arbiter vote/quorum model is retired and disputes are decided by an
-// assigned resolver via `resolveDispute` (see `assignDisputeResolver`).
+// the program — the per-case arbiter vote/quorum model is retired and disputes are
+// decided by a threshold-approved authority or threshold-seated assigned resolver.
 
 /**
  * Build a resolve_dispute instruction.
@@ -151,9 +169,12 @@ async function appendDisputeRemainingAccounts<
  * 256 bytes) — both are part of `ResolveDisputeAsyncInput` and flow straight through
  * to the generated builder. When an ASSIGNED resolver decides (rather than the protocol
  * authority), pass their roster PDA as `resolverAssignment` so their case counters
- * (`resolvedCount`, `lastResolvedAt`) are recorded; the protocol authority resolving
- * directly passes `resolverAssignment: null`. The deciding resolver + rationale hash
- * are persisted on the dispute and emitted in `DisputeResolved`.
+ * (`resolvedCount`, `lastResolvedAt`) are recorded. The protocol authority resolving
+ * directly omits `resolverAssignment` and supplies the current ProtocolConfig owner
+ * threshold through `multisigSigners`; those signer metas are appended after every
+ * dependency/peer/bid settlement account so Rust can remove approvals before parsing
+ * the economic suffix. The deciding resolver + rationale hash are persisted on the
+ * dispute and emitted in `DisputeResolved`.
  *
  * Audit F-9: to sweep the defendant's TaskSubmission on exit (decrement the review
  * counters and return its rent to the worker authority), pass `taskSubmission` and —
@@ -161,28 +182,30 @@ async function appendDisputeRemainingAccounts<
  * as optional trailing accounts. When omitted, `close_task` remains the sweep.
  */
 export type ResolveDisputeInput = Omit<
-    ResolveDisputeAsyncInput,
-    | "creatorCompletionBond"
-    | "workerCompletionBond"
-    | "workerClaim"
-    | "worker"
-    | "workerWallet"
-    | "taskSubmission"
-  > & {
-    /** Canonical defendant claim; mandatory evidence on the live Rust handler. */
-    workerClaim: Address;
-    /** Defendant AgentRegistration; mandatory on every dispute exit. */
-    worker: Address;
-    /** Defendant authority/rent recipient; mandatory on every dispute exit. */
-    workerWallet: Address;
-    /** Defaults to the canonical [task_submission, workerClaim] PDA. */
-    taskSubmission?: Address;
-    /** Authority (wallet) that posted the worker completion bond. */
-    workerBondAuthority?: Address;
-    /** Optional pre-derived overrides; derived from task/creator/worker when omitted. */
-    creatorCompletionBond?: Address;
-    workerCompletionBond?: Address;
-  } & DisputeRemainingAccounts;
+  ResolveDisputeAsyncInput,
+  | "creatorCompletionBond"
+  | "workerCompletionBond"
+  | "workerClaim"
+  | "worker"
+  | "workerWallet"
+  | "taskSubmission"
+  | "resolverAssignment"
+> & {
+  /** Canonical defendant claim; mandatory evidence on the live Rust handler. */
+  workerClaim: Address;
+  /** Defendant AgentRegistration; mandatory on every dispute exit. */
+  worker: Address;
+  /** Defendant authority/rent recipient; mandatory on every dispute exit. */
+  workerWallet: Address;
+  /** Defaults to the canonical [task_submission, workerClaim] PDA. */
+  taskSubmission?: Address;
+  /** Authority (wallet) that posted the worker completion bond. */
+  workerBondAuthority?: Address;
+  /** Optional pre-derived overrides; derived from task/creator/worker when omitted. */
+  creatorCompletionBond?: Address;
+  workerCompletionBond?: Address;
+} & DisputeRemainingAccounts &
+  ResolveDisputeAuthorization;
 
 export async function resolveDispute(input: ResolveDisputeInput) {
   const {
@@ -193,6 +216,7 @@ export async function resolveDispute(input: ResolveDisputeInput) {
     dependencyParent,
     peerWorkers,
     bidSettlement,
+    multisigSigners = [],
     ...rest
   } = input;
 
@@ -206,16 +230,20 @@ export async function resolveDispute(input: ResolveDisputeInput) {
 
   const creatorBond =
     creatorCompletionBond ??
-    (await findCreatorCompletionBondPda({
-      task: rest.task,
-      creator: rest.creator,
-    }))[0];
+    (
+      await findCreatorCompletionBondPda({
+        task: rest.task,
+        creator: rest.creator,
+      })
+    )[0];
   const workerBond =
     workerCompletionBond ??
-    (await findWorkerCompletionBondPda({
-      task: rest.task,
-      workerAuthority,
-    }))[0];
+    (
+      await findWorkerCompletionBondPda({
+        task: rest.task,
+        workerAuthority,
+      })
+    )[0];
 
   const submission =
     taskSubmission ??
@@ -226,11 +254,16 @@ export async function resolveDispute(input: ResolveDisputeInput) {
     workerCompletionBond: workerBond,
     taskSubmission: submission,
   });
-  return appendDisputeRemainingAccounts(instruction, input.task, {
-    dependencyParent,
-    peerWorkers,
-    bidSettlement,
-  });
+  const withSettlementAccounts = await appendDisputeRemainingAccounts(
+    instruction,
+    input.task,
+    {
+      dependencyParent,
+      peerWorkers,
+      bidSettlement,
+    },
+  );
+  return appendMultisigSignerMetas(withSettlementAccounts, multisigSigners);
 }
 
 /**
@@ -244,25 +277,25 @@ export async function resolveDispute(input: ResolveDisputeInput) {
  * it defaults to `workerWallet` when present.
  */
 export type ExpireDisputeInput = Omit<
-    ExpireDisputeAsyncInput,
-    | "creatorCompletionBond"
-    | "workerCompletionBond"
-    | "workerClaim"
-    | "worker"
-    | "workerWallet"
-    | "taskSubmission"
-  > & {
-    workerClaim: Address;
-    worker: Address;
-    workerWallet: Address;
-    /** Defaults to the canonical [task_submission, workerClaim] PDA. */
-    taskSubmission?: Address;
-    /** Authority (wallet) that posted the worker completion bond. */
-    workerBondAuthority?: Address;
-    /** Optional pre-derived overrides; derived from task/creator/worker when omitted. */
-    creatorCompletionBond?: Address;
-    workerCompletionBond?: Address;
-  } & DisputeRemainingAccounts;
+  ExpireDisputeAsyncInput,
+  | "creatorCompletionBond"
+  | "workerCompletionBond"
+  | "workerClaim"
+  | "worker"
+  | "workerWallet"
+  | "taskSubmission"
+> & {
+  workerClaim: Address;
+  worker: Address;
+  workerWallet: Address;
+  /** Defaults to the canonical [task_submission, workerClaim] PDA. */
+  taskSubmission?: Address;
+  /** Authority (wallet) that posted the worker completion bond. */
+  workerBondAuthority?: Address;
+  /** Optional pre-derived overrides; derived from task/creator/worker when omitted. */
+  creatorCompletionBond?: Address;
+  workerCompletionBond?: Address;
+} & DisputeRemainingAccounts;
 
 export async function expireDispute(input: ExpireDisputeInput) {
   const {
@@ -286,16 +319,20 @@ export async function expireDispute(input: ExpireDisputeInput) {
 
   const creatorBond =
     creatorCompletionBond ??
-    (await findCreatorCompletionBondPda({
-      task: rest.task,
-      creator: rest.creator,
-    }))[0];
+    (
+      await findCreatorCompletionBondPda({
+        task: rest.task,
+        creator: rest.creator,
+      })
+    )[0];
   const workerBond =
     workerCompletionBond ??
-    (await findWorkerCompletionBondPda({
-      task: rest.task,
-      workerAuthority,
-    }))[0];
+    (
+      await findWorkerCompletionBondPda({
+        task: rest.task,
+        workerAuthority,
+      })
+    )[0];
 
   const submission =
     taskSubmission ??
@@ -340,7 +377,12 @@ export async function cancelDispute(input: CancelDisputeInput) {
       ...instruction.accounts,
       { address: defendant, role: AccountRole.WRITABLE },
       ...(taskValidationConfig
-        ? [{ address: taskValidationConfig, role: AccountRole.READONLY } as const]
+        ? [
+            {
+              address: taskValidationConfig,
+              role: AccountRole.READONLY,
+            } as const,
+          ]
         : []),
     ],
   };
@@ -401,7 +443,9 @@ export async function applyDisputeSlash(input: ApplyDisputeSlashInput) {
     input.tokenProgram,
     input.creator,
   ];
-  const settlementRequested = settlementValues.some((value) => value !== undefined);
+  const settlementRequested = settlementValues.some(
+    (value) => value !== undefined,
+  );
   if (
     settlementRequested &&
     (!input.escrow ||
@@ -428,7 +472,9 @@ export async function applyDisputeSlash(input: ApplyDisputeSlashInput) {
 }
 
 /** Build an apply_initiator_slash instruction. protocol-config auto-derives. */
-export async function applyInitiatorSlash(input: ApplyInitiatorSlashAsyncInput) {
+export async function applyInitiatorSlash(
+  input: ApplyInitiatorSlashAsyncInput,
+) {
   return getApplyInitiatorSlashInstructionAsync(input);
 }
 
@@ -460,36 +506,48 @@ export async function expireRejectFrozen(input: ExpireRejectFrozenInput) {
 }
 
 /**
- * Build an assign_dispute_resolver instruction (authority-only).
+ * Build an assign_dispute_resolver instruction (authority-proposed, multisig-approved).
  *
  * Adds `resolver` to the dispute-resolver roster so that wallet can resolve disputes
  * directly (no vote tally, no quorum). The `disputeResolver` roster PDA (seeded by
  * `resolver`), `protocolConfig`, and `systemProgram` all auto-derive in the generated
- * builder — the caller supplies only the `authority` signer and the `resolver` pubkey.
+ * builder. Pass the current ProtocolConfig threshold owners in `multisigSigners`;
+ * they are appended as deterministic readonly-signer remaining accounts. The field is
+ * required at the TypeScript boundary because the on-chain roster mutation always
+ * fails unless the configured threshold actually signs.
  */
-export async function assignDisputeResolver(
-  input: AssignDisputeResolverAsyncInput,
-) {
-  return getAssignDisputeResolverInstructionAsync(input);
+export type AssignDisputeResolverInput = AssignDisputeResolverAsyncInput &
+  RequiredMultisigApprovals;
+
+export async function assignDisputeResolver(input: AssignDisputeResolverInput) {
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction =
+    await getAssignDisputeResolverInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**
- * Build a revoke_dispute_resolver instruction (authority-only).
+ * Build a revoke_dispute_resolver instruction (authority-proposed, multisig-approved).
  *
  * Removes a wallet from the dispute-resolver roster, closing its assignment PDA. The
  * generated builder does NOT derive the roster PDA (its on-chain seed reads the stored
  * `resolver`), so the facade derives it from the `resolver` pubkey when `disputeResolver`
- * is not passed explicitly. protocolConfig still auto-derives.
+ * is not passed explicitly. protocolConfig still auto-derives. Current ProtocolConfig
+ * owner approvals are appended from `multisigSigners` in caller-provided order.
  */
-export async function revokeDisputeResolver(
-  input: Omit<RevokeDisputeResolverAsyncInput, "disputeResolver"> & {
-    /** The roster member being removed. Used to derive the assignment PDA. */
-    resolver?: Address;
-    /** Optional pre-derived override for the assignment PDA. */
-    disputeResolver?: Address;
-  },
-) {
-  const { resolver, disputeResolver, ...rest } = input;
+export type RevokeDisputeResolverInput = Omit<
+  RevokeDisputeResolverAsyncInput,
+  "disputeResolver"
+> & {
+  /** The roster member being removed. Used to derive the assignment PDA. */
+  resolver?: Address;
+  /** Optional pre-derived override for the assignment PDA. */
+  disputeResolver?: Address;
+} & RequiredMultisigApprovals;
+
+export async function revokeDisputeResolver(input: RevokeDisputeResolverInput) {
+  const { resolver, disputeResolver, multisigSigners, ...generatedInput } =
+    input;
   let roster = disputeResolver;
   if (!roster) {
     if (!resolver) {
@@ -499,8 +557,9 @@ export async function revokeDisputeResolver(
     }
     roster = (await findDisputeResolverPda({ resolver }))[0];
   }
-  return getRevokeDisputeResolverInstructionAsync({
-    ...rest,
+  const instruction = await getRevokeDisputeResolverInstructionAsync({
+    ...generatedInput,
     disputeResolver: roster,
   });
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }

@@ -15,6 +15,11 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  assertRecordedProcessIdentity,
+  observeLinuxProcess,
+  readProcessIdentityFile,
+} from "./localnet-process-identity.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -41,16 +46,6 @@ function parseArgs(argv) {
   return args;
 }
 
-function pidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-
 const OK = "OK  ";
 const BAD = "FAIL";
 let healthy = true;
@@ -75,18 +70,23 @@ async function main() {
   console.log("");
 
   // ----------------------------------------------------------- validator
-  const pidInfo = await readFile(PID_FILE, "utf8").then(
-    (raw) => {
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return { pid: Number(raw.trim()) };
-      }
-    },
-    () => null,
-  );
+  const pidInfo = await readProcessIdentityFile(PID_FILE, "validator");
   if (pidInfo) {
-    report(pidAlive(pidInfo.pid), "validator process", `pid ${pidInfo.pid}${pidInfo.startedAt ? ` (started ${pidInfo.startedAt})` : ""}`);
+    const observed = await observeLinuxProcess(pidInfo.pid);
+    let identityMatches = false;
+    try {
+      identityMatches = assertRecordedProcessIdentity(pidInfo, observed, {
+        executableBasename: "solana-test-validator",
+        cwd: STATE_DIR,
+      });
+    } catch {
+      identityMatches = false;
+    }
+    report(
+      identityMatches,
+      "validator process",
+      `pid ${pidInfo.pid} (recorded ${pidInfo.recordedAt})`,
+    );
   } else {
     report(false, "validator process", `no pid file at ${PID_FILE}`);
   }

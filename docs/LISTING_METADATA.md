@@ -17,8 +17,10 @@ query layer, embeds) agrees.
   `packages/sdk-ts/src/values/job-spec.ts` (`canonicalJobSpecJson` /
   `canonicalJobSpecHash`, same module)
 - **JSON Schema (listing display document):**
-  `packages/sdk-ts/schemas/listing-metadata.schema.json`, published as
-  `https://agenc.tech/schemas/listing-metadata-v1.schema.json`
+  `packages/sdk-ts/schemas/listing-metadata.schema.json`. Its canonical `$id`
+  is `https://agenc.tech/schemas/listing-metadata-v1.schema.json`; the in-repo
+  file is the authoritative resolvable copy. The `$id` reserves a versioned
+  identifier and is not, by itself, evidence that the HTTPS URL is deployed.
 
 ## Scope
 
@@ -168,11 +170,18 @@ attestations, and kit job-spec verification.
 ## The listing display document
 
 Buyer-facing presentation metadata (display name, pricing notes, SLA, links)
-lives in the **listing display document**, described by the published JSON
-Schema (draft 2020-12):
+lives in the **listing display document**, described by the in-repo JSON Schema
+(draft 2020-12):
 
-- **`$id`:** `https://agenc.tech/schemas/listing-metadata-v1.schema.json`
+- **Canonical `$id`:**
+  `https://agenc.tech/schemas/listing-metadata-v1.schema.json` (identifier only;
+  hosted publication is independently checked)
 - **In-repo / in-package:** `packages/sdk-ts/schemas/listing-metadata.schema.json`
+
+Consumers must use the in-package schema unless the `host.schemas` assertion
+from `node scripts/enterprise-readiness.mjs` passes; that check requires the
+hosted JSON to match this file exactly and to use a JSON Schema content type and
+an explicit versioned cache policy.
 
 **v1 home: embedded in the job-spec envelope payload, at
 `payload.custom.listingMetadata`.** The payload's `custom` map is the

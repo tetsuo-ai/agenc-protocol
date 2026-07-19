@@ -4,6 +4,14 @@
   "private": true,
   "description": "Playwright browser e2e for the A3 checkout Done-when (real hire funded->accepted against the sandbox-up validator).",
   "type": "module",
+  "packageManager": "npm@11.18.0",
+  "engines": {
+    "node": ">=20.18.0",
+    "npm": "11.18.0"
+  },
+  "allowScripts": {
+    "fsevents@2.3.2": true
+  },
   "scripts": {
     "test": "playwright test --config playwright.config.ts",
     "test:headed": "playwright test --config playwright.config.ts --headed",

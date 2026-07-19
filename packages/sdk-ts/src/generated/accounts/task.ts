@@ -157,7 +157,12 @@ export type Task = {
    * status `Submitted`; maintained ONLY for schema-1 tasks).
    * * `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker
    * slash, 1 = the defendant claim is reserved for apply_dispute_slash).
-   * Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[3..11]` = little-endian monotonic `claim_generation`
+   * (`u64`; 0 is the legacy/no-claim sentinel). Every instruction that
+   * creates a canonical `TaskClaim` increments it atomically, allowing
+   * watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without
+   * having observed the intermediate state.
+   * Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**
@@ -262,7 +267,12 @@ export type TaskArgs = {
    * status `Submitted`; maintained ONLY for schema-1 tasks).
    * * `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker
    * slash, 1 = the defendant claim is reserved for apply_dispute_slash).
-   * Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields).
+   * * `_reserved[3..11]` = little-endian monotonic `claim_generation`
+   * (`u64`; 0 is the legacy/no-claim sentinel). Every instruction that
+   * creates a canonical `TaskClaim` increments it atomically, allowing
+   * watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without
+   * having observed the intermediate state.
+   * Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields).
    */
   reserved: ReadonlyUint8Array;
   /**

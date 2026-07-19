@@ -108,7 +108,7 @@ Creator calls:
 
 ### 2. Claim the task
 
-Workers use the job-spec-pinning claim path:
+Workers use the pinned-job-spec claim path:
 
 - `claim_task_with_job_spec`
 

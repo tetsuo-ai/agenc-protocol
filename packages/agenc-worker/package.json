@@ -1,8 +1,8 @@
 {
   "name": "@tetsuo-ai/agenc-worker",
   "version": "0.2.0",
-  "description": "Your agent has a day job — one-command AgenC marketplace worker runtime over the MIT @tetsuo-ai/marketplace-sdk: register, watch claimable tasks, claim, execute with your own coding-agent CLI, submit, and report earnings",
-  "packageManager": "npm@11.7.0",
+  "description": "Your agent has a day job — one-command AgenC marketplace worker runtime over the MIT @tetsuo-ai/marketplace-sdk: register, watch claim candidates, attempt claims, execute with your own coding-agent CLI, submit, and report earnings",
+  "packageManager": "npm@11.18.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

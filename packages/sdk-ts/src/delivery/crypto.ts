@@ -42,11 +42,17 @@ export async function generateRecipientKeyPair(): Promise<{
   publicKey: Uint8Array;
   privateKey: Uint8Array;
 }> {
-  const kp = (await subtle().generateKey({ name: DELIVERY_KEY_AGREEMENT }, true, [
-    "deriveBits",
-  ])) as CryptoKeyPair;
-  const publicKey = new Uint8Array(await subtle().exportKey("raw", kp.publicKey));
-  const pkcs8 = new Uint8Array(await subtle().exportKey("pkcs8", kp.privateKey));
+  const kp = (await subtle().generateKey(
+    { name: DELIVERY_KEY_AGREEMENT },
+    true,
+    ["deriveBits"],
+  )) as CryptoKeyPair;
+  const publicKey = new Uint8Array(
+    await subtle().exportKey("raw", kp.publicKey),
+  );
+  const pkcs8 = new Uint8Array(
+    await subtle().exportKey("pkcs8", kp.privateKey),
+  );
   return { publicKey, privateKey: pkcs8 };
 }
 
@@ -60,7 +66,9 @@ async function importAesKey(
       `delivery: symmetric key must be ${AES_KEY_BYTES} bytes, got ${raw.length}`,
     );
   }
-  return subtle().importKey("raw", raw.slice(), { name: "AES-GCM" }, false, [usage]);
+  return subtle().importKey("raw", raw.slice(), { name: "AES-GCM" }, false, [
+    usage,
+  ]);
 }
 
 /**
@@ -71,11 +79,24 @@ async function importAesKey(
 export async function aesGcmEncrypt(
   plaintext: Uint8Array,
   symKey: Uint8Array,
+  additionalData?: Uint8Array,
 ): Promise<Uint8Array> {
   const key = await importAesKey(symKey, "encrypt");
-  const iv = globalThis.crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
+  const iv = globalThis.crypto.getRandomValues(
+    new Uint8Array(AES_GCM_IV_BYTES),
+  );
   const ct = new Uint8Array(
-    await subtle().encrypt({ name: "AES-GCM", iv }, key, plaintext.slice()),
+    await subtle().encrypt(
+      {
+        name: "AES-GCM",
+        iv,
+        ...(additionalData !== undefined
+          ? { additionalData: additionalData.slice() }
+          : {}),
+      },
+      key,
+      plaintext.slice(),
+    ),
   );
   const out = new Uint8Array(iv.length + ct.length);
   out.set(iv, 0);
@@ -91,6 +112,7 @@ export async function aesGcmEncrypt(
 export async function aesGcmDecrypt(
   blob: Uint8Array,
   symKey: Uint8Array,
+  additionalData?: Uint8Array,
 ): Promise<Uint8Array> {
   if (blob.length < AES_GCM_IV_BYTES) {
     throw new TypeError("delivery: ciphertext shorter than the IV");
@@ -98,7 +120,19 @@ export async function aesGcmDecrypt(
   const key = await importAesKey(symKey, "decrypt");
   const iv = blob.slice(0, AES_GCM_IV_BYTES);
   const ct = blob.slice(AES_GCM_IV_BYTES);
-  return new Uint8Array(await subtle().decrypt({ name: "AES-GCM", iv }, key, ct));
+  return new Uint8Array(
+    await subtle().decrypt(
+      {
+        name: "AES-GCM",
+        iv,
+        ...(additionalData !== undefined
+          ? { additionalData: additionalData.slice() }
+          : {}),
+      },
+      key,
+      ct,
+    ),
+  );
 }
 
 /**
@@ -111,9 +145,13 @@ async function deriveAesKeyFromShared(
   sharedSecret: Uint8Array,
   salt: Uint8Array,
 ): Promise<Uint8Array> {
-  const ikm = await subtle().importKey("raw", sharedSecret.slice(), "HKDF", false, [
-    "deriveBits",
-  ]);
+  const ikm = await subtle().importKey(
+    "raw",
+    sharedSecret.slice(),
+    "HKDF",
+    false,
+    ["deriveBits"],
+  );
   const bits = await subtle().deriveBits(
     { name: "HKDF", hash: "SHA-256", salt: salt.slice(), info: HKDF_INFO },
     ikm,
@@ -145,9 +183,11 @@ export async function wrapKeyToPubkey(
     false,
     [],
   );
-  const ephemeral = (await subtle().generateKey({ name: DELIVERY_KEY_AGREEMENT }, true, [
-    "deriveBits",
-  ])) as CryptoKeyPair;
+  const ephemeral = (await subtle().generateKey(
+    { name: DELIVERY_KEY_AGREEMENT },
+    true,
+    ["deriveBits"],
+  )) as CryptoKeyPair;
   const ephemeralPublicKey = new Uint8Array(
     await subtle().exportKey("raw", ephemeral.publicKey),
   );
@@ -193,7 +233,11 @@ export async function unwrapKeyWithPrivateKey(
     [],
   );
   const shared = new Uint8Array(
-    await subtle().deriveBits({ name: DELIVERY_KEY_AGREEMENT, public: ephPub }, priv, 256),
+    await subtle().deriveBits(
+      { name: DELIVERY_KEY_AGREEMENT, public: ephPub },
+      priv,
+      256,
+    ),
   );
   const salt = concat(ephemeralPublicKey, recipientPublicKey);
   const aesKey = await deriveAesKeyFromShared(shared, salt);

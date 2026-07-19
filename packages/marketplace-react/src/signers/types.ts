@@ -45,8 +45,8 @@ export type { Address, SignatureBytes, Transaction, TransactionSigner };
  *
  * Given one or more `{ transaction }` wire-format inputs, it returns one
  * `{ signedTransaction }` output per input (a fully serialized, signed
- * transaction — wallets may modify it, which is why we diff signatures rather
- * than assume identity).
+ * transaction. The bridge rejects a returned message that differs from the
+ * requested message because the SDK submits the original transaction bytes.
  */
 export type WalletStandardSignTransaction = (
   ...inputs: ReadonlyArray<{
@@ -78,7 +78,7 @@ export type WalletStandardSignTransaction = (
 export interface WalletStandardAccountLike {
   /** Base58 account address (becomes the signer's `address`). */
   readonly address: string;
-  /** CAIP-2 chains this account supports (used to pick a default `chain`). */
+  /** CAIP-2 chains this account supports (used to validate chain selection). */
   readonly chains?: readonly string[];
   /** Raw Wallet Standard feature bag, when resolvable off the account. */
   readonly features?: Readonly<
@@ -89,14 +89,25 @@ export interface WalletStandardAccountLike {
   >;
 }
 
+/** Provider networks that map to Wallet Standard Solana chain identifiers. */
+export type SolanaWalletNetwork = "localnet" | "devnet" | "mainnet";
+
+/** A kit signer whose Wallet Standard chain can be validated by a provider. */
+export type ChainBoundTransactionSigner = TransactionSigner & {
+  readonly chain: string;
+};
+
 /** Options for {@link signerFromWalletAccount}. */
 export interface SignerFromWalletAccountOptions {
   /**
    * CAIP-2 chain id forwarded to the wallet on each sign (e.g.
-   * `"solana:devnet"`, `"solana:mainnet"`). Defaults to the account's first
-   * `solana:*` chain, else `"solana:mainnet"`.
+   * `"solana:devnet"`, `"solana:mainnet"`). When omitted, `network` maps to a
+   * chain; otherwise the account must expose exactly one `solana:*` chain.
+   * Ambiguous or unsupported selections fail closed.
    */
   chain?: string;
+  /** Provider network to bind to a Wallet Standard chain. */
+  network?: SolanaWalletNetwork;
   /**
    * Explicit `solana:signTransaction` feature method. Overrides any feature
    * resolved off `account.features`. This is the seam tests and non-Wallet-

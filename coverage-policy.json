@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "tool": {
+    "name": "cargo-llvm-cov",
+    "version": "0.6.21"
+  },
+  "manifest": "programs/agenc-coordination/Cargo.toml",
+  "profile": "default features, all targets",
+  "minimumPercent": {
+    "functions": 48.66962305986696,
+    "lines": 42.43502281002804,
+    "regions": 33.80990203865502
+  },
+  "baseline": {
+    "measuredOn": "2026-07-19",
+    "functions": { "count": 1804, "covered": 878, "percent": 48.66962305986696 },
+    "lines": { "count": 23893, "covered": 10139, "percent": 42.43502281002804 },
+    "regions": { "count": 11331, "covered": 3831, "percent": 33.80990203865502 }
+  }
+}

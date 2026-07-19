@@ -1,0 +1,74 @@
+name: Minimum Toolchain Compatibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  node-minimum:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup minimum supported Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20.18.0
+          cache: npm
+
+      - name: Pin declared npm toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
+
+      - name: Install exact dependency graph
+        run: npm ci
+
+      # The LiteSVM native binding is intentionally exercised on pinned Node 24
+      # in sdk.yml. This job proves the advertised Node floor for package
+      # compilation/import surfaces without invoking that native test runner.
+      - name: Build workspace packages at the advertised Node floor
+        run: npm run build --workspaces --if-present
+
+      - name: Typecheck workspace packages at the advertised Node floor
+        run: npm run typecheck --workspaces --if-present
+
+      - name: Exercise Node-only policy regressions at the advertised floor
+        run: >-
+          node --test
+          scripts/env-flags.test.mjs
+          scripts/release-policy.test.mjs
+          scripts/release-state.test.mjs
+
+  rust-msrv:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup declared program MSRV
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.82.0
+
+      - name: Check production program at MSRV
+        run: cargo +1.82.0 check --locked --manifest-path programs/agenc-coordination/Cargo.toml --all-targets
+
+      - name: Check private-ZK program at MSRV
+        run: cargo +1.82.0 check --locked --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --features private-zk
+
+      - name: Check minimal canary program at MSRV
+        run: cargo +1.82.0 check --locked --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary

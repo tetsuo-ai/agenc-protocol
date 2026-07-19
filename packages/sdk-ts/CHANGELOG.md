@@ -11,12 +11,36 @@
 
 ### Reliability and bounded reads
 
+- The Node-only `./testing` subpath now imports cleanly without its optional
+  native `litesvm` peer. LiteSVM helpers load the peer only when invoked and
+  fail with an actionable install instruction when it is absent; clean ESM/CJS
+  imports and full packaged sandbox execution are both release-smoked.
 - Expiry retries now fail closed when a post-broadcast signature cannot be
   reconciled, preventing a duplicate non-idempotent submission. A proven
   preflight `BlockhashNotFound` remains safe to retry.
+- Hire-and-activate now returns durable, typed reconciliation state for every
+  ambiguous send and resumes the landed attempt instead of re-hiring. Task
+  identity, listing terms, signer intent, and finalized on-chain state are
+  revalidated before the orchestration advances.
+- Indexer responses are byte- and intent-validated before a transaction crosses
+  the signing boundary. Pagination, response bytes, metadata, numeric fields,
+  and transport deadlines are bounded and fail closed.
+- Direct-claim candidate discovery and watching now cover every task-state gate
+  available to the read path (not a transaction-success guarantee),
+  detect close/reopen cycles through the on-chain claim generation, serialize
+  non-reentrant transports, bound backpressure, and stop terminally when an
+  underlying read cannot be cancelled safely.
+- Webhook replay tolerance rejects non-finite values, sandbox attestation reads
+  are bounded, and clients reject unknown future protocol revisions instead of
+  claiming full support.
+- Generated Borsh string fields now use a strict, shared UTF-8 codec that
+  preserves valid Unicode exactly while rejecting lone UTF-16 surrogates and
+  malformed UTF-8. Deployment preflight decoding follows the program's exact
+  Rust whitespace and BOM rules; valid wire encodings are unchanged.
 - Task-thread content fetches default to a 10-second timeout and 1 MiB response
-  cap, and thread reads default to 256 messages. Callers may override those
-  limits explicitly.
+  cap, and thread reads default to 256 messages. Receipt identity is bound to
+  the returned envelope and path identifiers are canonicalized before use.
+  Callers may override the documented limits explicitly.
 
 ## 0.11.0
 
@@ -284,19 +308,19 @@ moderator]` + the listing mirror) so each attestor owns an exclusive record
 ### Minor Changes
 
 - 9a4acf0: P5.3 worker-notification convenience: add `watchClaimableTasks(opts)` — a
-  no-poll-loop way for a worker agent to learn about NEW claimable tasks. It fuses
+  no-poll-loop way for a worker agent to learn about NEW direct-claim candidates. It fuses
   the live `TaskCreated` event stream (`subscribeMarketplaceEvents`, WebSocket with
   the existing log-polling fallback) with periodic `listOpenTasks` catch-up sweeps
   over the queries gPA / hosted-indexer read path, de-dupes by Task PDA, applies the
-  worker's eligibility filter (`{ capabilities? }` superset, `minReward?`,
-  `creator?`), and delivers each newly-claimable task exactly once. The returned
+  local discovery filters (`{ capabilities? }` superset, `minReward?`,
+  `creator?`), and delivers each newly discovered candidate exactly once. The returned
   handle is BOTH async-iterable (`for await (const task of watch)`) and stoppable
   (`await watch.stop()`); an `AbortSignal` (`signal`) stops it too. Exports
   `watchClaimableTasks`, `ClaimableTask`, `ClaimableTaskFilter`,
   `ClaimableTaskWatch`, `WatchClaimableTasksOptions` from the package root. The
-  eligibility predicate matches the on-chain claim gate (Open **and** job-spec
-  pinned), confirmed via the new `listPinnedJobSpecTasks`/`isTaskJobSpecPinned`
-  query helpers (drift-proofed offsets).
+  current candidate predicate validates all task-state gates visible to the read
+  path plus job-spec pointer values. Worker/config/moderation/dependency/hire and
+  canonical cross-account constraints remain authoritative in the transaction.
 - ad882e6: Phase 7 content rails (SDK): the `taskThread` namespace (hash-anchored buyer↔worker
   message envelope whose sha256 matches the on-chain `changes_hash`/`rejection_hash`/
   `rationale_hash`, with `postTaskMessage`/`fetchTaskThread`/`resolveChangesRequest`),

@@ -12,16 +12,15 @@ import {
   getI64Decoder,
   getStructDecoder,
   getU32Decoder,
-  getUtf8Decoder,
   type Address,
   type Decoder,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+import { getBorshStringDecoder } from "../codecs/borshString";
 
 /** 8-byte Anchor event discriminator for `ModerationBlockSet` (sha256("event:ModerationBlockSet")[0..8]). */
-export const MODERATION_BLOCK_SET_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
-  27, 98, 187, 114, 11, 28, 141, 209,
-]);
+export const MODERATION_BLOCK_SET_EVENT_DISCRIMINATOR: ReadonlyUint8Array =
+  new Uint8Array([27, 98, 187, 114, 11, 28, 141, 209]);
 
 /**
  * Emitted when the multisig sets (or re-sets) the BLOCK-only takedown floor for a
@@ -44,7 +43,10 @@ export function getModerationBlockSetEventDecoder(): Decoder<ModerationBlockSetE
   return getStructDecoder([
     ["contentHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["rationaleUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "rationaleUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["updatedBy", getAddressDecoder()],
     ["timestamp", getI64Decoder()],
   ]);

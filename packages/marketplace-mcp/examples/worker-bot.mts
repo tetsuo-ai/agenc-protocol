@@ -5,8 +5,8 @@
  * A worker agent should not have to write a bespoke `setInterval` over
  * `getProgramAccounts`. The SDK's `watchClaimableTasks` fuses the live
  * `TaskCreated` event stream with periodic catch-up sweeps, de-dupes by Task
- * PDA, applies the worker's eligibility filter, and hands each newly-claimable
- * task to one `onTask` callback. This bot:
+ * PDA, applies local discovery filters, and hands each candidate to one
+ * `onTask` callback. The transaction remains authoritative. This bot:
  *
  *   1. boots the REAL compiled agenc-coordination program in litesvm
  *      (`startLocalMarketplace` — the local stack, no validator/RPC/keys),
@@ -109,17 +109,20 @@ async function main(): Promise<void> {
 
   const watch = watchClaimableTasks({
     indexer: gpa, // catch-up read source (litesvm has no rpcSubscriptions)
-    filter: { capabilities: 0b1n, minReward: 1n }, // worker eligibility
+    filter: { capabilities: 0b1n, minReward: 1n }, // local discovery filters
     pollIntervalMs: 50, // tight sweep so "within seconds" is honest, still not hand-tuned
     onTask: async (task) => {
-      // The watch only surfaces "Open AND job-spec pinned" tasks, so this claim
-      // is expected to land. Still, claims race (another worker, an expired
+      // The watch surfaces task-state candidates with a validated job-spec pin;
+      // worker/config/protocol gates and current chain state are still decided
+      // by the transaction. Claims can also race (another worker, an expired
       // deadline, a same-block re-org), so a worker bot must TOLERATE a failed
       // claim rather than crash — catch it, log it, and keep watching for the
       // next task instead of letting the rejection tear down the watch.
       try {
         if (publishedJobSpecHash === null) {
-          throw new Error("claimable task surfaced before its job-spec hash was published");
+          throw new Error(
+            "claim candidate surfaced before its job-spec hash was published",
+          );
         }
         await workerClient.claimTaskWithJobSpec({
           task: task.task,
@@ -129,8 +132,8 @@ async function main(): Promise<void> {
         });
       } catch (err) {
         console.warn(
-          `[worker-bot] claim of ${task.task} failed (lost the race or no longer ` +
-            `claimable) — skipping:`,
+          `[worker-bot] claim of ${task.task} was rejected at execution ` +
+            `(for example, a lost race or a task/worker/config/protocol gate) — skipping:`,
           err instanceof Error ? err.message : err,
         );
         return; // keep watching; do not resolve on a failed claim

@@ -115,8 +115,9 @@ export const TASK_JOB_SPEC_TASK_OFFSET = 8;
 /**
  * `TaskJobSpec.jobSpecHash` (the SHA-256 commitment): 8 + 32 + 32 = 72.
  *
- * The on-chain `validate_job_spec_pointer` additionally requires this hash to
- * have at least one non-zero byte, so the claimable predicate checks both PDA
- * existence AND a non-zero hash to mirror the program exactly.
+ * The on-chain `validate_job_spec_pointer` requires this hash to have at least
+ * one non-zero byte and the URI to be nonblank. This offset supports the hash
+ * portion of candidate discovery only; it cannot mirror pointer validation or
+ * establish claimability, which also depends on current task and worker gates.
  */
 export const TASK_JOB_SPEC_HASH_OFFSET = 72;

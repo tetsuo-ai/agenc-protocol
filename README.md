@@ -119,17 +119,17 @@ surface.
 
 ## Packages (downstream consumption)
 
-| Package | Path | Version | What |
-|---------|------|---------|------|
-| `@tetsuo-ai/protocol` | `packages/protocol` | 0.4.0 candidate (published: 0.3.0) | Committed 98-instruction candidate IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 still contains live revision 4 and must not be overwritten. |
-| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **98-instruction revision-5 candidate** + ergonomic facade. The published 0.11.0 release still targets live revision 4; program and SDK must ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
-| `@tetsuo-ai/marketplace-react` | `packages/marketplace-react` | 0.4.2 candidate (published: 0.4.1) | React hooks/components for embeddable marketplace UIs; the candidate peer range admits SDK 0.12. |
-| `@tetsuo-ai/marketplace-tools` | `packages/marketplace-tools` | 0.5.0 candidate (published: 0.4.0) | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
-| `@tetsuo-ai/marketplace-mcp` | `packages/marketplace-mcp` | 0.5.0 candidate (published: 0.4.0) | MCP server exposing marketplace tools. |
-| `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | 0.1.0 | Shared moderation canon / test vectors. |
-| `@tetsuo-ai/agenc-cli` | `packages/agenc-cli` | 0.3.0 candidate (published: 0.2.0) | `init` / `dev` / `promote` developer CLI. |
-| `agenc-cli` | `packages/agenc-cli-alias` | 0.3.0 candidate (published: 0.2.0) | Thin unscoped alias; ships with the scoped CLI. |
-| `@tetsuo-ai/agenc-worker` | `packages/agenc-worker` | 0.2.0 candidate (published: 0.1.1) | Worker claim/submit runtime loop. |
+| Package                             | Path                              | Version                              | What                                                                                                                                                                                                                                                                  |
+| ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@tetsuo-ai/protocol`               | `packages/protocol`               | 0.4.0 candidate (published: 0.3.0)   | Committed 98-instruction candidate IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 still contains live revision 4 and must not be overwritten.                                                                                          |
+| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **98-instruction revision-5 candidate** + ergonomic facade. The published 0.11.0 release still targets live revision 4; program and SDK must ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | 0.4.2 candidate (published: 0.4.1)   | React hooks/components for embeddable marketplace UIs; the candidate peer range admits SDK 0.12.                                                                                                                                                                      |
+| `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | 0.5.0 candidate (published: 0.4.0)   | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers.                                                                                                                                                                                      |
+| `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | 0.5.0 candidate (published: 0.4.0)   | MCP server exposing marketplace tools.                                                                                                                                                                                                                                |
+| `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | 0.2.0 candidate (published: 0.1.0)   | Shared moderation canon / test vectors.                                                                                                                                                                                                                               |
+| `@tetsuo-ai/agenc-cli`              | `packages/agenc-cli`              | 0.3.0 candidate (published: 0.2.0)   | `init` / `dev` / `promote` developer CLI.                                                                                                                                                                                                                             |
+| `agenc-cli`                         | `packages/agenc-cli-alias`        | 0.3.0 candidate (published: 0.2.0)   | Thin unscoped alias; ships with the scoped CLI.                                                                                                                                                                                                                       |
+| `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | 0.2.0 candidate (published: 0.1.1)   | Worker claim/submit runtime loop.                                                                                                                                                                                                                                     |
 
 Every version labeled **candidate** above is unreleased and belongs to the same
 revision-5 release train. The published versions continue to describe and support
@@ -139,9 +139,11 @@ Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## Build, test & validate
 
-Prereqs: Rust + the Anchor/Solana toolchain (Anchor 0.32.1, Solana 3.0.13),
-Node ≥20.18, `npm ci`, and `npm ci --prefix tests-integration` for the independent
-deployment/preflight dependency tree.
+Reproducible-build prerequisites: Rust 1.85.0 (declared/tested MSRV 1.82.0),
+Anchor 0.32.1, Solana 3.0.13, Node 24.18.0, and npm 11.18.0. Package builds are
+also gated at the advertised Node 20.18.0 floor. Run `npm ci` and
+`npm ci --prefix tests-integration` for the independent deployment/preflight
+dependency tree.
 
 ```bash
 # Rust program: unit tests + lint (default + canary)
@@ -167,12 +169,13 @@ npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/prot
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
 ```
 
-**Test coverage (runner totals as of 2026-07-18):** Rust **524** production /
-**524** `validation-timings` / **549** private-ZK / **321** canary; **76**
-model/property tests; **395** compiled-program integrations (394 pass, one
-canary-only conditional skip), plus the separate canary compiled test at **1/1**;
-SDK **575 pass + one skip**; all npm workspaces
-**1,092 pass + one skip**; deployment/preflight **225 pass**. Exact commands and
+**Test coverage (runner totals as of 2026-07-19):** Rust **524** production /
+**524** `validation-timings` / **549** private-ZK / **321** canary; **77**
+model/property tests; **408** compiled-program integrations (**399** pass and
+**9** explicit canary-profile skips), plus the separate canary compiled suite at
+**11/11**; SDK **656 pass + one skip**; all npm workspaces
+**1,429 pass + two skips**; deployment/preflight **231 pass**; repository policy
+scripts **346 pass**. Exact commands and
 artifact hashes are in [docs/VALIDATION.md](docs/VALIDATION.md). Audit status:
 the batch 1–3 internal audits closed with 0 open findings **at that time**
 ([docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)); the 2026-07-16/17 adversarial
@@ -216,7 +219,7 @@ Before any mainnet deploy that changes the deployed surface or account layout:
    Reporting is currently disabled and the documented security mailbox is not
    confirmed active. Enable and test at least one private channel, then activate
    `.well-known/security.txt`; do not ship a false contact record.
-4. **ProgramData capacity ceremony.** The current candidate is 94,440 bytes too
+4. **ProgramData capacity ceremony.** The current candidate is 97,152 bytes too
    large for the live allocation. Before upgrade, execute a separately reviewed
    Squads-CPI `ExtendProgramChecked`, wait for a later slot, and rerun the full
    capacity/rent/authority preflight. Never let deploy auto-extend.
@@ -272,21 +275,21 @@ artifacts (PLAN.md Phase 8):
 
 Start at **[docs/DOCS_INDEX.md](docs/DOCS_INDEX.md)** (reading order for developers and AI agents).
 
-| Doc | What |
-|-----|------|
-| [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md) | Path-by-path repo map |
-| [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md) | Grouped instructions + PDA/account model |
-| [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md) | Batch 1–3 changes, audits, coverage matrix |
-| [TODO.MD](TODO.MD) | Security-hardening queue (F-1–F-19): all items DONE with per-fix evidence + acceptance criteria |
-| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) | Accepted design decisions (do not re-file) with rationale |
-| [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md) | SDK build/automation plan + status |
-| [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md) | Deployed source-of-truth + branch policy |
-| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md) | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge live) |
-| [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md) | How `anchor build` output becomes published artifacts |
-| [docs/VALIDATION.md](docs/VALIDATION.md) | Local toolchain + CI-equivalent commands |
-| [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md) | Reviewed-completion validation model |
-| [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md) | Private-completion + zk-config flow |
-| [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md) | Bid-book RFC |
+| Doc                                                                        | What                                                                                            |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [docs/CODEBASE_MAP.md](docs/CODEBASE_MAP.md)                               | Path-by-path repo map                                                                           |
+| [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md)                         | Grouped instructions + PDA/account model                                                        |
+| [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)               | Batch 1–3 changes, audits, coverage matrix                                                      |
+| [TODO.MD](TODO.MD)                                                         | Security-hardening queue (F-1–F-19): all items DONE with per-fix evidence + acceptance criteria |
+| [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)                       | Accepted design decisions (do not re-file) with rationale                                       |
+| [docs/SDK_AUTOMATION_PLAN.md](docs/SDK_AUTOMATION_PLAN.md)                 | SDK build/automation plan + status                                                              |
+| [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md)                       | Deployed source-of-truth + branch policy                                                        |
+| [docs/VERIFIABLE_BUILDS.md](docs/VERIFIABLE_BUILDS.md)                     | Reproducible build + how to verify `HJsZ…` matches this source (OtterSec badge live)            |
+| [docs/ARTIFACT_PIPELINE.md](docs/ARTIFACT_PIPELINE.md)                     | How `anchor build` output becomes published artifacts                                           |
+| [docs/VALIDATION.md](docs/VALIDATION.md)                                   | Local toolchain + CI-equivalent commands                                                        |
+| [docs/TASK_VALIDATION_V2.md](docs/TASK_VALIDATION_V2.md)                   | Reviewed-completion validation model                                                            |
+| [docs/ZK_PRIVATE_FLOW.md](docs/ZK_PRIVATE_FLOW.md)                         | Private-completion + zk-config flow                                                             |
+| [docs/MARKETPLACE_V2_BID_PROTOCOL.md](docs/MARKETPLACE_V2_BID_PROTOCOL.md) | Bid-book RFC                                                                                    |
 
 AI agents working in this repo: also read **[CLAUDE.md](CLAUDE.md)** for the build gate,
 conventions, and the local-only / migration-sensitivity rules.

@@ -33,8 +33,6 @@ import {
   getU64Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -48,6 +46,11 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 
 export const STORE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   130, 48, 247, 244, 182, 191, 30, 26,
@@ -162,11 +165,17 @@ export function getStoreEncoder(): Encoder<StoreArgs> {
       ["owner", getAddressEncoder()],
       ["handle", fixEncoderSize(getBytesEncoder(), 32)],
       ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "metadataUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["referrerFeeBps", getU16Encoder()],
       ["operator", getAddressEncoder()],
       ["operatorFeeBps", getU16Encoder()],
-      ["domain", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "domain",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["bondLamports", getU64Encoder()],
       ["version", getU64Encoder()],
       ["createdAt", getI64Encoder()],
@@ -185,11 +194,14 @@ export function getStoreDecoder(): Decoder<Store> {
     ["owner", getAddressDecoder()],
     ["handle", fixDecoderSize(getBytesDecoder(), 32)],
     ["metadataHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["metadataUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "metadataUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["referrerFeeBps", getU16Decoder()],
     ["operator", getAddressDecoder()],
     ["operatorFeeBps", getU16Decoder()],
-    ["domain", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["domain", addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder())],
     ["bondLamports", getU64Decoder()],
     ["version", getU64Decoder()],
     ["createdAt", getI64Decoder()],

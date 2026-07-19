@@ -25,9 +25,13 @@ import {
 } from "./fixtures.js";
 
 // prepare-* tools build instructions purely from args; no transport needed.
-const ctx: MarketplaceToolContext = { read: { async getProgramAccounts() {
-  return [];
-} } };
+const ctx: MarketplaceToolContext = {
+  read: {
+    async getProgramAccounts() {
+      return [];
+    },
+  },
+};
 
 const HEX32 = "07".repeat(32);
 /** A valid fixed 64-byte resultData payload (128 hex chars). */
@@ -77,7 +81,8 @@ describe("prepare_create_service_listing handler", () => {
     expect(decoded.maxOpenJobs).toBe(5);
     expect(decoded.operatorFeeBps).toBe(250);
     expect(decoded.operator.__option).toBe("Some");
-    if (decoded.operator.__option !== "Some") throw new Error("expected operator");
+    if (decoded.operator.__option !== "Some")
+      throw new Error("expected operator");
     expect(decoded.operator.value).toBe(A_CREATOR);
   });
 
@@ -102,6 +107,58 @@ describe("prepare_create_service_listing handler", () => {
         ctx,
       ),
     ).rejects.toBeInstanceOf(MarketplaceToolError);
+  });
+
+  it("rejects a malformed optional SPL price mint at the schema boundary", async () => {
+    await expect(
+      getTool("prepare_create_service_listing")!.handler(
+        {
+          providerAgent: A_PROVIDER,
+          authority: A_AUTHORITY,
+          listingId: HEX32,
+          name: "Research Summary",
+          category: "research",
+          tags: ["solana"],
+          specHash: HEX32,
+          specUri: "agenc://job-spec/sha256/" + HEX32,
+          price: "50000000",
+          priceMint: "not-a-solana-address",
+          requiredCapabilities: "7",
+          defaultDeadlineSecs: "3600",
+          maxOpenJobs: 5,
+        },
+        ctx,
+      ),
+    ).rejects.toMatchObject({
+      code: "INVALID_TOOL_INPUT",
+      tool: "prepare_create_service_listing",
+    });
+  });
+
+  it("fails fast with a stable error when a valid reserved price mint is supplied", async () => {
+    await expect(
+      getTool("prepare_create_service_listing")!.handler(
+        {
+          providerAgent: A_PROVIDER,
+          authority: A_AUTHORITY,
+          listingId: HEX32,
+          name: "Research Summary",
+          category: "research",
+          tags: ["solana"],
+          specHash: HEX32,
+          specUri: "agenc://job-spec/sha256/" + HEX32,
+          price: "50000000",
+          priceMint: A_CREATOR,
+          requiredCapabilities: "7",
+          defaultDeadlineSecs: "3600",
+          maxOpenJobs: 5,
+        },
+        ctx,
+      ),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED_TOKEN_PRICING",
+      tool: "prepare_create_service_listing",
+    });
   });
 });
 
@@ -167,7 +224,8 @@ describe("prepare_hire handler", () => {
     );
     expect(decoded.referrerFeeBps).toBe(500);
     expect(decoded.referrer.__option).toBe("Some");
-    if (decoded.referrer.__option !== "Some") throw new Error("expected referrer");
+    if (decoded.referrer.__option !== "Some")
+      throw new Error("expected referrer");
     expect(decoded.referrer.value).toBe(A_CREATOR);
   });
 
@@ -463,7 +521,6 @@ describe("prepare_claim handler", () => {
     const ix = (await getTool("prepare_claim")!.handler(
       {
         task: A_TASK_PDA,
-        claim: A_TASK_PDA,
         worker: A_PROVIDER,
         workerAuthority: A_AUTHORITY,
         jobSpecHash: HEX32,
@@ -506,7 +563,7 @@ describe("prepare_claim handler", () => {
         },
         ctx,
       ),
-    ).rejects.toMatchObject({ code: "BAD_ADDRESS" });
+    ).rejects.toMatchObject({ code: "INVALID_TOOL_INPUT" });
   });
 });
 
@@ -548,7 +605,12 @@ describe("review/cleanup/rating prepare handlers", () => {
     ["prepare_close_task", { task: A_TASK_PDA, authority: A_AUTHORITY }],
     [
       "prepare_rate_hire",
-      { task: A_TASK_PDA, listing: A_LISTING_PDA, buyer: A_AUTHORITY, score: 5 },
+      {
+        task: A_TASK_PDA,
+        listing: A_LISTING_PDA,
+        buyer: A_AUTHORITY,
+        score: 5,
+      },
     ],
   ])("%s returns an unsigned instruction", async (toolName, args) => {
     const ix = (await getTool(toolName)!.handler(
@@ -612,7 +674,7 @@ describe("prepare_submit handler", () => {
   // 2-byte array and `fixEncoderSize(..., 64)` zero-padded it to 64 bytes, so
   // the worker committed 62 trailing zero bytes it never supplied — and this
   // built a tx instead of throwing.
-  it("rejects a too-short resultData (would be silently zero-padded) with BAD_RESULTDATA_LEN", async () => {
+  it("rejects a too-short resultData at the schema boundary", async () => {
     const err = await getTool("prepare_submit")!
       .handler(
         {
@@ -631,13 +693,13 @@ describe("prepare_submit handler", () => {
         (e: unknown) => e,
       );
     expect(err).toBeInstanceOf(MarketplaceToolError);
-    expect((err as MarketplaceToolError).code).toBe("BAD_RESULTDATA_LEN");
+    expect((err as MarketplaceToolError).code).toBe("INVALID_TOOL_INPUT");
   });
 
   // REVERT-SENSITIVE (finding #2): a LONG resultData must throw, not be silently
   // truncated to the first 64 bytes. Pre-fix, a 100-byte input was sliced to 64
   // by `fixEncoderSize` and still built a (wrong) tx.
-  it("rejects a too-long resultData (would be silently truncated) with BAD_RESULTDATA_LEN", async () => {
+  it("rejects a too-long resultData at the schema boundary", async () => {
     const err = await getTool("prepare_submit")!
       .handler(
         {
@@ -656,7 +718,7 @@ describe("prepare_submit handler", () => {
         (e: unknown) => e,
       );
     expect(err).toBeInstanceOf(MarketplaceToolError);
-    expect((err as MarketplaceToolError).code).toBe("BAD_RESULTDATA_LEN");
+    expect((err as MarketplaceToolError).code).toBe("INVALID_TOOL_INPUT");
   });
 });
 
@@ -709,7 +771,8 @@ describe("prepare_register_agent handler", () => {
     );
     expect(decoded.stakeAmount).toBe(0n);
     expect(decoded.metadataUri.__option).toBe("Some");
-    if (decoded.metadataUri.__option !== "Some") throw new Error("expected metadataUri");
+    if (decoded.metadataUri.__option !== "Some")
+      throw new Error("expected metadataUri");
     expect(decoded.metadataUri.value).toBe("agenc://agent-card/sha256/test");
   });
 
@@ -729,10 +792,8 @@ describe("prepare_register_agent handler", () => {
 
   it("rejects a zero capabilities bitmask up-front (fixed on-chain invariant)", async () => {
     // register_agent.rs: require!(capabilities != 0, InvalidCapabilities).
-    // capabilities == 0 is never valid under any config, so the prepare tool
-    // must reject it client-side instead of returning a doomed instruction.
-    // REVERT PROOF: delete the `capabilities === 0n` guard in the handler and
-    // this test goes red (the tool builds and returns an instruction instead).
+    // capabilities == 0 is never valid under any config, so the public schema
+    // boundary rejects it before the prepare handler can build a doomed instruction.
     const err = await getTool("prepare_register_agent")!
       .handler(
         {
@@ -750,6 +811,6 @@ describe("prepare_register_agent handler", () => {
         (e: unknown) => e,
       );
     expect(err).toBeInstanceOf(MarketplaceToolError);
-    expect((err as MarketplaceToolError).code).toBe("INVALID_CAPABILITIES");
+    expect((err as MarketplaceToolError).code).toBe("INVALID_TOOL_INPUT");
   });
 });

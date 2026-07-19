@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  MarketplaceToolError,
   marketplaceTools,
   toOpenAITools,
   toLangChainTools,
   toCrewAITools,
+  type MarketplaceTool,
   type MarketplaceToolContext,
 } from "../src/index.js";
 import { fakeTransport, encodeListing } from "./fixtures.js";
@@ -86,4 +88,65 @@ describe("schema is the single source of truth", () => {
       expect(crewai[i]!.args_schema).toBe(schema);
     }
   });
+});
+
+describe("adapter runtime validation", () => {
+  const inputSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["count"],
+    properties: {
+      count: {
+        type: "integer",
+        minimum: 1,
+        maximum: 3,
+        description: "Bounded count.",
+      },
+    },
+  } as const;
+
+  function validationProbe(calls: unknown[]): MarketplaceTool {
+    return {
+      name: "validation_probe",
+      description: "Records only schema-valid adapter inputs.",
+      kind: "readonly",
+      inputSchema,
+      async handler(input) {
+        calls.push(input);
+        return { ok: true };
+      },
+    };
+  }
+
+  it.each([
+    [
+      "LangChain",
+      (tool: MarketplaceTool) => toLangChainTools([tool], ctx)[0]!.func,
+    ],
+    ["CrewAI", (tool: MarketplaceTool) => toCrewAITools([tool], ctx)[0]!.run],
+  ] as const)(
+    "%s rejects invalid input before invoking the handler",
+    async (_name, adapt) => {
+      const calls: unknown[] = [];
+      const invoke = adapt(validationProbe(calls));
+
+      for (const invalid of [
+        {},
+        { count: "2" },
+        { count: 0 },
+        { count: 4 },
+        { count: 2, surprise: true },
+      ]) {
+        await expect(invoke(invalid)).rejects.toMatchObject({
+          name: "MarketplaceToolError",
+          code: "INVALID_TOOL_INPUT",
+          tool: "validation_probe",
+        } satisfies Partial<MarketplaceToolError>);
+      }
+      expect(calls).toEqual([]);
+
+      await expect(invoke({ count: 2 })).resolves.toBe('{"ok":true}');
+      expect(calls).toEqual([{ count: 2 }]);
+    },
+  );
 });

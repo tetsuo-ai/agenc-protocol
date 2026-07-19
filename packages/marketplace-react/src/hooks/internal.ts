@@ -22,10 +22,18 @@ import type {
 /** Root namespace for every cache key this package writes. */
 export const QUERY_KEY_ROOT = "agenc" as const;
 
+/** Namespace used only by direct callers that omit deployment identity. */
+export const DEFAULT_QUERY_CACHE_NAMESPACE = "default" as const;
+
+function queryRoot(cacheNamespace: string) {
+  return [QUERY_KEY_ROOT, cacheNamespace] as const;
+}
+
 /**
  * Stable, hierarchical TanStack Query keys. Hooks build their keys ONLY through
- * this factory so a consumer (or a hook) can invalidate a whole sub-tree
- * (`["agenc", "listings"]`) or one entity (`["agenc", "listing", pda]`).
+ * this factory so a consumer (or a hook) can invalidate a deployment sub-tree
+ * (`["agenc", namespace, "listings"]`) or one entity
+ * (`["agenc", namespace, "listing", pda]`).
  *
  * `JSON.stringify` is intentionally NOT used — TanStack compares keys
  * structurally, so passing the raw filter object keeps equality correct for
@@ -33,24 +41,40 @@ export const QUERY_KEY_ROOT = "agenc" as const;
  */
 export const queryKeys = {
   /** All listings list queries (with their filter object as the leaf). */
-  listings: (filter?: unknown) =>
-    [QUERY_KEY_ROOT, "listings", filter ?? null] as const,
+  listings: (
+    filter?: unknown,
+    cacheNamespace: string = DEFAULT_QUERY_CACHE_NAMESPACE,
+  ) => [...queryRoot(cacheNamespace), "listings", filter ?? null] as const,
   /** One listing + its joined provider/track-record/moderation. */
-  listing: (pda: string) => [QUERY_KEY_ROOT, "listing", pda] as const,
+  listing: (
+    pda: string,
+    cacheNamespace: string = DEFAULT_QUERY_CACHE_NAMESPACE,
+  ) => [...queryRoot(cacheNamespace), "listing", pda] as const,
   /** One agent's indexer track record. */
-  agentTrackRecord: (agentPda: string) =>
-    [QUERY_KEY_ROOT, "agentTrackRecord", agentPda] as const,
+  agentTrackRecord: (
+    agentPda: string,
+    cacheNamespace: string = DEFAULT_QUERY_CACHE_NAMESPACE,
+  ) => [...queryRoot(cacheNamespace), "agentTrackRecord", agentPda] as const,
   /** One task's status (read via transport / svm decode). */
-  taskStatus: (taskPda: string) =>
-    [QUERY_KEY_ROOT, "taskStatus", taskPda] as const,
+  taskStatus: (
+    taskPda: string,
+    cacheNamespace: string = DEFAULT_QUERY_CACHE_NAMESPACE,
+  ) => [...queryRoot(cacheNamespace), "taskStatus", taskPda] as const,
   /** One task's dispute record. */
-  dispute: (taskPda: string) => [QUERY_KEY_ROOT, "dispute", taskPda] as const,
+  dispute: (
+    taskPda: string,
+    cacheNamespace: string = DEFAULT_QUERY_CACHE_NAMESPACE,
+  ) => [...queryRoot(cacheNamespace), "dispute", taskPda] as const,
   /** One task's completion-bond ("Guaranteed Hire") state. */
-  taskGuarantee: (taskPda: string) =>
-    [QUERY_KEY_ROOT, "taskGuarantee", taskPda] as const,
+  taskGuarantee: (
+    taskPda: string,
+    cacheNamespace: string = DEFAULT_QUERY_CACHE_NAMESPACE,
+  ) => [...queryRoot(cacheNamespace), "taskGuarantee", taskPda] as const,
   /** One referrer wallet's earnings (indexer-gated; see useReferrerEarnings). */
-  referrerEarnings: (wallet: string) =>
-    [QUERY_KEY_ROOT, "referrerEarnings", wallet] as const,
+  referrerEarnings: (
+    wallet: string,
+    cacheNamespace: string = DEFAULT_QUERY_CACHE_NAMESPACE,
+  ) => [...queryRoot(cacheNamespace), "referrerEarnings", wallet] as const,
 } as const;
 
 /**

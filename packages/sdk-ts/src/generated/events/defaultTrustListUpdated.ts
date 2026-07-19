@@ -13,16 +13,15 @@ import {
   getStructDecoder,
   getU32Decoder,
   getU64Decoder,
-  getUtf8Decoder,
   type Address,
   type Decoder,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+import { getBorshStringDecoder } from "../codecs/borshString";
 
 /** 8-byte Anchor event discriminator for `DefaultTrustListUpdated` (sha256("event:DefaultTrustListUpdated")[0..8]). */
-export const DEFAULT_TRUST_LIST_UPDATED_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
-  92, 58, 14, 174, 134, 120, 43, 80,
-]);
+export const DEFAULT_TRUST_LIST_UPDATED_EVENT_DISCRIMINATOR: ReadonlyUint8Array =
+  new Uint8Array([92, 58, 14, 174, 134, 120, 43, 80]);
 
 /**
  * Emitted when the multisig updates the on-chain default trusted-attestor list
@@ -43,7 +42,7 @@ export type DefaultTrustListUpdatedEventData = {
 export function getDefaultTrustListUpdatedEventDecoder(): Decoder<DefaultTrustListUpdatedEventData> {
   return getStructDecoder([
     ["listHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["listUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["listUri", addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder())],
     ["version", getU64Decoder()],
     ["updatedBy", getAddressDecoder()],
     ["timestamp", getI64Decoder()],

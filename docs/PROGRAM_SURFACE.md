@@ -144,13 +144,13 @@ floor remains unconditional. See `P1_2_OPEN_ROSTER_SPEC.md` and
 
 ## Surface revision summary
 
-| `surface_revision` | Approx full-module ix | Milestone |
-|--------------------|----------------------:|-----------|
-| 0 | 25 (canary) / unstamped | conservative / unstamped |
-| 1 (`FULL`) | 84 → 90 (P1.2 kept stamp 1) | Phase 9 full surface; P1.2 open roster |
-| 2 (`BATCH2`) | 94 | store + heartbeat + referrer legs |
-| 3 (`BATCH3`) | 96 | contest |
-| 4 (`BATCH4`) | **99** | goods (revision-gated) |
+| `surface_revision` |       Approx full-module ix | Milestone                              |
+| ------------------ | --------------------------: | -------------------------------------- |
+| 0                  |     25 (canary) / unstamped | conservative / unstamped               |
+| 1 (`FULL`)         | 84 → 90 (P1.2 kept stamp 1) | Phase 9 full surface; P1.2 open roster |
+| 2 (`BATCH2`)       |                          94 | store + heartbeat + referrer legs      |
+| 3 (`BATCH3`)       |                          96 | contest                                |
+| 4 (`BATCH4`)       |                      **99** | goods (revision-gated)                 |
 
 Generated per-instruction reference: [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md).
 
@@ -185,10 +185,13 @@ they were signed instruction data.
 
 ### Disputes and slashing
 
-- initiate / resolve dispute (resolved by the protocol authority or an **assigned single
-  resolver** — `vote_dispute` and the old arbiter-vote/quorum model were retired in P6.3;
-  the dispute initiator can never resolve their own dispute)
-- assign / revoke dispute resolver (authority-curated roster)
+- initiate / resolve dispute (resolved by the protocol authority with configured
+  M-of-N approval or by an **assigned single resolver** — `vote_dispute` and the
+  old arbiter-vote/quorum model were retired in P6.3; the dispute initiator can
+  never resolve their own dispute)
+- assign / revoke dispute resolver (authority-proposed, configured
+  M-of-N-approved roster changes; an assigned resolver's later rulings do not
+  require a per-case vote)
 - cancel / expire dispute
 - apply dispute slash
 - apply initiator slash
@@ -228,7 +231,7 @@ The complete model lives in `src/state.rs`. Important state families include:
 - zk config (private-ZK development build only; absent on mainnet and from the
   production candidate IDL)
 - agent accounts
-- task and claim accounts (Task is 466B since the 2026-06-11 migration of 169 legacy tasks from 382B; batch-3 schema-1 carves `task_schema`/`live_submissions` from `Task._reserved[0..2]`, schema-0 is legacy)
+- task and claim accounts (Task remains 466B; `_reserved[0]`/`[1]` hold batch-3 `task_schema`/`live_submissions`, `[2]` is the deferred-slash flag, and `[3..11]` is the monotonic little-endian `claim_generation` used by watchers; zero generation preserves legacy fallback behavior)
 - task validation config, attestor config, submissions, and validation votes
 - Marketplace V2 bid marketplace config, bidder market state, bid books, and bids
 - escrow accounts and completion bonds

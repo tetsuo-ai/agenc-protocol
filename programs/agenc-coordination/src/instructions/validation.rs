@@ -5,11 +5,12 @@ use anchor_lang::prelude::*;
 
 /// Validates an agent endpoint URL.
 ///
-/// - Empty strings are allowed (agent may not have a public endpoint)
+/// - This shared helper allows empty strings because `update_agent` may clear
+///   an endpoint; `register_agent` enforces non-empty before calling it
 /// - Non-empty endpoints must start with "http://" or "https://"
 /// - Maximum length is 128 characters
 pub fn validate_endpoint(endpoint: &str) -> Result<()> {
-    // Allow empty (agent may not have public endpoint)
+    // update_agent may clear an endpoint; register_agent rejects empty first.
     if endpoint.is_empty() {
         return Ok(());
     }

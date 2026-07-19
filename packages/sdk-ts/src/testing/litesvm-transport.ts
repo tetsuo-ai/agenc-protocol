@@ -2,9 +2,10 @@
 // SAME client pipeline that talks to a kit RPC in production runs here against
 // the real compiled program, in-process. litesvm is synchronous and final, so
 // "confirm" is simply the send result.
-import { FailedTransactionMetadata, type LiteSVM } from "litesvm";
+import type { LiteSVM } from "litesvm";
 import { getBase58Decoder } from "@solana/kit";
 import type { Transport } from "../client/index.js";
+import { loadLiteSvmPeer } from "./litesvm-peer.js";
 
 /**
  * Build a {@link Transport} over a litesvm VM.
@@ -35,6 +36,7 @@ export function createLiteSvmTransport(svm: LiteSVM): Transport {
       };
     },
     async sendAndConfirm(signedTx) {
+      const { FailedTransactionMetadata } = await loadLiteSvmPeer();
       const result = svm.sendTransaction(signedTx);
       if (result instanceof FailedTransactionMetadata) {
         const logs = result.meta().logs();

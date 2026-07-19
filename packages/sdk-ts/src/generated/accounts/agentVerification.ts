@@ -31,8 +31,6 @@ import {
   getU32Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -46,6 +44,11 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 
 export const AGENT_VERIFICATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([128, 155, 95, 241, 66, 207, 166, 59]);
@@ -107,7 +110,7 @@ export function getAgentVerificationEncoder(): Encoder<AgentVerificationArgs> {
       ["agent", getAddressEncoder()],
       [
         "verifiedDomain",
-        addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder()),
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
       ],
       ["method", getU8Encoder()],
       ["verifiedBy", getAddressEncoder()],
@@ -126,7 +129,10 @@ export function getAgentVerificationDecoder(): Decoder<AgentVerification> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["agent", getAddressDecoder()],
-    ["verifiedDomain", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "verifiedDomain",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["method", getU8Decoder()],
     ["verifiedBy", getAddressDecoder()],
     ["verifiedAt", getI64Decoder()],

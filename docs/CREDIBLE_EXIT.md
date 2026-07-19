@@ -171,8 +171,9 @@ STEP 5  buyer registers + hires from listing (escrow funded on-chain)
 STEP 6  attest task CLEAN (OWN moderation_authority) + pin job-spec (LOCAL file)
    TaskModeration 4Aiyo6ZfEgehw2oSupBwkjv7c2cwjoGMcnEvtci1zVGD status=CLEAN  sig 2j3pcy8A…
    job spec pinned file:///.../job-spec.txt  sig 3ZJaUPoA…
-STEP 6b verify task is claimable via gPA (listOpenTasks ∩ pinned specs)
+STEP 6b verify task is discoverable as an open+pinned candidate via gPA
    listOpenTasks(rpc) sees the task AND listPinnedJobSpecTasks(rpc) confirms a pinned spec
+   STEP 7's claim transaction proves final on-chain eligibility
 STEP 7  provider claims + completes — worker paid on-chain (escrow settled)
    provider claimed (task InProgress)
    provider completed  sig 4kp3oM5d7BDtNnrhsLTnky6XuoA5yGZuHPWjiTZ9Q1p1SmfXPBFU1grZbFPGKKYEyKN5PHizKKHZrGcGP8ejAoxp
@@ -290,8 +291,9 @@ If tetsuo's hosted plane vanishes:
   [PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md).
 - **Completion bonds** — the symmetric 25% bond lifecycle is on-chain.
 - **Disputes** — the assignable single-resolver model (`assign_dispute_resolver`
-  / `resolve_dispute`) is on-chain; the resolver is a protocol-authority role, not
-  a hosted service.
+  / `resolve_dispute`) is on-chain, not a hosted service. Roster mutation and a
+  direct protocol-authority ruling require configured M-of-N approval; an
+  already-assigned resolver decides directly without a per-case vote.
 - **Reputation** — `AgentStats` track-record aggregates are on-chain accounts.
 - **Reads** — every listing/task/claim/bid/hire-record is a program account
   fetchable via gPA with the SDK decoders. *Proven (discovery via gPA).*

@@ -25,9 +25,14 @@ export {
 } from "./crypto.js";
 export {
   encryptDeliverable,
+  encryptDeliverableV2,
   decryptDeliverable,
   buildDeliveryManifest,
+  buildDeliveryManifestV2,
+  deliveryManifestV2Aad,
   type DeliveryManifest,
+  type DeliveryManifestV1,
+  type DeliveryManifestV2,
   type DeliveryKeyWrap,
   type DeliveryRecipient,
   type DeliveryDecryptKey,

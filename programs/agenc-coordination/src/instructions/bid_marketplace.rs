@@ -328,8 +328,8 @@ fn candidate_is_better(
     }
 }
 
-fn validate_bid_account<'info>(
-    account: &AccountInfo<'info>,
+fn validate_bid_account(
+    account: &AccountInfo<'_>,
     task_key: &Pubkey,
     bid_book_key: &Pubkey,
     program_id: &Pubkey,
@@ -362,8 +362,8 @@ fn validate_bid_account<'info>(
     Ok(bid)
 }
 
-fn validate_bidder_account<'info>(
-    account: &AccountInfo<'info>,
+fn validate_bidder_account(
+    account: &AccountInfo<'_>,
     expected_bidder_key: &Pubkey,
     expected_bidder_authority: &Pubkey,
     program_id: &Pubkey,
@@ -426,14 +426,14 @@ fn accept_bid_account_key_budget(active_bids: u16, has_dependency: bool) -> Resu
 /// open bids. Each competitor is an exact `[TaskBid, AgentRegistration]` pair.
 /// The program-maintained `active_bids` counter makes omission or duplication
 /// fail closed, while canonical PDA checks prevent account substitution.
-fn validate_matching_policy_selection<'info>(
+fn validate_matching_policy_selection(
     task_key: &Pubkey,
     bid_key: &Pubkey,
     task: &Task,
     bid_book_key: &Pubkey,
     bid_book: &TaskBidBook,
     selected_bid: &TaskBid,
-    other_bid_accounts: &[AccountInfo<'info>],
+    other_bid_accounts: &[AccountInfo<'_>],
     now: i64,
     min_agent_stake: u64,
     program_id: &Pubkey,
@@ -1632,6 +1632,11 @@ pub fn accept_bid_handler(
         now.checked_add(config.max_claim_duration)
             .ok_or(CoordinationError::ArithmeticOverflow)?
     };
+
+    // Bid acceptance is the second canonical TaskClaim creation path. Keep the
+    // same monotonic generation invariant as claim_task_with_job_spec; any
+    // later failure rolls this value-only reserved-byte write back atomically.
+    task.increment_claim_generation()?;
 
     claim.task = task.key();
     claim.worker = bidder.key();

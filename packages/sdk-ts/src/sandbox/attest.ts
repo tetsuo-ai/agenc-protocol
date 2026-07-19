@@ -2,7 +2,13 @@
 // browser-safe client for a self-hosted attestor service that records CLEAN
 // ListingModeration / TaskModeration attestations so the fail-closed
 // moderation gate passes without a human moderator.
-import type { Address } from "@solana/kit";
+import {
+  address,
+  getBase58Decoder,
+  getBase58Encoder,
+  type Address,
+} from "@solana/kit";
+import type { ContentBodyStream } from "../task-thread/transport.js";
 import { resolveSandboxEnvironment } from "./environment.js";
 import { SANDBOX_FIXTURES } from "./fixtures.js";
 
@@ -20,11 +26,13 @@ export type SandboxFetchLike = (
     method: string;
     headers: Record<string, string>;
     body: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{
   ok: boolean;
   status: number;
   headers: { get(name: string): string | null };
+  body?: ContentBodyStream | null;
   json(): Promise<unknown>;
   text(): Promise<string>;
 }>;
@@ -50,6 +58,10 @@ export interface RequestSandboxAttestationInput {
   endpoint?: string;
   /** Override the fetch implementation (tests / custom transports). */
   fetch?: SandboxFetchLike;
+  /** Wall-clock request limit. Defaults to 10 seconds. */
+  timeoutMs?: number;
+  /** Maximum streamed response body. Defaults to 64 KiB. */
+  maxResponseBytes?: number;
 }
 
 /** Successful attestor response: the devnet transaction signature it landed. */
@@ -98,6 +110,50 @@ export class SandboxAttestationError extends Error {
 }
 
 const HEX_64 = /^[0-9a-f]{64}$/;
+export const DEFAULT_SANDBOX_ATTESTATION_TIMEOUT_MS = 10_000;
+export const DEFAULT_MAX_SANDBOX_ATTESTATION_RESPONSE_BYTES = 64 * 1024;
+
+function positiveBound(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647) {
+    throw new TypeError(
+      `requestSandboxAttestation: ${name} must be a positive safe integer no greater than 2147483647`,
+    );
+  }
+  return value;
+}
+
+function parseEndpoint(value: string): { url: string; display: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new TypeError(
+      "requestSandboxAttestation: endpoint must be an absolute HTTP(S) URL",
+    );
+  }
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.hash !== ""
+  ) {
+    throw new TypeError(
+      "requestSandboxAttestation: endpoint must be an HTTP(S) URL without credentials or a fragment",
+    );
+  }
+  // Never echo query parameters, which commonly contain access tokens.
+  return { url: parsed.href, display: `${parsed.origin}${parsed.pathname}` };
+}
+
+function isCanonicalSignature(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const bytes = new Uint8Array(getBase58Encoder().encode(value));
+    return bytes.length === 64 && getBase58Decoder().decode(bytes) === value;
+  } catch {
+    return false;
+  }
+}
 
 /** Normalize a 32-byte spec hash (bytes or hex string) to lowercase hex. */
 function specHashToHex(specHash: Uint8Array | string): string {
@@ -136,7 +192,11 @@ function parseRetryAfterSeconds(
       return Math.ceil(fromHeader);
     }
   }
-  if (typeof bodyValue === "number" && Number.isFinite(bodyValue) && bodyValue >= 0) {
+  if (
+    typeof bodyValue === "number" &&
+    Number.isFinite(bodyValue) &&
+    bodyValue >= 0
+  ) {
     return Math.ceil(bodyValue);
   }
   return null;
@@ -213,77 +273,180 @@ export async function requestSandboxAttestation(
         `and examples/localnet-first-hire.ts do.`,
     );
   }
+  if (input.kind !== "listing" && input.kind !== "task") {
+    throw new TypeError(
+      'requestSandboxAttestation: kind must be "listing" or "task"',
+    );
+  }
+  try {
+    address(String(input.address));
+  } catch {
+    throw new TypeError(
+      "requestSandboxAttestation: address must be a valid Solana address",
+    );
+  }
+  const parsedEndpoint = parseEndpoint(endpoint);
+  const timeoutMs = positiveBound(
+    input.timeoutMs ?? DEFAULT_SANDBOX_ATTESTATION_TIMEOUT_MS,
+    "timeoutMs",
+  );
+  const maxResponseBytes = positiveBound(
+    input.maxResponseBytes ?? DEFAULT_MAX_SANDBOX_ATTESTATION_RESPONSE_BYTES,
+    "maxResponseBytes",
+  );
   // Wrapped so the global fetch keeps its expected receiver in browsers.
   const fetchImpl: SandboxFetchLike =
     input.fetch ?? ((url, init) => globalThis.fetch(url, init));
 
-  let response: Awaited<ReturnType<SandboxFetchLike>>;
-  try {
-    response = await fetchImpl(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: input.kind, address: input.address, specHash }),
-    });
-  } catch (cause) {
-    // Network-layer rejection (DNS failure, refused connection, no network):
-    // there is no HTTP status, so report 0 and keep the raw error as `cause`.
-    throw new SandboxAttestationError(
-      `sandbox attestor at ${endpoint} could not be reached (the fetch ` +
-        `itself failed before any HTTP response). Check that the attestor ` +
-        `service is actually running at that URL, or point the \`endpoint\` ` +
-        `option / AGENC_SANDBOX_ATTESTOR_URL at a live self-hosted attestor.`,
-      { status: 0, cause },
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutFailure = () =>
+    new SandboxAttestationError(
+      `sandbox attestor at ${parsedEndpoint.display} timed out after ${timeoutMs}ms`,
+      { status: 0 },
     );
-  }
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(timeoutFailure());
+    }, timeoutMs);
+  });
 
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => null);
-    let bodyRetryAfter: unknown;
-    if (bodyText !== null) {
-      try {
-        const parsed: unknown = JSON.parse(bodyText);
-        if (parsed !== null && typeof parsed === "object") {
-          bodyRetryAfter = (parsed as { retryAfter?: unknown }).retryAfter;
-        }
-      } catch {
-        // Non-JSON error body — keep the raw text for diagnostics.
-      }
+  const perform = async (): Promise<SandboxAttestationResponse> => {
+    let response: Awaited<ReturnType<SandboxFetchLike>>;
+    try {
+      response = await fetchImpl(parsedEndpoint.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: input.kind,
+          address: input.address,
+          specHash,
+        }),
+        signal: controller.signal,
+      });
+    } catch (cause) {
+      if (controller.signal.aborted) throw timeoutFailure();
+      // Network-layer rejection (DNS failure, refused connection, no network):
+      // there is no HTTP status, so report 0 and keep the raw error as `cause`.
+      throw new SandboxAttestationError(
+        `sandbox attestor at ${parsedEndpoint.display} could not be reached (the fetch ` +
+          `itself failed before any HTTP response). Check that the attestor ` +
+          `service is actually running at that URL, or point the \`endpoint\` ` +
+          `option / AGENC_SANDBOX_ATTESTOR_URL at a live self-hosted attestor.`,
+        { status: 0, cause },
+      );
     }
-    const retryAfterSeconds = parseRetryAfterSeconds(
-      response.headers.get("retry-after"),
-      bodyRetryAfter,
-    );
-    const rateLimited = response.status === 429;
-    throw new SandboxAttestationError(
-      `sandbox attestor at ${endpoint} responded ${response.status} for ` +
-        `${input.kind} ${input.address}` +
-        (rateLimited
-          ? ` (rate-limited${retryAfterSeconds !== null ? `; retry after ${retryAfterSeconds}s` : ""})`
-          : "") +
-        (bodyText ? `: ${bodyText}` : ""),
-      { status: response.status, retryAfterSeconds, body: bodyText },
-    );
-  }
+    if (controller.signal.aborted) throw timeoutFailure();
 
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new SandboxAttestationError(
-      `sandbox attestor at ${endpoint} returned ${response.status} but the body is not JSON`,
-      { status: response.status, cause },
-    );
-  }
-  const signature =
-    payload !== null && typeof payload === "object"
+    const stream = response.body;
+    if (
+      stream === null ||
+      typeof stream !== "object" ||
+      typeof stream.getReader !== "function"
+    ) {
+      throw new SandboxAttestationError(
+        `sandbox attestor at ${parsedEndpoint.display} returned ${response.status} but its body is not a readable byte stream`,
+        { status: response.status },
+      );
+    }
+    const reader = stream.getReader();
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const chunks: string[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!(value instanceof Uint8Array)) {
+          throw new TypeError(
+            "sandbox attestor response stream returned a non-byte chunk",
+          );
+        }
+        total += value.byteLength;
+        if (total > maxResponseBytes) {
+          await reader
+            .cancel?.("sandbox attestor response exceeds byte limit")
+            .catch(() => undefined);
+          throw new SandboxAttestationError(
+            `sandbox attestor response exceeds the configured limit of ${maxResponseBytes} bytes`,
+            { status: response.status },
+          );
+        }
+        chunks.push(decoder.decode(value, { stream: true }));
+      }
+      chunks.push(decoder.decode());
+    } catch (cause) {
+      if (cause instanceof SandboxAttestationError) throw cause;
+      if (controller.signal.aborted) throw timeoutFailure();
+      throw new SandboxAttestationError(
+        `sandbox attestor at ${parsedEndpoint.display} returned ${response.status} but its response stream could not be read safely`,
+        { status: response.status, cause },
+      );
+    } finally {
+      reader.releaseLock?.();
+    }
+    const bodyText = chunks.join("");
+
+    if (!response.ok) {
+      let bodyRetryAfter: unknown;
+      if (bodyText !== "") {
+        try {
+          const parsed: unknown = JSON.parse(bodyText);
+          if (parsed !== null && typeof parsed === "object") {
+            bodyRetryAfter = (parsed as { retryAfter?: unknown }).retryAfter;
+          }
+        } catch {
+          // Non-JSON error body — keep the raw text for diagnostics.
+        }
+      }
+      const retryAfterSeconds = parseRetryAfterSeconds(
+        response.headers.get("retry-after"),
+        bodyRetryAfter,
+      );
+      const rateLimited = response.status === 429;
+      throw new SandboxAttestationError(
+        `sandbox attestor at ${parsedEndpoint.display} responded ${response.status} for ` +
+          `${input.kind} ${input.address}` +
+          (rateLimited
+            ? ` (rate-limited${retryAfterSeconds !== null ? `; retry after ${retryAfterSeconds}s` : ""})`
+            : "") +
+          "",
+        { status: response.status, retryAfterSeconds, body: bodyText },
+      );
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(bodyText) as unknown;
+    } catch (cause) {
+      throw new SandboxAttestationError(
+        `sandbox attestor at ${parsedEndpoint.display} returned ${response.status} but the body is not JSON`,
+        { status: response.status, cause },
+      );
+    }
+    const exactObject =
+      payload !== null &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      Object.keys(payload).length === 1 &&
+      Object.prototype.hasOwnProperty.call(payload, "signature");
+    const signature = exactObject
       ? (payload as { signature?: unknown }).signature
       : undefined;
-  if (typeof signature !== "string" || signature.length === 0) {
-    throw new SandboxAttestationError(
-      `sandbox attestor at ${endpoint} returned ${response.status} but no ` +
-        `"signature" string in the body`,
-      { status: response.status, body: JSON.stringify(payload) },
-    );
+    if (!isCanonicalSignature(signature)) {
+      throw new SandboxAttestationError(
+        `sandbox attestor at ${parsedEndpoint.display} returned ${response.status} but no valid canonical base58 transaction ` +
+          `"signature" in the body`,
+        { status: response.status, body: JSON.stringify(payload) },
+      );
+    }
+    return { signature };
+  };
+
+  try {
+    return await Promise.race([perform(), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
-  return { signature };
 }

@@ -1,0 +1,59 @@
+name: Program Coverage
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  program-coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.18.0"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: "1.85.0"
+          components: llvm-tools-preview
+
+      - name: Install pinned coverage tool
+        run: |
+          cargo install cargo-llvm-cov --version 0.6.21 --locked
+          cargo llvm-cov --version | grep -Fx "cargo-llvm-cov 0.6.21"
+
+      - name: Measure default production surface
+        run: >-
+          cargo llvm-cov
+          --manifest-path programs/agenc-coordination/Cargo.toml
+          --locked --all-targets
+          --json --output-path agenc-coverage.json
+
+      - name: Enforce coverage ratchet
+        run: |
+          node --test scripts/check-coverage.test.mjs
+          node scripts/check-coverage.mjs agenc-coverage.json
+
+      - name: Upload machine-readable coverage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agenc-program-coverage-${{ github.sha }}
+          path: agenc-coverage.json
+          if-no-files-found: error
+          retention-days: 14

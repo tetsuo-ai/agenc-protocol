@@ -16,7 +16,7 @@
 #      freshly built artifacts are ever absent. The gate can no longer pass
 #      vacuously.
 #   4. Builds the restricted canary SBF + IDL, checks the frozen 25-instruction
-#      wire shape, and executes its opt-in LiteSVM timeout-settlement regression.
+#      wire shape, and executes its opt-in LiteSVM semantic surface regressions.
 #      This happens only after every production artifact comparison, because the
 #      canary build intentionally overwrites the shared deploy `.so` path.
 #
@@ -26,7 +26,7 @@
 # already runs.
 #
 # The same gate can always be run locally:
-#   anchor build && npm run artifacts:check:built && npm run canary:build && npm run canary:idl && npm run canary:check-idl && AGENC_CANARY_LITESVM=1 node --test tests-integration/canary-timeout-accept.test.mjs
+#   anchor build && npm run artifacts:check:built && npm run canary:build && npm run canary:idl && npm run canary:check-idl && AGENC_CANARY_LITESVM=1 node --test tests-integration/canary-*.test.mjs
 
 name: IDL Drift
 
@@ -49,7 +49,7 @@ on:
 
 jobs:
   idl-drift:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -60,11 +60,16 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 24.18.0
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Pin declared npm toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
 
       - name: Cache anchor CLI binary
         id: cache-anchor
@@ -138,4 +143,4 @@ jobs:
       - name: Compiled mainnet-canary LiteSVM regression
         env:
           AGENC_CANARY_LITESVM: "1"
-        run: node --test tests-integration/canary-timeout-accept.test.mjs
+        run: node --test tests-integration/canary-*.test.mjs

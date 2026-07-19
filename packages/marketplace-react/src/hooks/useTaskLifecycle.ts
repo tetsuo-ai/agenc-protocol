@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { facade as facadeNs } from "@tetsuo-ai/marketplace-sdk";
 import { useAgencContext } from "../provider/context.js";
 import {
@@ -43,6 +43,7 @@ export function useTaskLifecycle(
   taskPda: Parameters<typeof facadeNs.cancelTask>[0]["task"],
 ): UseTaskLifecycleResult {
   const ctx = useAgencContext();
+  const lastAction = useRef<"cancel" | "close" | "autoAccept" | null>(null);
   const cancelMut = useMutation<string, Error, CancelTaskInput | undefined>({
     mutationFn: async (input) => {
       const client = requireClient(ctx.client);
@@ -83,20 +84,33 @@ export function useTaskLifecycle(
   });
 
   const cancel = useCallback(
-    (input?: CancelTaskInput) => cancelMut.mutateAsync(input),
+    (input?: CancelTaskInput) => {
+      lastAction.current = "cancel";
+      return cancelMut.mutateAsync(input);
+    },
     [cancelMut],
   );
   const close = useCallback(
-    (input?: CloseTaskInput) => closeMut.mutateAsync(input),
+    (input?: CloseTaskInput) => {
+      lastAction.current = "close";
+      return closeMut.mutateAsync(input);
+    },
     [closeMut],
   );
   const autoAccept = useCallback(
-    (input: AutoAcceptTaskResultInput) => autoAcceptMut.mutateAsync(input),
+    (input: AutoAcceptTaskResultInput) => {
+      lastAction.current = "autoAccept";
+      return autoAcceptMut.mutateAsync(input);
+    },
     [autoAcceptMut],
   );
   const active = cancelMut.isPending || closeMut.isPending || autoAcceptMut.isPending;
   const latest =
-    [cancelMut, closeMut, autoAcceptMut].find((m) => m.isError || m.isSuccess) ?? cancelMut;
+    lastAction.current === "close"
+      ? closeMut
+      : lastAction.current === "autoAccept"
+        ? autoAcceptMut
+        : cancelMut;
 
   return {
     cancel,
@@ -104,9 +118,10 @@ export function useTaskLifecycle(
     autoAccept,
     status: active ? "pending" : mutationStatusOf(latest),
     signature: latest.data ?? null,
-    error: cancelMut.error ?? closeMut.error ?? autoAcceptMut.error ?? null,
+    error: latest.error ?? null,
     isPending: active,
     reset: () => {
+      lastAction.current = null;
       cancelMut.reset();
       closeMut.reset();
       autoAcceptMut.reset();

@@ -37,8 +37,6 @@ import {
   getU64Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -54,6 +52,11 @@ import {
   type OptionOrNullable,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 
 export const GOODS_LISTING_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   120, 149, 179, 150, 220, 115, 129, 110,
@@ -220,7 +223,10 @@ export function getGoodsListingEncoder(): Encoder<GoodsListingArgs> {
       ["goodId", fixEncoderSize(getBytesEncoder(), 32)],
       ["name", fixEncoderSize(getBytesEncoder(), 32)],
       ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "metadataUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
       ["tags", fixEncoderSize(getBytesEncoder(), 64)],
@@ -249,7 +255,10 @@ export function getGoodsListingDecoder(): Decoder<GoodsListing> {
     ["goodId", fixDecoderSize(getBytesDecoder(), 32)],
     ["name", fixDecoderSize(getBytesDecoder(), 32)],
     ["metadataHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["metadataUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "metadataUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["price", getU64Decoder()],
     ["priceMint", getOptionDecoder(getAddressDecoder())],
     ["tags", fixDecoderSize(getBytesDecoder(), 64)],

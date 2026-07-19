@@ -17,6 +17,7 @@ import type {
   MarketplaceTool,
   MarketplaceToolContext,
 } from "./types.js";
+import { ensureValidatedMarketplaceTool } from "./types.js";
 
 // ===========================================================================
 // OpenAI function-calling
@@ -39,14 +40,17 @@ export interface OpenAITool {
 export function toOpenAITools(
   tools: ReadonlyArray<MarketplaceTool>,
 ): OpenAITool[] {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema,
-    },
-  }));
+  return tools.map((candidate) => {
+    const tool = ensureValidatedMarketplaceTool(candidate);
+    return {
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+      },
+    };
+  });
 }
 
 // ===========================================================================
@@ -81,15 +85,18 @@ export function toLangChainTools(
   tools: ReadonlyArray<MarketplaceTool>,
   ctx: MarketplaceToolContext,
 ): LangChainToolDescriptor[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    schema: tool.inputSchema,
-    func: async (input: Record<string, unknown>) => {
-      const result = await tool.handler(input, ctx);
-      return typeof result === "string" ? result : JSON.stringify(result);
-    },
-  }));
+  return tools.map((candidate) => {
+    const tool = ensureValidatedMarketplaceTool(candidate);
+    return {
+      name: tool.name,
+      description: tool.description,
+      schema: tool.inputSchema,
+      func: async (input: Record<string, unknown>) => {
+        const result = await tool.handler(input, ctx);
+        return typeof result === "string" ? result : JSON.stringify(result);
+      },
+    };
+  });
 }
 
 // ===========================================================================
@@ -117,13 +124,16 @@ export function toCrewAITools(
   tools: ReadonlyArray<MarketplaceTool>,
   ctx: MarketplaceToolContext,
 ): CrewAIToolDescriptor[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    args_schema: tool.inputSchema,
-    run: async (input: Record<string, unknown>) => {
-      const result = await tool.handler(input, ctx);
-      return typeof result === "string" ? result : JSON.stringify(result);
-    },
-  }));
+  return tools.map((candidate) => {
+    const tool = ensureValidatedMarketplaceTool(candidate);
+    return {
+      name: tool.name,
+      description: tool.description,
+      args_schema: tool.inputSchema,
+      run: async (input: Record<string, unknown>) => {
+        const result = await tool.handler(input, ctx);
+        return typeof result === "string" ? result : JSON.stringify(result);
+      },
+    };
+  });
 }

@@ -29,6 +29,7 @@ use crate::state::{
     DisputeStatus, ProtocolConfig, ResolutionType, Task, TaskClaim, TaskEscrow, TaskStatus,
     TaskType, TaskValidationConfig,
 };
+use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use crate::utils::version::check_version_compatible_for_exit;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
@@ -201,9 +202,10 @@ pub struct ResolveDispute<'info> {
     )]
     pub protocol_config: Box<Account<'info, ProtocolConfig>>,
 
-    /// The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
-    /// roster. The OR is enforced in the handler against `resolver_assignment` below — a
-    /// plain account constraint cannot express "this key OR that account exists".
+    /// The resolver: EITHER the protocol authority with configured M-of-N approval in
+    /// remaining accounts OR a wallet on the dispute-resolver roster. The OR is enforced
+    /// in the handler against `resolver_assignment` below — a plain account constraint
+    /// cannot express "this key OR that account exists".
     /// `mut` so it can pay rent for the optional `agent_stats` init (P6.6).
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -211,13 +213,15 @@ pub struct ResolveDispute<'info> {
     /// Optional roster entry proving `authority` is an assigned dispute resolver. A plain
     /// optional account (NOT seeds-derived) so the client can pass `None` when resolving as
     /// the protocol authority; when present it must be a program-owned `DisputeResolver`
-    /// whose `resolver` equals the signer (enforced in the handler). Only the authority-
-    /// gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
-    /// so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+    /// whose `resolver` equals the signer (enforced in the handler). Only an
+    /// authority-proposed, configured M-of-N-approved `assign_dispute_resolver` can mint
+    /// one, and the handler binds it to this signer, so the canonical
+    /// ["dispute_resolver", signer] PDA is enforced transitively.
     ///
     /// `mut` (P6.4): when an assigned resolver decides the dispute, their case counters
     /// (`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol
-    /// authority resolving directly passes `None` (no per-resolver counter to bump).
+    /// authority resolving directly passes `None` plus M-of-N owner signers in remaining
+    /// accounts (no per-resolver counter to bump).
     #[account(mut)]
     pub resolver_assignment: Option<Box<Account<'info, DisputeResolver>>>,
 
@@ -358,9 +362,10 @@ pub fn handler<'info>(
     // band, but remains length-bounded when supplied.
     validate_rationale(&rationale_hash, &rationale_uri)?;
 
-    // Authorization: the protocol authority OR an assigned dispute resolver may resolve.
-    // This replaced the open staked-arbiter vote + quorum model: a single assigned
-    // resolver now decides the outcome directly (see assign_dispute_resolver).
+    // Authorization: the protocol authority with configured M-of-N approval OR an
+    // assigned dispute resolver may resolve. This replaced the open staked-arbiter
+    // vote + quorum model: a threshold-seated assigned resolver decides directly
+    // without a per-case vote (see assign_dispute_resolver).
     let signer = ctx.accounts.authority.key();
     let is_protocol_authority = signer == ctx.accounts.protocol_config.authority;
     let is_assigned_resolver = ctx
@@ -373,6 +378,29 @@ pub fn handler<'info>(
         ctx.accounts.authority.is_signer && (is_protocol_authority || is_assigned_resolver),
         CoordinationError::UnauthorizedResolver
     );
+
+    // An assigned resolver is already seated by a threshold-approved roster
+    // mutation. The exceptional direct protocol-authority branch must itself
+    // collect M-of-N approval. Approval accounts share the deployed instruction's
+    // existing remaining-account wire, so remove configured owner signers before
+    // the economic/dependency account parser consumes the remainder.
+    let uses_direct_protocol_authority = is_protocol_authority && !is_assigned_resolver;
+    let mut economic_remaining_accounts = Vec::new();
+    let resolution_remaining_accounts = if uses_direct_protocol_authority {
+        let unique_signers = unique_account_infos(ctx.remaining_accounts);
+        require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
+        let owners_len = ctx.accounts.protocol_config.multisig_owners_len as usize;
+        let owner_keys = &ctx.accounts.protocol_config.multisig_owners[..owners_len];
+        economic_remaining_accounts.extend(
+            ctx.remaining_accounts
+                .iter()
+                .filter(|account| !(account.is_signer && owner_keys.contains(account.key)))
+                .cloned(),
+        );
+        economic_remaining_accounts.as_slice()
+    } else {
+        ctx.remaining_accounts
+    };
     // Self-dealing guard: the dispute initiator must never resolve their own dispute,
     // even if they are also on the resolver roster (or are the protocol authority).
     // The InitiatorCannotResolve error was declared but never wired (audit) — without
@@ -411,8 +439,8 @@ pub fn handler<'info>(
         CoordinationError::DisputeResolutionWindowExpired
     );
 
-    // No voting-period wait: an assigned resolver decides directly. (The legacy
-    // voting_deadline field is retained on the account but no longer gates resolution.)
+    // No per-case voting-period wait: the authorized resolver decides directly. (The
+    // legacy voting_deadline field is retained but no longer gates resolution.)
 
     // Validate and bind defendant worker accounts (fix #842)
     validate_dispute_worker_accounts(
@@ -468,11 +496,10 @@ pub fn handler<'info>(
     let (dispute_remaining_accounts, accepted_bid_accounts) =
         if task.task_type == TaskType::BidExclusive {
             require!(
-                ctx.remaining_accounts.len() >= 3,
+                resolution_remaining_accounts.len() >= 3,
                 CoordinationError::BidSettlementAccountsRequired
             );
-            let split_at = ctx
-                .remaining_accounts
+            let split_at = resolution_remaining_accounts
                 .len()
                 .checked_sub(3)
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
@@ -484,30 +511,30 @@ pub fn handler<'info>(
                 .ok_or(CoordinationError::ArithmeticOverflow)?;
             (
                 remaining_account_range(
-                    ctx.remaining_accounts,
+                    resolution_remaining_accounts,
                     0..split_at,
                     CoordinationError::BidSettlementAccountsRequired,
                 )?,
                 Some((
                     remaining_account_at(
-                        ctx.remaining_accounts,
+                        resolution_remaining_accounts,
                         split_at,
                         CoordinationError::BidSettlementAccountsRequired,
                     )?,
                     remaining_account_at(
-                        ctx.remaining_accounts,
+                        resolution_remaining_accounts,
                         accepted_bid_index,
                         CoordinationError::BidSettlementAccountsRequired,
                     )?,
                     remaining_account_at(
-                        ctx.remaining_accounts,
+                        resolution_remaining_accounts,
                         bidder_state_index,
                         CoordinationError::BidSettlementAccountsRequired,
                     )?,
                 )),
             )
         } else {
-            (ctx.remaining_accounts, None)
+            (resolution_remaining_accounts, None)
         };
 
     // Validate task is in disputed state and transitions are allowed (fix #538)
@@ -521,8 +548,10 @@ pub fn handler<'info>(
         CoordinationError::InvalidStatusTransition
     );
 
-    // The decision is the resolver's `approve` argument — NOT a vote tally. `approved`
-    // upholds the initiator's requested `resolution_type`; `!approved` refunds the creator.
+    // The decision is the authorized resolver's `approve` argument — NOT a per-case
+    // arbiter vote tally. Direct protocol-authority authorization has already passed
+    // its M-of-N check above; `approved` upholds the initiator's requested
+    // `resolution_type`, while `!approved` refunds the creator.
     let approved = approve;
     let outcome = if approved {
         dispute_outcome::APPROVED

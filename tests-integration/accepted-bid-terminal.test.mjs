@@ -21,6 +21,8 @@ import {
   decode,
   isClosed,
   freshWorld,
+  configureTestMultisig,
+  seatTestAuthorityResolver,
   moderationBlockPda,
   BN,
   Keypair,
@@ -37,6 +39,14 @@ function accountLamports(svm, address) {
   return svm.getBalance(address);
 }
 
+function taskClaimGeneration(task) {
+  let generation = 0n;
+  for (let index = 10; index >= 3; index -= 1) {
+    generation = (generation << 8n) | BigInt(task._reserved[index] ?? 0);
+  }
+  return generation;
+}
+
 function bidSettlementSuffix(w, b, terminal) {
   const suffix = [
     { pubkey: b.bidBook, isSigner: false, isWritable: true },
@@ -44,9 +54,17 @@ function bidSettlementSuffix(w, b, terminal) {
     { pubkey: b.bidderMarket, isSigner: false, isWritable: true },
   ];
   if (terminal === "complete") {
-    suffix.push({ pubkey: w.provider.publicKey, isSigner: false, isWritable: true });
+    suffix.push({
+      pubkey: w.provider.publicKey,
+      isSigner: false,
+      isWritable: true,
+    });
   } else if (terminal === "no-show") {
-    suffix.push({ pubkey: w.buyer.publicKey, isSigner: false, isWritable: true });
+    suffix.push({
+      pubkey: w.buyer.publicKey,
+      isSigner: false,
+      isWritable: true,
+    });
   }
   return suffix;
 }
@@ -59,7 +77,11 @@ function withDependencyPrefix(parentTask, suffix) {
 
 async function completeAutoTask(w, taskFixture, remainingAccounts = []) {
   const { task, escrow, jobSpec, jobHash } = taskFixture;
-  const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);
+  const [claim] = pda([
+    enc("claim"),
+    task.toBuffer(),
+    w.providerAgent.toBuffer(),
+  ]);
   let claimBuilder = w.providerProg.methods.claimTaskWithJobSpec().accounts({
     task,
     taskJobSpec: jobSpec,
@@ -72,41 +94,44 @@ async function completeAutoTask(w, taskFixture, remainingAccounts = []) {
     authority: w.provider.publicKey,
     systemProgram: SystemProgram.programId,
   });
-  if (remainingAccounts.length > 0) claimBuilder = claimBuilder.remainingAccounts(remainingAccounts);
+  if (remainingAccounts.length > 0)
+    claimBuilder = claimBuilder.remainingAccounts(remainingAccounts);
   expectOk(
     send(w.svm, await claimBuilder.instruction(), [w.provider]),
     "parent:claim",
   );
 
-  let completeBuilder = w.providerProg.methods.completeTask(arr(id32()), null).accounts({
-    task,
-    claim,
-    escrow,
-    creator: w.buyer.publicKey,
-    worker: w.providerAgent,
-    protocolConfig: w.protocolPda,
-    treasury: w.admin.publicKey,
-    authority: w.provider.publicKey,
-    systemProgram: SystemProgram.programId,
-    tokenEscrowAta: null,
-    workerTokenAccount: null,
-    treasuryTokenAccount: null,
-    rewardMint: null,
-    tokenProgram: null,
-    hireRecord: pda([enc("hire"), task.toBuffer()])[0],
-    operator: null,
-    referrer: null,
-    creatorCompletionBond: pda([
-      enc("completion_bond"),
-      task.toBuffer(),
-      w.buyer.publicKey.toBuffer(),
-    ])[0],
-    workerCompletionBond: pda([
-      enc("completion_bond"),
-      task.toBuffer(),
-      w.provider.publicKey.toBuffer(),
-    ])[0],
-  });
+  let completeBuilder = w.providerProg.methods
+    .completeTask(arr(id32()), null)
+    .accounts({
+      task,
+      claim,
+      escrow,
+      creator: w.buyer.publicKey,
+      worker: w.providerAgent,
+      protocolConfig: w.protocolPda,
+      treasury: w.admin.publicKey,
+      authority: w.provider.publicKey,
+      systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null,
+      workerTokenAccount: null,
+      treasuryTokenAccount: null,
+      rewardMint: null,
+      tokenProgram: null,
+      hireRecord: pda([enc("hire"), task.toBuffer()])[0],
+      operator: null,
+      referrer: null,
+      creatorCompletionBond: pda([
+        enc("completion_bond"),
+        task.toBuffer(),
+        w.buyer.publicKey.toBuffer(),
+      ])[0],
+      workerCompletionBond: pda([
+        enc("completion_bond"),
+        task.toBuffer(),
+        w.provider.publicKey.toBuffer(),
+      ])[0],
+    });
   if (remainingAccounts.length > 0) {
     completeBuilder = completeBuilder.remainingAccounts(remainingAccounts);
   }
@@ -207,7 +232,11 @@ async function setupAcceptedBid(
   let validation = null;
   let attestorConfig = null;
   if (creatorReview) {
-    validation = await configureCreatorReview(w, taskFixture.task, reviewWindow);
+    validation = await configureCreatorReview(
+      w,
+      taskFixture.task,
+      reviewWindow,
+    );
   } else if (externalAttestor) {
     ({ validation, attestorConfig } = await configureExternalAttestation(
       w,
@@ -221,23 +250,36 @@ async function setupAcceptedBid(
     noShowSlashBps,
     tag,
   });
-  const { task, jobSpec, jobHash, bidBook, bid, bidderMarket, claim, storedBid } =
-    bidFixture;
-  assert.equal(storedBid.requested_reward_lamports.toString(), String(bidPrice));
-  assert.equal(storedBid.accepted_no_show_slash_bps, noShowSlashBps);
-  let acceptBuilder = w.buyerProg.methods.acceptBid(arr(bidFixture.bidTermsHash)).accounts({
+  const {
     task,
-    claim,
-    protocolConfig: w.protocolPda,
+    jobSpec,
+    jobHash,
     bidBook,
     bid,
-    bidderMarketState: bidderMarket,
-    bidder: w.providerAgent,
-    taskJobSpec: jobSpec,
-    moderationBlock: moderationBlockPda(jobHash)[0],
-    creator: w.buyer.publicKey,
-    systemProgram: SystemProgram.programId,
-  });
+    bidderMarket,
+    claim,
+    storedBid,
+  } = bidFixture;
+  assert.equal(
+    storedBid.requested_reward_lamports.toString(),
+    String(bidPrice),
+  );
+  assert.equal(storedBid.accepted_no_show_slash_bps, noShowSlashBps);
+  let acceptBuilder = w.buyerProg.methods
+    .acceptBid(arr(bidFixture.bidTermsHash))
+    .accounts({
+      task,
+      claim,
+      protocolConfig: w.protocolPda,
+      bidBook,
+      bid,
+      bidderMarketState: bidderMarket,
+      bidder: w.providerAgent,
+      taskJobSpec: jobSpec,
+      moderationBlock: moderationBlockPda(jobHash)[0],
+      creator: w.buyer.publicKey,
+      systemProgram: SystemProgram.programId,
+    });
   if (parentTask) {
     acceptBuilder = acceptBuilder.remainingAccounts([
       { pubkey: parentTask, isSigner: false, isWritable: false },
@@ -246,6 +288,11 @@ async function setupAcceptedBid(
   expectOk(
     send(w.svm, await acceptBuilder.instruction(), [w.buyer]),
     `${tag}:accept-bid`,
+  );
+  assert.equal(
+    taskClaimGeneration(decode(w.svm, "Task", task)),
+    1n,
+    `${tag}: accepted-bid TaskClaim creation advances claim_generation`,
   );
 
   return {
@@ -317,15 +364,23 @@ function assertCompletedBidSettlement(
   before,
   { submission = null, providerFee = 0n, creatorFee = 0n, label },
 ) {
-  assert.ok(decode(w.svm, "Task", b.task).status.Completed !== undefined, `${label}: task Completed`);
+  assert.ok(
+    decode(w.svm, "Task", b.task).status.Completed !== undefined,
+    `${label}: task Completed`,
+  );
   assert.ok(isClosed(w.svm, b.claim), `${label}: claim closed`);
   assert.ok(isClosed(w.svm, b.bid), `${label}: accepted bid closed`);
   assert.ok(isClosed(w.svm, b.escrow), `${label}: escrow closed`);
-  if (submission) assert.ok(isClosed(w.svm, submission), `${label}: submission closed`);
+  if (submission)
+    assert.ok(isClosed(w.svm, submission), `${label}: submission closed`);
 
   assert.equal(
     accountLamports(w.svm, w.provider.publicKey) - before.provider,
-    before.workerReward + before.bid + before.claim + before.submission - providerFee,
+    before.workerReward +
+      before.bid +
+      before.claim +
+      before.submission -
+      providerFee,
     `${label}: worker receives contract reward and every worker-funded account refund`,
   );
   assert.equal(
@@ -341,14 +396,15 @@ function assertCompletedBidSettlement(
 
   const protocolAfter = decode(w.svm, "ProtocolConfig", w.protocolPda);
   assert.equal(
-    BigInt(protocolAfter.total_value_distributed.toString())
-      - BigInt(before.protocol.total_value_distributed.toString()),
+    BigInt(protocolAfter.total_value_distributed.toString()) -
+      BigInt(before.protocol.total_value_distributed.toString()),
     BigInt(b.bidPrice),
     `${label}: volume records the accepted contract price`,
   );
   const workerAfter = decode(w.svm, "AgentRegistration", w.providerAgent);
   assert.equal(
-    BigInt(workerAfter.total_earned.toString()) - BigInt(before.worker.total_earned.toString()),
+    BigInt(workerAfter.total_earned.toString()) -
+      BigInt(before.worker.total_earned.toString()),
     before.workerReward,
     `${label}: worker earnings record the net bid-price reward`,
   );
@@ -368,40 +424,51 @@ function assertBidBookDisposition(w, b, state, label) {
 
 function effectiveProtocolFeeBps(task, worker) {
   const reputation = worker.reputation;
-  const discount = reputation >= 9_500 ? 15 : reputation >= 9_000 ? 10 : reputation >= 8_000 ? 5 : 0;
-  return task.protocol_fee_bps === 0 ? 0 : Math.max(1, task.protocol_fee_bps - discount);
+  const discount =
+    reputation >= 9_500
+      ? 15
+      : reputation >= 9_000
+        ? 10
+        : reputation >= 8_000
+          ? 5
+          : 0;
+  return task.protocol_fee_bps === 0
+    ? 0
+    : Math.max(1, task.protocol_fee_bps - discount);
 }
 
 async function completeAcceptedBid(w, b) {
-  let builder = w.providerProg.methods.completeTask(arr(id32()), null).accounts({
-    task: b.task,
-    claim: b.claim,
-    escrow: b.escrow,
-    creator: w.buyer.publicKey,
-    worker: w.providerAgent,
-    protocolConfig: w.protocolPda,
-    treasury: w.admin.publicKey,
-    authority: w.provider.publicKey,
-    systemProgram: SystemProgram.programId,
-    tokenEscrowAta: null,
-    workerTokenAccount: null,
-    treasuryTokenAccount: null,
-    rewardMint: null,
-    tokenProgram: null,
-    hireRecord: pda([enc("hire"), b.task.toBuffer()])[0],
-    operator: null,
-    referrer: null,
-    creatorCompletionBond: pda([
-      enc("completion_bond"),
-      b.task.toBuffer(),
-      w.buyer.publicKey.toBuffer(),
-    ])[0],
-    workerCompletionBond: pda([
-      enc("completion_bond"),
-      b.task.toBuffer(),
-      w.provider.publicKey.toBuffer(),
-    ])[0],
-  });
+  let builder = w.providerProg.methods
+    .completeTask(arr(id32()), null)
+    .accounts({
+      task: b.task,
+      claim: b.claim,
+      escrow: b.escrow,
+      creator: w.buyer.publicKey,
+      worker: w.providerAgent,
+      protocolConfig: w.protocolPda,
+      treasury: w.admin.publicKey,
+      authority: w.provider.publicKey,
+      systemProgram: SystemProgram.programId,
+      tokenEscrowAta: null,
+      workerTokenAccount: null,
+      treasuryTokenAccount: null,
+      rewardMint: null,
+      tokenProgram: null,
+      hireRecord: pda([enc("hire"), b.task.toBuffer()])[0],
+      operator: null,
+      referrer: null,
+      creatorCompletionBond: pda([
+        enc("completion_bond"),
+        b.task.toBuffer(),
+        w.buyer.publicKey.toBuffer(),
+      ])[0],
+      workerCompletionBond: pda([
+        enc("completion_bond"),
+        b.task.toBuffer(),
+        w.provider.publicKey.toBuffer(),
+      ])[0],
+    });
   builder = builder.remainingAccounts(
     withDependencyPrefix(b.parentTask, bidSettlementSuffix(w, b, "complete")),
   );
@@ -445,8 +512,8 @@ async function acceptSubmittedBid(w, b, submission) {
 }
 
 async function autoAcceptSubmittedBid(w, b, submission, crank) {
-  const builder = makeProgram(crank).methods
-    .autoAcceptTaskResult()
+  const builder = makeProgram(crank)
+    .methods.autoAcceptTaskResult()
     .accounts({
       ...completionAccounts(w, b, submission),
       authority: crank.publicKey,
@@ -464,8 +531,8 @@ async function validateSubmittedBid(w, b, submission, reviewer, approved) {
     reviewer.publicKey.toBuffer(),
   ])[0];
   const terminal = approved ? "complete" : "reject";
-  const builder = makeProgram(reviewer).methods
-    .validateTaskResult(approved)
+  const builder = makeProgram(reviewer)
+    .methods.validateTaskResult(approved)
     .accounts({
       task: b.task,
       claim: b.claim,
@@ -502,7 +569,10 @@ async function validateSubmittedBid(w, b, submission, reviewer, approved) {
 async function initiateAcceptedBidDispute(w, b, resolutionType, label) {
   const disputeId = id32();
   const dispute = pda([enc("dispute"), Buffer.from(disputeId)])[0];
-  const rateLimit = pda([enc("authority_rate_limit"), w.buyer.publicKey.toBuffer()])[0];
+  const rateLimit = pda([
+    enc("authority_rate_limit"),
+    w.buyer.publicKey.toBuffer(),
+  ])[0];
   expectOk(
     send(
       w.svm,
@@ -569,7 +639,8 @@ test("accepted BidExclusive completion pays the bid price for every dependency o
   ]) {
     await t.test(variant.name, async () => {
       const w = await freshWorld({ moderationEnabled: true });
-      const parentTask = variant.dependencyType === 0 ? null : await settleParent(w);
+      const parentTask =
+        variant.dependencyType === 0 ? null : await settleParent(w);
       const b = await setupAcceptedBid(w, {
         parentTask,
         dependencyType: variant.dependencyType,
@@ -582,7 +653,11 @@ test("accepted BidExclusive completion pays the bid price for every dependency o
         providerFee: TX_FEE,
         label: variant.name,
       });
-      assert.notEqual(b.bidPrice, b.budget, "regression fixture keeps bid price below budget");
+      assert.notEqual(
+        b.bidPrice,
+        b.budget,
+        "regression fixture keeps bid price below budget",
+      );
     });
   }
 });
@@ -619,7 +694,11 @@ test("auto_accept_task_result settles an accepted Ordering-dependent bid permiss
     tag: "accepted-bid-auto-accept-ordering",
   });
   const submission = await submitAcceptedBid(w, b);
-  const reviewDeadline = decode(w.svm, "TaskSubmission", submission).review_deadline_at;
+  const reviewDeadline = decode(
+    w.svm,
+    "TaskSubmission",
+    submission,
+  ).review_deadline_at;
   const clock = w.svm.getClock();
   clock.unixTimestamp = BigInt(reviewDeadline.toString()) + 1n;
   w.svm.setClock(clock);
@@ -660,19 +739,21 @@ test("CreatorReview rejection reopens the book and refunds the accepted bid bond
     b.task.toBuffer(),
     w.provider.publicKey.toBuffer(),
   ])[0];
-  let rejectBuilder = w.buyerProg.methods.rejectTaskResult(arr(id32())).accounts({
-    task: b.task,
-    claim: b.claim,
-    taskValidationConfig: b.validation,
-    taskSubmission: submission,
-    worker: w.providerAgent,
-    protocolConfig: w.protocolPda,
-    creator: w.buyer.publicKey,
-    workerAuthority: w.provider.publicKey,
-    agentStats: null,
-    systemProgram: null,
-    workerCompletionBond: workerBond,
-  });
+  let rejectBuilder = w.buyerProg.methods
+    .rejectTaskResult(arr(id32()))
+    .accounts({
+      task: b.task,
+      claim: b.claim,
+      taskValidationConfig: b.validation,
+      taskSubmission: submission,
+      worker: w.providerAgent,
+      protocolConfig: w.protocolPda,
+      creator: w.buyer.publicKey,
+      workerAuthority: w.provider.publicKey,
+      agentStats: null,
+      systemProgram: null,
+      workerCompletionBond: workerBond,
+    });
   rejectBuilder = rejectBuilder.remainingAccounts(
     withDependencyPrefix(parentTask, bidSettlementSuffix(w, b, "reject")),
   );
@@ -689,13 +770,27 @@ test("CreatorReview rejection reopens the book and refunds the accepted bid bond
     bidBalance + claimBalance + submissionBalance,
     "worker receives every bid/claim/submission lamport; no bid-bond slash on rejection",
   );
-  assert.equal(accountLamports(w.svm, b.escrow), escrowBefore, "rejection does not spend task principal");
+  assert.equal(
+    accountLamports(w.svm, b.escrow),
+    escrowBefore,
+    "rejection does not spend task principal",
+  );
 
   const book = decode(w.svm, "TaskBidBook", b.bidBook);
-  assert.ok(book.state.Open !== undefined, "book reopens after creator rejection");
-  assert.equal(book.accepted_bid, null, "reopened book clears the dead accepted-bid pointer");
+  assert.ok(
+    book.state.Open !== undefined,
+    "book reopens after creator rejection",
+  );
+  assert.equal(
+    book.accepted_bid,
+    null,
+    "reopened book clears the dead accepted-bid pointer",
+  );
   assert.equal(book.active_bids, 0);
-  assert.equal(decode(w.svm, "BidderMarketState", b.bidderMarket).active_bid_count, 0);
+  assert.equal(
+    decode(w.svm, "BidderMarketState", b.bidderMarket).active_bid_count,
+    0,
+  );
   const task = decode(w.svm, "Task", b.task);
   assert.ok(task.status.Open !== undefined, "task returns to Open");
   assert.equal(task.current_workers, 0);
@@ -703,68 +798,99 @@ test("CreatorReview rejection reopens the book and refunds the accepted bid bond
 
 test("validate_task_result settles both external-attestation outcomes with a Proof prefix", async (t) => {
   for (const approved of [true, false]) {
-    await t.test(approved ? "attestor approval" : "attestor rejection", async () => {
-      const w = await freshWorld({ moderationEnabled: true });
-      const reviewer = Keypair.generate();
-      w.svm.airdrop(reviewer.publicKey, 10_000_000_000n);
-      const parentTask = await settleParent(w);
-      const b = await setupAcceptedBid(w, {
-        parentTask,
-        dependencyType: 3,
-        externalAttestor: reviewer.publicKey,
-        tag: `accepted-bid-attestation-${approved ? "approve" : "reject"}`,
-      });
-      const submission = await submitAcceptedBid(w, b);
-      const before = snapshotCompletion(w, b, submission);
-
-      const { vote, result } = await validateSubmittedBid(
-        w,
-        b,
-        submission,
-        reviewer,
-        approved,
-      );
-      expectOk(result, `bid:attestor-${approved ? "approve" : "reject"}`);
-      assert.ok(isClosed(w.svm, vote), "one-reviewer attestation vote rent is returned");
-
-      if (approved) {
-        assertCompletedBidSettlement(w, b, before, {
-          submission,
-          label: "validate_task_result/approve/Proof",
+    await t.test(
+      approved ? "attestor approval" : "attestor rejection",
+      async () => {
+        const w = await freshWorld({ moderationEnabled: true });
+        const reviewer = Keypair.generate();
+        w.svm.airdrop(reviewer.publicKey, 10_000_000_000n);
+        const parentTask = await settleParent(w);
+        const b = await setupAcceptedBid(w, {
+          parentTask,
+          dependencyType: 3,
+          externalAttestor: reviewer.publicKey,
+          tag: `accepted-bid-attestation-${approved ? "approve" : "reject"}`,
         });
-        return;
-      }
+        const submission = await submitAcceptedBid(w, b);
+        const before = snapshotCompletion(w, b, submission);
 
-      assert.ok(isClosed(w.svm, b.bid), "attestor rejection closes/refunds the accepted bid");
-      assert.ok(isClosed(w.svm, b.claim), "attestor rejection closes/refunds the claim");
-      assert.ok(!isClosed(w.svm, submission), "rejected submission remains as round history");
-      assert.equal(
-        accountLamports(w.svm, w.provider.publicKey) - before.provider,
-        before.bid + before.claim,
-        "rejected worker receives bid and claim refunds but not live submission rent",
-      );
-      assert.equal(
-        accountLamports(w.svm, b.escrow),
-        before.escrow,
-        "attestor rejection leaves all task principal available for a later bid round",
-      );
-      assert.equal(
-        accountLamports(w.svm, w.buyer.publicKey) - before.creator,
-        0n,
-        "attestor rejection does not move creator principal",
-      );
-      assert.equal(
-        accountLamports(w.svm, w.admin.publicKey) - before.treasury,
-        0n,
-        "attestor rejection does not charge a protocol fee",
-      );
-      const task = decode(w.svm, "Task", b.task);
-      assert.ok(task.status.Open !== undefined, "attestor rejection reopens the task");
-      assert.equal(task.current_workers, 0, "attestor rejection releases the worker slot");
-      const book = decode(w.svm, "TaskBidBook", b.bidBook);
-      assert.equal(book.accepted_bid, null, "reopened book clears the accepted pointer");
-      assertBidBookDisposition(w, b, "Open", "validate_task_result/reject/Proof");
-    });
+        const { vote, result } = await validateSubmittedBid(
+          w,
+          b,
+          submission,
+          reviewer,
+          approved,
+        );
+        expectOk(result, `bid:attestor-${approved ? "approve" : "reject"}`);
+        assert.ok(
+          isClosed(w.svm, vote),
+          "one-reviewer attestation vote rent is returned",
+        );
+
+        if (approved) {
+          assertCompletedBidSettlement(w, b, before, {
+            submission,
+            label: "validate_task_result/approve/Proof",
+          });
+          return;
+        }
+
+        assert.ok(
+          isClosed(w.svm, b.bid),
+          "attestor rejection closes/refunds the accepted bid",
+        );
+        assert.ok(
+          isClosed(w.svm, b.claim),
+          "attestor rejection closes/refunds the claim",
+        );
+        assert.ok(
+          !isClosed(w.svm, submission),
+          "rejected submission remains as round history",
+        );
+        assert.equal(
+          accountLamports(w.svm, w.provider.publicKey) - before.provider,
+          before.bid + before.claim,
+          "rejected worker receives bid and claim refunds but not live submission rent",
+        );
+        assert.equal(
+          accountLamports(w.svm, b.escrow),
+          before.escrow,
+          "attestor rejection leaves all task principal available for a later bid round",
+        );
+        assert.equal(
+          accountLamports(w.svm, w.buyer.publicKey) - before.creator,
+          0n,
+          "attestor rejection does not move creator principal",
+        );
+        assert.equal(
+          accountLamports(w.svm, w.admin.publicKey) - before.treasury,
+          0n,
+          "attestor rejection does not charge a protocol fee",
+        );
+        const task = decode(w.svm, "Task", b.task);
+        assert.ok(
+          task.status.Open !== undefined,
+          "attestor rejection reopens the task",
+        );
+        assert.equal(
+          task.current_workers,
+          0,
+          "attestor rejection releases the worker slot",
+        );
+        const book = decode(w.svm, "TaskBidBook", b.bidBook);
+        assert.equal(
+          book.accepted_bid,
+          null,
+          "reopened book clears the accepted pointer",
+        );
+        assertBidBookDisposition(
+          w,
+          b,
+          "Open",
+          "validate_task_result/reject/Proof",
+        );
+      },
+    );
   }
 });
 
@@ -782,7 +908,8 @@ test("cancel_task closes an accepted Proof-dependent no-show and applies only th
   const taskBefore = decode(w.svm, "Task", b.task);
   const acceptedBid = decode(w.svm, "TaskBid", b.bid);
   const slash =
-    (BigInt(acceptedBid.bond_lamports.toString()) * BigInt(noShowSlashBps)) / 10_000n;
+    (BigInt(acceptedBid.bond_lamports.toString()) * BigInt(noShowSlashBps)) /
+    10_000n;
   const before = snapshotCompletion(w, b);
 
   const clock = w.svm.getClock();
@@ -813,7 +940,10 @@ test("cancel_task closes an accepted Proof-dependent no-show and applies only th
           rewardMint: null,
           tokenProgram: null,
           creatorCompletionBond: emptyCompletionBond(b.task, w.buyer.publicKey),
-          workerCompletionBond: emptyCompletionBond(b.task, w.provider.publicKey),
+          workerCompletionBond: emptyCompletionBond(
+            b.task,
+            w.provider.publicKey,
+          ),
           workerBondAuthority: w.provider.publicKey,
           creatorAgent: null,
           agentStats: null,
@@ -826,7 +956,10 @@ test("cancel_task closes an accepted Proof-dependent no-show and applies only th
     "bid:cancel-proof-no-show",
   );
 
-  assert.ok(decode(w.svm, "Task", b.task).status.Cancelled !== undefined, "cancel: task Cancelled");
+  assert.ok(
+    decode(w.svm, "Task", b.task).status.Cancelled !== undefined,
+    "cancel: task Cancelled",
+  );
   assert.ok(isClosed(w.svm, b.escrow), "cancel: escrow closed to creator");
   assert.ok(isClosed(w.svm, b.claim), "cancel: claim closed to worker");
   assert.ok(isClosed(w.svm, b.bid), "cancel: accepted bid closed to bidder");
@@ -850,20 +983,30 @@ test("cancel_task closes an accepted Proof-dependent no-show and applies only th
 
 test("resolve_dispute Complete pays only the accepted bid price and refunds its bond", async () => {
   const w = await freshWorld({ moderationEnabled: true });
+  const directApprovals = await configureTestMultisig(w);
   const parentTask = await settleParent(w);
   const b = await setupAcceptedBid(w, {
     parentTask,
     dependencyType: 2,
     tag: "accepted-bid-resolve-complete",
   });
-  const dispute = await initiateAcceptedBidDispute(w, b, 1, "bid:initiate-complete-dispute");
+  const dispute = await initiateAcceptedBidDispute(
+    w,
+    b,
+    1,
+    "bid:initiate-complete-dispute",
+  );
   const before = snapshotCompletion(w, b);
 
   expectOk(
     send(
       w.svm,
-      await makeProgram(w.admin).methods
-        .resolveDispute(true, arr(Buffer.alloc(32, 9)), "agenc://ruling/accepted-bid-complete")
+      await makeProgram(w.admin)
+        .methods.resolveDispute(
+          true,
+          arr(Buffer.alloc(32, 9)),
+          "agenc://ruling/accepted-bid-complete",
+        )
         .accounts({
           ...disputeAccounts(w, b, dispute),
           authority: w.admin.publicKey,
@@ -876,15 +1019,22 @@ test("resolve_dispute Complete pays only the accepted bid price and refunds its 
         .remainingAccounts([
           { pubkey: parentTask, isSigner: false, isWritable: false },
           ...bidSettlementSuffix(w, b, "reject"),
+          ...directApprovals.remainingAccounts,
         ])
         .instruction(),
-      [w.admin],
+      directApprovals.approvers,
     ),
-    "bid:resolve-complete",
+    "bid:resolve-complete-direct-authority-threshold",
   );
 
-  assert.ok(decode(w.svm, "Task", b.task).status.Completed !== undefined, "resolve: task Completed");
-  assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "resolve: dispute Resolved");
+  assert.ok(
+    decode(w.svm, "Task", b.task).status.Completed !== undefined,
+    "resolve: task Completed",
+  );
+  assert.ok(
+    decode(w.svm, "Dispute", dispute).status.Resolved !== undefined,
+    "resolve: dispute Resolved",
+  );
   assert.ok(isClosed(w.svm, b.escrow), "resolve: escrow closed");
   assert.ok(isClosed(w.svm, b.claim), "resolve: claim closed");
   assert.ok(isClosed(w.svm, b.bid), "resolve: accepted bid closed");
@@ -900,25 +1050,26 @@ test("resolve_dispute Complete pays only the accepted bid price and refunds its 
   );
   assert.equal(
     accountLamports(w.svm, w.admin.publicKey) - before.treasury,
-    -TX_FEE,
-    "resolve: dispute Complete takes no protocol fee; authority pays only its tx fee",
+    -TX_FEE * BigInt(directApprovals.approvers.length),
+    "resolve: dispute Complete takes no protocol fee; authority pays only the threshold-signed tx fee",
   );
   const protocolAfter = decode(w.svm, "ProtocolConfig", w.protocolPda);
   assert.equal(
-    BigInt(protocolAfter.total_value_distributed.toString())
-      - BigInt(before.protocol.total_value_distributed.toString()),
+    BigInt(protocolAfter.total_value_distributed.toString()) -
+      BigInt(before.protocol.total_value_distributed.toString()),
     BigInt(b.bidPrice),
     "resolve: volume records only the accepted contract price",
   );
   const workerAfter = decode(w.svm, "AgentRegistration", w.providerAgent);
   assert.equal(
-    BigInt(workerAfter.tasks_completed.toString())
-      - BigInt(before.worker.tasks_completed.toString()),
+    BigInt(workerAfter.tasks_completed.toString()) -
+      BigInt(before.worker.tasks_completed.toString()),
     1n,
     "resolve: Complete records one worker completion",
   );
   assert.equal(
-    BigInt(workerAfter.total_earned.toString()) - BigInt(before.worker.total_earned.toString()),
+    BigInt(workerAfter.total_earned.toString()) -
+      BigInt(before.worker.total_earned.toString()),
     BigInt(b.bidPrice),
     "resolve: SOL earnings record the exact accepted contract payout",
   );
@@ -931,6 +1082,7 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
   const referrerFeeBps = 333;
   const referrer = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true });
+  const authorityResolver = await seatTestAuthorityResolver(w);
   w.svm.airdrop(referrer.publicKey, 1_000_000_000n);
 
   const b = await setupAcceptedBid(w, {
@@ -952,12 +1104,27 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
     referrer.publicKey.toBase58(),
     "Split: referrer payee was snapshotted by create_task",
   );
-  assert.equal(taskBefore.referrer_fee_bps, referrerFeeBps, "Split: referrer bps snapshotted");
-  assert.ok(taskBefore.protocol_fee_bps > 0, "Split: fixture would charge a protocol fee normally");
+  assert.equal(
+    taskBefore.referrer_fee_bps,
+    referrerFeeBps,
+    "Split: referrer bps snapshotted",
+  );
+  assert.ok(
+    taskBefore.protocol_fee_bps > 0,
+    "Split: fixture would charge a protocol fee normally",
+  );
 
-  const dispute = await initiateAcceptedBidDispute(w, b, 2, "bid:initiate-split-dispute");
+  const dispute = await initiateAcceptedBidDispute(
+    w,
+    b,
+    2,
+    "bid:initiate-split-dispute",
+  );
   const agentStats = pda([enc("agent_stats"), w.providerAgent.toBuffer()])[0];
-  assert.ok(isClosed(w.svm, agentStats), "Split: worker AgentStats starts absent");
+  assert.ok(
+    isClosed(w.svm, agentStats),
+    "Split: worker AgentStats starts absent",
+  );
   const before = snapshotCompletion(w, b);
   const referrerBefore = accountLamports(w.svm, referrer.publicKey);
 
@@ -976,12 +1143,16 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
   expectOk(
     send(
       w.svm,
-      await makeProgram(w.admin).methods
-        .resolveDispute(true, arr(Buffer.alloc(32, 9)), "agenc://ruling/accepted-bid-split")
+      await makeProgram(w.admin)
+        .methods.resolveDispute(
+          true,
+          arr(Buffer.alloc(32, 9)),
+          "agenc://ruling/accepted-bid-split",
+        )
         .accounts({
           ...disputeAccounts(w, b, dispute),
           authority: w.admin.publicKey,
-          resolverAssignment: null,
+          resolverAssignment: authorityResolver,
           agentStats,
           disputeReferrer: referrer.publicKey,
           systemProgram: SystemProgram.programId,
@@ -997,12 +1168,26 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
 
   const taskAfter = decode(w.svm, "Task", b.task);
   assert.ok(taskAfter.status.Cancelled !== undefined, "Split: task Cancelled");
-  assert.equal(taskAfter.current_workers, 0, "Split: task worker slot released");
-  assert.equal(taskAfter._reserved[2], 0, "Split: no worker slash remains pending");
-  assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "Split: dispute Resolved");
+  assert.equal(
+    taskAfter.current_workers,
+    0,
+    "Split: task worker slot released",
+  );
+  assert.equal(
+    taskAfter._reserved[2],
+    0,
+    "Split: no worker slash remains pending",
+  );
+  assert.ok(
+    decode(w.svm, "Dispute", dispute).status.Resolved !== undefined,
+    "Split: dispute Resolved",
+  );
   assert.ok(isClosed(w.svm, b.escrow), "Split: escrow closed");
   assert.ok(isClosed(w.svm, b.claim), "Split: worker claim closed");
-  assert.ok(isClosed(w.svm, b.bid), "Split: accepted bid closed and bond refunded");
+  assert.ok(
+    isClosed(w.svm, b.bid),
+    "Split: accepted bid closed and bond refunded",
+  );
   assertBidBookDisposition(w, b, "Closed", "resolve_dispute/Split");
 
   assert.equal(
@@ -1021,10 +1206,7 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
     "Split: creator receives the rounded-up half, unused budget, and escrow rent",
   );
   assert.equal(
-    creatorContractShare
-      + unusedBudget
-      + workerNet
-      + referrerFee,
+    creatorContractShare + unusedBudget + workerNet + referrerFee,
     BigInt(budget),
     "Split: every principal lamport is assigned exactly once",
   );
@@ -1054,13 +1236,21 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
     before.worker.total_earned.toString(),
     "Split: completion earnings telemetry is neutral",
   );
-  assert.equal(workerAfter.reputation, before.worker.reputation, "Split: reputation is neutral");
+  assert.equal(
+    workerAfter.reputation,
+    before.worker.reputation,
+    "Split: reputation is neutral",
+  );
   assert.equal(
     workerAfter.active_tasks,
     before.worker.active_tasks - 1,
     "Split: worker active-task counter released exactly once",
   );
-  assert.equal(workerAfter.disputes_as_defendant, 0, "Split: defendant liability released");
+  assert.equal(
+    workerAfter.disputes_as_defendant,
+    0,
+    "Split: defendant liability released",
+  );
 
   const statsAfter = decode(w.svm, "AgentStats", agentStats);
   assert.equal(
@@ -1068,8 +1258,16 @@ test("resolve_dispute Split conserves an odd accepted-bid price and is telemetry
     true,
     "Split: supplied AgentStats remains untouched rather than recording an outcome",
   );
-  assert.equal(statsAfter.disputes_won.toString(), "0", "Split: disputes_won remains neutral");
-  assert.equal(statsAfter.disputes_lost.toString(), "0", "Split: disputes_lost remains neutral");
+  assert.equal(
+    statsAfter.disputes_won.toString(),
+    "0",
+    "Split: disputes_won remains neutral",
+  );
+  assert.equal(
+    statsAfter.disputes_lost.toString(),
+    "0",
+    "Split: disputes_lost remains neutral",
+  );
 });
 
 test("expire_dispute refunds principal and applies the evidence-bound accepted-bid no-show slash", async () => {
@@ -1083,10 +1281,16 @@ test("expire_dispute refunds principal and applies the evidence-bound accepted-b
     noShowSlashBps,
     tag: "accepted-bid-expire-dispute-proof",
   });
-  const dispute = await initiateAcceptedBidDispute(w, b, 0, "bid:initiate-expiring-dispute");
+  const dispute = await initiateAcceptedBidDispute(
+    w,
+    b,
+    0,
+    "bid:initiate-expiring-dispute",
+  );
   const acceptedBid = decode(w.svm, "TaskBid", b.bid);
   const slash =
-    (BigInt(acceptedBid.bond_lamports.toString()) * BigInt(noShowSlashBps)) / 10_000n;
+    (BigInt(acceptedBid.bond_lamports.toString()) * BigInt(noShowSlashBps)) /
+    10_000n;
   const before = snapshotCompletion(w, b);
 
   const disputeState = decode(w.svm, "Dispute", dispute);
@@ -1107,8 +1311,8 @@ test("expire_dispute refunds principal and applies the evidence-bound accepted-b
   expectOk(
     send(
       w.svm,
-      await makeProgram(crank).methods
-        .expireDispute()
+      await makeProgram(crank)
+        .methods.expireDispute()
         .accounts({
           ...disputeAccounts(w, b, dispute),
           authority: crank.publicKey,
@@ -1123,8 +1327,14 @@ test("expire_dispute refunds principal and applies the evidence-bound accepted-b
     "bid:expire-dispute",
   );
 
-  assert.ok(decode(w.svm, "Task", b.task).status.Cancelled !== undefined, "expiry: task Cancelled");
-  assert.ok(decode(w.svm, "Dispute", dispute).status.Expired !== undefined, "expiry: dispute Expired");
+  assert.ok(
+    decode(w.svm, "Task", b.task).status.Cancelled !== undefined,
+    "expiry: task Cancelled",
+  );
+  assert.ok(
+    decode(w.svm, "Dispute", dispute).status.Expired !== undefined,
+    "expiry: dispute Expired",
+  );
   assert.ok(isClosed(w.svm, b.escrow), "expiry: escrow closed to creator");
   assert.ok(isClosed(w.svm, b.claim), "expiry: claim closed to worker");
   assert.ok(isClosed(w.svm, b.bid), "expiry: accepted bid closed");
@@ -1208,15 +1418,24 @@ test("accepted-bid no-show applies only the snapshotted partial slash, then clos
     bidBalance + claimBalance - slash,
     "bidder receives bid rent + unslashed bond remainder + claim rent",
   );
-  assert.ok(isClosed(w.svm, b.bid), "no-show bid is closed after one disposition");
+  assert.ok(
+    isClosed(w.svm, b.bid),
+    "no-show bid is closed after one disposition",
+  );
   assert.ok(isClosed(w.svm, b.claim), "expired claim is closed");
 
   const book = decode(w.svm, "TaskBidBook", b.bidBook);
   assert.ok(book.state.Open !== undefined, "book reopens after no-show");
   assert.equal(book.accepted_bid, null);
   assert.equal(book.active_bids, 0);
-  assert.equal(decode(w.svm, "BidderMarketState", b.bidderMarket).active_bid_count, 0);
+  assert.equal(
+    decode(w.svm, "BidderMarketState", b.bidderMarket).active_bid_count,
+    0,
+  );
   const task = decode(w.svm, "Task", b.task);
-  assert.ok(task.status.Open !== undefined, "task reopens for another bid round");
+  assert.ok(
+    task.status.Open !== undefined,
+    "task reopens for another bid round",
+  );
   assert.equal(task.current_workers, 0);
 });

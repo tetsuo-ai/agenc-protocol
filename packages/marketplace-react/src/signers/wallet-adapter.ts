@@ -21,8 +21,10 @@
  */
 import {
   address,
+  getPublicKeyFromAddress,
   getTransactionDecoder,
   getTransactionEncoder,
+  verifySignature,
   type SignatureBytes,
   type Transaction,
 } from "@solana/kit";
@@ -83,6 +85,17 @@ function resolveAdapterAddress(adapter: WalletAdapterLike): string {
   return String(publicKey);
 }
 
+function bytesEqual(
+  left: ArrayLike<number>,
+  right: ArrayLike<number>,
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
 /**
  * Bridge a LEGACY `@solana/wallet-adapter` `WalletContextState` into a kit
  * {@link TransactionSigner}.
@@ -121,16 +134,33 @@ export function signerFromWalletAdapter(
   const { VersionedTransaction } = options;
   const encoder = getTransactionEncoder();
   const decoder = getTransactionDecoder();
+  let publicKeyPromise: ReturnType<typeof getPublicKeyFromAddress> | undefined;
 
   async function signOne(transaction: Transaction): Promise<SignatureBytes> {
     const wireBytes = new Uint8Array(encoder.encode(transaction));
     const legacyTx = VersionedTransaction.deserialize(wireBytes);
     const signed = await signTransaction!(legacyTx);
     const signedTx = decoder.decode(new Uint8Array(signed.serialize()));
+    if (!bytesEqual(transaction.messageBytes, signedTx.messageBytes)) {
+      throw new Error(
+        ts("signer.walletModifiedTransaction", { address: signerAddress }),
+      );
+    }
     const signature = signedTx.signatures[signerAddress];
     if (!signature) {
       throw new Error(
         ts("signer.walletNoSignature", { address: signerAddress }),
+      );
+    }
+    publicKeyPromise ??= getPublicKeyFromAddress(signerAddress);
+    const valid = await verifySignature(
+      await publicKeyPromise,
+      signature,
+      transaction.messageBytes,
+    );
+    if (!valid) {
+      throw new Error(
+        ts("signer.walletInvalidSignature", { address: signerAddress }),
       );
     }
     return signature as SignatureBytes;
@@ -139,11 +169,15 @@ export function signerFromWalletAdapter(
   return {
     address: signerAddress,
     async signTransactions(transactions) {
-      return Promise.all(
-        transactions.map(async (transaction) => ({
+      const signatures = [];
+      // Legacy wallet-adapter is unary and many implementations are
+      // single-flight. Serialize prompts in input order.
+      for (const transaction of transactions) {
+        signatures.push({
           [signerAddress]: await signOne(transaction),
-        })),
-      );
+        });
+      }
+      return signatures;
     },
   } satisfies TransactionSigner;
 }

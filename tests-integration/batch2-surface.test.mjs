@@ -37,7 +37,7 @@ import { Buffer } from "node:buffer";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed, coder,
-  freshWorld, hireIx,
+  freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram, PID,
 } from "./harness.mjs";
@@ -239,6 +239,7 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
   const operatorKp = Keypair.generate();
   const referrerKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: REWARD, operator: operatorKp.publicKey, operatorFeeBps: OP_BPS });
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const modProg = makeProgram(w.modAuth);
 
   // Clean listing attestation so the hire passes the (strict) gate.
@@ -289,7 +290,7 @@ test("dispute referrer leg: resolve_dispute(Complete) pays the snapshotted refer
 
   const resolveAccounts = (disputeReferrer) => ({
     dispute, task, escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey,
-    resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: claim,
+    resolverAssignment: authorityResolver, creator: w.buyer.publicKey, workerClaim: claim,
     worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null,
     hireRecord, disputeOperator: operatorKp.publicKey, disputeReferrer,
     systemProgram: SystemProgram.programId,

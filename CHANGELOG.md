@@ -44,7 +44,7 @@ authoritative deployed-state record is
   obligations, account layouts, payout bindings, and all supported build surfaces.
   Production is 98 instructions, explicit development `private-zk` is 101, and the
   frozen canary is 25; invalid mixed feature combinations now fail compilation.
-  The candidate is 94,440 bytes larger than the live ProgramData payload capacity,
+  The candidate is 97,152 bytes larger than the live ProgramData payload capacity,
   so upgrade preflight now blocks until a separately reviewed Squads/loader
   `ExtendProgramChecked` action expands it. The rail models the loader's distinct
   45-byte ProgramData and 37-byte Buffer headers, mainnet's active minimum-extension
@@ -89,17 +89,18 @@ authoritative deployed-state record is
   misleading `security.txt` contacts were deactivated, including the explorer-visible
   contact blob previously embedded in the candidate program; enable and test a real
   private intake before release, then publish matching on-chain and RFC 9116 metadata.
-- **Final local evidence:** Rust 524 production / 524 `validation-timings` / 549
-  private-ZK / 321 canary; 76 model/property tests; 395 compiled-program integrations
-  (394 pass, one canary-only conditional skip), plus the separate canary compiled
-  test passing 1/1; SDK 575 pass + one skip; 1,092
-  workspace tests pass + one skip; 225 deployment/preflight tests pass. Strict Clippy,
+- **Final local evidence (refreshed 2026-07-19):** Rust 524 production / 524
+  `validation-timings` / 549 private-ZK / 321 canary; 77 model/property tests;
+  408 compiled-program integrations (399 pass and 9 explicit canary-profile
+  skips), plus the separate canary compiled suite passing 11/11; SDK 656 pass +
+  one skip; 1,429 workspace tests pass + two skips; 231 deployment/preflight and
+  346 repository-policy tests pass. Strict Clippy,
   formatting, artifact drift, package smoke, and SBF stack gates are green. The final
-  production SBF is 2,277,664 bytes with SHA-256
-  `2b4b80b899d36073417c0ace53c0f62aedc2bfa801af20038c8d83fe5678bf0a`.
+  production SBF is 2,280,376 bytes with SHA-256
+  `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`.
   The canonical candidate IDL contains 98 instructions / 43 accounts / 99 events /
   393 errors and has SHA-256
-  `5951d233e98c61ce77243fe807b9df4c79905532185495e0b36e9d8b14d43604`.
+  `5ae986603626d0dfe9024c7dc180f184931622c350c0c32b4abf920a0d918f1b`.
 - This is a pending candidate. Mainnet remains the revision-4, 99-instruction binary
   until an independently approved Squads upgrade and revision-5 stamp are complete.
 
@@ -268,7 +269,7 @@ authoritative deployed-state record is
   authored by a registered, non-revoked `ModerationAttestor` roster entry, not
   only the single global `moderation_authority` (PR #93, commit `254078a`;
   additive optional account, no layout change, no migration)
-- at this point roster *membership* was still authority-assigned
+- at this point roster _membership_ was still authority-assigned
   (`assign_moderation_attestor`); registration went permissionless with P1.2
   the next day. Verification record: `docs/WP-A1-DEPLOY-READINESS.md`
 

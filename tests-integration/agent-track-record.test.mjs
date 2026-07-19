@@ -40,7 +40,7 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, decode, isClosed,
-  freshWorld, hireIx,
+  freshWorld, hireIx, seatTestAuthorityResolver,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
@@ -247,9 +247,10 @@ async function hireClaimDispute(w, { resolutionType }) {
   return { task, escrow, hireRecord, claim, dispute };
 }
 
-// Resolve the dispute (protocol authority resolves directly) and attach the optional
-// AgentStats account so the defendant's outcome counter is bumped.
+// Resolve through the admin wallet's threshold-approved resolver assignment and attach
+// the optional AgentStats account so the defendant's outcome counter is bumped.
 async function resolveWithStats(w, r, approve) {
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const defendantStats = agentStatsPda(w.providerAgent);
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
@@ -258,7 +259,7 @@ async function resolveWithStats(w, r, approve) {
     .resolveDispute(approve, arr(Buffer.alloc(32, 5)), "agenc://ruling/sha256/track-record")
     .accounts({
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
-      authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey,
+      authority: w.admin.publicKey, resolverAssignment: authorityResolver, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey,
       hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId,
       tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null,

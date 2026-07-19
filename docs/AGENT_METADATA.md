@@ -11,8 +11,14 @@ every producer (operator tooling, kit CLI, storefronts) and every reader
 - **Reference implementation (validator + renderer):**
   `packages/sdk-ts/src/values/agent-metadata.ts` (`@tetsuo-ai/marketplace-sdk`,
   `values` module)
-- **JSON Schema:** `schemas/agent-metadata.schema.json`, published as
-  `https://agenc.tech/schemas/agent-metadata-v1.schema.json`
+- **JSON Schema:** `schemas/agent-metadata.schema.json`. Its canonical `$id` is
+  `https://agenc.tech/schemas/agent-metadata-v1.schema.json`; the in-repo file
+  is the authoritative resolvable copy. The `$id` is an identifier, not a claim
+  that the HTTPS URL is currently deployed.
+
+Consumers must use the in-repo schema unless the `host.schemas` assertion from
+`node scripts/enterprise-readiness.mjs` passes; the check verifies content type,
+explicit versioned caching, and exact equality with this file.
 
 > This is **pure spec** — no on-chain change and no `[HUMAN]` signing gate. The
 > program never reads this document; conformance is a client/indexer contract.

@@ -13,9 +13,9 @@
  * separate entry so bundlers never pull it into browser builds. Never
  * re-export it from the root barrel.
  *
- * `litesvm` is an **optional peerDependency**: it is imported normally here,
- * so consumers must `npm install litesvm` (devDependency is fine) to use this
- * subpath. Everything else in the package works without it.
+ * `litesvm` is an **optional peerDependency**. This subpath can be imported
+ * without it; the native peer is loaded only when a LiteSVM helper is invoked,
+ * which then throws an actionable install error if the peer is absent.
  *
  * @example
  * ```ts

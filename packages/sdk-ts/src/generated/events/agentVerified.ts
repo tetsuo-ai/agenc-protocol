@@ -11,16 +11,15 @@ import {
   getStructDecoder,
   getU32Decoder,
   getU8Decoder,
-  getUtf8Decoder,
   type Address,
   type Decoder,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+import { getBorshStringDecoder } from "../codecs/borshString";
 
 /** 8-byte Anchor event discriminator for `AgentVerified` (sha256("event:AgentVerified")[0..8]). */
-export const AGENT_VERIFIED_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
-  56, 159, 70, 162, 200, 46, 208, 1,
-]);
+export const AGENT_VERIFIED_EVENT_DISCRIMINATOR: ReadonlyUint8Array =
+  new Uint8Array([56, 159, 70, 162, 200, 46, 208, 1]);
 
 /**
  * Emitted when a trusted attestor records a domain-verification attestation for an
@@ -43,7 +42,10 @@ export type AgentVerifiedEventData = {
 export function getAgentVerifiedEventDecoder(): Decoder<AgentVerifiedEventData> {
   return getStructDecoder([
     ["agent", getAddressDecoder()],
-    ["verifiedDomain", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "verifiedDomain",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["method", getU8Decoder()],
     ["verifiedBy", getAddressDecoder()],
     ["verifiedAt", getI64Decoder()],

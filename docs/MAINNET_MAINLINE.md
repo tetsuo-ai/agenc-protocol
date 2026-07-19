@@ -86,25 +86,25 @@ The deployment rail is deliberately fail-closed:
 canonical ProgramData account as
 `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, with data length 2,183,269
 bytes (45 loader metadata + 2,183,224 executable payload). The current
-2,277,664-byte candidate needs a 2,277,709-byte account, so it is 94,440 payload
+2,280,376-byte candidate needs a 2,280,421-byte account, so it is 97,152 payload
 bytes too large. The loader maximum is 10,485,760 account-data bytes, or
 10,485,715 executable bytes after ProgramData metadata. Mainnet's active
 SIMD-0431 rule normally requires an extension of at least 10,240 bytes (except
-when consuming all remaining loader headroom); the exact 94,440-byte extension
+when consuming all remaining loader headroom); the exact 97,152-byte extension
 is valid without rounding.
 
 The existing ProgramData account held its exact 15,196,443,120-lamport rent
 floor. Extending it to the candidate's exact capacity requires
-15,853,745,520 lamports, a 657,302,400-lamport (0.6573024 SOL) top-up. Agave
-CLI 3.0.13 allocates the candidate upgrade Buffer at 2,277,701 bytes (37-byte
-Buffer header), whose rent floor is 15,853,689,840 lamports, but funds it on the
-2,277,709-byte ProgramData basis: 15,853,745,520 lamports, 55,680 lamports more.
+15,872,621,040 lamports, a 676,177,920-lamport (0.67617792 SOL) top-up. Agave
+CLI 3.0.13 allocates the candidate upgrade Buffer at 2,280,413 bytes (37-byte
+Buffer header), whose rent floor is 15,872,565,360 lamports, but funds it on the
+2,280,421-byte ProgramData basis: 15,872,621,040 lamports, 55,680 lamports more.
 Those are different accounting surfaces; do not substitute the Buffer allocation
 size for ProgramData capacity.
 
 Before the binary upgrade, a separate reviewed Squads proposal must execute
-loader `ExtendProgramChecked` for at least 94,440 additional bytes through
-Squads CPI; 94,440 is the exact minimum for this candidate. The vault PDA is the
+loader `ExtendProgramChecked` for at least 97,152 additional bytes through
+Squads CPI; 97,152 is the exact minimum for this candidate. The vault PDA is the
 loader authority and cannot be supplied as a
 CLI keypair. Extension stamps the ProgramData slot, so the extension and
 `Upgrade` cannot execute in the same slot; wait for a later slot, then rerun the

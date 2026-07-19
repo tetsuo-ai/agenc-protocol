@@ -38,6 +38,21 @@ that cutover.
   the `AgentCardA2AInterface` / `AgentCardA2ASkill` /
   `AgentCardA2AExtension` / `AgentCardA2ACapabilities` types.
 
+### Fixed
+
+- Compile and enforce the advertised JSON-Schema subset at every handler
+  boundary. Registry, LangChain, CrewAI, and MCP invocations now reject missing,
+  mistyped, out-of-range, nested-invalid, or undeclared model inputs before a
+  tool handler runs, with stable `INVALID_TOOL_INPUT` errors. Invalid or
+  unsupported schemas fail registration with `INVALID_TOOL_SCHEMA`; supported
+  custom formats include Solana addresses, 32-byte hex, decimal u64, and URI.
+- Apply the protocol's exact address, hash, integer, URL, metadata, price,
+  deadline, and review-window bounds to all 19 production tools. The retained
+  `prepare_create_service_listing.priceMint` compatibility field now fails fast
+  with `UNSUPPORTED_TOKEN_PRICING` when supplied, matching the program's
+  current SOL-only create-and-hire invariant instead of returning a guaranteed
+  failing instruction.
+
 ## 0.4.0
 
 ### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)

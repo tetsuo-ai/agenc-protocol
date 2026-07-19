@@ -26,8 +26,6 @@ import {
   getU32Encoder,
   getU64Decoder,
   getU64Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -48,6 +46,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -137,7 +140,10 @@ export function getCreateGoodsListingInstructionDataEncoder(): Encoder<CreateGoo
       ["goodId", fixEncoderSize(getBytesEncoder(), 32)],
       ["name", fixEncoderSize(getBytesEncoder(), 32)],
       ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "metadataUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
       ["tags", fixEncoderSize(getBytesEncoder(), 64)],
@@ -158,7 +164,10 @@ export function getCreateGoodsListingInstructionDataDecoder(): Decoder<CreateGoo
     ["goodId", fixDecoderSize(getBytesDecoder(), 32)],
     ["name", fixDecoderSize(getBytesDecoder(), 32)],
     ["metadataHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["metadataUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "metadataUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["price", getU64Decoder()],
     ["priceMint", getOptionDecoder(getAddressDecoder())],
     ["tags", fixDecoderSize(getBytesDecoder(), 64)],

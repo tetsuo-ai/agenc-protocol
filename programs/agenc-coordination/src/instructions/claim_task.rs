@@ -447,6 +447,12 @@ fn process_claim(
             .ok_or(CoordinationError::ArithmeticOverflow)?
     };
 
+    // Advance the durable generation in the same transaction that creates the
+    // claim. This survives sole-worker expiry restoring Open 0:0 and lets
+    // watchers rediscover the reopened slot without observing an intermediate
+    // closed sweep. Any later failure rolls the increment back atomically.
+    task.increment_claim_generation()?;
+
     // Initialize claim
     claim.task = task_key;
     claim.worker = worker_key;

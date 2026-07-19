@@ -1,10 +1,11 @@
 //! Property tests for the direct `resolve_dispute` model.
 //!
-//! A protocol authority or assigned resolver may rule immediately while the
-//! resolution window is open. The initiator, creator, and worker are always
-//! conflicted. A successful ruling requires a nonzero rationale commitment and
-//! records exactly one approve/reject bit while retaining the counter-provenance
-//! sentinel in the retired voter byte.
+//! The protocol authority with configured M-of-N approval, or a previously
+//! threshold-seated assigned resolver, may rule immediately while the resolution
+//! window is open. The initiator, creator, and worker are always conflicted. A
+//! successful ruling requires a nonzero rationale commitment and records exactly
+//! one approve/reject bit while retaining the counter-provenance sentinel in the
+//! retired voter byte.
 
 use crate::*;
 use proptest::prelude::*;
@@ -48,11 +49,12 @@ fn modeled_attempt(
     (dispute, task, escrow)
 }
 
-fn role_can_resolve(role: ResolverRole) -> bool {
-    matches!(
-        role,
-        ResolverRole::ProtocolAuthority | ResolverRole::AssignedResolver
-    )
+fn role_can_resolve(role: ResolverRole, has_configured_threshold_approval: bool) -> bool {
+    match role {
+        ResolverRole::ProtocolAuthority => has_configured_threshold_approval,
+        ResolverRole::AssignedResolver => true,
+        _ => false,
+    }
 }
 
 proptest! {
@@ -62,12 +64,20 @@ proptest! {
     fn fuzz_direct_resolution(input in any::<ResolveDisputeInput>()) {
         let (mut dispute, mut task, mut escrow) = modeled_attempt(&input);
         let before = (dispute.clone(), task.clone(), escrow.clone());
-        let ruling = direct_ruling(input.resolver_role, input.approve, input.has_rationale);
+        let ruling = direct_ruling_with_threshold_approval(
+            input.resolver_role,
+            input.approve,
+            input.has_rationale,
+            input.has_configured_threshold_approval,
+        );
 
         let should_succeed = input.dispute_active
             && input.task_disputed
             && dispute_resolution_window_open(&dispute, input.current_timestamp)
-            && role_can_resolve(input.resolver_role)
+            && role_can_resolve(
+                input.resolver_role,
+                input.has_configured_threshold_approval,
+            )
             && input.has_rationale;
 
         let result = simulate_resolve_dispute(
@@ -126,6 +136,7 @@ mod edge_cases {
             approve,
             resolver_role: ResolverRole::AssignedResolver,
             has_rationale: true,
+            has_configured_threshold_approval: false,
             dispute_active: true,
             task_disputed: true,
             escrow_amount: 1_000_000,
@@ -135,12 +146,17 @@ mod edge_cases {
             current_timestamp: 100,
         };
         let (dispute, task, escrow) = modeled_attempt(&input);
-        let ruling = direct_ruling(input.resolver_role, input.approve, input.has_rationale);
+        let ruling = direct_ruling_with_threshold_approval(
+            input.resolver_role,
+            input.approve,
+            input.has_rationale,
+            input.has_configured_threshold_approval,
+        );
         (dispute, task, escrow, ruling)
     }
 
     #[test]
-    fn assigned_resolver_can_rule_immediately_before_legacy_deadline() {
+    fn assigned_resolver_can_rule_without_per_case_threshold_approval() {
         let (mut dispute, mut task, mut escrow, ruling) = valid_attempt(true);
         let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_success());
@@ -156,9 +172,14 @@ mod edge_cases {
     }
 
     #[test]
-    fn protocol_authority_can_rule_without_assignment() {
+    fn protocol_authority_can_rule_without_assignment_when_threshold_approved() {
         let (mut dispute, mut task, mut escrow, _) = valid_attempt(false);
-        let ruling = direct_ruling(ResolverRole::ProtocolAuthority, false, true);
+        let ruling = direct_ruling_with_threshold_approval(
+            ResolverRole::ProtocolAuthority,
+            false,
+            true,
+            true,
+        );
         let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_success());
         assert_eq!(
@@ -169,6 +190,25 @@ mod edge_cases {
             ),
             (0, 1, INITIATOR_OUTCOME_COUNTER_MARKER)
         );
+    }
+
+    #[test]
+    fn protocol_authority_without_threshold_approval_is_rejected_without_mutation() {
+        let (mut dispute, mut task, mut escrow, _) = valid_attempt(false);
+        let ruling = direct_ruling_with_threshold_approval(
+            ResolverRole::ProtocolAuthority,
+            false,
+            true,
+            false,
+        );
+        let before = (dispute.clone(), task.clone(), escrow.clone());
+        let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
+
+        assert!(matches!(
+            &result,
+            SimulationResult::Error(error) if error == "MultisigNotEnoughSigners"
+        ));
+        assert_eq!((dispute, task, escrow), before);
     }
 
     #[test]
@@ -195,6 +235,7 @@ mod edge_cases {
         ruling.resolver = TASK_CREATOR;
         ruling.protocol_authority = TASK_CREATOR;
         ruling.resolver_assigned = false;
+        ruling.has_configured_threshold_approval = true;
         let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_error());
 
@@ -202,6 +243,7 @@ mod edge_cases {
         ruling.resolver = DISPUTE_INITIATOR;
         ruling.protocol_authority = DISPUTE_INITIATOR;
         ruling.resolver_assigned = false;
+        ruling.has_configured_threshold_approval = true;
         let result = simulate_resolve_dispute(&mut dispute, &mut task, &mut escrow, &ruling, 100);
         assert!(result.is_error());
     }

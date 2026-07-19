@@ -68,6 +68,9 @@ pub struct SimulatedRuling {
     pub resolver: [u8; 32],
     pub protocol_authority: [u8; 32],
     pub resolver_assigned: bool,
+    /// Whether the configured M-of-N threshold approved a direct, unassigned
+    /// protocol-authority ruling. Assigned resolvers do not require this per case.
+    pub has_configured_threshold_approval: bool,
     pub creator_authority: [u8; 32],
     pub worker_authority: [u8; 32],
     pub approve: bool,
@@ -398,6 +401,7 @@ pub fn simulate_resolve_dispute(
         &ruling.resolver,
         &ruling.protocol_authority,
         ruling.resolver_assigned,
+        ruling.has_configured_threshold_approval,
         &dispute.initiator_authority,
         &ruling.creator_authority,
         &ruling.worker_authority,
@@ -405,6 +409,9 @@ pub fn simulate_resolve_dispute(
         ResolverAuthorizationResult::Authorized => {}
         ResolverAuthorizationResult::Unauthorized => {
             return SimulationResult::Error("UnauthorizedResolver".to_string())
+        }
+        ResolverAuthorizationResult::MissingThresholdApproval => {
+            return SimulationResult::Error("MultisigNotEnoughSigners".to_string())
         }
         ResolverAuthorizationResult::InitiatorConflict => {
             return SimulationResult::Error("InitiatorCannotResolve".to_string())

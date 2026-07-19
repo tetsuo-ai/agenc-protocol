@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -25,16 +25,23 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: 24.18.0
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: 1.85.0
           components: rustfmt, clippy
+
+      - name: Pin declared npm toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Audit root workspace runtime dependencies
+        run: npm audit --omit=dev --workspaces
 
       - name: Install deployment/preflight dependencies
         run: npm ci
@@ -110,6 +117,9 @@ jobs:
 
       - name: Verify IDL-derived reference docs are in sync
         run: npm run check:idl-reference
+
+      - name: Verify scale-model worker-cap documentation
+        run: node --test scripts/scale-cost-model-doc.test.mjs
 
       - name: Build publishable protocol package
         run: npm run build

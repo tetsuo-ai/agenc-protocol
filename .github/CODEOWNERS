@@ -1,0 +1,26 @@
+# AgenC protocol review ownership.
+#
+# Two repository administrators are named on every rule so CODEOWNERS remains
+# effective if either maintainer is unavailable. Branch protection must still
+# require CODEOWNER review; this file alone does not enforce approvals.
+
+*                              @7etsuo @signerless
+/.github/                      @7etsuo @signerless
+/programs/agenc-coordination/  @7etsuo @signerless
+/packages/                     @7etsuo @signerless
+/scripts/                      @7etsuo @signerless
+/schemas/                      @7etsuo @signerless
+/tests-integration/            @7etsuo @signerless
+/SECURITY.md                   @7etsuo @signerless
+/.well-known/security.txt      @7etsuo @signerless
+/.gitleaks.toml                @7etsuo @signerless
+/Anchor.toml                   @7etsuo @signerless
+/Cargo.toml                    @7etsuo @signerless
+/Cargo.lock                    @7etsuo @signerless
+/coverage-policy.json          @7etsuo @signerless
+/deny.toml                     @7etsuo @signerless
+/package.json                  @7etsuo @signerless
+/package-lock.json             @7etsuo @signerless
+/release-train.json            @7etsuo @signerless
+/rust-toolchain.toml           @7etsuo @signerless
+/supply-chain/                 @7etsuo @signerless

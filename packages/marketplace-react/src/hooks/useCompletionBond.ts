@@ -22,7 +22,7 @@
  * @module hooks/useCompletionBond
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { facade as facadeNs } from "@tetsuo-ai/marketplace-sdk";
 import { useAgencContext } from "../provider/context.js";
 import {
@@ -91,12 +91,16 @@ export function useCompletionBond(
 ): UseCompletionBondResult {
   const ctx = useAgencContext();
   const queryClient = useQueryClient();
+  const lastAction = useRef<"post" | "reclaim" | null>(null);
 
   const invalidateGuarantee = useCallback(() => {
     void queryClient.invalidateQueries({
-      queryKey: queryKeys.taskGuarantee(pdaKey(taskPda)),
+      queryKey: queryKeys.taskGuarantee(
+        pdaKey(taskPda),
+        ctx.cacheNamespace,
+      ),
     });
-  }, [queryClient, taskPda]);
+  }, [ctx.cacheNamespace, queryClient, taskPda]);
 
   const postMut = useMutation<string, Error, PostCompletionBondInput>({
     mutationFn: async (input) => {
@@ -125,30 +129,35 @@ export function useCompletionBond(
   });
 
   const post = useCallback(
-    (input: PostCompletionBondInput) => postMut.mutateAsync(input),
+    (input: PostCompletionBondInput) => {
+      lastAction.current = "post";
+      return postMut.mutateAsync(input);
+    },
     [postMut],
   );
   const reclaim = useCallback(
-    (input: ReclaimCompletionBondInput) => reclaimMut.mutateAsync(input),
+    (input: ReclaimCompletionBondInput) => {
+      lastAction.current = "reclaim";
+      return reclaimMut.mutateAsync(input);
+    },
     [reclaimMut],
   );
 
   const isPending = postMut.isPending || reclaimMut.isPending;
+  const latest = lastAction.current === "reclaim" ? reclaimMut : postMut;
   const status: CompletionBondStatus = isPending
     ? "pending"
-    : mutationStatusOf(
-        // Surface the most recently-touched verb's terminal state.
-        [postMut, reclaimMut].find((m) => m.isError || m.isSuccess) ?? postMut,
-      );
+    : mutationStatusOf(latest);
 
   return {
     post,
     reclaim,
     status,
-    error: postMut.error ?? reclaimMut.error ?? null,
-    signature: postMut.data ?? reclaimMut.data ?? null,
+    error: latest.error ?? null,
+    signature: latest.data ?? null,
     isPending,
     reset: () => {
+      lastAction.current = null;
       postMut.reset();
       reclaimMut.reset();
     },

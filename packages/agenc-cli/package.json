@@ -2,13 +2,13 @@
   "name": "@tetsuo-ai/agenc-cli",
   "version": "0.3.0",
   "description": "The Stripe-4242 moment for AgenC: `agenc init` wires the current repo into an AgenC node, `agenc dev` runs counterparty bots that hire + complete your listing (printing the live 4-way settlement split) against a localnet stack or the zero-setup in-process litesvm sandbox, `agenc promote` diffs against the go-live checklist",
-  "packageManager": "npm@11.7.0",
+  "packageManager": "npm@11.18.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "agenc": "./dist/cli.js"
+    "agenc": "./dist/bin.js"
   },
   "exports": {
     ".": {
@@ -21,7 +21,16 @@
         "default": "./dist/index.cjs"
       }
     },
-    "./cli": "./dist/cli.js",
+    "./cli": {
+      "import": {
+        "types": "./dist/cli.d.ts",
+        "default": "./dist/cli.js"
+      },
+      "require": {
+        "types": "./dist/cli.d.cts",
+        "default": "./dist/cli.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -36,7 +45,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run tests/",
-    "test:e2e": "vitest run tests-e2e/"
+    "test:e2e": "vitest run tests-e2e/",
+    "test:generated-next": "node tests-e2e/generated-next-build.mjs"
   },
   "dependencies": {
     "@tetsuo-ai/agenc-worker": "^0.2.0",

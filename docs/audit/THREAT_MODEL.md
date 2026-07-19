@@ -28,11 +28,11 @@ changes. Last reconciled with the deployed revision and candidate artifacts on
 - Singletons: `BidMarketplaceConfig`, `ModerationConfig`, and `GovernanceConfig`
   INITIALIZED (sane params); `ZkConfig` NOT initialized — ZK private completion
   is deferred and `complete_task_private` stays off until it is.
-- Disputes: single-assigned-resolver. The protocol authority or an assigned
-  `DisputeResolver` resolves directly with a mandatory reasoned ruling
-  (`rationale_hash` + bounded `rationale_uri`). Arbiter voting / `vote_dispute`
-  is retired (P6.3) and absent from the IDL — no quorum/vote path exists to
-  attack.
+- Disputes: single-assigned-resolver. The protocol authority resolves only with
+  configured M-of-N approval; a previously threshold-approved assigned
+  `DisputeResolver` resolves directly without a per-case vote. Both paths require
+  a reasoned ruling (`rationale_hash` + bounded `rationale_uri`). Arbiter voting /
+  `vote_dispute` is retired (P6.3) and absent from the IDL.
 - Errors are append-only by policy: 354 variants in deployed revision 4 and 393
   in the candidate artifact. Existing numeric codes are not reordered.
 - Legacy state: the 169 pre-upgrade Task accounts were migrated 2026-06-11
@@ -66,7 +66,7 @@ working, tested private intake is a release blocker, not an on-chain invariant.
 
 ## Fuzz Harness Relationship
 
-`programs/agenc-coordination/fuzz/` is an active 76-test model/property suite and
+`programs/agenc-coordination/fuzz/` is an active 77-test model/property suite and
 a required CI/release gate. It treats this file as the human-readable statement
 of the invariants it is trying to protect. The retired `vote_dispute` target is
 gone; current scenarios cover the single-resolver dispute lifecycle alongside

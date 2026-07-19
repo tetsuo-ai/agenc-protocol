@@ -8,27 +8,17 @@ operator-supervised mainnet signing rails. Run its audit independently:
 npm run audit:tests-integration
 ```
 
-The gate rejects every critical advisory and every new or changed high-severity
-advisory. One transitive high advisory is temporarily reviewed:
-
-- `GHSA-3gc7-fjrx-p6mg` / npm advisory `1103747` in
-  `bigint-buffer@1.1.5`. The affected `toBigIntLE()` path can overflow when it
-  receives an oversized buffer. AgenC invokes that conversion only through
-  Anchor's fixed-width Borsh integer fields; decoded accounts are then required
-  to match the pinned program, discriminator/layout, and canonical PDA policy.
-  Request bodies and arbitrary-length fields are not passed to this conversion,
-  and integration fixtures are local. This narrows reachability but does not
-  make the upstream defect disappear.
-
-Remove the exception as soon as the Solana/Anchor dependency graph provides a
-compatible patched path. Moderate advisories remain visible in the audit output
-and should be reduced during the same dependency upgrade; they do not pass
-silently as high/critical findings.
+The gate rejects every npm advisory, including low and moderate findings. The
+suite carries a small local encoder for the exact immutable legacy SPL Token
+instructions used by fixtures instead of importing the extension-heavy SPL
+helper package into operator tooling. Its byte layouts and account ordering are
+pinned by `spl-token-legacy.test.mjs`.
 
 The lock also overrides `rpc-websockets` to `9.3.8`. Version `9.3.9` paired its
 CommonJS entrypoint with ESM-only `uuid@14` and crashes when loaded by the Node
 20 deployment rails; `9.3.8` uses the compatible CommonJS-capable `uuid@11`
 line while remaining above the separately disclosed `rpc-websockets` advisory
-range. `audit:tests-integration` includes a real
+range. The vulnerable `jayson` UUID resolution is independently overridden to
+`uuid@11.1.1`. `audit:tests-integration` includes a real
 `@solana/web3.js` CommonJS load probe, so this compatibility pin cannot be
 removed or drifted until the resolved tree actually loads.

@@ -26,7 +26,7 @@ const full: AgentMetadata = {
 };
 
 describe("agent-metadata constants", () => {
-  it("exposes the v1 version and the published schema $id", () => {
+  it("exposes the v1 version and canonical schema $id", () => {
     expect(AGENT_METADATA_VERSION).toBe(1);
     expect(AGENT_METADATA_SCHEMA_ID).toBe(
       "https://agenc.tech/schemas/agent-metadata-v1.schema.json",

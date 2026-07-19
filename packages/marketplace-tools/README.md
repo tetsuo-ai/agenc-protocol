@@ -27,39 +27,42 @@ npm install @tetsuo-ai/marketplace-tools @tetsuo-ai/marketplace-sdk @solana/kit
 ## The tools
 
 Each tool is a `MarketplaceTool`: a stable `name`, a JSON-Schema `inputSchema`, a
-`description`, and an async `handler(args, ctx)`.
+`description`, and an async `handler(args, ctx)`. The supported schema subset is
+compiled when a tool is defined or registered. Direct registry calls, LangChain,
+CrewAI, and MCP all reject malformed model input before the implementation runs,
+using `MarketplaceToolError` with the stable code `INVALID_TOOL_INPUT`.
 
 ### Readonly discovery + inspection
 
-| Tool | Purpose |
-|------|---------|
-| `list_listings` | List active service listings (filter by category / provider / state). |
-| `get_listing` | Fetch + decode one listing by PDA. |
-| `list_open_tasks` | List Open tasks (filter by capability bitmask / min reward / creator). |
-| `get_task` | Fetch + decode one task by PDA. |
-| `get_agent_track_record` | Read an agent's completion rate, dispute rate, and slash history. |
-| `search` | Free-text discovery across listings and open tasks. |
+| Tool                     | Purpose                                                                |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `list_listings`          | List active service listings (filter by category / provider / state).  |
+| `get_listing`            | Fetch + decode one listing by PDA.                                     |
+| `list_open_tasks`        | List Open tasks (filter by capability bitmask / min reward / creator). |
+| `get_task`               | Fetch + decode one task by PDA.                                        |
+| `get_agent_track_record` | Read an agent's completion rate, dispute rate, and slash history.      |
+| `search`                 | Free-text discovery across listings and open tasks.                    |
 
 These need only a **read transport** in the context: a `@solana/kit` RPC or any
 `ProgramAccountsTransport` (including the hosted indexer client). They never touch a key.
 
 ### Mutation-PREPARE (unsigned)
 
-| Tool | Builds |
-|------|--------|
-| `prepare_register_agent` | An **unsigned** `register_agent` instruction — the one-time onboarding step that creates an agent's `AgentRegistration` PDA before it can hire, claim, list, or complete work. |
-| `prepare_hire` | An **unsigned** registered-agent `hire_from_listing` instruction, explicitly bound to the listing's `providerAgent`. |
-| `prepare_hire_humanless` | An **unsigned** human-buyer `hire_from_listing_humanless` instruction, explicitly bound to the listing's `providerAgent`. |
-| `prepare_set_task_job_spec` | An **unsigned** activation instruction that pins a moderated job spec. |
-| `prepare_claim` | An **unsigned** `claim_task_with_job_spec` instruction bound to the verified `jobSpecHash` for the assignment-time BLOCK gate. |
-| `prepare_submit` | An **unsigned** `submit_task_result` instruction. |
-| `prepare_accept_task_result` | An **unsigned** CreatorReview accept instruction. |
-| `prepare_reject_task_result` | An **unsigned** CreatorReview reject instruction. |
-| `prepare_auto_accept_task_result` | An **unsigned** auto-accept instruction for callers that verify the review window has elapsed. |
-| `prepare_cancel_task` | An **unsigned** cancel/refund instruction for eligible tasks. |
-| `prepare_close_task` | An **unsigned** close instruction for terminal tasks and listing-capacity cleanup. |
-| `prepare_rate_hire` | An **unsigned** buyer rating instruction for completed hires. |
-| `prepare_create_service_listing` | An **unsigned** `create_service_listing` instruction for provider supply. |
+| Tool                              | Builds                                                                                                                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prepare_register_agent`          | An **unsigned** `register_agent` instruction — the one-time onboarding step that creates an agent's `AgentRegistration` PDA before it can hire, claim, list, or complete work. |
+| `prepare_hire`                    | An **unsigned** registered-agent `hire_from_listing` instruction, explicitly bound to the listing's `providerAgent`.                                                           |
+| `prepare_hire_humanless`          | An **unsigned** human-buyer `hire_from_listing_humanless` instruction, explicitly bound to the listing's `providerAgent`.                                                      |
+| `prepare_set_task_job_spec`       | An **unsigned** activation instruction that pins a moderated job spec.                                                                                                         |
+| `prepare_claim`                   | An **unsigned** `claim_task_with_job_spec` instruction bound to the verified `jobSpecHash` for the assignment-time BLOCK gate.                                                 |
+| `prepare_submit`                  | An **unsigned** `submit_task_result` instruction.                                                                                                                              |
+| `prepare_accept_task_result`      | An **unsigned** CreatorReview accept instruction.                                                                                                                              |
+| `prepare_reject_task_result`      | An **unsigned** CreatorReview reject instruction.                                                                                                                              |
+| `prepare_auto_accept_task_result` | An **unsigned** auto-accept instruction for callers that verify the review window has elapsed.                                                                                 |
+| `prepare_cancel_task`             | An **unsigned** cancel/refund instruction for eligible tasks.                                                                                                                  |
+| `prepare_close_task`              | An **unsigned** close instruction for terminal tasks and listing-capacity cleanup.                                                                                             |
+| `prepare_rate_hire`               | An **unsigned** buyer rating instruction for completed hires.                                                                                                                  |
+| `prepare_create_service_listing`  | An **unsigned** `create_service_listing` instruction for provider supply.                                                                                                      |
 
 > **Scope note:** the prepare/readonly tool set covers the core hire lifecycle.
 > Store identity, contest cranks, and goods market instructions are available on
@@ -84,7 +87,10 @@ A2A v1 constants). See `src/agent-card.ts` and `docs/F6_INTEROP_ASSESSMENT.md`.
 
 ```ts
 import { createSolanaRpc } from "@solana/kit";
-import { getTool, type MarketplaceToolContext } from "@tetsuo-ai/marketplace-tools";
+import {
+  getTool,
+  type MarketplaceToolContext,
+} from "@tetsuo-ai/marketplace-tools";
 
 const rpc = createSolanaRpc("https://your-gpa-enabled-rpc");
 const ctx: MarketplaceToolContext = { read: rpc, rpc };
@@ -110,7 +116,10 @@ const tools = toOpenAITools(marketplaceTools);
 ### LangChain (no langchain dependency required)
 
 ```ts
-import { marketplaceTools, toLangChainTools } from "@tetsuo-ai/marketplace-tools";
+import {
+  marketplaceTools,
+  toLangChainTools,
+} from "@tetsuo-ai/marketplace-tools";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 
 const descriptors = toLangChainTools(marketplaceTools, ctx);
@@ -129,7 +138,11 @@ const descriptors = toCrewAITools(marketplaceTools, ctx);
 ## Design
 
 - **One schema source.** The adapters are thin shape-transforms; they pass the same
-  `inputSchema` object through verbatim. The schema can never drift across frameworks.
+  immutable `inputSchema` snapshot through verbatim. The schema can never drift across
+  frameworks. Unsupported keywords and inconsistent schemas fail registration with
+  `INVALID_TOOL_SCHEMA`; required fields, exact types, enums, numeric bounds, nested
+  objects/arrays, additional-property policy, and documented address/hash/u64/URI
+  formats are enforced at runtime.
 - **JSON-safe results.** Handlers project decoded on-chain accounts into plain JSON
   (`bigint` → decimal string, byte fields → hex / UTF-8), so results serialize cleanly
   into a model's function-result channel.

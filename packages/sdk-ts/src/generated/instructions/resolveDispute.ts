@@ -20,8 +20,6 @@ import {
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -40,6 +38,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -200,7 +203,10 @@ export function getResolveDisputeInstructionDataEncoder(): Encoder<ResolveDisput
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["approve", getBooleanEncoder()],
       ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["rationaleUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "rationaleUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
     ]),
     (value) => ({ ...value, discriminator: RESOLVE_DISPUTE_DISCRIMINATOR }),
   );
@@ -211,7 +217,10 @@ export function getResolveDisputeInstructionDataDecoder(): Decoder<ResolveDisput
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["approve", getBooleanDecoder()],
     ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["rationaleUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "rationaleUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
   ]);
 }
 
@@ -258,9 +267,10 @@ export type ResolveDisputeAsyncInput<
   escrow?: Address<TAccountEscrow>;
   protocolConfig?: Address<TAccountProtocolConfig>;
   /**
-   * The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
-   * roster. The OR is enforced in the handler against `resolver_assignment` below — a
-   * plain account constraint cannot express "this key OR that account exists".
+   * The resolver: EITHER the protocol authority with configured M-of-N approval in
+   * remaining accounts OR a wallet on the dispute-resolver roster. The OR is enforced
+   * in the handler against `resolver_assignment` below — a plain account constraint
+   * cannot express "this key OR that account exists".
    * `mut` so it can pay rent for the optional `agent_stats` init (P6.6).
    */
   authority: TransactionSigner<TAccountAuthority>;
@@ -268,13 +278,15 @@ export type ResolveDisputeAsyncInput<
    * Optional roster entry proving `authority` is an assigned dispute resolver. A plain
    * optional account (NOT seeds-derived) so the client can pass `None` when resolving as
    * the protocol authority; when present it must be a program-owned `DisputeResolver`
-   * whose `resolver` equals the signer (enforced in the handler). Only the authority-
-   * gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
-   * so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+   * whose `resolver` equals the signer (enforced in the handler). Only an
+   * authority-proposed, configured M-of-N-approved `assign_dispute_resolver` can mint
+   * one, and the handler binds it to this signer, so the canonical
+   * ["dispute_resolver", signer] PDA is enforced transitively.
    *
    * `mut` (P6.4): when an assigned resolver decides the dispute, their case counters
    * (`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol
-   * authority resolving directly passes `None` (no per-resolver counter to bump).
+   * authority resolving directly passes `None` plus M-of-N owner signers in remaining
+   * accounts (no per-resolver counter to bump).
    */
   resolverAssignment?: Address<TAccountResolverAssignment>;
   creator: Address<TAccountCreator>;
@@ -633,9 +645,10 @@ export type ResolveDisputeInput<
   escrow: Address<TAccountEscrow>;
   protocolConfig: Address<TAccountProtocolConfig>;
   /**
-   * The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
-   * roster. The OR is enforced in the handler against `resolver_assignment` below — a
-   * plain account constraint cannot express "this key OR that account exists".
+   * The resolver: EITHER the protocol authority with configured M-of-N approval in
+   * remaining accounts OR a wallet on the dispute-resolver roster. The OR is enforced
+   * in the handler against `resolver_assignment` below — a plain account constraint
+   * cannot express "this key OR that account exists".
    * `mut` so it can pay rent for the optional `agent_stats` init (P6.6).
    */
   authority: TransactionSigner<TAccountAuthority>;
@@ -643,13 +656,15 @@ export type ResolveDisputeInput<
    * Optional roster entry proving `authority` is an assigned dispute resolver. A plain
    * optional account (NOT seeds-derived) so the client can pass `None` when resolving as
    * the protocol authority; when present it must be a program-owned `DisputeResolver`
-   * whose `resolver` equals the signer (enforced in the handler). Only the authority-
-   * gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
-   * so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+   * whose `resolver` equals the signer (enforced in the handler). Only an
+   * authority-proposed, configured M-of-N-approved `assign_dispute_resolver` can mint
+   * one, and the handler binds it to this signer, so the canonical
+   * ["dispute_resolver", signer] PDA is enforced transitively.
    *
    * `mut` (P6.4): when an assigned resolver decides the dispute, their case counters
    * (`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol
-   * authority resolving directly passes `None` (no per-resolver counter to bump).
+   * authority resolving directly passes `None` plus M-of-N owner signers in remaining
+   * accounts (no per-resolver counter to bump).
    */
   resolverAssignment?: Address<TAccountResolverAssignment>;
   creator: Address<TAccountCreator>;
@@ -957,9 +972,10 @@ export type ParsedResolveDisputeInstruction<
     escrow: TAccountMetas[2];
     protocolConfig: TAccountMetas[3];
     /**
-     * The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver
-     * roster. The OR is enforced in the handler against `resolver_assignment` below — a
-     * plain account constraint cannot express "this key OR that account exists".
+     * The resolver: EITHER the protocol authority with configured M-of-N approval in
+     * remaining accounts OR a wallet on the dispute-resolver roster. The OR is enforced
+     * in the handler against `resolver_assignment` below — a plain account constraint
+     * cannot express "this key OR that account exists".
      * `mut` so it can pay rent for the optional `agent_stats` init (P6.6).
      */
     authority: TAccountMetas[4];
@@ -967,13 +983,15 @@ export type ParsedResolveDisputeInstruction<
      * Optional roster entry proving `authority` is an assigned dispute resolver. A plain
      * optional account (NOT seeds-derived) so the client can pass `None` when resolving as
      * the protocol authority; when present it must be a program-owned `DisputeResolver`
-     * whose `resolver` equals the signer (enforced in the handler). Only the authority-
-     * gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,
-     * so the canonical ["dispute_resolver", signer] PDA is enforced transitively.
+     * whose `resolver` equals the signer (enforced in the handler). Only an
+     * authority-proposed, configured M-of-N-approved `assign_dispute_resolver` can mint
+     * one, and the handler binds it to this signer, so the canonical
+     * ["dispute_resolver", signer] PDA is enforced transitively.
      *
      * `mut` (P6.4): when an assigned resolver decides the dispute, their case counters
      * (`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol
-     * authority resolving directly passes `None` (no per-resolver counter to bump).
+     * authority resolving directly passes `None` plus M-of-N owner signers in remaining
+     * accounts (no per-resolver counter to bump).
      */
     resolverAssignment?: TAccountMetas[5] | undefined;
     creator: TAccountMetas[6];

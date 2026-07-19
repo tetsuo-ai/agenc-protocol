@@ -227,6 +227,8 @@ describe("e2e: one worker tick against the real program", () => {
       // Exercises the pre-registration funding preflight (the wallet is
       // funded well past the requirement, so registration proceeds).
       getBalance: async (addr) => svm.getBalance(addr) ?? 0n,
+      getMinimumBalanceForRentExemption: async (space) =>
+        svm.minimumBalanceForRentExemption(BigInt(space)),
     };
 
     const tick = await runTickOnce(ctx);

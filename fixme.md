@@ -1,0 +1,267 @@
+# Enterprise audit remediation ledger
+
+This is the permanent closeout ledger for the enterprise hardening audit begun
+on 2026-07-19. It preserves the complete claim history after remediation so a
+green test run cannot erase a finding, a rejected hypothesis, or an external
+release blocker.
+
+## Audit contract and outcome
+
+- Audited baseline: `1fc5896eb14d703677232eb2ba21b853f31df9ef` on local
+  `main`; the baseline started clean, with one worktree and no side branch.
+- Scope: on-chain Rust and compiled execution; deployment/migration rails; SDK,
+  React, tools, MCP, moderation, worker, CLI, and generated fixtures; dependency,
+  CI, release, supply-chain, documentation, and read-only public-state controls.
+- Safety boundary: this audit did not sign, broadcast, deploy, publish, push, or
+  mutate GitHub, npm, DNS, hosted schemas, security intake, or mainnet state.
+- Compatibility boundary: the deployed program ID, account layouts, instruction
+  ABI, and published package APIs were preserved. The candidate package versions
+  remain unpublished and the candidate program remains undeployed.
+- Final claim accounting: **78 active findings = 62 FIXED + 6 CONDITIONAL + 10
+  EXTERNAL**. A further **22 hypotheses are REJECTED or merged**, with the
+  rationale retained below.
+- Assurance boundary: review and testing cannot prove that arbitrary software is
+  mathematically bug-free. At this closeout, no accepted repository-controlled
+  defect remains open. Conditional features remain fail-closed, and release is
+  blocked on the external items below.
+
+Status meanings:
+
+- `FIXED`: the claim was independently accepted, remediated, and covered by a
+  focused regression plus the applicable aggregate gates.
+- `CONDITIONAL`: no current supported-production exposure was established; the
+  feature or compatibility boundary remains blocked until its stated condition
+  is met.
+- `EXTERNAL`: repository controls are complete where possible, but closure needs
+  an authorized remote, operator, hosted-service, upstream, or mainnet action.
+- `REJECTED`: independent review disproved or materially merged the hypothesis.
+
+## Repository-controlled findings — fixed
+
+Every row in this table received an independent senior-engineer `ACCEPT/FIXED`
+verdict after the implementation and focused regressions were present.
+
+| ID                      | Severity | Accepted claim and completed remediation                                                                                                                                                                                                                                                                                                                                     | Primary evidence                                                                                                                 |
+| ----------------------- | -------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `APC-OC-001`            |     High | Resolver assignment, revocation, and direct authority rulings allowed one authority despite an M-of-N configuration. Existing ABI-compatible remaining accounts now enforce unique configured multisig approvals on every authority path.                                                                                                                                    | `assign_dispute_resolver.rs`, `revoke_dispute_resolver.rs`, `resolve_dispute.rs`; compiled `dispute-accountable-ruling.test.mjs` |
+| `APC-DEP-001`           |      Low | Deployment skip flags mixed exact parsing with JavaScript truthiness. All binary flags now share one unset/`0`/`1` parser and reject every other value.                                                                                                                                                                                                                      | `scripts/env-flags.mjs`, `env-flags.test.mjs`, deployment boundary tests                                                         |
+| `ROOT-MANIFEST-001`     |   Medium | The private workspace root had accumulated npm-init publishing metadata and 510 transitive packages as direct runtime dependencies, massively expanding the declared install and supply-chain surface. The accidental fields were removed, the lock was regenerated from the reviewed workspace manifests, and policy now pins the root to its exact private workspace role. | `package.json`, root lock record, `root-manifest-policy.test.mjs`, clean `npm ci`                                                |
+| `APC-COV-002`           |   Medium | The frozen canary had only one compiled path. The canary surface now has a compiled semantic matrix across all 25 exposed entrypoints and separate 11-test execution.                                                                                                                                                                                                        | `tests-integration/canary-surface.test.mjs`, CI/release canary jobs                                                              |
+| `APC-COV-003`           |   Medium | The property suite modeled state without invoking the processor. It now drives real processor bytes/accounts with adversarial mutations and retained seeds while keeping the 10,000-case model gate.                                                                                                                                                                         | `tests-integration/processor-fuzz.test.mjs`, fuzz/model manifests and CI                                                         |
+| `APC-COV-004`           |      Low | Unmeasured compute constants were presented as client guidance. Unsupported recommendations were removed and the documentation now distinguishes measured gates from future profiling.                                                                                                                                                                                       | `compute_budget.rs`, `docs/VALIDATION.md`                                                                                        |
+| `APC-COV-005`           |   Medium | Rust advisory, license, and source policy was absent. Exact-version `cargo-audit`/`cargo-deny` gates, lock-specific policy, and a narrow expiring upstream exception now run in PR/release paths.                                                                                                                                                                            | `deny.toml`, `check-rust-supply-chain-policy.mjs`, `rust-supply-chain.yml`                                                       |
+| `SDK-IDX-001`           |     High | An indexer could return an arbitrary transaction across the local-signing boundary. The SDK now strictly decodes and binds the intended program, discriminator, accounts, terms, lifetime, metadata, and instruction set.                                                                                                                                                    | `sdk-ts/src/indexer/client.ts`, adversarial `indexer.test.ts`                                                                    |
+| `SDK-IDX-002`           |   Medium | Indexer requests, bodies, and pagination were unbounded. Validated deadlines/abort, streamed byte ceilings, page/item ceilings, and progress checks now fail closed.                                                                                                                                                                                                         | `indexer/client.ts`, timeout/body/pagination tests                                                                               |
+| `SDK-IDX-003`           |   Medium | Successful indexer envelopes were cast rather than validated. All known response fields and nested primitives now have strict runtime validation while unknown response fields remain forward-compatible.                                                                                                                                                                    | `indexer/client.ts`, malformed-envelope matrices                                                                                 |
+| `SDK-WEBHOOK-001`       |   Medium | Non-finite tolerance or clock values disabled replay-window comparisons. Finite safe-integer bounds and maximum tolerance are now enforced.                                                                                                                                                                                                                                  | `webhooks/verify.ts`, `webhooks.test.ts`                                                                                         |
+| `SDK-THREAD-001`        |      Low | A receipt hashed the outbound envelope but returned a host-substituted envelope. The returned content is now byte/hash-bound to the sent envelope.                                                                                                                                                                                                                           | `task-thread/client.ts`, substitution tests                                                                                      |
+| `SDK-THREAD-002`        |      Low | Task-thread identifiers could normalize paths and weak inputs entered commitments. Addresses/hashes/envelopes are validated and path segments are encoded before transport.                                                                                                                                                                                                  | `task-thread/envelope.ts`, `client.ts`, task-thread tests                                                                        |
+| `SDK-WATCH-001`         |   Medium | A sole-worker task reopened after claim expiry could remain permanently deduplicated. Delivery now uses bounded transition/generation identity and proves open → claim → expire → open is emitted twice.                                                                                                                                                                     | `watch/watch.ts`, structural and compiled watch tests                                                                            |
+| `SDK-WATCH-002`         |   Medium | Watcher cancellation, timeouts, and backpressure were not bounded. Iterators now own abort/return cleanup, validate timeouts, and enforce bounded queues with explicit overflow behavior.                                                                                                                                                                                    | `watch/watch.ts`, cancellation/timeout/queue tests                                                                               |
+| `SDK-WATCH-003`         |   Medium | Claim discovery presented an incomplete local filter as if it were the complete on-chain claimability predicate. It now enforces every gate derivable from the fetched Task plus pinned job spec and treats worker/config/moderation/dependency/hire/stake/prior-claim gates as transaction-time checks, not a claimability guarantee.                                       | `watch/watch.ts`, `queries/helpers.ts`, claimability matrices                                                                    |
+| `SDK-WATCH-004`         |   Medium | Visible task state lacked a monotonic claim-generation identity. On-chain Task reserved state now carries the discriminator used internally by the watcher so reopen transitions cannot alias earlier state; public `ClaimableTask` events intentionally do not expose it.                                                                                                   | `state.rs`, `watch/watch.ts`, watch generation regressions                                                                       |
+| `SDK-SANDBOX-001`       |      Low | Sandbox attestor requests and bodies were unbounded and signature shape was weak. Bounded transport, strict endpoint/response validation, and base58 signature checks were added.                                                                                                                                                                                            | `sandbox/attest.ts`, `sandbox.test.ts`                                                                                           |
+| `SDK-SURFACE-001`       |   Medium | Unknown future protocol revisions were reported fully supported. Unsupported revisions now fail closed instead of inheriting the newest known capability set.                                                                                                                                                                                                                | `facade/surface.ts`, `surface.test.ts`                                                                                           |
+| `SDK-ORCH-001`          |      Low | Post-hire hosting/activation errors lacked machine-readable committed progress. Typed partial-progress errors and resume state now preserve task/signature without repeating the hire.                                                                                                                                                                                       | `orchestration/hire-and-activate.ts`, phase-recovery tests                                                                       |
+| `SDK-ORCH-002`          |     High | An ambiguous hire submission could repeat a funded hire instead of reconciling finalized state. Retry now reconciles the derived task and exact intent before any resubmission and refuses ambiguity.                                                                                                                                                                        | `hire-and-activate.ts`, ambiguous-send/reconcile tests                                                                           |
+| `SDK-CODEC-001`         |   Medium | General-purpose JavaScript UTF-8 codecs normalized Borsh strings, accepted replacement decoding, and collapsed lone surrogates. Generated account/instruction/event codecs now preserve BOM/NUL, reject invalid UTF-8, and reject ill-formed UTF-16 like Rust Borsh.                                                                                                         | `sdk-ts/src/generated/codecs/borshString.ts`, generator drift, `generated-borsh-string.test.ts`                                  |
+| `SDK-PACK-PEER-001`     |   Medium | The exported `./testing` subpath eagerly loaded its optional native `litesvm` peer, so importing the advertised surface from a clean tarball failed when the helper was not used. Runtime peer loading is now lazy with an actionable missing-peer error, while clean ESM/CJS imports and full optional-peer sandbox execution are both package-smoked.                      | `testing/litesvm-peer.ts`, testing helpers, clean/full `pack-smoke.mjs` regressions                                              |
+| `DEP-JOBSPEC-CODEC-001` |     High | Active-job-spec deployment preflight decoded Borsh strings and whitespace differently from the on-chain Rust gate. It now uses fatal byte-faithful UTF-8 and the exact Rust whitespace set.                                                                                                                                                                                  | `preflight-active-job-spec-block-scan.mjs` and its codec regressions                                                             |
+| `TOOLS-VALIDATION-001`  |   Medium | Advertised tool JSON Schemas were not enforced at execution boundaries. One compiled validator now gates registry, MCP, LangChain, and CrewAI invocation with stable typed errors.                                                                                                                                                                                           | `marketplace-tools/src/tools/schema.ts`, adapters/MCP/schema tests                                                               |
+| `TOOLS-SCHEMA-002`      |   Medium | Production tool schemas were incomplete or permissive. All supported tool inputs now declare bounded exact runtime schemas; unsupported keywords and extra fields fail closed.                                                                                                                                                                                               | `tools/prepare.ts`, `tools/readonly.ts`, `types.ts`, `schemas.test.ts`                                                           |
+| `REACT-CACHE-001`       |   Medium | Query keys collided across deployments. Every query/invalidation key now includes a stable network/program/RPC/indexer deployment namespace.                                                                                                                                                                                                                                 | `hooks/internal.ts`, provider and hook switch tests                                                                              |
+| `REACT-SIGNER-001`      |   Medium | Wallet-mutated signatures were attached to the original message. Bridges now require exact returned-message equality and verify the signature over the bytes actually submitted.                                                                                                                                                                                             | `signers/wallet-account.ts`, `wallet-adapter.ts`, signer tests                                                                   |
+| `REACT-SIGNER-002`      |      Low | Concurrent per-transaction wallet calls broke single-flight wallets. Wallet Standard uses one variadic request; legacy adapters serialize while preserving order.                                                                                                                                                                                                            | signer bridge tests with single-flight fakes                                                                                     |
+| `REACT-TASKSTATUS-001`  |      Low | Task-event iterators leaked and retained history across source/task changes. Cleanup now aborts and calls `return()`, and identity changes reset history.                                                                                                                                                                                                                    | `hooks/useTaskStatus.ts`, hook lifecycle tests                                                                                   |
+| `REACT-TASKSTATUS-002`  |      Low | Disabled/readerless status sources still started work and polling/cancellation inputs were not validated. Source activation and timing/abort options now fail closed before work begins.                                                                                                                                                                                     | `useTaskStatus.ts`, `use-task-status-api.test.ts`                                                                                |
+| `REACT-MULTIMUT-001`    |      Low | Aggregate mutation state returned the first settled action rather than the latest invocation. Hooks now track a monotonic invocation identity.                                                                                                                                                                                                                               | affected mutation hooks, `multi-mutation-state.test.tsx`                                                                         |
+| `REACT-WALLET-001`      |      Low | An explicitly disconnected adapter fell back to the provider signer. An explicit adapter now exclusively owns signer state; fallback occurs only when no adapter was supplied.                                                                                                                                                                                               | `useWalletSigner.ts`, hook tests                                                                                                 |
+| `REACT-MODAL-001`       |   Medium | A rejected checkout confirmation created a derived unhandled rejection. Cleanup now observes the original promise without spawning an unhandled rejecting chain.                                                                                                                                                                                                             | `HireCheckoutModal.tsx`, double-submit/rejection tests                                                                           |
+| `REACT-PACK-PEER-001`   |   Medium | The advertised Tailwind preset required `tailwindcss/plugin` at module load even though Tailwind was not declared, breaking clean installed-tarball imports. The preset now exports Tailwind v3's dependency-free plugin descriptor directly; generic package smoke loads the clean export and a pinned Tailwind compile exercises its utilities.                            | `agenc-tailwind-preset.cjs`, `tailwind-preset.test.ts`, generic release pack smoke                                               |
+| `WORKER-WALLET-001`     |   Medium | Wallet bytes were silently coerced and unsafe files were accepted. A shared loader now requires a private owned regular file, exact 64-byte integer array, and matching derived key.                                                                                                                                                                                         | `agenc-worker/src/wallet.ts`, `wallet.test.ts`                                                                                   |
+| `WORKER-UPLOAD-001`     |      Low | Upload responses and result URIs were unbounded. Streaming size/time limits and strict URI/response validation now protect submission preparation.                                                                                                                                                                                                                           | `worker/src/result.ts`, result/runtime tests                                                                                     |
+| `WORKER-LOCK-001`       |      Low | PID reuse could keep a stale worker lock alive. Lock ownership now binds an exact process identity rather than PID alone.                                                                                                                                                                                                                                                    | worker state/recovery tests                                                                                                      |
+| `WORKER-STATE-001`      |   Medium | State paths permitted unsafe ownership, links, or size before atomic persistence. Directory/file ownership, modes, leaf type, no-follow, bounds, fsync, and atomic generation publication are enforced.                                                                                                                                                                      | `worker/src/state.ts`, adversarial `state.test.ts`                                                                               |
+| `WORKER-FUND-001`       |   Medium | Registration and recurring claims used stale/incomplete stake, rent, deposit, and fee requirements. Funding plans now derive current on-chain/configured obligations and expose exact shortfalls before signing.                                                                                                                                                             | `worker/src/runtime.ts`, runtime and recovery tests                                                                              |
+| `CLI-PROMOTE-001`       |     High | Go-live audit accepted non-production chains. Promotion now binds the exact mainnet genesis, program, executable state, and release evidence.                                                                                                                                                                                                                                | `agenc-cli/src/promote.ts`, promote tests                                                                                        |
+| `CLI-PURGE-001`         |   Medium | A stale localnet PID could terminate an unrelated reused process. Purge/status/down now require the exact recorded executable, argv, cwd, owner, and start identity.                                                                                                                                                                                                         | CLI localnet tests and shared identity helper                                                                                    |
+| `CLI-CONFIG-001`        |   Medium | Invalid optional configuration silently defaulted and unknown keys were accepted. Exact runtime schemas now produce path-specific errors for every present-invalid or extra field.                                                                                                                                                                                           | `agenc-cli/src/config.ts`, `config.test.ts`                                                                                      |
+| `CLI-WALLET-001`        |   Medium | Promotion did not validate wallet file type, ownership, mode, bytes, or address. It now uses the hardened shared wallet loader in read-only validation mode.                                                                                                                                                                                                                 | CLI promote and worker wallet tests                                                                                              |
+| `LOCALNET-IDENTITY-001` |   Medium | Repository localnet lifecycle control could signal an unrelated PID-reused process. Private atomic identity records and exact re-attestation are required before status or signal operations.                                                                                                                                                                                | `localnet-process-identity.mjs`, localnet identity tests                                                                         |
+| `MOD-CANON-001`         |      Low | Non-finite numbers canonicalized to JSON `null`. Canonicalization now rejects non-finite values instead of creating collisions.                                                                                                                                                                                                                                              | moderation `src/index.ts`, `canon.test.ts`                                                                                       |
+| `MOD-CANON-002`         |      Low | Accessors, proxies, cycles, exotics, sparse arrays, and non-JSON values could violate determinism or execute user code. Canonicalization now admits a bounded data-only JSON domain and rejects every ambiguous shape.                                                                                                                                                       | moderation adversarial canonicalization matrix                                                                                   |
+| `TEMPLATE-CHECKOUT-001` |   Medium | The funded checkout template lacked production replay, size, rate, spend, and authentication controls. Generated code now authenticates before body parsing, enforces idempotency and bounded budgets, and refuses production without an explicit policy.                                                                                                                    | `agenc-cli/src/templates.ts`, generated-template tests/builds                                                                    |
+| `TEMPLATE-ROLLBACK-001` |     High | Generated funded checkout rollback/idempotency races could lose reservations or repeat spend intent. Durable state transitions now use generation/ownership checks and reconcile ambiguous funding before retry/rollback.                                                                                                                                                    | template concurrency/failure tests and generated Next build                                                                      |
+| `DEP-NPM-001`           |     High | Integration/operator tooling carried the vulnerable `bigint-buffer` path. The unused SPL helper dependency was removed, required token helpers were local and bounded, all advisories are now denied at low severity, and the integration runtime audit is zero.                                                                                                             | `tests-integration/package-lock.json`, `spl-token-legacy.mjs`, `audit-tests-integration.mjs`                                     |
+| `REL-STATE-001`         |   Medium | Release publication was neither resumable nor immutable. An explicit inspected state machine now verifies registry integrity/provenance and immutable asset digests before safe resume, publish, or finalization.                                                                                                                                                            | `release-state.mjs`, state/provenance/SBOM tests, release workflow                                                               |
+| `CI-FIXTURES-001`       |   Medium | Next SSR and Playwright fixtures were outside CI and lacked tracked locks. Clean-install SSR/hydration/browser/checkout gates and all independent locks are now tracked in required/nightly workflows.                                                                                                                                                                       | `react-fixtures.yml`, fixture package locks and smoke configs                                                                    |
+| `TOOLCHAIN-001`         |   Medium | Node/npm and Rust release toolchains floated and advertised floors were untested. Exact release versions, engine enforcement, Rust MSRV, and Node-min compatibility jobs are now declared and asserted.                                                                                                                                                                      | `.node-version`, `.nvmrc`, `rust-toolchain.toml`, compatibility workflow                                                         |
+| `TOOLCHAIN-RUNNER-001`  |   Medium | CI did not pin/reproduce the release runner family or all advertised compatibility floors. Every hosted job now selects Ubuntu 24.04 and dedicated jobs exercise Rust 1.82 and Node 20.18.                                                                                                                                                                                   | workflow policy tests and `.github/workflows/compatibility.yml`                                                                  |
+| `RELEASE-VERSION-001`   |   Medium | Moderation wire semantics changed under an unchanged candidate version. The coordinated candidate versions and changelogs now identify the new surface without claiming publication.                                                                                                                                                                                         | package manifests, changelogs, `release-train.json`                                                                              |
+| `DOC-SCALE-001`         |      Low | Scale documentation described the shipped four-worker dispute cap as future work. Current invariants and historical measurements are now separated and machine-checked.                                                                                                                                                                                                      | `docs/SCALE_COST_MODEL.md`, scale documentation test                                                                             |
+| `ART-DIST-001`          |      Low | Tracked tools/MCP distribution output had no drift gate. CI/release now rebuild and require a clean deterministic diff; package smoke executes the declared surface.                                                                                                                                                                                                         | workflow gates, tracked dist, package smoke                                                                                      |
+| `SUPPLY-SCRIPTS-001`    |     High | npm lifecycle scripts could execute without a complete reviewed policy. All six install roots now default-deny scripts and engines; an exact name/version/registry/integrity policy covers every script-bearing package and rejects stale/broadened decisions.                                                                                                               | `.npmrc` files, `check-npm-install-scripts.mjs`, 30 focused policy tests                                                         |
+| `REL-TRAIN-001`         |   Medium | Four public packages lacked a release route and dependency order was advisory. All nine candidates now form an exact acyclic release DAG with verified prerequisite version, dist-tag, integrity, and provenance gates.                                                                                                                                                      | `release-train.json`, release policy/state workflow tests                                                                        |
+| `REACT-E2E-FIXTURE-001` |   Medium | Checkout fallback silently passed bootstrap failure and leaked local validator state. The opt-in gate distinguishes true skip from failure, binds ownership, and performs transactional cleanup on every setup/teardown path.                                                                                                                                                | `localnet-e2e-gate.ts`, sandbox lifecycle tests, Playwright setup/teardown                                                       |
+| `CLI-IMPORT-001`        |   Medium | Importing the exported CLI subpath executed the process and could exit. The importable command surface is pure; only dedicated executables run the process, and the alias executable imports and calls `runCliProcess` from the pure `/cli` API.                                                                                                                             | `agenc-cli/src/cli.ts`, `src/bin.ts`, alias bin, `entrypoint.test.ts`                                                            |
+| `REL-PACK-SMOKE-001`    |   Medium | Release smoke skipped direct-string exports and lost nested resolver conditions. It now traverses direct/nested import/require/bin routes and rejects module output, exit-code changes, and `process.exit` while permitting bin help.                                                                                                                                        | `release-pack-smoke.mjs`, 8 focused adversarial tests                                                                            |
+
+## Conditional findings — intentionally blocked
+
+| ID                        | Severity | Current safe state and mandatory closure condition                                                                                                                                                                                                                             |
+| ------------------------- | -------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `APC-ZK-001`              |     High | Production excludes private-ZK entrypoints and rejects new private tasks. Do not activate until a reproducible guest proves task semantics and golden/adversarial proof, replay, journal, image, and nullifier cases pass.                                                     |
+| `APC-COV-001`             |     High | Host-only private-ZK coverage cannot establish SBF verifier/router correctness. Activation requires a feature-enabled SBF build plus compiled proof/ABI/stack/compute coverage.                                                                                                |
+| `SDK-DELIVERY-001`        |      Low | Delivery-v1 ciphertext authenticity does not itself bind all caller context. Versioned manifests and strict helpers are present, but integrations must validate the signed manifest/context; any new wire version must authenticate metadata rather than silently changing v1. |
+| `MOD-SEMANTIC-001`        |   Medium | Canonicalization v2 covers creator-controlled worker-visible semantics while c14n-v1 remains interoperable. A production moderation backend must explicitly support/test v2; structured specs otherwise fail closed instead of being represented as semantically reviewed.     |
+| `REACT-CHAIN-001`         |      Low | Provider-aware wallet bridges bind the requested Solana chain. Opaque custom signers cannot be introspected; applications using one must attest the provider deployment/chain contract or the flow remains unsupported.                                                        |
+| `DEP-NPM-DEPRECATION-001` |      Low | The Node 20.18 compatibility fixture retains dev-only `whatwg-encoding@3.1.1` through jsdom 25. It is absent from runtime trees and has no advisory. Remove it when the supported Node floor permits a newer jsdom without weakening the compatibility claim.                  |
+
+## External findings — release remains blocked
+
+These rows are not repository defects left unfixed. They are independently
+confirmed actions or state changes outside the authority granted to this audit.
+
+| ID                     | Severity | Read-only result and required authorized action                                                                                                                                                                                                                                                               |
+| ---------------------- | -------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPS-GH-001`           |     High | Public CI/release workflows are disabled or absent remotely. Land this exact tree, enable every required workflow, and obtain protected green runs.                                                                                                                                                           |
+| `OPS-GH-002`           |     High | Durable main/tag/environment/release governance is not configured remotely. Enable protected main and release tags, required reviews/checks, CODEOWNERS enforcement, constrained Actions, protected environment approval, and immutable releases.                                                             |
+| `OPS-SYNC-001`         |     High | The audited baseline/remediation is local and not resolvable on public `main`. An authorized human must land the exact reviewed commit through the protected path; this audit did not push.                                                                                                                   |
+| `SEC-INTAKE-001`       |     High | No tested private vulnerability mailbox/PVR/security.txt path is operational. Enable and exercise PVR plus an independently monitored mailbox, publish valid RFC 9116 text, and complete scope/counsel review.                                                                                                |
+| `HOST-SCHEMA-001`      |   Medium | Advertised schema URLs return landing HTML or 404 rather than versioned JSON. Deploy the exact schemas with correct content type/cache/integrity monitoring, or keep documentation on resolvable package-local references.                                                                                    |
+| `REL-CUTOVER-001`      |     High | Repository release gates now bind a stable publish to finalized revision, executable hash, verified build, and independent RPC evidence. The stable train must remain blocked until an authorized revision-5 mainnet cutover satisfies those checks.                                                          |
+| `SUPPLY-ASSURANCE-001` |   Medium | Repository CodeQL, history secret scanning, SBOM, license, lock coverage, and fail-closed policy are present. GitHub secret scanning, push protection, validity/non-provider checks, security updates, and code-scanning features still require authorized enablement.                                        |
+| `NPM-PROVENANCE-001`   |   Medium | Existing immutable public versions have registry integrity/signatures but no npm OIDC attestations. Publish the next coordinated train only through the provenance rail and verify attestations before assigning the public channel.                                                                          |
+| `CARGO-MAINT-001`      |      Low | `bincode@1.3.3` is unmaintained through the Anchor/Solana graph and has no patched compatible release. The exact lock-specific exception is owned and expiring; remove it as soon as upstream permits migration.                                                                                              |
+| `EXT-MAINNET-001`      |     High | Final SBF size is **2,280,376 bytes**, exceeding live payload capacity **2,183,224** by exactly **97,152 bytes**. Before upgrade, approve a separate Squads `ExtendProgramChecked` ceremony, fund/recheck rent, separate extension and upgrade slots, and rerun two-RPC preflight. No extension was executed. |
+
+The exact capacity inputs retained for `EXT-MAINNET-001` are: required
+ProgramData account length **2,280,421**, required Buffer account length
+**2,280,413**, ProgramData rent floor **15,872,621,040 lamports**, current
+ProgramData top-up **676,177,920 lamports (0.67617792 SOL)**, Buffer rent floor
+**15,872,565,360 lamports**, and the expected header-related rent difference
+**55,680 lamports**. These values must be re-resolved immediately before any
+authorized transaction.
+
+## Rejected and merged hypotheses
+
+The independent senior review retraced all 22. A rejection means the named bug
+was not established; it is not a blanket guarantee about the surrounding code.
+
+- `RJ-001` — No untrusted production escrow-redirection/account-substitution
+  path survived canonical owner/PDA/ATA and positive-alias tests.
+- `RJ-002` — No unchecked audited-flow payout, fee, bond, slash, goods, or skill
+  arithmetic overflow survived checked/u128 and release-overflow tracing.
+- `RJ-003` — No accepted-bid principal/bond leak or double settlement survived
+  compiled terminal-path coverage.
+- `RJ-004` — Mixed legacy/new marketplace snapshot fallback is not reachable
+  through normal creation/migration; stamped active terms bind payees.
+- `RJ-005` — Governance double-vote/quorum bypass was disproved by
+  authority-keyed votes, immutable snapshots, distinct identities, and execution
+  rechecks.
+- `RJ-006` — Arbitrary migration/reallocation was disproved by owner, PDA,
+  discriminator, size, threshold, idempotence, and compiled legacy-layout gates.
+- `RJ-007` — Pause/exit asymmetry is intentional: pause blocks new work while
+  tested settlement and credible exits remain available under version checks.
+- `RJ-008` — No second deployment-signing defect survived genesis, executable,
+  ProgramData authority, finalized/context-slot, snapshot, pause, multisig, and
+  immutable-material controls.
+- `RJ-009` — Worker job-spec SSRF was disproved by redirect, credential, private
+  address, DNS rebinding, byte, and wall-clock bounds.
+- `RJ-010` — Task-thread response exhaustion was disproved by its existing
+  deadline and streamed-byte controls.
+- `RJ-011` — The broad worker-state race claim was narrowed; the verified pieces
+  became `WORKER-LOCK-001` and `WORKER-STATE-001`.
+- `RJ-012` — Cross-system atomic hire was not a valid requirement; the concrete
+  recovery defects were promoted to `SDK-ORCH-001` and `SDK-ORCH-002`.
+- `RJ-013` — Uploader-URI integrity was merged into `WORKER-UPLOAD-001`; on-chain
+  integrity derives from the proof hash/result-data commitment, not the URI.
+- `RJ-014` — Initial rejection was overturned and promoted to
+  `MOD-SEMANTIC-001`.
+- `RJ-015` — Initial rejection was overturned and promoted to
+  `REACT-SIGNER-002`.
+- `RJ-016` — Alleged duplicate generated-template declarations were a truncated
+  output artifact; the actual source contained no duplicates.
+- `RJ-017` — No concrete export/import, HTML escaping, attribution-link,
+  referrer, or generated-code-drift defect remained on the named surfaces.
+- `RJ-018` — Point-in-time review found no tracked secret, artifact/codegen/dist
+  drift, or active Rust vulnerability; continuous controls were still added.
+- `RJ-019` — Current npm packages are registry-integrity signed; only OIDC
+  provenance is absent, tracked separately as `NPM-PROVENANCE-001`.
+- `RJ-020` — Checked-in Vercel MCP configuration was quarantined absent evidence
+  of auto-connect, credential forwarding, or an untrusted endpoint.
+- `RJ-021` — Mutable solana-verify-container concern was quarantined absent proof
+  that the selected tag currently resolved nondeterministically.
+- `RJ-022` — Alleged concurrent iterator `maxQueue` overflow was disproved:
+  JavaScript run-to-completion plus the loop's repeated capacity check prevents
+  the claimed interleaving.
+
+## Independent senior verification
+
+Verification happened in two explicit stages:
+
+1. A fresh senior-review agent, separate from the three audit claim authors,
+   read the full initial ledger, retraced every claim and rejection, reproduced
+   adversarial cases, refined scope/severity, and authorized implementation only
+   for accepted claims.
+2. After remediation, a fresh final senior pass reviewed the resulting control
+   flow and focused regressions for every row. It rejected overclaims, added the
+   later findings recorded above, and issued `ACCEPT/FIXED` only after each
+   repository-controlled claim passed. For release integrity it independently
+   packed all nine packages twice from the quiescent tree: every pair was
+   byte-identical and every SRI matched `release-train.json`. The focused
+   release/supply policy, state, pack, SBOM, provenance, and workflow suite
+   passed **46/46**.
+
+Compatibility rulings retained by that review: keep the on-chain ABI by using
+existing remaining accounts for threshold approval; do not silently retrofit
+AAD into delivery v1; keep moderation c14n-v1 stable while adding semantic v2;
+allow unknown response fields only where all known fields remain strictly typed;
+and never represent a remote/operator condition as locally completed.
+
+## Final local verification evidence
+
+The following gates passed on the remediated tree:
+
+- Rust: production **524/524**, `validation-timings` **524/524**, private-ZK
+  host **549/549**, canary **321/321**, and model/property **77/77** with
+  `PROPTEST_CASES=10000`; strict Clippy passed for all supported profiles.
+- Rust compatibility/supply: Rust **1.82** default/private/canary gates passed;
+  unsupported bare no-default build failed as required; exact pinned
+  `cargo-audit`/`cargo-deny` policy passed for all three locks.
+- Coverage: **524/524** tests; functions **48.754842%**, lines **42.518073%**,
+  regions **33.902933%**, all above the committed nonzero ratchet.
+- Compiled program: production wildcard **408 total = 399 pass + 9 explicit
+  canary-profile skips**; separate canary suite **11/11**.
+- Deployment/preflight scripts: **231/231**. Repository policy scripts:
+  **346/346**.
+- Node **24.18.0** / npm **11.18.0**: every workspace built and typechecked;
+  **1,431 total = 1,429 pass + 2 intentional environment-gated skips**. SDK was
+  **657 total = 656 pass + 1 skip**; React **272 = 271 + 1 skip**; tools 97,
+  MCP 35, moderation 15, worker 241, and CLI 114 all passed.
+- Node **20.18.0** / npm **11.18.0** compatibility: all workspace builds,
+  typechecks, SDK/MCP examples, and clean installs passed. npm 11.7 was rejected
+  by the declared engine as intended.
+- npm supply: clean installs passed at all six independent roots with zero
+  vulnerabilities; 14 lifecycle-script records were exactly classified; the
+  exact install policy and six-lock, 1,616-package license policy passed.
+- Fixtures: starter **28/28** plus ten repeated UI runs without act warnings;
+  checkout and Next SSR clean builds; hydration smoke **1/1**; full browser
+  checkout **1/1**; enabled localnet checkout **1/1** on two clean runs with
+  owned teardown and no residual `.localnet` state.
+- Artifact/codegen: Anchor production build, stack gate, deterministic SDK
+  generation/drift, IDL reference, protocol artifact/package sync, and built
+  artifact checks passed.
+
+Final candidate identities:
+
+- Production SBF: **2,280,376 bytes**, SHA-256
+  `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`.
+- Canonical IDL: **98 instructions / 43 accounts / 99 events / 393 errors**,
+  SHA-256
+  `5ae986603626d0dfe9024c7dc180f184931622c350c0c32b4abf920a0d918f1b`.
+- The SDK testing SBF is byte-identical to the production SBF.
+
+These are local candidate facts, not deployment or publication claims. The ten
+external rows remain release blockers even though all repository-controlled
+findings are closed.

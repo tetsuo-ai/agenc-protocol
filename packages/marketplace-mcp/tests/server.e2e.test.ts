@@ -9,7 +9,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { facade, findAgentPda, findTaskPda } from "@tetsuo-ai/marketplace-sdk";
 import { startLocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";
-import type { MarketplaceToolContext } from "@tetsuo-ai/marketplace-tools";
+import type {
+  MarketplaceTool,
+  MarketplaceToolContext,
+} from "@tetsuo-ai/marketplace-tools";
 import type { Address } from "@solana/kit";
 import { createMarketplaceMcpServer } from "../src/index.js";
 import { LiteSvmGpa, liteSvmRpc } from "./litesvm-harness.js";
@@ -68,7 +71,10 @@ beforeAll(async () => {
     operator: null,
     operatorFeeBps: 0,
   });
-  const [listingPda] = await facade.findListingPda({ providerAgent, listingId });
+  const [listingPda] = await facade.findListingPda({
+    providerAgent,
+    listingId,
+  });
 
   // --- creator: register agent + create a real Open Task ---
   const creator = await market.fundedSigner();
@@ -135,12 +141,18 @@ beforeAll(async () => {
 });
 
 /** Connect a real MCP Client to a server built over `seeded.context`. */
-async function connectClient(opts: { enableMutations?: boolean } = {}) {
+async function connectClient(
+  opts: {
+    enableMutations?: boolean;
+    tools?: ReadonlyArray<MarketplaceTool>;
+  } = {},
+) {
   const { server } = createMarketplaceMcpServer({
     context: seeded.context,
     ...(opts.enableMutations !== undefined
       ? { enableMutations: opts.enableMutations }
       : {}),
+    ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
   });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -162,6 +174,22 @@ function parseResult(result: unknown): unknown {
   const text = r.content?.find((c) => c.type === "text")?.text;
   expect(text).toBeDefined();
   return JSON.parse(text!);
+}
+
+/** Assert and parse the stable structured error returned by tools/call. */
+function parseToolError(result: unknown): {
+  error: { tool: string; code: string; message: string };
+} {
+  const r = result as {
+    content?: Array<{ type: string; text?: string }>;
+    isError?: boolean;
+  };
+  expect(r.isError).toBe(true);
+  const text = r.content?.find((entry) => entry.type === "text")?.text;
+  expect(text).toBeDefined();
+  return JSON.parse(text ?? "null") as {
+    error: { tool: string; code: string; message: string };
+  };
 }
 
 describe("MCP server: tool registration", () => {
@@ -223,6 +251,132 @@ describe("MCP server: tool registration", () => {
       await close();
     }
   });
+
+  it("rejects malformed tool arguments before dispatching to a handler", async () => {
+    const calls: unknown[] = [];
+    const validationProbe: MarketplaceTool = {
+      name: "validation_probe",
+      description: "MCP runtime input validation probe.",
+      kind: "readonly",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["count"],
+        properties: {
+          count: {
+            type: "integer",
+            minimum: 1,
+            maximum: 2,
+            description: "A bounded count.",
+          },
+        },
+      },
+      async handler(input) {
+        calls.push(input);
+        return { ok: true };
+      },
+    };
+    const { client, close } = await connectClient({ tools: [validationProbe] });
+    try {
+      for (const invalid of [
+        {},
+        { count: "1" },
+        { count: 3 },
+        { count: 1, unexpected: true },
+      ]) {
+        const result = await client.callTool({
+          name: "validation_probe",
+          arguments: invalid,
+        });
+        expect(result.isError).toBe(true);
+        const content = result.content as Array<{
+          type: string;
+          text?: string;
+        }>;
+        const text = content.find((entry) => entry.type === "text")?.text;
+        expect(JSON.parse(text ?? "null")).toMatchObject({
+          error: {
+            tool: "validation_probe",
+            code: "INVALID_TOOL_INPUT",
+          },
+        });
+      }
+      expect(calls).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("rejects an invalid envelope through MCP for every shipped tool", async () => {
+    const { client, close } = await connectClient({ enableMutations: true });
+    try {
+      const { tools } = await client.listTools();
+      expect(tools).toHaveLength(19);
+      for (const tool of tools) {
+        const result = await client.callTool({
+          name: tool.name,
+          arguments: { __unexpected: true },
+        });
+        expect(parseToolError(result)).toMatchObject({
+          error: {
+            tool: tool.name,
+            code: "INVALID_TOOL_INPUT",
+          },
+        });
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  it.each([
+    ["get_listing", { pda: "not-a-solana-address" }],
+    ["list_open_tasks", { capabilities: "-1" }],
+    [
+      "prepare_submit",
+      {
+        task: () => seeded.taskPda,
+        worker: () => seeded.providerAgent,
+        workerAuthority: () => seeded.creatorWallet,
+        proofHash: () => "07".repeat(31),
+      },
+    ],
+    [
+      "prepare_set_task_job_spec",
+      {
+        task: () => seeded.taskPda,
+        creator: () => seeded.creatorWallet,
+        jobSpecHash: () => "07".repeat(32),
+        jobSpecUri: "javascript:alert(1)",
+        moderator: () => seeded.creatorWallet,
+      },
+    ],
+    [
+      "prepare_register_agent",
+      {
+        authority: () => seeded.creatorWallet,
+        agentId: () => "07".repeat(32),
+        capabilities: "1",
+        endpoint: "ipfs://not-an-http-endpoint",
+      },
+    ],
+  ])("rejects strict production format via MCP: %s", async (name, template) => {
+    const args = Object.fromEntries(
+      Object.entries(template).map(([key, value]) => [
+        key,
+        typeof value === "function" ? value() : value,
+      ]),
+    );
+    const { client, close } = await connectClient({ enableMutations: true });
+    try {
+      const result = await client.callTool({ name, arguments: args });
+      expect(parseToolError(result)).toMatchObject({
+        error: { tool: name, code: "INVALID_TOOL_INPUT" },
+      });
+    } finally {
+      await close();
+    }
+  });
 });
 
 describe("MCP server: readonly tools resolve REAL local-stack accounts", () => {
@@ -234,7 +388,12 @@ describe("MCP server: readonly tools resolve REAL local-stack accounts", () => {
         arguments: {},
       });
       const out = parseResult(result) as {
-        listings: Array<{ pda: string; name: string; category: string; state: string }>;
+        listings: Array<{
+          pda: string;
+          name: string;
+          category: string;
+          state: string;
+        }>;
       };
       expect(out.listings.length).toBe(1);
       expect(out.listings[0]!.pda).toBe(seeded.listingPda);
@@ -287,7 +446,9 @@ describe("MCP server: readonly tools resolve REAL local-stack accounts", () => {
         name: "get_task",
         arguments: { pda: seeded.taskPda },
       });
-      const out = parseResult(result) as { task: { pda: string; status: string } | null };
+      const out = parseResult(result) as {
+        task: { pda: string; status: string } | null;
+      };
       expect(out.task).not.toBeNull();
       expect(out.task!.pda).toBe(seeded.taskPda);
       expect(out.task!.status).toBe("Open");
@@ -344,7 +505,10 @@ describe("MCP server: mutation prepare tools return UNSIGNED transactions", () =
       });
       const out = parseResult(result) as {
         programAddress: string;
-        accounts: Array<{ address: string; role: { writable: boolean; signer: boolean } }>;
+        accounts: Array<{
+          address: string;
+          role: { writable: boolean; signer: boolean };
+        }>;
         dataBase64: string;
         signatures: unknown[];
       };

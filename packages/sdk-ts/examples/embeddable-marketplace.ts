@@ -118,7 +118,9 @@ export async function main() {
   // Generic content commitments use plain sha256; written review text uses the
   // documented description-hash convention.
   const proofHash = await sha256("artifact:sha256:translated-docs-bundle-v1");
-  const reviewHash = await descriptionHash("Great translation; links preserved.");
+  const reviewHash = await descriptionHash(
+    "Great translation; links preserved.",
+  );
 
   // -- 1. Provider registers the worker agent ------------------------------
   // The agent PDA auto-derives from agentId; only `authority` signs. In a live
@@ -160,8 +162,9 @@ export async function main() {
   // -- 3. Human buyer hires from the listing -------------------------------
   // hire_from_listing_humanless is the plain-wallet storefront checkout path:
   // it mints the task + escrow + hire-record and forces CreatorReview so the
-  // buyer reviews before funds release. Escrow funding alone does not make the
-  // task claimable; activation happens in the next signed action.
+  // buyer reviews before funds release. Escrow funding alone does not clear the
+  // job-spec gate; the next signed action pins the spec and activates discovery,
+  // while transaction-time gates remain authoritative.
   const hireIx = await facade.hireFromListingHumanless({
     listing,
     providerAgent,
@@ -275,7 +278,9 @@ export async function main() {
   ];
 
   // eslint-disable-next-line no-console
-  console.log(`embeddable-marketplace: assembled ${instructions.length} instructions`);
+  console.log(
+    `embeddable-marketplace: assembled ${instructions.length} instructions`,
+  );
   return instructions;
 }
 

@@ -1,6 +1,6 @@
 # Scale-to-Millions Cost Model
 
-> **Historical design/reference record (banner added 2026-07-17).** Byte sizes and the live baseline below are dated measurements, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+> **Historical design/reference record (banner added 2026-07-17).** Byte sizes and the live baseline below are dated measurements, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for the completed remediation record.
 
 > **Status:** DESIGN / REFERENCE — the numeric grounding for "what happens at
 > 10⁴-10⁶ tasks." Sets the binding scale targets for WP-C3's indexer work
@@ -122,16 +122,17 @@ transaction, 1.4M CU ceiling.
   legacy packet with one signer. Adding P5.3's `referrer_store` (+1, mint-side
   anyway) or a future attestation account does not threaten this.
 - **`hire_from_listing`**: 14 accounts (`hire_from_listing.rs:180-338`). Fine.
-- **`resolve_dispute` is the only unbounded shape.** Its fixed accounts are
-  ~20, but collaborative-task cleanup consumes `(claim, worker)` **pairs via
-  remaining accounts** (`dispute_helpers.rs:85-135`), and `max_workers` may be
-  up to **100** (`task_init_helpers.rs:36`). At ~2 × 32 bytes per pair the
-  legacy packet exhausts around ~15 extra pairs, and the 64-lock ceiling lands
-  around ~22 pairs even with lookup tables. A disputed collaborative task with
-  more live claims than that **cannot be resolved in one transaction**.
-  Today's marketplace flows are single-worker (`max_workers = 1` on every hire
-  and reviewed task), so this is latent — but it is a real cliff, and it is
-  cheap to bound now. → Recommendation R2 (§6).
+- **`resolve_dispute` has a shipped four-worker invariant.** Its fixed accounts
+  are ~20, and collaborative-task cleanup consumes `(claim, worker)` **pairs
+  via remaining accounts** (`dispute_helpers.rs:85-135`). The program now caps
+  new tasks at `DISPUTE_SAFE_MAX_WORKERS = 4`, admits at most four live claims
+  on wider legacy tasks, and rejects dispute entry above that bound. Resolution
+  therefore carries at most three additional worker pairs beyond the primary
+  claim — comfortably below both the legacy packet and 64-lock cliffs. Legacy
+  accounts may still store a historical `max_workers` value as high as 100,
+  but that stored value no longer expands the supported live/disputable set.
+  Supporting more than four simultaneous workers would require a new chunked
+  settlement design; it is not part of the current protocol contract.
 
 CU has never been the binding constraint on this program's settlement paths
 (they are transfer + bookkeeping, no heavy hashing loops); byte/lock budget
@@ -198,13 +199,13 @@ serving edge per endpoint (the P5.1 envelope already distinguishes
   next full-module batch (one `else if` arm + a litesvm test; additive,
   no migration). SHIPPED in batch-2 (`close_task.rs` whitelist arm +
   `tests-integration/batch2-surface.test.mjs` reclaim test).
-- **F2 — collaborative-dispute account cliff (§3).**
-  **R2: bound it explicitly** — either document "disputed collaborative tasks
-  support at most N live claims per resolution tx" with a chunked-resolution
-  story, or (simpler, recommended) cap `max_workers` for dispute-eligible
-  task types well below the cliff (e.g. 16) in the next batch that touches
-  task init. Verify the exact cliff empirically in litesvm as part of WP-C3
-  QA before any surface markets collaborative tasks.
+- **F2 — collaborative-dispute account cliff (§3): SHIPPED.** The program's
+  four-worker invariant (`DISPUTE_SAFE_MAX_WORKERS = 4`) is enforced for new
+  task initialization, legacy-task claim admission, and dispute entry. Upgrade
+  preflight separately inventories wider legacy declarations and blocks unsafe
+  active/disputed worker sets. The current monolithic unwind is therefore
+  bounded; any future surface offering more than four simultaneous workers must
+  first ship chunked settlement state and a new audited transaction budget.
 - **F3 — `HireRating` burn is a feature with a price tag** (P6.4's call, not
   this doc's): restate the number (0.00395 SOL/rating) whenever rating volume
   projections change.
@@ -226,9 +227,9 @@ marked, all of:
 | T5 | Cold rebuild | Full reindex from RPC of the 1M-task corpus in ≤ 4 h with resumable checkpoints (disaster recovery bound; implies chunked gPA backfill ~≥ 70 accounts/s/type minimum, trivially parallelizable) |
 | T6 | Byte-true contract | The P5.1 envelope's `accountData` stays byte-identical to on-chain data (existing contract, restated as a scale target because caching layers love to "normalize") |
 | T7 | Corpus math stays pinned | The §1 size table is regenerated from `InitSpace` in a unit test (extend the existing `test_*_size` suite with a printed manifest) so this doc's numbers fail loudly on layout drift |
-| T8 | Tx-shape assertions | litesvm tests assert the account counts of `accept_task_result` / `hire_from_listing` / `resolve_dispute` (incl. the F2 cliff bound) so a future "just add one account" review has the budget in front of it |
+| T8 | Tx-shape assertions | litesvm tests assert the account counts of `accept_task_result` / `hire_from_listing` / `resolve_dispute` (including the shipped F2 four-worker bound) so a future "just add one account" review has the budget in front of it |
 
 **Go/no-go: GO** — no program change is required for scale itself (the account
-model is small and flat; the money paths are constant-size); adopt R1/R2 as
-S-sized riders on the next convenient full-module batch, hold WP-C3 to
-T1-T8, and re-run this model whenever a batch adds a per-task account.
+model is small and flat; the money paths are constant-size). R1 and R2 are
+shipped; preserve their reclaim and four-worker invariants, hold WP-C3 to T1-T8,
+and re-run this model whenever a batch adds a per-task account.

@@ -445,13 +445,13 @@ fn decode_private_completion_payload(
 }
 
 #[inline(never)]
-fn validate_completion_inputs<'info>(
+fn validate_completion_inputs(
     task: &Task,
     task_key: &Pubkey,
     claim: &TaskClaim,
     protocol_config: &ProtocolConfig,
     zk_config: &ZkConfig,
-    remaining_accounts: &[AccountInfo<'info>],
+    remaining_accounts: &[AccountInfo<'_>],
     program_id: &Pubkey,
     authority: &Pubkey,
     task_id: u64,
@@ -531,8 +531,8 @@ fn validate_parsed_journal(
 }
 
 #[inline(never)]
-fn invoke_router_verification<'info>(
-    accounts: &CompleteTaskPrivate<'info>,
+fn invoke_router_verification(
+    accounts: &CompleteTaskPrivate<'_>,
     proof: &PrivateCompletionPayload,
     decoded_proof: &DecodedPrivateProof,
 ) -> Result<()> {
@@ -551,9 +551,7 @@ fn invoke_router_verification<'info>(
     invoke_router_verify_ix(accounts, &verify_ix)
 }
 
-fn validate_router_program_accounts<'info>(
-    accounts: &CompleteTaskPrivate<'info>,
-) -> Result<Pubkey> {
+fn validate_router_program_accounts(accounts: &CompleteTaskPrivate<'_>) -> Result<Pubkey> {
     let router_program_key = accounts.router_program.key();
     require!(
         router_program_key == TRUSTED_RISC0_ROUTER_PROGRAM_ID,
@@ -566,8 +564,8 @@ fn validate_router_program_accounts<'info>(
     Ok(router_program_key)
 }
 
-fn build_and_validate_router_verify_ix<'info>(
-    accounts: &CompleteTaskPrivate<'info>,
+fn build_and_validate_router_verify_ix(
+    accounts: &CompleteTaskPrivate<'_>,
     proof: &PrivateCompletionPayload,
     decoded_proof: &DecodedPrivateProof,
     router_program_key: &Pubkey,
@@ -602,8 +600,8 @@ fn build_and_validate_router_verify_ix<'info>(
     Ok(verify_ix)
 }
 
-fn invoke_router_verify_ix<'info>(
-    accounts: &CompleteTaskPrivate<'info>,
+fn invoke_router_verify_ix(
+    accounts: &CompleteTaskPrivate<'_>,
     verify_ix: &Instruction,
 ) -> Result<()> {
     require!(
@@ -706,8 +704,8 @@ fn append_router_verify_args(
     out.extend_from_slice(&journal_digest);
 }
 
-fn record_private_spends<'info>(
-    accounts: &mut CompleteTaskPrivate<'info>,
+fn record_private_spends(
+    accounts: &mut CompleteTaskPrivate<'_>,
     parsed_journal: &ParsedJournal,
     clock: &Clock,
     binding_spend_bump: u8,

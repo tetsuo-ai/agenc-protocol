@@ -1,5 +1,7 @@
 export {
   hireAndActivate,
+  resumeHireAndActivate,
+  HireAndActivateError,
   type HireAndActivateActivationInput,
   type HireAndActivateHireInput,
   type HireAndActivateHost,
@@ -7,6 +9,9 @@ export {
   type HireAndActivateInput,
   type HireAndActivateModerationResult,
   type HireAndActivatePhase,
+  type HireAndActivateProgress,
+  type HireAndActivateModeratingProgress,
+  type HireAndActivateActivatingProgress,
   type HireAndActivateResult,
 } from "./hire-and-activate.js";
 export {

@@ -1,14 +1,17 @@
 //! Assign a wallet to the dispute-resolver roster (assignable arbiter model).
 //!
-//! The protocol authority designates specific people who may resolve disputes. Each
+//! The protocol authority proposes specific people who may resolve disputes, and the
+//! configured ProtocolConfig M-of-N owners approve the change. Each
 //! assignment is its own PDA (`["dispute_resolver", resolver]`); its existence authorizes
-//! that wallet to call `resolve_dispute` directly — no vote tally, no quorum. Revoke by
-//! closing it via `revoke_dispute_resolver`. Re-assigning an already-assigned resolver
+//! that wallet to call `resolve_dispute` directly — no per-case arbiter vote tally or
+//! quorum (the roster assignment itself required M-of-N approval). Revoke by closing it
+//! via `revoke_dispute_resolver`. Re-assigning an already-assigned resolver
 //! fails at `init` (the PDA already exists), which is the desired "already assigned" signal.
 
 use crate::errors::CoordinationError;
 use crate::events::DisputeResolverAssigned;
 use crate::state::{DisputeResolver, ProtocolConfig};
+use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -30,7 +33,8 @@ pub struct AssignDisputeResolver<'info> {
     )]
     pub dispute_resolver: Box<Account<'info, DisputeResolver>>,
 
-    /// Must be the protocol authority (the roster is authority-managed).
+    /// Must be the protocol authority (the roster proposal is authority-bound;
+    /// configured M-of-N approval arrives through remaining accounts).
     #[account(
         mut,
         constraint = authority.key() == protocol_config.authority
@@ -42,6 +46,12 @@ pub struct AssignDisputeResolver<'info> {
 }
 
 pub fn handler(ctx: Context<AssignDisputeResolver>, resolver: Pubkey) -> Result<()> {
+    // Resolver appointment controls who may choose canonical dispute outcomes.
+    // The authority assembles/pays for the instruction, while the configured
+    // M-of-N owners explicitly approve through existing remaining accounts.
+    let unique_signers = unique_account_infos(ctx.remaining_accounts);
+    require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
+
     require!(
         resolver != Pubkey::default(),
         CoordinationError::InvalidDisputeResolver

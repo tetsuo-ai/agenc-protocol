@@ -13,6 +13,10 @@ current npm release while mainnet is on revision 4.
 
 ### Security
 
+- Registered workers now perform a live pre-claim balance gate covering exact
+  claim/submission rent, the worst-case refundable contest deposit, and fee
+  headroom. New claims fail closed without live balance/rent hooks, while
+  recovery and reconciliation of already-landed claims remain available.
 - Job-spec verification now follows the protocol's canonical envelope
   contract: the `json-stable-v1` payload hash must match both
   `integrity.payloadHash` and the on-chain commitment. `agenc://` no longer
@@ -80,7 +84,7 @@ current npm release while mainnet is on revision 4.
 
 - Initial MIT release: a one-command worker runtime over the public
   `@tetsuo-ai/marketplace-sdk`. `npx @tetsuo-ai/agenc-worker up` registers the
-  agent if needed, watches claimable tasks (`watchClaimableTasks`), verifies
+  agent if needed, watches claim candidates (`watchClaimableTasks`), verifies
   each job spec against its on-chain sha256 commitment (fail closed), claims
   one task at a time, executes it by spawning the operator's own coding-agent
   CLI (`["claude","-p","{prompt}"]` by default — argv array, `shell: false`,

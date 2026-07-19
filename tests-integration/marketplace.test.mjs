@@ -29,7 +29,7 @@ import {
   createMintToInstruction,
   createSetAuthorityInstruction,
   getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+} from "./spl-token-legacy.mjs";
 
 
 // Shared harness (constants + helpers) — see harness.mjs.
@@ -37,7 +37,8 @@ import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, sendMany, tokenAmount, expectOk, expectFail, decode, isClosed,
   injectProtocolConfig, setProtocolPaused, injectAgentStake,
-  setMultisig, injectModerationConfig, freshWorld, hireIx,
+  setMultisig, configureTestMultisig, seatTestAuthorityResolver,
+  injectModerationConfig, freshWorld, hireIx,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
 } from "./harness.mjs";
 import { setupBidExclusiveFixture } from "./bid-fixture.mjs";
@@ -1881,10 +1882,10 @@ test("SPL-token settlement: complete pays worker + treasury in tokens (conservat
 });
 
 test("dispute: resolve via assigned resolver settles while the protocol is paused (exit-safe, no votes)", async () => {
-  // P6.3: the arbiter vote/quorum model is retired. The protocol authority resolves
-  // directly (resolverAssignment = null) with the required P6.4 rationale, no arbiters,
-  // no vote PDAs, and NO (vote, arbiter) remaining accounts.
+  // P6.3: the arbiter vote/quorum model is retired. A threshold-seated resolver
+  // resolves with the required P6.4 rationale, no arbiters, and no vote PDAs.
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
 
   // Creator opens a dispute against the claimed worker (there is no submission yet).
@@ -1897,12 +1898,12 @@ test("dispute: resolve via assigned resolver settles while the protocol is pause
     .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "resolve:initiate");
 
-  // resolve while paused — exit-safe (money never locks). No voting-period wait is
-  // needed anymore: an assigned resolver / the protocol authority decides directly.
+  // Resolve while paused through the threshold-seated assigned resolver — exit-safe
+  // (money never locks). No per-case voting-period wait is needed.
   await setProtocolPaused(w.svm, true);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/refund")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: authorityResolver, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "resolve_dispute while paused");
 
   assert.ok(decode(w.svm, "Dispute", dispute).status.Active === undefined, "dispute resolved (no longer Active) while paused");
@@ -1916,6 +1917,7 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
   // operator carve in resolve_dispute and the two equalities below go red.
   const operatorKp = Keypair.generate();
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000, operator: operatorKp.publicKey, operatorFeeBps: 1000 });
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed, InProgress, live hire w/ 10% operator fee
 
   // Creator opens a Complete dispute against the claimed worker.
@@ -1928,8 +1930,8 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
     .accounts({ dispute, task: r.task, agent: w.buyerAgent, authorityRateLimit: initRate, protocolConfig: w.protocolPda, initiatorClaim: null, workerAgent: w.providerAgent, workerClaim: r.claim, taskSubmission: null, authority: w.buyer.publicKey, systemProgram: SystemProgram.programId })
     .instruction(), [w.buyer]), "op-resolve:initiate Complete");
 
-  // P6.3: the protocol authority resolves the Complete ruling directly — no arbiters,
-  // no votes, no voting-period wait.
+  // P6.3: the threshold-seated assigned resolver decides the Complete ruling directly —
+  // no per-case arbiters, votes, or voting-period wait.
   const workerBalBefore = Number(w.svm.getBalance(w.provider.publicKey));
   const workerStateBefore = decode(w.svm, "AgentRegistration", w.providerAgent);
   const operatorBalBefore = Number(w.svm.getBalance(operatorKp.publicKey));
@@ -1939,7 +1941,7 @@ test("operator-fee protection: resolve_dispute Complete pays the operator its cu
 
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: operatorKp.publicKey, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: authorityResolver, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: operatorKp.publicKey, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "op-resolve:resolve Complete");
 
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed via dispute");
@@ -1974,6 +1976,7 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
   // Worker wins (Complete) -> worker bond refunded, creator (loser) bond forfeited to
   // treasury. Revert-sensitive: without the disposition both bonds stay open.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
@@ -1987,8 +1990,8 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
       workerClaim: r.claim })).instruction(), [w.provider]), "worker bond");
   const bondPrincipal = Math.floor(r.reward / 4); // 25% = 1,000,000
 
-  // Creator opens a Complete dispute against the claimed worker; P6.3: the protocol
-  // authority rules directly (no arbiters, no votes).
+  // Creator opens a Complete dispute against the claimed worker; P6.3: the
+  // threshold-seated assigned resolver rules directly (no per-case arbiters or votes).
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
@@ -2001,7 +2004,7 @@ test("completion bond: resolve_dispute Complete refunds the worker bond + forfei
   const treasuryBefore = Number(w.svm.getBalance(w.admin.publicKey));
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: authorityResolver, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: creatorBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "bond-resolve:resolve Complete");
 
   assert.ok(decode(w.svm, "Task", r.task).status.Completed !== undefined, "task Completed");
@@ -2022,6 +2025,7 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
   // refund to the loser on the now-Completed task — inverting the forfeit. With the pin,
   // the tx fails atomically (MissingCompletionBondAccount) and nothing settles.
   const w = await freshWorld({ moderationEnabled: true, price: 4_000_000 });
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
 
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
@@ -2035,7 +2039,8 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
       workerClaim: r.claim })).instruction(), [w.provider]), "junk-bond:worker bond");
 
   // Creator opens a Complete dispute (worker wins -> creator bond is forfeit-due);
-  // P6.3: the protocol authority rules directly (no arbiters, no votes).
+  // P6.3: the threshold-seated assigned resolver rules directly (no per-case arbiters
+  // or votes).
   const taskId = decode(w.svm, "Task", r.task).task_id;
   const disputeId = id32();
   const [dispute] = pda([enc("dispute"), Buffer.from(disputeId)]);
@@ -2050,7 +2055,7 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
   const junkBond = Keypair.generate().publicKey;
   expectFail(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/complete")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: junkBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: authorityResolver, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: junkBond, workerCompletionBond: workerBond, bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "MissingCompletionBondAccount", "junk-bond:resolve must reject non-canonical creator bond");
 
   // Nothing settled: the dispute is still Active and the real creator bond is still open.
@@ -2059,9 +2064,10 @@ test("completion bond: resolve_dispute rejects a non-canonical (junk) forfeit-du
 });
 
 test("dispute: apply_dispute_slash slashes the losing worker while the protocol is paused (exit-safe, roster ruling)", async () => {
-  // P6.3: no arbiters, no votes — the protocol authority rules a Refund (worker loses)
-  // directly. The slash decision is recovered from the resolver's ruling bit, not a tally.
+  // P6.3: no arbiters, no votes — a threshold-seated resolver rules a Refund
+  // (worker loses). The slash decision comes from the ruling bit, not a tally.
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const r = await runHireSettlement(w, { stopBeforeComplete: true }); // claimed task, InProgress
   await injectAgentStake(w.svm, w.providerAgent, 2_000_000); // worker has a slashable stake
 
@@ -2079,7 +2085,7 @@ test("dispute: apply_dispute_slash slashes the losing worker while the protocol 
   // no remaining accounts.
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .resolveDispute(true, arr(Buffer.alloc(32, 5)), "agenc://ruling/refund")
-    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: null, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
+    .accounts({ dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda, authority: w.admin.publicKey, resolverAssignment: authorityResolver, creator: w.buyer.publicKey, workerClaim: r.claim, worker: w.providerAgent, workerWallet: w.provider.publicKey, agentStats: null, hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null, systemProgram: SystemProgram.programId, tokenEscrowAta: null, creatorTokenAccount: null, workerTokenAccountAta: null, treasuryTokenAccount: null, rewardMint: null, tokenProgram: null, creatorCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0], workerCompletionBond: pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0], bondTreasury: w.admin.publicKey, taskSubmission: taskSubmissionPda(r.claim), taskValidationConfig: null })
     .instruction(), [w.admin]), "slash:resolve");
   assert.ok(decode(w.svm, "Dispute", dispute).status.Resolved !== undefined, "dispute Resolved (worker lost)");
   const stakeBefore = Number(decode(w.svm, "AgentRegistration", w.providerAgent).stake);
@@ -2116,8 +2122,9 @@ async function resolveAsDispute(w, r, dispute, prog, signerPubkey, resolverAssig
     .instruction();
 }
 
-test("dispute roster: an ASSIGNED resolver (not the protocol authority) resolves directly — no votes, no quorum, no voting-period wait", async () => {
+test("dispute roster: a threshold-seated ASSIGNED resolver resolves directly — no per-case votes, quorum, or voting-period wait", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const approvals = await configureTestMultisig(w);
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
   const dispute = await openCompleteDispute(w, r);
 
@@ -2134,7 +2141,8 @@ test("dispute roster: an ASSIGNED resolver (not the protocol authority) resolves
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .assignDisputeResolver(resolver.publicKey)
     .accounts({ protocolConfig: w.protocolPda, disputeResolver: assignment, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.admin]), "roster:assign");
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction(), approvals.approvers), "roster:assign");
   const a = decode(w.svm, "DisputeResolver", assignment);
   assert.equal(a.resolver.toBase58(), resolver.publicKey.toBase58(), "assignment records the resolver");
 
@@ -2149,6 +2157,7 @@ test("dispute roster: an ASSIGNED resolver (not the protocol authority) resolves
 
 test("dispute roster: revoke removes the resolver's authority", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  const approvals = await configureTestMultisig(w);
   const r = await runHireSettlement(w, { stopBeforeComplete: true });
   const dispute = await openCompleteDispute(w, r);
 
@@ -2158,12 +2167,22 @@ test("dispute roster: revoke removes the resolver's authority", async () => {
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .assignDisputeResolver(resolver.publicKey)
     .accounts({ protocolConfig: w.protocolPda, disputeResolver: assignment, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.admin]), "roster:assign");
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction(), approvals.approvers), "roster:assign");
+
+  expectFail(send(w.svm, await makeProgram(w.admin).methods
+    .revokeDisputeResolver()
+    .accounts({ protocolConfig: w.protocolPda, disputeResolver: assignment, authority: w.admin.publicKey })
+    .remainingAccounts([approvals.remainingAccounts[0]])
+    .instruction(), [approvals.approvers[0]]),
+    "MultisigNotEnoughSigners", "roster:one owner cannot revoke");
+  assert.ok(!isClosed(w.svm, assignment), "failed single-owner revoke leaves assignment open");
 
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .revokeDisputeResolver()
     .accounts({ protocolConfig: w.protocolPda, disputeResolver: assignment, authority: w.admin.publicKey })
-    .instruction(), [w.admin]), "roster:revoke");
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction(), approvals.approvers), "roster:revoke");
   assert.ok(isClosed(w.svm, assignment), "assignment PDA closed on revoke");
 
   // With the assignment gone, the (formerly assigned) resolver is just a stranger again.

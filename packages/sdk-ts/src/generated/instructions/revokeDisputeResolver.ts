@@ -115,7 +115,10 @@ export type RevokeDisputeResolverAsyncInput<
    * is enforced; `close = authority` returns the rent to the protocol authority.
    */
   disputeResolver: Address<TAccountDisputeResolver>;
-  /** Must be the protocol authority (the roster is authority-managed). */
+  /**
+   * Must be the protocol authority; configured M-of-N approval arrives through
+   * remaining accounts.
+   */
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -187,7 +190,10 @@ export type RevokeDisputeResolverInput<
    * is enforced; `close = authority` returns the rent to the protocol authority.
    */
   disputeResolver: Address<TAccountDisputeResolver>;
-  /** Must be the protocol authority (the roster is authority-managed). */
+  /**
+   * Must be the protocol authority; configured M-of-N approval arrives through
+   * remaining accounts.
+   */
   authority: TransactionSigner<TAccountAuthority>;
 };
 
@@ -253,7 +259,10 @@ export type ParsedRevokeDisputeResolverInstruction<
      * is enforced; `close = authority` returns the rent to the protocol authority.
      */
     disputeResolver: TAccountMetas[1];
-    /** Must be the protocol authority (the roster is authority-managed). */
+    /**
+     * Must be the protocol authority; configured M-of-N approval arrives through
+     * remaining accounts.
+     */
     authority: TAccountMetas[2];
   };
   data: RevokeDisputeResolverInstructionData;

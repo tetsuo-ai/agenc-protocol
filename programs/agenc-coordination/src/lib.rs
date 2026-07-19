@@ -633,13 +633,14 @@ pub mod agenc_coordination {
         )
     }
 
-    // P6.3: `vote_dispute` retired. The arbiter vote/quorum model no longer gates
-    // resolution — an assigned dispute resolver (the dispute-resolver roster below)
-    // decides directly. Removing the instruction also drops its `DisputeVote` /
-    // `AuthorityDisputeVote` PDAs and the `DisputeVoteCast` event.
+    // P6.3: `vote_dispute` retired. The per-case arbiter vote/quorum model no longer
+    // gates resolution. A threshold-approved protocol authority or a threshold-seated
+    // assigned resolver decides directly. Removing the instruction also drops its
+    // `DisputeVote` / `AuthorityDisputeVote` PDAs and the `DisputeVoteCast` event.
 
-    /// Assign a wallet to the dispute-resolver roster (authority-only). The assigned
-    /// wallet may then call `resolve_dispute` directly — no vote tally, no quorum.
+    /// Assign a wallet to the dispute-resolver roster. The protocol authority proposes
+    /// the change and the configured M-of-N owners approve it. The assigned wallet may
+    /// then call `resolve_dispute` directly — no per-case vote tally or quorum.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn assign_dispute_resolver(
         ctx: Context<AssignDisputeResolver>,
@@ -648,8 +649,8 @@ pub mod agenc_coordination {
         instructions::assign_dispute_resolver::handler(ctx, resolver)
     }
 
-    /// Remove a wallet from the dispute-resolver roster (authority-only), closing its
-    /// assignment PDA.
+    /// Remove a wallet from the dispute-resolver roster after a protocol-authority
+    /// proposal receives configured M-of-N approval, closing its assignment PDA.
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn revoke_dispute_resolver(ctx: Context<RevokeDisputeResolver>) -> Result<()> {
         instructions::revoke_dispute_resolver::handler(ctx)
@@ -739,9 +740,11 @@ pub mod agenc_coordination {
         instructions::set_default_trust_list::handler(ctx, list_hash, list_uri)
     }
 
-    /// Resolve a dispute. The signer must be the protocol authority OR an assigned
-    /// dispute resolver. `approve` upholds the initiator's requested resolution_type;
-    /// `!approve` refunds the creator. No vote tally or quorum is consulted.
+    /// Resolve a dispute. A direct protocol-authority ruling requires configured
+    /// M-of-N owner approval; an assigned resolver must have been seated through
+    /// that same threshold-controlled roster. `approve` upholds the initiator's
+    /// requested resolution_type; `!approve` refunds the creator. No per-case
+    /// arbiter vote tally or quorum is consulted.
     ///
     /// P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a
     /// 32-byte content hash of the off-chain rationale) and a bounded `rationale_uri`.

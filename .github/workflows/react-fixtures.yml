@@ -1,0 +1,184 @@
+name: React Fixtures
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    # Full local-validator checkout coverage nightly. Keep this off the PR path;
+    # the deterministic Next/Chromium hydration smoke runs on every PR instead.
+    - cron: "17 8 * * *"
+
+permissions:
+  contents: read
+
+env:
+  AGAVE_VERSION: v3.0.13
+  AGAVE_INSTALL_INIT_SHA256: 1a4e96d884a4df7f204240ea8a0e2ce5a4ca71257bc5ce32ae140e1f6bc140d8
+
+jobs:
+  fixture-smoke:
+    name: Clean-install SSR and browser smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/marketplace-react/test-apps/next-ssr/package-lock.json
+            packages/marketplace-react/test/playwright/package-lock.json
+
+      - name: Pin declared npm toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
+
+      - name: Clean-install workspace dependencies
+        run: npm ci
+
+      - name: Build fixture workspace dependencies
+        run: |
+          npm run build --workspace=@tetsuo-ai/marketplace-sdk
+          npm run build --workspace=@tetsuo-ai/marketplace-react
+          npm run build --workspace=@tetsuo-ai/agenc-cli
+
+      - name: Clean-install Next SSR fixture
+        run: npm ci
+        working-directory: packages/marketplace-react/test-apps/next-ssr
+
+      - name: Build and typecheck Next SSR fixture
+        working-directory: packages/marketplace-react/test-apps/next-ssr
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          npm run build
+          npx tsc --noEmit
+
+      - name: Build generated AgenC App and Pages Router fixtures
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run test:generated-next --workspace=@tetsuo-ai/agenc-cli
+
+      - name: Verify production SSR shell
+        run: npm run test:ssr
+        working-directory: packages/marketplace-react/test-apps/next-ssr
+
+      - name: Clean-install and typecheck Playwright harness
+        working-directory: packages/marketplace-react/test/playwright
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: react-fixture-chromium-${{ runner.os }}-${{ hashFiles('packages/marketplace-react/test/playwright/package-lock.json') }}
+
+      - name: Install Chromium runtime
+        run: npx playwright install --with-deps chromium
+        working-directory: packages/marketplace-react/test/playwright
+
+      - name: Browser hydration smoke
+        run: npx playwright test --config playwright.smoke.config.ts
+        working-directory: packages/marketplace-react/test/playwright
+
+  full-playwright:
+    name: Full local-validator checkout E2E
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: fixture-smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/marketplace-react/test-apps/checkout/package-lock.json
+            packages/marketplace-react/test/playwright/package-lock.json
+
+      - name: Pin declared npm toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Cache cargo and SBF target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            programs/agenc-coordination/target
+          key: react-fixture-sbf-${{ runner.os }}-${{ hashFiles('programs/agenc-coordination/Cargo.lock', 'programs/agenc-coordination/Cargo.toml') }}
+
+      - name: Install Solana platform tools
+        run: |
+          curl -sSfL --retry 3 \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
+            -o "${RUNNER_TEMP}/agave-install-init"
+          echo "${AGAVE_INSTALL_INIT_SHA256}  ${RUNNER_TEMP}/agave-install-init" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/agave-install-init"
+          "${RUNNER_TEMP}/agave-install-init" "${AGAVE_VERSION}"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Clean-install workspace dependencies
+        run: npm ci
+
+      - name: Build production program
+        run: cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
+
+      - name: Build browser workspace dependencies
+        run: |
+          npm run build --workspace=@tetsuo-ai/marketplace-sdk
+          npm run build --workspace=@tetsuo-ai/marketplace-react
+
+      - name: Clean-install checkout fixture
+        run: npm ci
+        working-directory: packages/marketplace-react/test-apps/checkout
+
+      - name: Clean-install and typecheck Playwright harness
+        working-directory: packages/marketplace-react/test/playwright
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: react-fixture-chromium-${{ runner.os }}-${{ hashFiles('packages/marketplace-react/test/playwright/package-lock.json') }}
+
+      - name: Install Chromium runtime
+        run: npx playwright install --with-deps chromium
+        working-directory: packages/marketplace-react/test/playwright
+
+      - name: Run full browser checkout E2E
+        run: npm test
+        working-directory: packages/marketplace-react/test/playwright
+
+      - name: Stop local validator
+        if: always()
+        continue-on-error: true
+        run: node packages/marketplace-react/test/sandbox-up.mjs down --purge

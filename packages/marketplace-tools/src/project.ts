@@ -21,7 +21,9 @@ import type { Address } from "@solana/kit";
 const { decodeListingName, decodeListingCategory, decodeListingTags } = values;
 
 /** Lowercase hex of a byte array. */
-export function toHex(bytes: { length: number; [i: number]: number } | Uint8Array): string {
+export function toHex(
+  bytes: { length: number; [i: number]: number } | Uint8Array,
+): string {
   let out = "";
   for (let i = 0; i < bytes.length; i++) {
     out += (bytes[i] as number).toString(16).padStart(2, "0");
@@ -80,17 +82,18 @@ export interface TaskView {
    */
   description: string;
   /**
-   * Whether this Open task's job spec is PINNED — i.e. a `TaskJobSpec` account
-   * exists at PDA `["task_job_spec", task]`. A task is only actually claimable
-   * (`claim_task_with_job_spec` succeeds) when it is BOTH Open AND pinned; an
-   * Open-but-unpinned task fails on-chain (AccountNotInitialized).
+   * Whether this Open task has a `TaskJobSpec` account at PDA
+   * `["task_job_spec", task]`. Pin existence is a necessary discovery signal,
+   * not proof that `claim_task_with_job_spec` will succeed: the program also
+   * validates the pointer fields and all current task, worker, capacity,
+   * deadline, capability, stake, cooldown, and protocol gates at execution.
    *
-   * - `true`  — pinned and confirmed claim-ready (a single-account read path).
+   * - `true`  — the pin account exists; treat the task as a claim candidate.
    * - `false` — confirmed Open but NOT pinned (do not prepare a claim yet).
    * - `null`  — UNKNOWN on this read path. The bulk `list_open_tasks` gPA sweep
    *   returns every Open task in one call and does NOT pay the per-task extra
    *   read to confirm pinning, so it leaves this `null`. Confirm with `get_task`
-   *   (single fetch) before preparing a claim.
+   *   (single fetch) before preparing a claim attempt.
    */
   jobSpecPinned: boolean | null;
 }
@@ -114,7 +117,9 @@ export function projectTask(
     requiredCapabilities: n(task.requiredCapabilities),
     rewardAmount: n(task.rewardAmount),
     rewardMint:
-      task.rewardMint.__option === "Some" ? String(task.rewardMint.value) : null,
+      task.rewardMint.__option === "Some"
+        ? String(task.rewardMint.value)
+        : null,
     status: taskStatusName(task.status),
     minReputation: task.minReputation,
     maxWorkers: task.maxWorkers,

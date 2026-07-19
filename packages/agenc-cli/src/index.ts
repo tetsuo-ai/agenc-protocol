@@ -43,17 +43,23 @@ export {
   findLocalnetEnv,
   LocalnetError,
   localnetTooling,
+  parseValidatorPidRecord,
+  assertValidatorProcessBinding,
   SETUP_INSTRUCTIONS,
   type LocalnetEnv,
+  type ValidatorPidRecord,
+  type ValidatorProcessObservation,
 } from "./localnet.js";
 export {
   gatherPromoteInput,
+  gatherPromoteInputAsync,
   readInstalledVersions,
   runPromoteChecks,
   SUPPORT_MATRIX,
   versionInMatrix,
   type CheckStatus,
   type PromoteCheck,
+  type PromoteChainEvidence,
   type PromoteInput,
   type PromoteReport,
 } from "./promote.js";

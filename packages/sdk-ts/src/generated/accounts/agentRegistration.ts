@@ -33,8 +33,6 @@ import {
   getU64Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -48,6 +46,11 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAgentStatusDecoder,
   getAgentStatusEncoder,
@@ -248,8 +251,14 @@ export function getAgentRegistrationEncoder(): Encoder<AgentRegistrationArgs> {
       ["authority", getAddressEncoder()],
       ["capabilities", getU64Encoder()],
       ["status", getAgentStatusEncoder()],
-      ["endpoint", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
-      ["metadataUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "endpoint",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
+      [
+        "metadataUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["registeredAt", getI64Encoder()],
       ["lastActive", getI64Encoder()],
       ["tasksCompleted", getU64Encoder()],
@@ -281,8 +290,14 @@ export function getAgentRegistrationDecoder(): Decoder<AgentRegistration> {
     ["authority", getAddressDecoder()],
     ["capabilities", getU64Decoder()],
     ["status", getAgentStatusDecoder()],
-    ["endpoint", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
-    ["metadataUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "endpoint",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
+    [
+      "metadataUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["registeredAt", getI64Decoder()],
     ["lastActive", getI64Decoder()],
     ["tasksCompleted", getU64Decoder()],

@@ -93,11 +93,11 @@ export function useListing(
   pda: Address | string | undefined | null,
   options?: UseListingOptions,
 ): UseListingResult {
-  const { read } = useAgencContext();
+  const { read, cacheNamespace } = useAgencContext();
   const enabled = (options?.enabled ?? true) && Boolean(pda);
 
   const query = useQuery<ListingDetail, Error>({
-    queryKey: queryKeys.listing(pda ? pdaKey(pda) : ""),
+    queryKey: queryKeys.listing(pda ? pdaKey(pda) : "", cacheNamespace),
     enabled,
     queryFn: async () => {
       // 1) The listing itself.

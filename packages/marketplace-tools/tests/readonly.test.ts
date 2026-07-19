@@ -60,7 +60,10 @@ describe("list_listings handler", () => {
     const ctx: MarketplaceToolContext = {
       read: fakeTransport([encodeListing(), encodeListing(), encodeListing()]),
     };
-    const out = (await getTool("list_listings")!.handler({ limit: 2 }, ctx)) as {
+    const out = (await getTool("list_listings")!.handler(
+      { limit: 2 },
+      ctx,
+    )) as {
       listings: unknown[];
     };
     expect(out.listings).toHaveLength(2);
@@ -107,7 +110,7 @@ describe("list_open_tasks handler", () => {
   it("applies the client-side capability-subset filter", async () => {
     const ctx: MarketplaceToolContext = {
       read: fakeTransport([
-        encodeTask({ requiredCapabilities: 1n }), // claimable by caps=3
+        encodeTask({ requiredCapabilities: 1n }), // capability-compatible with caps=3
         encodeTask({
           requiredCapabilities: 4n, // NOT a subset of 3
           pda: "Config1111111111111111111111111111111111113" as never,
@@ -164,7 +167,8 @@ describe("get_listing / get_task handlers", () => {
   });
 
   // Finding #5: an Open task WITH a pinned job-spec account at
-  // ["task_job_spec", task] is the only actually-claimable shape.
+  // ["task_job_spec", task] has the necessary pin-account shape for an Open
+  // claim candidate; transaction-time gates still decide the claim.
   it("get_task reports jobSpecPinned=true when the job-spec account exists", async () => {
     const taskAcct = encodeTask({ status: TaskStatus.Open, pda: A_TASK_PDA });
     const [jobSpecPda] = await findTaskJobSpecPda({ task: A_TASK_PDA });

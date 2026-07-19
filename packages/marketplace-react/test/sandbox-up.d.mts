@@ -30,6 +30,9 @@ export interface SandboxEnv {
   fixturesPath: string | null;
   fixtures: SandboxFixtures | null;
   keypairs: { authority: string; moderator: string; seeder: string } | null;
+  programSha256: string | null;
+  currentProgramSha256: string | null;
+  programCurrent: boolean;
 }
 
 export interface StartOptions {
@@ -37,6 +40,20 @@ export interface StartOptions {
   keepLedger?: boolean;
   seed?: boolean;
   quiet?: boolean;
+  unsafeUnpausedFixture?: boolean;
+  disposable?: boolean;
+}
+
+export interface SandboxBootstrapDependencies {
+  up: () => Promise<void>;
+  readEnv: () => Promise<unknown | null>;
+  seed: () => Promise<void>;
+  resolve: () => Promise<SandboxEnv | null>;
+  cleanup: () => Promise<void>;
+}
+
+export interface SandboxStartDependencies extends SandboxBootstrapDependencies {
+  assertPrereqs: () => Promise<void>;
 }
 
 export function readLocalnetEnv(envFile?: string): Promise<unknown | null>;
@@ -44,5 +61,17 @@ export function readSandboxFixtures(
   fixturesPath: string | null | undefined,
 ): Promise<SandboxFixtures | null>;
 export function readSandboxEnv(envFile?: string): Promise<SandboxEnv | null>;
-export function start(options?: StartOptions): Promise<SandboxEnv>;
-export function stop(options?: { purge?: boolean; quiet?: boolean }): Promise<void>;
+export function recordedValidatorMayBeLive(): Promise<boolean>;
+export function start(
+  options?: StartOptions,
+  dependencies?: Partial<SandboxStartDependencies>,
+): Promise<SandboxEnv>;
+export function runSandboxBootstrap(
+  dependencies: SandboxBootstrapDependencies,
+  options?: { seed?: boolean; cleanupOnFailure?: boolean },
+): Promise<SandboxEnv>;
+export function stop(options?: {
+  purge?: boolean;
+  quiet?: boolean;
+  removeState?: boolean;
+}): Promise<void>;

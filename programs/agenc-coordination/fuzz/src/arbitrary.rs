@@ -325,13 +325,28 @@ pub const DISPUTE_INITIATOR: [u8; 32] = [4; 32];
 pub const TASK_CREATOR: [u8; 32] = [5; 32];
 pub const TASK_WORKER: [u8; 32] = [6; 32];
 
-/// Materialize a role into the exact identity relationships checked by the
-/// simulation. Party roles carry a valid assignment so they exercise the
-/// self-dealing guards after passing the roster gate.
+/// Materialize a role with a complete authorization proof. This convenience
+/// assumes configured threshold approval for a direct protocol-authority ruling;
+/// tests that model missing approval must use
+/// [`direct_ruling_with_threshold_approval`]. Party roles carry a valid assignment
+/// so they exercise the self-dealing guards after passing the roster gate.
 pub fn direct_ruling(
     role: ResolverRole,
     approve: bool,
     has_rationale: bool,
+) -> crate::scenarios::SimulatedRuling {
+    direct_ruling_with_threshold_approval(role, approve, has_rationale, true)
+}
+
+/// Materialize a direct ruling while explicitly modeling whether the configured
+/// M-of-N owners approved an unassigned protocol-authority action. The approval
+/// bit is ignored for assigned resolvers because their roster assignment was
+/// threshold-approved separately.
+pub fn direct_ruling_with_threshold_approval(
+    role: ResolverRole,
+    approve: bool,
+    has_rationale: bool,
+    has_configured_threshold_approval: bool,
 ) -> crate::scenarios::SimulatedRuling {
     let (resolver, resolver_assigned) = match role {
         ResolverRole::ProtocolAuthority => (PROTOCOL_AUTHORITY, false),
@@ -346,6 +361,7 @@ pub fn direct_ruling(
         resolver,
         protocol_authority: PROTOCOL_AUTHORITY,
         resolver_assigned,
+        has_configured_threshold_approval,
         creator_authority: TASK_CREATOR,
         worker_authority: TASK_WORKER,
         approve,
@@ -378,6 +394,7 @@ pub struct ResolveDisputeInput {
     pub approve: bool,
     pub resolver_role: ResolverRole,
     pub has_rationale: bool,
+    pub has_configured_threshold_approval: bool,
     pub dispute_active: bool,
     pub task_disputed: bool,
     pub escrow_amount: u64,
@@ -394,14 +411,19 @@ impl Arbitrary for ResolveDisputeInput {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             (arb_id(), 0u8..=2u8, any::<bool>(), any::<ResolverRole>()),
-            (any::<bool>(), any::<bool>(), any::<bool>()),
+            (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()),
             (arb_reward_amount(), arb_reward_amount()),
             (arb_dispute_time(), arb_dispute_time(), arb_dispute_time()),
         )
             .prop_map(
                 |(
                     (dispute_id, resolution_type, approve, resolver_role),
-                    (has_rationale, dispute_active, task_disputed),
+                    (
+                        has_rationale,
+                        has_configured_threshold_approval,
+                        dispute_active,
+                        task_disputed,
+                    ),
                     (escrow_amount, escrow_distributed),
                     (voting_deadline, expires_at, current_timestamp),
                 )| {
@@ -411,6 +433,7 @@ impl Arbitrary for ResolveDisputeInput {
                         approve,
                         resolver_role,
                         has_rationale,
+                        has_configured_threshold_approval,
                         dispute_active,
                         task_disputed,
                         escrow_amount,
@@ -531,6 +554,7 @@ pub enum DisputeAction {
         resolver_role: ResolverRole,
         approve: bool,
         has_rationale: bool,
+        has_configured_threshold_approval: bool,
         timestamp: i64,
     },
     Cancel {
@@ -547,12 +571,25 @@ impl Arbitrary for DisputeAction {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            5 => (any::<ResolverRole>(), any::<bool>(), any::<bool>(), arb_dispute_time())
-                .prop_map(|(resolver_role, approve, has_rationale, timestamp)| {
+            5 => (
+                any::<ResolverRole>(),
+                any::<bool>(),
+                any::<bool>(),
+                any::<bool>(),
+                arb_dispute_time(),
+            )
+                .prop_map(|(
+                    resolver_role,
+                    approve,
+                    has_rationale,
+                    has_configured_threshold_approval,
+                    timestamp,
+                )| {
                     DisputeAction::Resolve {
                         resolver_role,
                         approve,
                         has_rationale,
+                        has_configured_threshold_approval,
                         timestamp,
                     }
                 }),

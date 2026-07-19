@@ -40,6 +40,8 @@ import {
 import {
   projectTrackRecord,
   queryKeys,
+  type TaskEventsSource,
+  type TaskEventsSourceFactory,
   useAgentTrackRecord,
   useDispute,
   useHire,
@@ -101,7 +103,9 @@ function mockReadTransport(
 }
 
 /** A stub write client capturing calls, via the `client` override slot. */
-function stubClient(overrides: Partial<MarketplaceClient> = {}): MarketplaceClient {
+function stubClient(
+  overrides: Partial<MarketplaceClient> = {},
+): MarketplaceClient {
   return {
     signer: createNoopSigner(address(VALID_WALLET)),
     transport: {} as MarketplaceClient["transport"],
@@ -111,11 +115,26 @@ function stubClient(overrides: Partial<MarketplaceClient> = {}): MarketplaceClie
       signature: "sig-humanless",
       logs: [],
     })),
-    setTaskJobSpec: vi.fn(async () => ({ signature: "sig-activate", logs: [] })),
-    claimTaskWithJobSpec: vi.fn(async () => ({ signature: "sig-claim", logs: [] })),
-    submitTaskResult: vi.fn(async () => ({ signature: "sig-submit", logs: [] })),
-    acceptTaskResult: vi.fn(async () => ({ signature: "sig-accept", logs: [] })),
-    rejectTaskResult: vi.fn(async () => ({ signature: "sig-reject", logs: [] })),
+    setTaskJobSpec: vi.fn(async () => ({
+      signature: "sig-activate",
+      logs: [],
+    })),
+    claimTaskWithJobSpec: vi.fn(async () => ({
+      signature: "sig-claim",
+      logs: [],
+    })),
+    submitTaskResult: vi.fn(async () => ({
+      signature: "sig-submit",
+      logs: [],
+    })),
+    acceptTaskResult: vi.fn(async () => ({
+      signature: "sig-accept",
+      logs: [],
+    })),
+    rejectTaskResult: vi.fn(async () => ({
+      signature: "sig-reject",
+      logs: [],
+    })),
     autoAcceptTaskResult: vi.fn(async () => ({
       signature: "sig-autoaccept",
       logs: [],
@@ -123,7 +142,10 @@ function stubClient(overrides: Partial<MarketplaceClient> = {}): MarketplaceClie
     cancelTask: vi.fn(async () => ({ signature: "sig-cancel", logs: [] })),
     closeTask: vi.fn(async () => ({ signature: "sig-close", logs: [] })),
     rateHire: vi.fn(async () => ({ signature: "sig-rate", logs: [] })),
-    initiateDispute: vi.fn(async () => ({ signature: "sig-dispute", logs: [] })),
+    initiateDispute: vi.fn(async () => ({
+      signature: "sig-dispute",
+      logs: [],
+    })),
     ...overrides,
   } as unknown as MarketplaceClient;
 }
@@ -170,6 +192,87 @@ describe("useListings", () => {
     expect(fn).toHaveBeenCalledWith({ category: "code-generation" });
   });
 
+  it("does not reuse cached results after a shared QueryClient switches networks", async () => {
+    const mainnetRead = mockReadTransport({
+      listActiveListings: vi.fn(async () => [listingRow(VALID_WALLET)]),
+    });
+    const devnetRead = mockReadTransport({
+      listActiveListings: vi.fn(async () => [
+        listingRow(VALID_WALLET),
+        listingRow(String(PROVIDER_AGENT)),
+      ]),
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Number.POSITIVE_INFINITY },
+      },
+    });
+    let config: AgencProviderConfig = {
+      network: "mainnet",
+      queryTransport: mainnetRead,
+    };
+    function SwitchingProvider({ children }: { children: ReactNode }) {
+      return (
+        <AgencProvider config={config} queryClient={queryClient}>
+          {children}
+        </AgencProvider>
+      );
+    }
+    const { result, rerender } = renderHook(() => useListings(), {
+      wrapper: SwitchingProvider,
+    });
+    await waitFor(() => expect(result.current.total).toBe(1));
+
+    config = { network: "devnet", queryTransport: devnetRead };
+    rerender();
+
+    await waitFor(() => expect(result.current.total).toBe(2));
+    expect(devnetRead.listActiveListings).toHaveBeenCalledTimes(1);
+  });
+
+  it("isolates opaque deployments with an explicit cache namespace", async () => {
+    const firstRead = mockReadTransport({
+      listActiveListings: vi.fn(async () => [listingRow(VALID_WALLET)]),
+    });
+    const secondRead = mockReadTransport({
+      listActiveListings: vi.fn(async () => [
+        listingRow(VALID_WALLET),
+        listingRow(String(PROVIDER_AGENT)),
+      ]),
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Number.POSITIVE_INFINITY },
+      },
+    });
+    let config: AgencProviderConfig = {
+      network: "devnet",
+      cacheNamespace: "deployment-a",
+      queryTransport: firstRead,
+    };
+    function SwitchingProvider({ children }: { children: ReactNode }) {
+      return (
+        <AgencProvider config={config} queryClient={queryClient}>
+          {children}
+        </AgencProvider>
+      );
+    }
+    const { result, rerender } = renderHook(() => useListings(), {
+      wrapper: SwitchingProvider,
+    });
+    await waitFor(() => expect(result.current.total).toBe(1));
+
+    config = {
+      network: "devnet",
+      cacheNamespace: "deployment-b",
+      queryTransport: secondRead,
+    };
+    rerender();
+
+    await waitFor(() => expect(result.current.total).toBe(2));
+    expect(secondRead.listActiveListings).toHaveBeenCalledTimes(1);
+  });
+
   it("paginates client-side: fetchMore reveals the next page", async () => {
     const rows = Array.from({ length: 5 }, (_, i) =>
       listingRow(VALID_WALLET, { price: BigInt(i) }),
@@ -177,9 +280,12 @@ describe("useListings", () => {
     const read = mockReadTransport({
       listActiveListings: vi.fn(async () => rows),
     });
-    const { result } = renderHook(() => useListings(undefined, { pageSize: 2 }), {
-      wrapper: wrapper({ network: "localnet", queryTransport: read }),
-    });
+    const { result } = renderHook(
+      () => useListings(undefined, { pageSize: 2 }),
+      {
+        wrapper: wrapper({ network: "localnet", queryTransport: read }),
+      },
+    );
     await waitFor(() => expect(result.current.listings.length).toBe(2));
     expect(result.current.hasMore).toBe(true);
     result.current.fetchMore();
@@ -236,9 +342,8 @@ describe("useListing", () => {
   });
 
   it("degrades to null track record when the gPA fallback is unsupported", async () => {
-    const { ReadTransportUnsupportedError } = await import(
-      "../../src/index.js"
-    );
+    const { ReadTransportUnsupportedError } =
+      await import("../../src/index.js");
     const detail: ReadListingResult = {
       address: address(VALID_WALLET),
       account: { providerAgent: PROVIDER_AGENT } as unknown as ServiceListing,
@@ -407,7 +512,10 @@ describe("useHire", () => {
 
   it("errors clearly when no write client is configured", async () => {
     const { result } = renderHook(() => useHire(), {
-      wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }),
+      wrapper: wrapper({
+        network: "localnet",
+        queryTransport: mockReadTransport(),
+      }),
     });
     await expect(result.current.hire(hireArgs)).rejects.toThrowError(
       /No write client/,
@@ -451,13 +559,16 @@ describe("useHumanlessHireFlow", () => {
       moderator: PROVIDER_AGENT,
       moderation: { verdict: "allow" },
     }));
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     const res = await result.current.hireAndActivate({
       hire: flowHire,
@@ -504,14 +615,17 @@ describe("useHumanlessHireFlow", () => {
         moderator: PROVIDER_AGENT,
       }),
     );
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-        referrer: { wallet: VALID_WALLET, feeBps: 250 },
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+          referrer: { wallet: VALID_WALLET, feeBps: 250 },
+        }),
+      },
+    );
 
     const res = await result.current.hireAndActivate({
       hire: flowHire,
@@ -519,11 +633,14 @@ describe("useHumanlessHireFlow", () => {
       hostAndModerateJobSpec,
     });
 
-    const hireInput = (client.hireFromListingHumanless as ReturnType<typeof vi.fn>)
-      .mock.calls[0]![0];
+    const hireInput = (
+      client.hireFromListingHumanless as ReturnType<typeof vi.fn>
+    ).mock.calls[0]![0];
     expect(hireInput).toHaveProperty("referrer", VALID_WALLET);
     expect(hireInput).toHaveProperty("referrerFeeBps", 250);
-    expect(hostAndModerateJobSpec.mock.calls[0]![0].referrerInjected).toBe(true);
+    expect(hostAndModerateJobSpec.mock.calls[0]![0].referrerInjected).toBe(
+      true,
+    );
     expect(res.referrerInjected).toBe(true);
   });
 
@@ -537,13 +654,16 @@ describe("useHumanlessHireFlow", () => {
         moderator: PROVIDER_AGENT,
       }),
     );
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     const res = await result.current.hireAndActivate({
       hire: {
@@ -555,11 +675,14 @@ describe("useHumanlessHireFlow", () => {
       hostAndModerateJobSpec,
     });
 
-    const hireInput = (client.hireFromListingHumanless as ReturnType<typeof vi.fn>)
-      .mock.calls[0]![0];
+    const hireInput = (
+      client.hireFromListingHumanless as ReturnType<typeof vi.fn>
+    ).mock.calls[0]![0];
     expect(hireInput).not.toHaveProperty("referrer");
     expect(hireInput).not.toHaveProperty("referrerFeeBps");
-    expect(hostAndModerateJobSpec.mock.calls[0]![0].referrerInjected).toBe(false);
+    expect(hostAndModerateJobSpec.mock.calls[0]![0].referrerInjected).toBe(
+      false,
+    );
     expect(res.referrerInjected).toBe(false);
   });
 
@@ -569,13 +692,16 @@ describe("useHumanlessHireFlow", () => {
     const hostAndModerateJobSpec = vi.fn(async () => {
       throw backendError;
     });
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     await expect(
       result.current.hireAndActivate({
@@ -600,13 +726,16 @@ describe("useHumanlessHireFlow", () => {
       moderationAttested: false,
       moderator: PROVIDER_AGENT,
     }));
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     await expect(
       result.current.hireAndActivate({
@@ -631,13 +760,16 @@ describe("useHumanlessHireFlow", () => {
       moderationAttested: true,
       moderator: PROVIDER_AGENT,
     }));
-    const invalidHash = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client: invalidHashClient,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const invalidHash = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client: invalidHashClient,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     await expect(
       invalidHash.result.current.hireAndActivate({
@@ -655,13 +787,16 @@ describe("useHumanlessHireFlow", () => {
       moderationAttested: true,
       moderator: PROVIDER_AGENT,
     }));
-    const emptyUri = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client: emptyUriClient,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const emptyUri = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client: emptyUriClient,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     await expect(
       emptyUri.result.current.hireAndActivate({
@@ -686,13 +821,16 @@ describe("useHumanlessHireFlow", () => {
       moderationAttested: true,
       moderator: PROVIDER_AGENT,
     }));
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     await expect(
       result.current.hireAndActivate({
@@ -733,13 +871,16 @@ describe("useHumanlessHireFlow", () => {
           resolveHost = resolve;
         }),
     );
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     const first = result.current.hireAndActivate({
       hire: flowHire,
@@ -770,9 +911,15 @@ describe("useHumanlessHireFlow", () => {
   });
 
   it("errors clearly when no write client is configured", async () => {
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     await expect(
       result.current.hireAndActivate({
@@ -792,13 +939,16 @@ describe("useHumanlessHireFlow", () => {
       moderationAttested: true,
       moderator: PROVIDER_AGENT,
     }));
-    const { result } = renderHook(() => useHumanlessHireFlow<typeof flowJobSpec>(), {
-      wrapper: wrapper({
-        network: "localnet",
-        client,
-        queryTransport: mockReadTransport(),
-      }),
-    });
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
 
     await result.current.hireAndActivate({
       hire: flowHire,
@@ -873,6 +1023,41 @@ describe("useSubmissionReview", () => {
 // useTaskStatus (reader seam, terminal stop)
 // ----------------------------------------------------------------------------
 describe("useTaskStatus", () => {
+  it.each([Number.NaN, -1, 1.5, 2_147_483_648, Number.POSITIVE_INFINITY])(
+    "rejects an invalid pollIntervalMs value: %s",
+    (pollIntervalMs) => {
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      const preventExpectedWindowError = (event: ErrorEvent) => {
+        event.preventDefault();
+      };
+      window.addEventListener("error", preventExpectedWindowError);
+      try {
+        expect(() =>
+          renderHook(
+            () =>
+              useTaskStatus(PROVIDER_AGENT, {
+                taskReader: async () => null,
+                pollIntervalMs,
+              }),
+            {
+              wrapper: wrapper({
+                network: "localnet",
+                queryTransport: mockReadTransport(),
+              }),
+            },
+          ),
+        ).toThrowError(
+          /pollIntervalMs must be a non-negative integer no greater than 2147483647/u,
+        );
+      } finally {
+        window.removeEventListener("error", preventExpectedWindowError);
+        consoleError.mockRestore();
+      }
+    },
+  );
+
   it("reads task status through the injected reader", async () => {
     const task = {
       status: TaskStatus.Completed,
@@ -881,9 +1066,16 @@ describe("useTaskStatus", () => {
     const reader = vi.fn(async () => task);
     const { result } = renderHook(
       () => useTaskStatus(PROVIDER_AGENT, { taskReader: reader }),
-      { wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }) },
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
     );
-    await waitFor(() => expect(result.current.status).toBe(TaskStatus.Completed));
+    await waitFor(() =>
+      expect(result.current.status).toBe(TaskStatus.Completed),
+    );
     expect(result.current.task).toBe(task);
     expect(result.current.submission).toBeNull();
   });
@@ -897,18 +1089,257 @@ describe("useTaskStatus", () => {
     const reader = vi.fn(async () => task);
     const { result } = renderHook(
       () => useTaskStatus(PROVIDER_AGENT, { taskReader: reader }),
-      { wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }) },
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
     );
     await waitFor(() => expect(result.current.submission).not.toBeNull());
-    expect(Array.from(result.current.submission!)).toEqual(Array.from(resultBytes));
+    expect(Array.from(result.current.submission!)).toEqual(
+      Array.from(resultBytes),
+    );
   });
 
   it("stays idle without a reader", () => {
     const { result } = renderHook(() => useTaskStatus(PROVIDER_AGENT), {
-      wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }),
+      wrapper: wrapper({
+        network: "localnet",
+        queryTransport: mockReadTransport(),
+      }),
     });
     expect(result.current.task).toBeNull();
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it("does not open or refetch an event source while explicitly disabled", async () => {
+    const reader = vi.fn(async () => null);
+    const events = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { task: "disabled" };
+      },
+    }));
+    const { result } = renderHook(
+      () =>
+        useTaskStatus(PROVIDER_AGENT, {
+          taskReader: reader,
+          events,
+          enabled: false,
+        }),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    await Promise.resolve();
+    expect(events).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+    expect(result.current.events).toEqual([]);
+  });
+
+  it("does not open an event source when no task reader is configured", async () => {
+    const events = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { task: "readerless" };
+      },
+    }));
+    const { result } = renderHook(
+      () => useTaskStatus(PROVIDER_AGENT, { events }),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    await Promise.resolve();
+    expect(events).not.toHaveBeenCalled();
+    expect(result.current.events).toEqual([]);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("keeps the legacy AsyncIterable source cancellable with abort race and return", async () => {
+    const task = {
+      status: TaskStatus.InProgress,
+      result: new Uint8Array(0),
+    } as unknown as Task;
+    const iteratorReturn = vi.fn(async () => ({
+      done: true as const,
+      value: undefined,
+    }));
+    let emitted = false;
+    const events: TaskEventsSource = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            if (!emitted) {
+              emitted = true;
+              return { done: false as const, value: { task: "legacy" } };
+            }
+            return new Promise<IteratorResult<unknown>>(() => {});
+          },
+          return: iteratorReturn,
+        };
+      },
+    };
+    const { result, unmount } = renderHook(
+      () =>
+        useTaskStatus(PROVIDER_AGENT, {
+          taskReader: async () => task,
+          events,
+        }),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+
+    await waitFor(() =>
+      expect(result.current.events).toEqual([{ task: "legacy" }]),
+    );
+    unmount();
+    await waitFor(() => expect(iteratorReturn).toHaveBeenCalledTimes(1));
+  });
+
+  it("prefers a callable factory and propagates cooperative abort", async () => {
+    const task = {
+      status: TaskStatus.InProgress,
+      result: new Uint8Array(0),
+    } as unknown as Task;
+    let receivedSignal: AbortSignal | undefined;
+    const legacyIterator = vi.fn(
+      (): AsyncIterator<unknown> => ({
+        next: async () => ({ done: true, value: undefined }),
+      }),
+    );
+    const factoryCall = vi.fn(({
+      signal,
+    }: Parameters<TaskEventsSourceFactory>[0]) => {
+      receivedSignal = signal;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { task: "factory" };
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) resolve();
+            else signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+      };
+    });
+    const factory: TaskEventsSourceFactory & TaskEventsSource = Object.assign(
+      factoryCall,
+      { [Symbol.asyncIterator]: legacyIterator },
+    );
+
+    const { result, unmount } = renderHook(
+      () =>
+        useTaskStatus(PROVIDER_AGENT, {
+          taskReader: async () => task,
+          events: factory,
+        }),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    await waitFor(() =>
+      expect(result.current.events).toEqual([{ task: "factory" }]),
+    );
+    expect(factoryCall).toHaveBeenCalledTimes(1);
+    expect(legacyIterator).not.toHaveBeenCalled();
+
+    unmount();
+    expect(receivedSignal?.aborted).toBe(true);
+  });
+
+  it("returns a blocked event iterator and clears history when the task changes", async () => {
+    const task = {
+      status: TaskStatus.InProgress,
+      result: new Uint8Array(0),
+    } as unknown as Task;
+    const iteratorReturn = vi.fn(async () => ({
+      done: true as const,
+      value: undefined,
+    }));
+    let iteratorIndex = 0;
+    const abortSignals: AbortSignal[] = [];
+    const events = ({ signal }: { signal: AbortSignal }) => {
+      abortSignals.push(signal);
+      return {
+        [Symbol.asyncIterator]() {
+          const index = iteratorIndex++;
+          let emitted = false;
+          return {
+            next: async () => {
+              if (index === 0 && !emitted) {
+                emitted = true;
+                return { done: false as const, value: { task: "a" } };
+              }
+              return new Promise<IteratorResult<unknown>>(() => {});
+            },
+            return: iteratorReturn,
+          };
+        },
+      };
+    };
+    const reader = vi.fn(async () => task);
+    const { result, rerender } = renderHook(
+      ({ taskPda }) => useTaskStatus(taskPda, { taskReader: reader, events }),
+      {
+        initialProps: { taskPda: PROVIDER_AGENT as string },
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    await waitFor(() => expect(result.current.events).toEqual([{ task: "a" }]));
+
+    rerender({ taskPda: VALID_WALLET });
+
+    expect(result.current.events).toEqual([]);
+    expect(abortSignals[0]?.aborted).toBe(true);
+    await waitFor(() => expect(iteratorReturn).toHaveBeenCalledTimes(1));
+  });
+
+  it("retains only a bounded tail of high-volume events", async () => {
+    const task = {
+      status: TaskStatus.InProgress,
+      result: new Uint8Array(0),
+    } as unknown as Task;
+    const events = ({ signal }: { signal: AbortSignal }) => ({
+      async *[Symbol.asyncIterator]() {
+        for (let index = 0; index < 20; index += 1) yield index;
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else
+            signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    });
+    const { result, unmount } = renderHook(
+      () =>
+        useTaskStatus(PROVIDER_AGENT, {
+          taskReader: async () => task,
+          events,
+          maxEvents: 3,
+        }),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    await waitFor(() => expect(result.current.events).toEqual([17, 18, 19]));
+    unmount();
   });
 });
 
@@ -969,7 +1400,12 @@ describe("useWalletSigner", () => {
         useWalletSigner({
           adapter: { signer: adapterSigner, connected: true, connect },
         }),
-      { wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }) },
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          queryTransport: mockReadTransport(),
+        }),
+      },
     );
     expect(result.current.signer).toBe(adapterSigner);
     expect(result.current.connected).toBe(true);
@@ -979,8 +1415,27 @@ describe("useWalletSigner", () => {
 
   it("reports not connected when neither adapter nor provider signer exists", () => {
     const { result } = renderHook(() => useWalletSigner(), {
-      wrapper: wrapper({ network: "localnet", queryTransport: mockReadTransport() }),
+      wrapper: wrapper({
+        network: "localnet",
+        queryTransport: mockReadTransport(),
+      }),
     });
+    expect(result.current.signer).toBeNull();
+    expect(result.current.connected).toBe(false);
+  });
+
+  it("does not fall back for an explicit disconnected adapter", () => {
+    const providerSigner = createNoopSigner(address(VALID_WALLET));
+    const { result } = renderHook(
+      () => useWalletSigner({ adapter: { signer: null, connected: false } }),
+      {
+        wrapper: wrapper({
+          network: "localnet",
+          signer: providerSigner,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
     expect(result.current.signer).toBeNull();
     expect(result.current.connected).toBe(false);
   });
@@ -1101,11 +1556,17 @@ describe("useReferrerEarnings (P3.8 earnings endpoint)", () => {
 // ----------------------------------------------------------------------------
 describe("queryKeys", () => {
   it("namespaces and structures keys", () => {
-    expect(queryKeys.listings({ category: "x" })).toEqual([
+    expect(queryKeys.listings({ category: "x" }, "deployment-a")).toEqual([
       "agenc",
+      "deployment-a",
       "listings",
       { category: "x" },
     ]);
-    expect(queryKeys.listing("abc")).toEqual(["agenc", "listing", "abc"]);
+    expect(queryKeys.listing("abc", "deployment-a")).toEqual([
+      "agenc",
+      "deployment-a",
+      "listing",
+      "abc",
+    ]);
   });
 });

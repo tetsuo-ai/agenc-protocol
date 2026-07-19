@@ -31,6 +31,9 @@ export interface VerifyAgencWebhookSignatureInput {
   now?: () => number;
 }
 
+/** Largest supported replay window: 24 hours. Larger windows are unsafe. */
+export const MAX_WEBHOOK_TOLERANCE_MS = 86_400_000;
+
 const HEX_PAIR = /^[0-9a-f]+$/;
 
 /** UTF-8 encode into a plain-ArrayBuffer-backed view for WebCrypto. */
@@ -122,10 +125,18 @@ export async function verifyAgencWebhookSignature(
   input: VerifyAgencWebhookSignatureInput,
 ): Promise<boolean> {
   const toleranceMs = input.toleranceMs ?? 300_000;
+  if (
+    !Number.isSafeInteger(toleranceMs) ||
+    toleranceMs < 0 ||
+    toleranceMs > MAX_WEBHOOK_TOLERANCE_MS
+  ) {
+    return false;
+  }
   const parsed = parseSignatureHeader(input.signatureHeader);
   if (parsed === null) return false;
 
   const nowMs = (input.now ?? Date.now)();
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) return false;
   if (Math.abs(nowMs - parsed.timestampMs) > toleranceMs) return false;
 
   const key = await globalThis.crypto.subtle.importKey(

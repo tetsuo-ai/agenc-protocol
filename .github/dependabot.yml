@@ -18,6 +18,36 @@ updates:
           - minor
           - patch
 
+  - package-ecosystem: npm
+    directory: /tests-integration
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /packages/marketplace-react/examples/marketplace-starter
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /packages/marketplace-react/test-apps/checkout
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /packages/marketplace-react/test-apps/next-ssr
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /packages/marketplace-react/test/playwright
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
   - package-ecosystem: cargo
     directory: /programs/agenc-coordination
     schedule:

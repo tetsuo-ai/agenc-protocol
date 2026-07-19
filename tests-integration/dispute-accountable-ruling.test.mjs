@@ -41,6 +41,7 @@ import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
   freshWorld, hireIx,
+  setMultisig,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, PublicKey, SystemProgram,
 } from "./harness.mjs";
@@ -49,10 +50,29 @@ import {
 const resolverPda = (resolver) =>
   pda([enc("dispute_resolver"), resolver.toBuffer()]);
 
-// Assign `resolver` to the dispute-resolver roster, signed by the protocol authority.
-async function assignResolver(w, resolver) {
+const signerMeta = (signer) => ({
+  pubkey: signer.publicKey,
+  isSigner: true,
+  isWritable: false,
+});
+
+async function configureDisputeMultisig(w) {
+  const owner2 = Keypair.generate();
+  const owner3 = Keypair.generate();
+  for (const owner of [owner2, owner3]) {
+    w.svm.airdrop(owner.publicKey, BigInt(100e9));
+  }
+  await setMultisig(
+    w.svm,
+    [w.admin.publicKey, owner2.publicKey, owner3.publicKey],
+    2,
+  );
+  w.disputeApprovers = [w.admin, owner2];
+}
+
+async function assignResolverInstruction(w, resolver, approvers) {
   const [entry] = resolverPda(resolver.publicKey);
-  expectOk(send(w.svm, await makeProgram(w.admin).methods
+  const ix = await makeProgram(w.admin).methods
     .assignDisputeResolver(resolver.publicKey)
     .accounts({
       protocolConfig: w.protocolPda,
@@ -60,7 +80,22 @@ async function assignResolver(w, resolver) {
       authority: w.admin.publicKey,
       systemProgram: SystemProgram.programId,
     })
-    .instruction(), [w.admin]), "p64:assign_dispute_resolver");
+    .remainingAccounts(approvers.map(signerMeta))
+    .instruction();
+  return { entry, ix };
+}
+
+// Assign `resolver` to the dispute-resolver roster, approved by ProtocolConfig M-of-N.
+async function assignResolver(w, resolver) {
+  const { entry, ix } = await assignResolverInstruction(
+    w,
+    resolver,
+    w.disputeApprovers,
+  );
+  expectOk(
+    send(w.svm, ix, w.disputeApprovers),
+    "p64:assign_dispute_resolver",
+  );
   return entry;
 }
 
@@ -151,10 +186,39 @@ async function resolveIx(w, r, { resolver, resolverEntry, approve, rationaleHash
 // ---------------------------------------------------------------------------
 test("accountable ruling: resolve_dispute persists rationale + resolver and bumps the resolver's resolved_count", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  await configureDisputeMultisig(w);
 
   // The protocol authority deputizes a dedicated resolver wallet.
   const resolver = Keypair.generate();
   w.svm.airdrop(resolver.publicKey, BigInt(100e9));
+  const singleOwnerAttempt = await assignResolverInstruction(w, resolver, [w.admin]);
+  expectFail(
+    send(w.svm, singleOwnerAttempt.ix, [w.admin]),
+    "MultisigNotEnoughSigners",
+    "p64:one owner cannot assign a resolver",
+  );
+  const duplicateOwnerAttempt = await assignResolverInstruction(
+    w,
+    resolver,
+    [w.admin, w.admin],
+  );
+  expectFail(
+    send(w.svm, duplicateOwnerAttempt.ix, [w.admin]),
+    "MultisigNotEnoughSigners",
+    "p64:duplicate owner cannot assign a resolver",
+  );
+  const foreign = Keypair.generate();
+  w.svm.airdrop(foreign.publicKey, BigInt(100e9));
+  const foreignOwnerAttempt = await assignResolverInstruction(
+    w,
+    resolver,
+    [w.admin, foreign],
+  );
+  expectFail(
+    send(w.svm, foreignOwnerAttempt.ix, [w.admin, foreign]),
+    "MultisigNotEnoughSigners",
+    "p64:foreign signer cannot complete resolver threshold",
+  );
   const resolverEntry = await assignResolver(w, resolver);
 
   // Fresh roster counters before any ruling.
@@ -193,6 +257,7 @@ test("accountable ruling: resolve_dispute persists rationale + resolver and bump
 // ---------------------------------------------------------------------------
 test("accountable ruling: an over-length rationale_uri reverts and leaves the dispute unresolved", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  await configureDisputeMultisig(w);
   const resolver = Keypair.generate();
   w.svm.airdrop(resolver.publicKey, BigInt(100e9));
   const resolverEntry = await assignResolver(w, resolver);
@@ -224,6 +289,7 @@ test("accountable ruling: a snapshotted operator cannot resolve a task that pays
     operator: resolver.publicKey,
     operatorFeeBps: 1_000,
   });
+  await configureDisputeMultisig(w);
   w.svm.airdrop(resolver.publicKey, BigInt(100e9));
   const resolverEntry = await assignResolver(w, resolver);
   const r = await hireClaimDispute(w, { resolutionType: 1 }); // Complete would pay operator.
@@ -245,11 +311,13 @@ test("accountable ruling: a snapshotted operator cannot resolve a task that pays
 });
 
 // ---------------------------------------------------------------------------
-// Back-compat: the protocol authority can still resolve directly (resolverAssignment
-// = null), supplying the now-required rationale. No per-resolver counter exists to bump.
+// Back-compat: the protocol authority can still use the direct branch
+// (resolverAssignment = null) only with configured M-of-N approval and the
+// required rationale. No per-resolver counter exists to bump.
 // ---------------------------------------------------------------------------
-test("accountable ruling: protocol authority resolves directly with a rationale (no roster counter)", async () => {
+test("accountable ruling: threshold-approved protocol authority resolves directly with a rationale", async () => {
   const w = await freshWorld({ moderationEnabled: true, price: 3_000_000 });
+  await configureDisputeMultisig(w);
   const r = await hireClaimDispute(w, { resolutionType: 1 }); // Complete -> worker wins
 
   const rationaleHash = crypto.randomBytes(32);
@@ -258,7 +326,7 @@ test("accountable ruling: protocol authority resolves directly with a rationale 
   // admin == protocol authority; resolverAssignment null.
   const creatorBond = pda([enc("completion_bond"), r.task.toBuffer(), w.buyer.publicKey.toBuffer()])[0];
   const workerBond = pda([enc("completion_bond"), r.task.toBuffer(), w.provider.publicKey.toBuffer()])[0];
-  expectOk(send(w.svm, await makeProgram(w.admin).methods
+  const buildDirectResolution = async (approvers) => makeProgram(w.admin).methods
     .resolveDispute(true, arr(rationaleHash), rationaleUri)
     .accounts({
       dispute: r.dispute, task: r.task, escrow: r.escrow, protocolConfig: w.protocolPda,
@@ -273,7 +341,42 @@ test("accountable ruling: protocol authority resolves directly with a rationale 
       taskSubmission: pda([enc("task_submission"), r.claim.toBuffer()])[0],
       taskValidationConfig: null,
     })
-    .instruction(), [w.admin]), "p64:resolve direct by protocol authority");
+    .remainingAccounts(approvers.map(signerMeta))
+    .instruction();
+
+  expectFail(
+    send(w.svm, await buildDirectResolution([w.admin]), [w.admin]),
+    "MultisigNotEnoughSigners",
+    "p64:one owner cannot resolve directly",
+  );
+  expectFail(
+    send(
+      w.svm,
+      await buildDirectResolution([w.admin, w.admin]),
+      [w.admin],
+    ),
+    "MultisigNotEnoughSigners",
+    "p64:duplicate owner cannot resolve directly",
+  );
+  const foreign = Keypair.generate();
+  w.svm.airdrop(foreign.publicKey, BigInt(100e9));
+  expectFail(
+    send(
+      w.svm,
+      await buildDirectResolution([w.admin, foreign]),
+      [w.admin, foreign],
+    ),
+    "MultisigNotEnoughSigners",
+    "p64:foreign signer cannot complete direct-resolution threshold",
+  );
+  expectOk(
+    send(
+      w.svm,
+      await buildDirectResolution(w.disputeApprovers),
+      w.disputeApprovers,
+    ),
+    "p64:resolve direct by protocol authority with threshold",
+  );
 
   const d = decode(w.svm, "Dispute", r.dispute);
   assert.ok(d.status.Resolved !== undefined, "dispute Resolved by the protocol authority");

@@ -47,6 +47,8 @@ export interface DevActor {
 
 export interface DevListingTerms {
   name: string;
+  category: string;
+  tags: string[];
   priceLamports: bigint;
   operatorFeeBps: number;
   referrerFeeBps: number;
@@ -67,6 +69,8 @@ export interface DevLoopDeps {
   readAccount: (address: Address) => Promise<Uint8Array | null>;
   /** Lamport balance reader. */
   getBalance: (address: Address) => Promise<bigint>;
+  /** Live cluster rent lookup used by the worker's fail-closed claim gate. */
+  getMinimumBalanceForRentExemption: (space: number) => Promise<bigint>;
   /** getProgramAccounts source for the worker bot's sweep. */
   gpa: ProgramAccountsSource;
   /** Scratch dir for the worker bot's state files. */
@@ -220,9 +224,13 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
     providerAgent,
     authority: deps.provider.signer,
     listingId,
-    name: deps.listing.name.slice(0, 32),
-    category: "other",
-    tags: ["agenc-dev"],
+    // Config parsing already validates the fixed-width metadata by UTF-8 byte
+    // length; never truncate by JavaScript code units here.
+    name: deps.listing.name,
+    category: deps.listing.category as Parameters<
+      typeof deps.provider.client.createServiceListing
+    >[0]["category"],
+    tags: deps.listing.tags,
     specHash: listingSpecHash,
     specUri: `agenc://job-spec/sha256/${values.bytesToHex(listingSpecHash)}`,
     price: deps.listing.priceLamports,
@@ -328,10 +336,10 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
   }
 
   // ---- 4) worker bot: the REAL @tetsuo-ai/agenc-worker runtime, reused
-  // programmatically. The agent is pre-registered above (the runtime's own
-  // registration path stakes 0, below the localnet stake floor), so we seed
-  // its state file with the minted agent id and run a sweep tick: claim ->
-  // execute (stub executor) -> submit.
+  // programmatically. The agent is pre-registered above because its PDA is the
+  // provider identity used by the listing and hire created earlier in this
+  // scenario. Seed the runtime state with that same agent id, then run a sweep
+  // tick: claim -> execute (stub executor) -> submit.
   const workerState = emptyState();
   workerState.agentIdHex = bytesToHex(agentId);
   saveState(deps.stateDir, workerState);
@@ -362,6 +370,9 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
     signer: deps.provider.signer,
     gpa: deps.gpa,
     readAccount: deps.readAccount,
+    getBalance: deps.getBalance,
+    getMinimumBalanceForRentExemption:
+      deps.getMinimumBalanceForRentExemption,
     resolveAgencUri: async (uri) => {
       if (uri !== jobSpecUri) {
         throw new Error(`unknown sandbox job-spec URI: ${uri}`);

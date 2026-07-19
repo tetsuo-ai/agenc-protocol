@@ -28,8 +28,6 @@ import {
   getU32Encoder,
   getU64Decoder,
   getU64Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -50,6 +48,11 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -128,7 +131,7 @@ export function getUpdateServiceListingInstructionDataEncoder(): Encoder<UpdateS
       [
         "specUri",
         getOptionEncoder(
-          addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder()),
+          addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
         ),
       ],
       ["tags", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 64))],
@@ -152,7 +155,9 @@ export function getUpdateServiceListingInstructionDataDecoder(): Decoder<UpdateS
     ["specHash", getOptionDecoder(fixDecoderSize(getBytesDecoder(), 32))],
     [
       "specUri",
-      getOptionDecoder(addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())),
+      getOptionDecoder(
+        addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+      ),
     ],
     ["tags", getOptionDecoder(fixDecoderSize(getBytesDecoder(), 64))],
     ["requiredCapabilities", getOptionDecoder(getU64Decoder())],

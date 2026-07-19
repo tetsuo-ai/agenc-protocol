@@ -48,21 +48,27 @@ const TASK_THREAD_VECTORS: { vectors: TaskThreadVector[] } = JSON.parse(
 
 const TASK_PDA = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK";
 
-function makeEnvelope(over: Partial<TaskThreadEnvelope> = {}): TaskThreadEnvelope {
+function makeEnvelope(
+  over: Partial<TaskThreadEnvelope> = {},
+): TaskThreadEnvelope {
   return {
     v: TASK_THREAD_ENVELOPE_VERSION,
     taskPda: TASK_PDA,
     parentHash: null,
     role: "buyer",
     body: "Please tighten the intro and add a benchmarks section.",
-    attachments: [{ uri: "agenc://artifact/sha256/abc", hash: "ab".repeat(32) }],
+    attachments: [
+      { uri: "agenc://artifact/sha256/abc", hash: "ab".repeat(32) },
+    ],
     ts: 1_700_000_000,
     ...over,
   };
 }
 
 /** A fake content transport backed by an in-memory thread store. */
-function makeFakeTransport(initial: TaskThreadEnvelope[] = []): ContentTransport & {
+function makeFakeTransport(
+  initial: TaskThreadEnvelope[] = [],
+): ContentTransport & {
   stored: TaskThreadEnvelope[];
 } {
   const stored = [...initial];
@@ -125,8 +131,36 @@ describe("envelope hash (P7.1)", () => {
     const env = makeEnvelope();
     expect(assertTaskThreadEnvelope(env)).toEqual(env);
     expect(() => assertTaskThreadEnvelope({ ...env, v: 2 })).toThrow(/version/);
-    expect(() => assertTaskThreadEnvelope({ ...env, role: "judge" })).toThrow(/role/);
+    expect(() => assertTaskThreadEnvelope({ ...env, role: "judge" })).toThrow(
+      /role/,
+    );
     expect(() => assertTaskThreadEnvelope(null)).toThrow(/JSON object/);
+  });
+
+  it("rejects invalid addresses, hashes, URI schemes, bounds, and unknown keys", () => {
+    const env = makeEnvelope();
+    expect(() =>
+      assertTaskThreadEnvelope({ ...env, taskPda: "../admin" }),
+    ).toThrow(/taskPda/);
+    expect(() =>
+      assertTaskThreadEnvelope({ ...env, parentHash: "abcd" }),
+    ).toThrow(/parentHash/);
+    expect(() =>
+      assertTaskThreadEnvelope({
+        ...env,
+        attachments: [{ uri: "javascript:alert(1)", hash: "ab".repeat(32) }],
+      }),
+    ).toThrow(/uri/);
+    expect(() =>
+      assertTaskThreadEnvelope({
+        ...env,
+        attachments: [{ uri: "https://safe.test/a", hash: "AB".repeat(32) }],
+      }),
+    ).toThrow(/hash/);
+    expect(() => assertTaskThreadEnvelope({ ...env, ts: 1.5 })).toThrow(/ts/);
+    expect(() => assertTaskThreadEnvelope({ ...env, extra: true })).toThrow(
+      /unknown|keys/i,
+    );
   });
 
   // CROSS-IMPL DRIFT GUARD (revert-sensitive): pin the canonicalization AND the
@@ -169,12 +203,55 @@ describe("postTaskMessage / fetchTaskThread (P7.1)", () => {
     const r1 = await postTaskMessage(t, first);
     expect(r1.hash).toBe((await envelopeHash(first)).hex);
 
-    const second = makeEnvelope({ body: "second", parentHash: r1.hash, role: "worker" });
+    const second = makeEnvelope({
+      body: "second",
+      parentHash: r1.hash,
+      role: "worker",
+    });
     await postTaskMessage(t, second);
 
     const thread = await fetchTaskThread(t, TASK_PDA);
     expect(thread.messages.map((m) => m.body)).toEqual(["first", "second"]);
     expect(thread.messages[1].parentHash).toBe(r1.hash);
+  });
+
+  it("never returns a host-substituted envelope under the outbound hash", async () => {
+    const outbound = makeEnvelope({ body: "pay A" });
+    const substituted = makeEnvelope({ body: "pay B" });
+    const transport: ContentTransport = {
+      baseUrl: "https://fake.test",
+      async get() {
+        return { messages: [] };
+      },
+      async post() {
+        return { envelope: substituted };
+      },
+    };
+    const receipt = await postTaskMessage(transport, outbound);
+    expect(receipt.envelope).toEqual(outbound);
+    expect(receipt.hash).toBe((await envelopeHash(receipt.envelope)).hex);
+  });
+
+  it("validates outbound envelopes before hashing or transport and encodes path segments", async () => {
+    const post = vi.fn(async () => ({}));
+    const get = vi.fn(async () => ({ messages: [] }));
+    const transport = {
+      baseUrl: "https://fake.test",
+      post,
+      get,
+    } satisfies ContentTransport;
+    await expect(
+      postTaskMessage(transport, makeEnvelope({ taskPda: "../admin" })),
+    ).rejects.toThrow(/taskPda/);
+    expect(post).not.toHaveBeenCalled();
+    await expect(fetchTaskThread(transport, "../admin")).rejects.toThrow(
+      /taskPda/,
+    );
+    expect(get).not.toHaveBeenCalled();
+    await fetchTaskThread(transport, TASK_PDA);
+    expect(get).toHaveBeenCalledWith(
+      `/api/task-threads/${encodeURIComponent(TASK_PDA)}`,
+    );
   });
 
   it("fetchTaskThread rejects a non-{messages} body", async () => {
@@ -248,7 +325,9 @@ describe("content transport resource limits", () => {
       },
     });
 
-    const failure = await transport.get("/slow").catch((error: unknown) => error);
+    const failure = await transport
+      .get("/slow")
+      .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ContentTransportError);
     expect(failure).toMatchObject({ status: 0 });
     expect((failure as Error).message).toContain("timed out after 5ms");
@@ -265,7 +344,9 @@ describe("content transport resource limits", () => {
         }),
     });
 
-    const failure = await transport.get("/large").catch((error: unknown) => error);
+    const failure = await transport
+      .get("/large")
+      .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ContentTransportError);
     expect(failure).toMatchObject({ status: 200 });
     expect((failure as Error).message).toMatch(/exceeds.*32 bytes/i);
@@ -288,9 +369,9 @@ describe("content transport resource limits", () => {
       }),
     });
 
-    const failure = await transport.get("/streamless").catch((error: unknown) =>
-      error,
-    );
+    const failure = await transport
+      .get("/streamless")
+      .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ContentTransportError);
     expect(failure).toMatchObject({ status: 200 });
     expect((failure as Error).message).toMatch(/not a readable byte stream/i);
@@ -312,7 +393,11 @@ describe("resolveChangesRequest (P7.1)", () => {
     expect(byBytes.body).toBe("rework section 2");
 
     // Uppercase / 0x-prefixed hex normalizes too.
-    const byUpper = await resolveChangesRequest(t, TASK_PDA, "0x" + hex.toUpperCase());
+    const byUpper = await resolveChangesRequest(
+      t,
+      TASK_PDA,
+      "0x" + hex.toUpperCase(),
+    );
     expect(byUpper.body).toBe("rework section 2");
   });
 

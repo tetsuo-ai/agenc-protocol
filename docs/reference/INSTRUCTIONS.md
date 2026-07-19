@@ -219,8 +219,9 @@ _None._
 
 ## assign_dispute_resolver
 
-Assign a wallet to the dispute-resolver roster (authority-only). The assigned
-wallet may then call `resolve_dispute` directly — no vote tally, no quorum.
+Assign a wallet to the dispute-resolver roster. The protocol authority proposes
+the change and the configured M-of-N owners approve it. The assigned wallet may
+then call `resolve_dispute` directly — no per-case vote tally or quorum.
 
 ### Accounts (4)
 
@@ -228,7 +229,7 @@ wallet may then call `resolve_dispute` directly — no vote tally, no quorum.
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 2 | `dispute_resolver` | yes |  |  | PDA ["dispute_resolver", arg:resolver] | Roster entry for `resolver`. `init` ⇒ assigning an already-assigned wallet fails. |
-| 3 | `authority` | yes | yes |  |  | Must be the protocol authority (the roster is authority-managed). |
+| 3 | `authority` | yes | yes |  |  | Must be the protocol authority (the roster proposal is authority-bound; configured M-of-N approval arrives through remaining accounts). |
 | 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (1)
@@ -251,7 +252,7 @@ separate [HUMAN] decision (`docs/MODERATION_NEUTRALITY.md`).
 |---|---|---|---|---|---|---|
 | 1 | `moderation_config` |  |  |  | PDA ["moderation_config"] |  |
 | 2 | `moderation_attestor` | yes |  |  | PDA ["moderation_attestor", arg:attestor] | Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. |
-| 3 | `authority` | yes | yes |  |  | Must be the moderation authority that owns the moderation config (the roster is authority-managed, exactly like the dispute-resolver roster). |
+| 3 | `authority` | yes | yes |  |  | Must be the moderation authority that owns the moderation config. Unlike the threshold-approved dispute-resolver roster, this moderation roster remains authority-managed under its separate trust model. |
 | 4 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
 ### Args (1)
@@ -1837,9 +1838,11 @@ the claim open for an in-place resubmit; bounded by MAX_REVISION_ROUNDS.
 
 ## resolve_dispute
 
-Resolve a dispute. The signer must be the protocol authority OR an assigned
-dispute resolver. `approve` upholds the initiator's requested resolution_type;
-`!approve` refunds the creator. No vote tally or quorum is consulted.
+Resolve a dispute. A direct protocol-authority ruling requires configured
+M-of-N owner approval; an assigned resolver must have been seated through
+that same threshold-controlled roster. `approve` upholds the initiator's
+requested resolution_type; `!approve` refunds the creator. No per-case
+arbiter vote tally or quorum is consulted.
 
 P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a
 32-byte content hash of the off-chain rationale) and a bounded `rationale_uri`.
@@ -1854,8 +1857,8 @@ Both are persisted on the dispute alongside the deciding resolver, and the hash
 | 2 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 3 | `escrow` | yes |  |  | PDA ["escrow", account:task] |  |
 | 4 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
-| 5 | `authority` | yes | yes |  |  | The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver roster. The OR is enforced in the handler against `resolver_assignment` below — a plain account constraint cannot express "this key OR that account exists". `mut` so it can pay rent for the optional `agent_stats` init (P6.6). |
-| 6 | `resolver_assignment` | yes |  | yes |  | Optional roster entry proving `authority` is an assigned dispute resolver. A plain optional account (NOT seeds-derived) so the client can pass `None` when resolving as the protocol authority; when present it must be a program-owned `DisputeResolver` whose `resolver` equals the signer (enforced in the handler). Only the authority- gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer, so the canonical ["dispute_resolver", signer] PDA is enforced transitively.  `mut` (P6.4): when an assigned resolver decides the dispute, their case counters (`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol authority resolving directly passes `None` (no per-resolver counter to bump). |
+| 5 | `authority` | yes | yes |  |  | The resolver: EITHER the protocol authority with configured M-of-N approval in remaining accounts OR a wallet on the dispute-resolver roster. The OR is enforced in the handler against `resolver_assignment` below — a plain account constraint cannot express "this key OR that account exists". `mut` so it can pay rent for the optional `agent_stats` init (P6.6). |
+| 6 | `resolver_assignment` | yes |  | yes |  | Optional roster entry proving `authority` is an assigned dispute resolver. A plain optional account (NOT seeds-derived) so the client can pass `None` when resolving as the protocol authority; when present it must be a program-owned `DisputeResolver` whose `resolver` equals the signer (enforced in the handler). Only an authority-proposed, configured M-of-N-approved `assign_dispute_resolver` can mint one, and the handler binds it to this signer, so the canonical ["dispute_resolver", signer] PDA is enforced transitively.  `mut` (P6.4): when an assigned resolver decides the dispute, their case counters (`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol authority resolving directly passes `None` plus M-of-N owner signers in remaining accounts (no per-resolver counter to bump). |
 | 7 | `creator` | yes |  |  |  |  |
 | 8 | `worker_claim` | yes |  | yes | PDA ["claim", account:task, account:worker_claim.worker (TaskClaim)] | Worker's claim proving they worked on task (fix #59) Required for Complete/Split resolutions that pay a worker Made mutable to allow closing after dispute resolution (fix #439) |
 | 9 | `worker` | yes |  | yes |  | Worker agent account for the dispute defendant. |
@@ -1958,8 +1961,8 @@ _None._
 
 ## revoke_dispute_resolver
 
-Remove a wallet from the dispute-resolver roster (authority-only), closing its
-assignment PDA.
+Remove a wallet from the dispute-resolver roster after a protocol-authority
+proposal receives configured M-of-N approval, closing its assignment PDA.
 
 ### Accounts (3)
 
@@ -1967,7 +1970,7 @@ assignment PDA.
 |---|---|---|---|---|---|---|
 | 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 2 | `dispute_resolver` | yes |  |  | PDA ["dispute_resolver", account:dispute_resolver.resolver (DisputeResolver)] | Roster entry to remove. Seeded by its own stored `resolver`, so the canonical PDA is enforced; `close = authority` returns the rent to the protocol authority. |
-| 3 | `authority` | yes | yes |  |  | Must be the protocol authority (the roster is authority-managed). |
+| 3 | `authority` | yes | yes |  |  | Must be the protocol authority; configured M-of-N approval arrives through remaining accounts. |
 
 ### Args (0)
 

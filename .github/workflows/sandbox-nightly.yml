@@ -46,7 +46,7 @@ permissions:
 jobs:
   devnet-first-hire-canary:
     if: ${{ vars.SANDBOX_NIGHTLY_ENABLED == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
@@ -61,8 +61,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 24
+          node-version: 24.18.0
           cache: npm
+
+      - name: Pin declared npm toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
 
       - name: Install dependencies
         run: npm ci

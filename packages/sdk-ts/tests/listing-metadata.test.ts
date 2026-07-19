@@ -28,7 +28,7 @@ import {
 } from "../src/values/index.js";
 
 // LISTING_METADATA v1 (P1.5) structural tests: the canonical category taxonomy,
-// the published JSON Schema, the string<->bytes round-trip, and the facade's
+// the in-package JSON Schema, the string<->bytes round-trip, and the facade's
 // dual-form createServiceListing (strings validated+encoded via src/values; the
 // raw fixed-width path untouched, byte-for-byte).
 

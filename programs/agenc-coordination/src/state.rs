@@ -61,10 +61,10 @@ pub mod capability {
     pub const ACTUATOR: u64 = 1 << 5;
     /// Task coordination and orchestration
     pub const COORDINATOR: u64 = 1 << 6;
-    /// DEPRECATED (P6.3): formerly granted dispute-voting rights. The arbiter
-    /// vote/quorum model is retired (disputes are decided by an assigned resolver);
-    /// this capability bit is no longer checked by any instruction. Kept for the stable
-    /// capability bit layout.
+    /// DEPRECATED (P6.3): formerly granted dispute-voting rights. The per-case
+    /// arbiter vote/quorum model is retired; disputes are decided by an authorized
+    /// resolver (threshold-approved protocol authority or threshold-seated assigned
+    /// resolver). This bit is no longer checked. Kept for the stable capability layout.
     pub const ARBITER: u64 = 1 << 7;
     /// Result validation and verification
     pub const VALIDATOR: u64 = 1 << 8;
@@ -728,6 +728,11 @@ impl AgentRegistration {
     }
 }
 
+// Cross-language consumers query live rent using these exact allocation
+// sizes. Compile-time pins make any layout change an explicit coordinated
+// migration instead of silently underfunding worker transactions.
+const _: () = assert!(AgentRegistration::SIZE == 566);
+
 /// Wallet-scoped rate limit state.
 /// PDA seeds: ["authority_rate_limit", authority]
 #[account]
@@ -882,6 +887,8 @@ impl TaskSubmission {
         self._reserved[1] = 0;
     }
 }
+
+const _: () = assert!(TaskSubmission::SIZE == 273);
 
 impl Default for TaskSubmission {
     fn default() -> Self {
@@ -1183,7 +1190,12 @@ pub struct Task {
     ///     status `Submitted`; maintained ONLY for schema-1 tasks).
     ///   * `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker
     ///     slash, 1 = the defendant claim is reserved for apply_dispute_slash).
-    /// Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields).
+    ///   * `_reserved[3..11]` = little-endian monotonic `claim_generation`
+    ///     (`u64`; 0 is the legacy/no-claim sentinel). Every instruction that
+    ///     creates a canonical `TaskClaim` increments it atomically, allowing
+    ///     watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without
+    ///     having observed the intermediate state.
+    /// Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields).
     pub _reserved: [u8; 16],
     // === P6.2 demand-side referral leg (APPEND-ONLY — never reorder/insert above) ===
     /// Referrer (embedder who brought the buyer) payee for the §4 4-way split.
@@ -1300,6 +1312,34 @@ impl Task {
         self._reserved[2] = u8::from(pending);
     }
 
+    /// Monotonic claim-attempt generation carved into `_reserved[3..11]` as a
+    /// little-endian `u64`. Zero is backward-compatible with every task created
+    /// before this carve-out; the first claim under the upgraded program writes 1.
+    pub fn claim_generation(&self) -> u64 {
+        u64::from_le_bytes([
+            self._reserved[3],
+            self._reserved[4],
+            self._reserved[5],
+            self._reserved[6],
+            self._reserved[7],
+            self._reserved[8],
+            self._reserved[9],
+            self._reserved[10],
+        ])
+    }
+
+    /// Increment the claim generation with checked arithmetic. Transaction
+    /// atomicity rolls this write back if any later claim-account operation or
+    /// contest-deposit transfer fails.
+    pub fn increment_claim_generation(&mut self) -> Result<u64> {
+        let next = self
+            .claim_generation()
+            .checked_add(1)
+            .ok_or(crate::errors::CoordinationError::ArithmeticOverflow)?;
+        self._reserved[3..11].copy_from_slice(&next.to_le_bytes());
+        Ok(next)
+    }
+
     /// A contest task: schema-1 (contest-aware) AND `Competitive`. Every batch-3
     /// behavior change gates on this predicate, so schema-0 tasks and every other
     /// task type keep byte-identical semantics.
@@ -1310,10 +1350,11 @@ impl Task {
 
     /// Reserved padding must stay zeroed; non-zero implies corruption or an
     /// unexpected write (defense-in-depth, mirrors other reserved-field guards).
-    /// Batch 3 and the deferred-slash guard carve `_reserved[0..3]`. The slash
-    /// byte is a canonical boolean and the remaining tail must stay zeroed.
+    /// Batch 3, the deferred-slash guard, and claim-generation tracking carve
+    /// `_reserved[0..11]`. The slash byte is a canonical boolean, the generation
+    /// is an unconstrained `u64`, and the remaining tail must stay zeroed.
     pub fn validate_reserved_fields(&self) -> bool {
-        self._reserved[2] <= 1 && self._reserved[3..] == [0u8; 13]
+        self._reserved[2] <= 1 && self._reserved[11..] == [0u8; 5]
     }
 }
 
@@ -1324,6 +1365,11 @@ impl Task {
 const _: () = assert!(Task::SIZE == 466);
 const _: () = assert!(Task::OLD_TASK_SIZE + 84 == Task::SIZE);
 const _: () = assert!(Task::BATCH2_TASK_SIZE + 34 == Task::SIZE);
+
+// Generated funded-checkout clients reserve rent for this variable-codec
+// account at its maximum allocation. Keep the cross-language drift test in
+// packages/agenc-cli/tests/init.test.ts synchronized with this compile-time pin.
+const _: () = assert!(TaskJobSpec::SIZE == 388);
 
 /// Worker's claim on a task
 /// PDA seeds: ["claim", task, worker_agent]
@@ -1375,6 +1421,8 @@ impl Default for TaskClaim {
 impl TaskClaim {
     pub const SIZE: usize = <Self as anchor_lang::Space>::INIT_SPACE.saturating_add(8); // bump
 }
+
+const _: () = assert!(TaskClaim::SIZE == 203);
 
 /// Shared coordination state
 /// PDA seeds: ["state", owner, state_key]
@@ -1455,8 +1503,10 @@ pub struct Dispute {
     /// The field is retained (not shrunk) to keep the account layout stable.
     pub total_voters: u8,
     /// Legacy voting deadline, now reused as the first liveness deadline: an
-    /// assigned resolver may rule immediately, but permissionless expiry opens
-    /// after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`.
+    /// authorized resolver may rule immediately, but permissionless expiry opens
+    /// after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`. Here authorized
+    /// means a threshold-seated assigned resolver or the protocol authority with
+    /// configured M-of-N approval.
     pub voting_deadline: i64,
     /// Hard dispute expiration; after this, only expire_dispute may unwind it.
     /// expires_at = created_at + max_dispute_duration
@@ -1495,8 +1545,9 @@ pub struct Dispute {
     /// Empty string = no URI (the hash may still carry the rationale).
     #[max_len(256)]
     pub rationale_uri: String,
-    /// The wallet that decided this dispute (the protocol authority OR the assigned
-    /// resolver who signed `resolve_dispute`). Default pubkey until resolved.
+    /// The wallet that decided this dispute: either the threshold-approved protocol
+    /// authority or a threshold-seated assigned resolver who signed
+    /// `resolve_dispute`. Default pubkey until resolved.
     pub resolved_by: Pubkey,
 }
 
@@ -1549,8 +1600,9 @@ impl Dispute {
 // P6.3: the `DisputeVote` (["vote", dispute, voter]) and `AuthorityDisputeVote`
 // (["authority_vote", dispute, authority]) PDA account types are RETIRED. They were
 // only ever minted by `vote_dispute` (now removed) and closed by the arbiter-pair
-// cleanup loops in resolve/expire (also removed). Disputes are decided by an assigned
-// resolver, so the current program creates no vote PDA. The types were deleted before
+// cleanup loops in resolve/expire (also removed). Disputes are decided by an authorized
+// resolver (threshold-seated assignment or M-of-N-approved protocol authority), so the
+// current program creates no vote PDA. The types were deleted before
 // the full surface reached mainnet; deployment inventory remains the authoritative
 // check that no legacy vote account needs recovery.
 
@@ -2315,11 +2367,12 @@ impl CompletionBond {
 }
 
 /// Roster entry authorizing a specific wallet to resolve disputes (the assignable
-/// arbiter model). The protocol authority manages the roster via
-/// `assign_dispute_resolver` / `revoke_dispute_resolver`. The mere existence of this
-/// PDA authorizes its `resolver` to call `resolve_dispute`; closing it (revoke) removes
-/// the authorization. A single assigned resolver decides a dispute directly — there is
-/// NO vote tally or quorum on this path (that is the whole point of the model).
+/// arbiter model). The protocol authority proposes roster changes via
+/// `assign_dispute_resolver` / `revoke_dispute_resolver`, and the configured M-of-N
+/// owners approve each change. The mere existence of this PDA authorizes its `resolver`
+/// to call `resolve_dispute`; closing it (revoke) removes the authorization. A single
+/// threshold-seated assigned resolver decides a dispute directly — there is no per-case
+/// arbiter vote tally or quorum on this path (that is the whole point of the model).
 /// PDA seeds: ["dispute_resolver", resolver]
 #[account]
 #[derive(Default, InitSpace)]
@@ -3884,9 +3937,29 @@ mod tests {
         let mut task = Task::default();
         task._reserved[2] = 0xFF;
         assert!(!task.validate_reserved_fields());
+        // Every u64 bit pattern in the generation carve-out is canonical.
+        let mut generation = Task::default();
+        generation._reserved[3..11].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(generation.validate_reserved_fields());
         let mut tail = Task::default();
         tail._reserved[15] = 1;
         assert!(!tail.validate_reserved_fields());
+    }
+
+    #[test]
+    fn test_task_claim_generation_carveout_is_monotonic_and_checked() {
+        let mut task = Task::default();
+        assert_eq!(task.claim_generation(), 0);
+        assert_eq!(task.increment_claim_generation().unwrap(), 1);
+        assert_eq!(task.increment_claim_generation().unwrap(), 2);
+        assert_eq!(task.claim_generation(), 2);
+        assert_eq!(&task._reserved[3..11], &2u64.to_le_bytes());
+        assert_eq!(&task._reserved[11..], &[0u8; 5]);
+        assert!(task.validate_reserved_fields());
+
+        task._reserved[3..11].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(task.increment_claim_generation().is_err());
+        assert_eq!(task.claim_generation(), u64::MAX);
     }
 
     // === Batch-3 WS-CONTEST: Task._reserved carve-out (task_schema + live_submissions) ===

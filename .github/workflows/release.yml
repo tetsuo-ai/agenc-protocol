@@ -6,6 +6,10 @@ name: Release
 #   react-vX.Y.Z     -> publishes @tetsuo-ai/marketplace-react
 #   tools-vX.Y.Z     -> publishes @tetsuo-ai/marketplace-tools
 #   mcp-vX.Y.Z       -> publishes @tetsuo-ai/marketplace-mcp
+#   moderation-vX.Y.Z -> publishes @tetsuo-ai/marketplace-moderation
+#   worker-vX.Y.Z     -> publishes @tetsuo-ai/agenc-worker
+#   cli-vX.Y.Z        -> publishes @tetsuo-ai/agenc-cli
+#   cli-alias-vX.Y.Z  -> publishes agenc-cli
 #
 # Publish order matters for first-time installs: sdk before tools/react,
 # tools before mcp (dependency ranges point at the published versions).
@@ -31,6 +35,10 @@ on:
       - "react-v*"
       - "tools-v*"
       - "mcp-v*"
+      - "moderation-v*"
+      - "worker-v*"
+      - "cli-v*"
+      - "cli-alias-v*"
 
 permissions:
   contents: read
@@ -52,11 +60,17 @@ jobs:
       contents: read
     uses: ./.github/workflows/verify.yml
 
+  rust_supply_chain:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rust-supply-chain.yml
+
   release:
-    needs: protocol_verifiable_build
-    if: ${{ always() && (needs.protocol_verifiable_build.result == 'success' || needs.protocol_verifiable_build.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    needs: [protocol_verifiable_build, rust_supply_chain]
+    if: ${{ always() && needs.rust_supply_chain.result == 'success' && (needs.protocol_verifiable_build.result == 'success' || needs.protocol_verifiable_build.result == 'skipped') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
+    environment: production-release
     permissions:
       actions: read
       contents: write # create/finalize the GitHub Release
@@ -80,74 +94,38 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 24
+          node-version: 24.18.0
           cache: npm
           registry-url: https://registry.npmjs.org
+
+      - name: Pin declared npm release toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Install independent npm license evidence
+        run: npm ci --prefix tests-integration --ignore-scripts
+
+      - name: Enforce release-time npm license policy
+        run: node scripts/check-npm-licenses.mjs
+
       - name: Resolve package from tag
         id: pkg
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          case "$TAG" in
-            protocol-v*)
-              PACKAGE_NAME="@tetsuo-ai/protocol"
-              PACKAGE_DIR="packages/protocol"
-              PACKAGE_VERSION="${TAG#protocol-v}"
-              ;;
-            sdk-v*)
-              PACKAGE_NAME="@tetsuo-ai/marketplace-sdk"
-              PACKAGE_DIR="packages/sdk-ts"
-              PACKAGE_VERSION="${TAG#sdk-v}"
-              ;;
-            react-v*)
-              PACKAGE_NAME="@tetsuo-ai/marketplace-react"
-              PACKAGE_DIR="packages/marketplace-react"
-              PACKAGE_VERSION="${TAG#react-v}"
-              ;;
-            tools-v*)
-              PACKAGE_NAME="@tetsuo-ai/marketplace-tools"
-              PACKAGE_DIR="packages/marketplace-tools"
-              PACKAGE_VERSION="${TAG#tools-v}"
-              ;;
-            mcp-v*)
-              PACKAGE_NAME="@tetsuo-ai/marketplace-mcp"
-              PACKAGE_DIR="packages/marketplace-mcp"
-              PACKAGE_VERSION="${TAG#mcp-v}"
-              ;;
-            *)
-              echo "Unrecognized tag: $TAG" >&2; exit 1
-              ;;
-          esac
-          if [[ ! "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Release tag contains an invalid semantic version: $TAG" >&2
-            exit 1
-          fi
-          printf '%s\n' \
-            "name=${PACKAGE_NAME}" \
-            "dir=${PACKAGE_DIR}" \
-            "version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+        run: node scripts/release-policy.mjs resolve
 
-      - name: Verify tag matches package.json version
-        env:
-          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
-          TAG_VERSION: ${{ steps.pkg.outputs.version }}
-        run: |
-          PKG_VERSION=$(node -p "require('./' + process.env.PACKAGE_DIR + '/package.json').version")
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "Tag version $TAG_VERSION != package.json $PKG_VERSION" >&2
-            exit 1
-          fi
+      - name: Verify exact attested release prerequisites
+        run: node scripts/release-policy.mjs prerequisites
 
       # --- Gate: SDK / MCP / react (on-chain e2e needs the compiled program) ---
       - name: Setup Rust (e2e)
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.85.0
 
       - name: Install Solana platform tools (e2e)
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
         run: |
           curl -sSfL --retry 3 \
             "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
@@ -158,7 +136,7 @@ jobs:
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Build program for e2e
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v')
+        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
         run: cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
 
       - name: SDK gate (drift, typecheck, tests incl. e2e, build, examples)
@@ -175,7 +153,7 @@ jobs:
       # react/tools/mcp typecheck + test against the workspace-linked sdk,
       # whose types/runtime live in dist/ — build it first.
       - name: Build workspace sdk (react/tools/mcp gates)
-        if: startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'tools-v') || startsWith(github.ref_name, 'mcp-v')
+        if: startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'tools-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
         working-directory: packages/sdk-ts
         run: npm run build
 
@@ -187,6 +165,7 @@ jobs:
           node ../sdk-ts/scripts/sync-testing-so.mjs
           npm run typecheck
           npm test
+          npm run test:localnet
           npm run build
 
       # --- Gate: tools ---
@@ -213,6 +192,42 @@ jobs:
           npm test
           npm run build
 
+      - name: Moderation gate (typecheck, tests, build)
+        if: startsWith(github.ref_name, 'moderation-v')
+        working-directory: packages/marketplace-moderation
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Sync production program into SDK test assets (worker/CLI gates)
+        if: startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        working-directory: packages/sdk-ts
+        run: npm run testing:sync-so
+
+      - name: Worker gate (typecheck, unit/e2e tests, build)
+        if: startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        working-directory: packages/agenc-worker
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: CLI gate (typecheck, unit/e2e tests, build)
+        if: startsWith(github.ref_name, 'cli-v')
+        working-directory: packages/agenc-cli
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: CLI alias dependency and entrypoint gate
+        if: startsWith(github.ref_name, 'cli-alias-v')
+        working-directory: packages/agenc-cli-alias
+        run: |
+          node -e 'const p=require("./package.json"); if (p.dependencies["@tetsuo-ai/agenc-cli"] !== `^${p.version}`) process.exit(1)'
+          node --check bin/agenc-cli.js
+
       # --- Gate: protocol ---
       - name: Install deployment/preflight dependencies
         if: startsWith(github.ref_name, 'protocol-v')
@@ -230,6 +245,7 @@ jobs:
         if: startsWith(github.ref_name, 'protocol-v')
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: 1.85.0
           components: rustfmt, clippy
 
       - name: Protocol Rust release matrix
@@ -329,7 +345,7 @@ jobs:
         if: startsWith(github.ref_name, 'protocol-v')
         env:
           AGENC_CANARY_LITESVM: "1"
-        run: node --test tests-integration/canary-timeout-accept.test.mjs
+        run: node --test tests-integration/canary-*.test.mjs
 
       - name: Audit runtime npm dependencies
         run: npm audit --omit=dev --workspaces
@@ -340,51 +356,167 @@ jobs:
         with:
           name: verifiable-build-hashes
 
+      - name: Require finalized mainnet cutover for stable releases
+        env:
+          AGENC_MAINNET_RPC_URLS_JSON: ${{ vars.AGENC_MAINNET_RPC_URLS_JSON }}
+          EXPECTED_MAINNET_PROGRAM_SHA256: ${{ vars.AGENC_MAINNET_PROGRAM_SHA256 }}
+          EXPECTED_VERIFIED_SOURCE_COMMIT: ${{ vars.AGENC_VERIFIED_SOURCE_COMMIT }}
+          VERIFIABLE_BUILD_MANIFEST: verifiable-build-hashes.txt
+        run: node scripts/release-policy.mjs cutover
+
+      - name: Build reviewed npm tarball
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: npm pack --json > "${RUNNER_TEMP}/package-pack.json"
+
+      - name: Smoke the exact reviewed tarball surface
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+        run: node scripts/release-pack-smoke.mjs
+
+      - name: Generate deterministic SPDX release SBOM
+        id: sbom
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+        run: |
+          SOURCE_COMMIT_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")
+          export SOURCE_COMMIT_DATE
+          node scripts/release-sbom.mjs generate
+
+      - name: Inspect resumable release state before mutation
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+          EXPECTED_REVIEWED_INTEGRITY: ${{ steps.pkg.outputs.expected_integrity }}
+          REQUIRED_RELEASE_ASSET: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
+          REQUIRED_RELEASE_ASSET_PATH: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
+          SBOM_RELEASE_ASSET: ${{ steps.sbom.outputs.name }}
+          SBOM_RELEASE_ASSET_PATH: ${{ steps.sbom.outputs.path }}
+        run: node scripts/release-state.mjs inspect
+
       # Create a draft first. A failed hash attachment or npm publish therefore
       # cannot expose a half-formed public GitHub Release.
       - name: Prepare GitHub Release draft
+        if: steps.state.outputs.create_draft == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
           PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
           PACKAGE_DIR: ${{ steps.pkg.outputs.dir }}
+          PRERELEASE: ${{ steps.pkg.outputs.prerelease }}
         run: |
           node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
           if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            echo "Release ${GITHUB_REF_NAME} already exists — reusing it"
-          else
-            gh release create "${GITHUB_REF_NAME}" \
-              --verify-tag \
-              --draft \
-              --title "${PACKAGE_NAME}@${PACKAGE_VERSION}" \
-              --notes "See ${PACKAGE_DIR}/CHANGELOG.md for details."
+            echo "release state changed after inspection" >&2
+            exit 1
           fi
+          PRERELEASE_ARGS=()
+          if [ "${PRERELEASE}" = "true" ]; then
+            PRERELEASE_ARGS+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --draft \
+            "${PRERELEASE_ARGS[@]}" \
+            --title "${PACKAGE_NAME}@${PACKAGE_VERSION}" \
+            --notes "See ${PACKAGE_DIR}/CHANGELOG.md for details."
 
       - name: Attach required verifiable-build hashes
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: startsWith(github.ref_name, 'protocol-v') && contains(fromJSON(steps.state.outputs.missing_assets), 'verifiable-build-hashes.txt')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
-          gh release upload "${GITHUB_REF_NAME}" verifiable-build-hashes.txt --clobber
+          gh release upload "${GITHUB_REF_NAME}" verifiable-build-hashes.txt
 
-      # Never treat a pre-existing registry version as a successful rerun: without
-      # deterministic integrity + provenance verification it is an untrusted artifact.
-      - name: Publish to npm
+      - name: Attach required SPDX release SBOM
+        if: contains(fromJSON(steps.state.outputs.missing_assets), steps.sbom.outputs.name)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SBOM_PATH: ${{ steps.sbom.outputs.path }}
+        run: |
+          node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
+          gh release upload "${GITHUB_REF_NAME}" "${SBOM_PATH}"
+
+      - name: Publish reviewed tarball to npm staging tag
+        if: steps.state.outputs.publish_npm == 'true'
         working-directory: ${{ steps.pkg.outputs.dir }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
           PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          PACK_FILENAME: ${{ steps.state.outputs.pack_filename }}
         run: |
           node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
-          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version > /dev/null 2>&1; then
-            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} already exists on npm; refusing to endorse an unverified tarball" >&2
-            exit 1
+          npm publish "${PACK_FILENAME}" --access public --provenance --tag agenc-staging
+
+      - name: Verify npm integrity and provenance before changing public dist-tags
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
+          PACK_INTEGRITY: ${{ steps.state.outputs.pack_integrity }}
+        run: |
+          for attempt in $(seq 1 12); do
+            if node scripts/release-state.mjs verify-npm; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "npm provenance did not converge after 12 attempts" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Advance reviewed npm dist-tag
+        if: steps.state.outputs.set_dist_tag == 'true' || steps.state.outputs.publish_npm == 'true' || steps.state.outputs.remove_staging_tag == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
+        run: |
+          node "${GITHUB_WORKSPACE}/scripts/verify-release-tag-binding.mjs"
+          npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" "${DIST_TAG}"
+          if [ "${{ steps.state.outputs.publish_npm }}" = "true" ] || \
+             [ "${{ steps.state.outputs.remove_staging_tag }}" = "true" ]; then
+            npm dist-tag rm "${PACKAGE_NAME}" agenc-staging
           fi
-          npm publish --access public --provenance
+
+      - name: Verify final npm dist-tag still binds reviewed provenance
+        env:
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
+          PACK_INTEGRITY: ${{ steps.state.outputs.pack_integrity }}
+          REQUIRE_DIST_TAG: "1"
+        run: node scripts/release-state.mjs verify-npm
+
+      - name: Reinspect every immutable release surface before finalization
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ steps.pkg.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.pkg.outputs.version }}
+          DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
+          PACK_JSON: ${{ runner.temp }}/package-pack.json
+          EXPECTED_REVIEWED_INTEGRITY: ${{ steps.pkg.outputs.expected_integrity }}
+          REQUIRED_RELEASE_ASSET: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
+          REQUIRED_RELEASE_ASSET_PATH: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
+          SBOM_RELEASE_ASSET: ${{ steps.sbom.outputs.name }}
+          SBOM_RELEASE_ASSET_PATH: ${{ steps.sbom.outputs.path }}
+        run: node scripts/release-state.mjs finalize
 
       - name: Publish GitHub Release
+        if: steps.state.outputs.publish_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

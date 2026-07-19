@@ -16,7 +16,10 @@
  */
 
 // Wallet Standard bridge (the supported browser-wallet path).
-export { signerFromWalletAccount } from "./wallet-account.js";
+export {
+  signerFromWalletAccount,
+  walletStandardChainForNetwork,
+} from "./wallet-account.js";
 
 // Legacy @solana/wallet-adapter compatibility shim (optional, no hard dep).
 export {
@@ -36,9 +39,11 @@ export { signerFromEmbeddedWallet } from "./embedded-wallet.js";
 
 // The signer-adapter contracts (the seam the hooks/components/templates bind to).
 export type {
+  ChainBoundTransactionSigner,
   EmbeddedWalletConnection,
   EmbeddedWalletProvider,
   SignerFromWalletAccountOptions,
+  SolanaWalletNetwork,
   TransactionSigner,
   WalletStandardAccountLike,
   WalletStandardSignTransaction,

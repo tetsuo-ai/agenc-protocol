@@ -2,7 +2,7 @@
 // that (0.1.0 hardcoded 0n, which reverted with InsufficientStake on mainnet
 // where the minimum is 10,000,000 lamports), and the funding preflight rejects
 // an underfunded wallet with one clear message BEFORE any transaction.
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -17,13 +17,19 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import {
   AGENT_ACCOUNT_RENT_LAMPORTS,
+  AGENT_ACCOUNT_SIZE,
   CLAIM_ACCOUNT_RENT_LAMPORTS,
+  claimFundingRequirement,
+  CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+  CLAIM_ACCOUNT_SIZE,
   ensureRegistered,
   FEE_HEADROOM_LAMPORTS,
   readMinAgentStake,
+  readWorkerAccountRentMinimums,
   registrationFundingRequirement,
   runTickOnce,
   SUBMISSION_ACCOUNT_RENT_LAMPORTS,
+  SUBMISSION_ACCOUNT_SIZE,
   type WorkerContext,
   type WorkerLogEvent,
 } from "../src/runtime.js";
@@ -134,6 +140,7 @@ async function registrationHarness(options: {
   configData?: Uint8Array | null;
   balance?: bigint;
   getBalance?: false;
+  rents?: { agent: bigint; claim: bigint; submission: bigint };
   dryRun?: boolean;
 }): Promise<RegistrationHarness> {
   const agentId = new Uint8Array(32).fill(42);
@@ -176,7 +183,20 @@ async function registrationHarness(options: {
     ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
     ...(options.getBalance === false
       ? {}
-      : { getBalance: async () => options.balance ?? 1_000_000_000n }),
+      : {
+          getBalance: async () => options.balance ?? 1_000_000_000n,
+          getMinimumBalanceForRentExemption: async (space: number) => {
+            const rents = options.rents ?? {
+              agent: AGENT_ACCOUNT_RENT_LAMPORTS,
+              claim: CLAIM_ACCOUNT_RENT_LAMPORTS,
+              submission: SUBMISSION_ACCOUNT_RENT_LAMPORTS,
+            };
+            if (space === AGENT_ACCOUNT_SIZE) return rents.agent;
+            if (space === CLAIM_ACCOUNT_SIZE) return rents.claim;
+            if (space === SUBMISSION_ACCOUNT_SIZE) return rents.submission;
+            throw new Error(`unexpected account size ${space}`);
+          },
+        }),
   };
   return { ctx, registerAgent, events, agentId };
 }
@@ -222,16 +242,84 @@ describe("runtime state lock", () => {
 });
 
 describe("registrationFundingRequirement", () => {
-  it("sums stake + agent/claim/submission rents + fee headroom (~0.021 SOL on mainnet)", () => {
+  it("keeps every JS funding constant pinned to the Rust program contract", () => {
+    const stateSource = readFileSync(
+      new URL(
+        "../../../programs/agenc-coordination/src/state.rs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    for (const [account, size] of [
+      ["AgentRegistration", AGENT_ACCOUNT_SIZE],
+      ["TaskClaim", CLAIM_ACCOUNT_SIZE],
+      ["TaskSubmission", SUBMISSION_ACCOUNT_SIZE],
+    ] as const) {
+      expect(stateSource).toMatch(
+        new RegExp(`assert!\\(${account}::SIZE == ${size}\\)`),
+      );
+    }
+
+    const constantsSource = readFileSync(
+      new URL(
+        "../../../programs/agenc-coordination/src/instructions/constants.rs",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const deposit = constantsSource.match(
+      /CONTEST_ENTRY_DEPOSIT_LAMPORTS: u64 = ([0-9_]+);/u,
+    );
+    expect(deposit).not.toBeNull();
+    expect(BigInt(deposit![1]!.replaceAll("_", ""))).toBe(
+      CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+    );
+  });
+
+  it("sums stake + rents + contest deposit + fee headroom (~0.031 SOL on mainnet)", () => {
     const required = registrationFundingRequirement(MAINNET_MIN_STAKE);
     expect(required).toBe(
       MAINNET_MIN_STAKE +
         AGENT_ACCOUNT_RENT_LAMPORTS +
         CLAIM_ACCOUNT_RENT_LAMPORTS +
         SUBMISSION_ACCOUNT_RENT_LAMPORTS +
+        CONTEST_ENTRY_DEPOSIT_LAMPORTS +
         FEE_HEADROOM_LAMPORTS,
     );
-    expect(required).toBe(20_924_960n);
+    expect(required).toBe(30_924_960n);
+  });
+
+  it("budgets every recurring claim through submission with worst-case contest and fee headroom", () => {
+    expect(claimFundingRequirement()).toBe(
+      CLAIM_ACCOUNT_RENT_LAMPORTS +
+        SUBMISSION_ACCOUNT_RENT_LAMPORTS +
+        CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+        FEE_HEADROOM_LAMPORTS,
+    );
+    expect(claimFundingRequirement({ claim: 20n, submission: 30n })).toBe(
+      20n + 30n + CONTEST_ENTRY_DEPOSIT_LAMPORTS + FEE_HEADROOM_LAMPORTS,
+    );
+  });
+
+  it("queries live rent for every exact worker-funded account size", async () => {
+    const calls: number[] = [];
+    const rents = await readWorkerAccountRentMinimums(async (size) => {
+      calls.push(size);
+      return BigInt(size * 10);
+    });
+    expect(calls.sort((a, b) => a - b)).toEqual(
+      [AGENT_ACCOUNT_SIZE, CLAIM_ACCOUNT_SIZE, SUBMISSION_ACCOUNT_SIZE].sort(
+        (a, b) => a - b,
+      ),
+    );
+    expect(registrationFundingRequirement(100n, rents)).toBe(
+      100n +
+        BigInt(AGENT_ACCOUNT_SIZE * 10) +
+        BigInt(CLAIM_ACCOUNT_SIZE * 10) +
+        BigInt(SUBMISSION_ACCOUNT_SIZE * 10) +
+        CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+        FEE_HEADROOM_LAMPORTS,
+    );
   });
 });
 
@@ -285,6 +373,28 @@ describe("ensureRegistered (fresh agent)", () => {
     const agent = await ensureRegistered(ctx);
     expect(agent.registered).toBe(true);
     expect(registerAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses live cluster rent instead of the snapshot estimates", async () => {
+    const rents = { agent: 10n, claim: 20n, submission: 30n };
+    const required = registrationFundingRequirement(MAINNET_MIN_STAKE, rents);
+    const { ctx, registerAgent } = await registrationHarness({
+      rents,
+      balance: required - 1n,
+    });
+    await expect(ensureRegistered(ctx)).rejects.toThrow(
+      new RegExp(`needs at least ${required} lamports`),
+    );
+    expect(registerAgent).not.toHaveBeenCalled();
+  });
+
+  it("refuses a partial funding seam rather than falling back to stale rent", async () => {
+    const { ctx, registerAgent } = await registrationHarness({});
+    delete ctx.getMinimumBalanceForRentExemption;
+    await expect(ensureRegistered(ctx)).rejects.toThrow(
+      /requires both getBalance and getMinimumBalanceForRentExemption/,
+    );
+    expect(registerAgent).not.toHaveBeenCalled();
   });
 
   it("dry-run signs nothing and needs no funds or config read", async () => {

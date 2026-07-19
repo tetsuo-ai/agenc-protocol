@@ -20,7 +20,7 @@ import {
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+} from "./spl-token-legacy.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(__dirname, "..");
@@ -296,6 +296,62 @@ export async function setMultisig(svm, owners, threshold) {
   cfg.multisig_threshold = threshold;
   const data = await coder.accounts.encode("ProtocolConfig", cfg);
   svm.setAccount(protocolPda, { lamports: Number(acct.lamports), data, owner: PID, executable: false, rentEpoch: 0 });
+}
+
+/// Configure a realistic 2-of-3 ProtocolConfig owner set for compiled tests and
+/// return the two signers/account metas needed by multisig-gated instructions.
+export async function configureTestMultisig(w) {
+  const owner2 = Keypair.generate();
+  const owner3 = Keypair.generate();
+  for (const owner of [owner2, owner3]) {
+    w.svm.airdrop(owner.publicKey, BigInt(100e9));
+  }
+  await setMultisig(
+    w.svm,
+    [w.admin.publicKey, owner2.publicKey, owner3.publicKey],
+    2,
+  );
+  const approvers = [w.admin, owner2];
+  return {
+    approvers,
+    remainingAccounts: approvers.map((signer) => ({
+      pubkey: signer.publicKey,
+      isSigner: true,
+      isWritable: false,
+    })),
+  };
+}
+
+/// Seat the synthetic test world's protocol authority on the resolver roster via
+/// a real threshold-approved instruction. Settlement-focused tests can then use
+/// the ordinary assigned-resolver path while the dedicated accountable-ruling
+/// regression separately exercises the direct-authority M-of-N branch.
+export async function seatTestAuthorityResolver(w) {
+  if (w.authorityResolverEntry) return w.authorityResolverEntry;
+  const approvals = await configureTestMultisig(w);
+  const [entry] = pda([
+    enc("dispute_resolver"),
+    w.admin.publicKey.toBuffer(),
+  ]);
+  expectOk(
+    send(
+      w.svm,
+      await makeProgram(w.admin).methods
+        .assignDisputeResolver(w.admin.publicKey)
+        .accounts({
+          protocolConfig: w.protocolPda,
+          disputeResolver: entry,
+          authority: w.admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .remainingAccounts(approvals.remainingAccounts)
+        .instruction(),
+      approvals.approvers,
+    ),
+    "seat test protocol authority as resolver",
+  );
+  w.authorityResolverEntry = entry;
+  return entry;
 }
 
 /// Inject a ModerationConfig at ["moderation_config"]. enabled=false keeps Model-A.

@@ -144,8 +144,9 @@ function toMcpTool(tool) {
 function createMarketplaceMcpServer(options) {
   const { context } = options;
   const enableMutations = options.enableMutations ?? false;
-  const tools = options.tools ?? selectTools(enableMutations);
-  const registry = createToolRegistry(tools);
+  const requestedTools = options.tools ?? selectTools(enableMutations);
+  const registry = createToolRegistry(requestedTools);
+  const tools = [...registry.values()];
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {} } }
@@ -198,7 +199,11 @@ function toErrorResult(toolName, error) {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ error: { tool: toolName, code, message } }, null, 2)
+        text: JSON.stringify(
+          { error: { tool: toolName, code, message } },
+          null,
+          2
+        )
       }
     ]
   };

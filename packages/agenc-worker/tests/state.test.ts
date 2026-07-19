@@ -1,21 +1,28 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
+  chmodSync,
   linkSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   statSync,
+  symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { address } from "@solana/kit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   acquireStateLock,
   emptyState,
   loadState,
+  MAX_WORKER_STATE_BYTES,
+  pruneSettledSubmissions,
   saveState,
+  SETTLED_SUBMISSION_RETENTION,
   WorkerStateError,
 } from "../src/state.js";
 
@@ -35,7 +42,9 @@ function pendingSubmission() {
 }
 
 function writeRaw(stateDir: string, value: unknown): void {
-  writeFileSync(path.join(stateDir, "state.json"), JSON.stringify(value));
+  writeFileSync(path.join(stateDir, "state.json"), JSON.stringify(value), {
+    mode: 0o600,
+  });
 }
 
 describe("versioned fail-closed worker state", () => {
@@ -139,6 +148,91 @@ describe("versioned fail-closed worker state", () => {
     });
     expect(() => loadState(stateDir)).toThrow(/legacy root\.openClaim\.phase/);
   });
+
+  it("bounds the hot ledger while preserving every unsettled submission", () => {
+    const state = emptyState();
+    const settled = Array.from(
+      { length: SETTLED_SUBMISSION_RETENTION + 5 },
+      (_, index) => ({
+        ...pendingSubmission(),
+        task: `${index}`,
+        settled: true as const,
+        outcome: "accepted" as const,
+        earnedLamports: "1",
+        settlementSignature: `settlement-${index}`,
+        settledAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      }),
+    );
+    const unsettled = [
+      { ...pendingSubmission(), task: "pending-a" },
+      { ...pendingSubmission(), task: "pending-b" },
+    ];
+    state.submissions = [...settled, ...unsettled];
+
+    expect(pruneSettledSubmissions(state)).toBe(5);
+    expect(state.submissions.filter(({ settled: done }) => done)).toHaveLength(
+      SETTLED_SUBMISSION_RETENTION,
+    );
+    expect(
+      state.submissions
+        .filter(({ settled: done }) => !done)
+        .map(({ task }) => task),
+    ).toEqual(["pending-a", "pending-b"]);
+    expect(state.submissions[0]?.task).toBe("5");
+  });
+
+  it("rejects an oversized state file before reading or parsing it", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-large-"));
+    const statePath = path.join(stateDir, "state.json");
+    writeFileSync(statePath, "{}", { mode: 0o600 });
+    chmodSync(statePath, 0o600);
+    truncateSync(statePath, MAX_WORKER_STATE_BYTES + 1);
+    expect(() => loadState(stateDir)).toThrow(/exceeds .* bytes/);
+  });
+
+  it("refuses symlinked state directories and state files", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "agenc-worker-links-"));
+    const realDir = path.join(parent, "real");
+    mkdirSync(realDir, { mode: 0o700 });
+    writeRaw(realDir, emptyState());
+
+    const linkedDir = path.join(parent, "linked-dir");
+    symlinkSync(realDir, linkedDir, "dir");
+    expect(() => loadState(linkedDir)).toThrow(/not a symbolic link/u);
+    expect(() => saveState(linkedDir, emptyState())).toThrow(
+      /not a symbolic link/u,
+    );
+
+    const outside = path.join(parent, "outside.json");
+    writeFileSync(outside, JSON.stringify(emptyState()), { mode: 0o600 });
+    const stateDir = path.join(parent, "state");
+    mkdirSync(stateDir, { mode: 0o700 });
+    symlinkSync(outside, path.join(stateDir, "state.json"));
+    expect(() => loadState(stateDir)).toThrow(/not a symbolic link/u);
+  });
+
+  it("refuses group/world-accessible or foreign-owned state paths", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "agenc-worker-mode-"));
+    writeRaw(stateDir, emptyState());
+    chmodSync(path.join(stateDir, "state.json"), 0o644);
+    expect(() => loadState(stateDir)).toThrow(/chmod 600/u);
+
+    chmodSync(path.join(stateDir, "state.json"), 0o600);
+    chmodSync(stateDir, 0o755);
+    expect(() => loadState(stateDir)).toThrow(/chmod 700/u);
+    expect(() => saveState(stateDir, emptyState())).toThrow(/chmod 700/u);
+
+    chmodSync(stateDir, 0o700);
+    const actualUid = statSync(stateDir).uid;
+    const uid = vi
+      .spyOn(process, "getuid")
+      .mockReturnValue(actualUid === 0 ? 1 : actualUid - 1);
+    try {
+      expect(() => loadState(stateDir)).toThrow(/owned by the current user/u);
+    } finally {
+      uid.mockRestore();
+    }
+  });
 });
 
 describe("exclusive state directory lock", () => {
@@ -168,6 +262,45 @@ describe("exclusive state directory lock", () => {
     writeFileSync(path.join(stateDir, ".active.lock"), "{");
 
     expect(() => acquireStateLock(stateDir)).toThrow(/unreadable/);
+    expect(readdirSync(stateDir)).toContain(".active.lock");
+  });
+
+  it("reclaims a live reused PID when its recorded process identity mismatches", () => {
+    if (process.platform !== "linux") return;
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-lock-reused-pid-"),
+    );
+    writeFileSync(
+      path.join(stateDir, ".active.lock"),
+      JSON.stringify({
+        pid: process.pid,
+        nonce: "ad".repeat(16),
+        acquiredAt: "2000-01-01T00:00:00.000Z",
+        bootId: "00000000-0000-0000-0000-000000000000",
+        processStartTime: "1",
+      }),
+    );
+    const release = acquireStateLock(stateDir);
+    release();
+    expect(readdirSync(stateDir)).not.toContain(".active.lock");
+  });
+
+  it("fails closed when only half of a process identity is present", () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-lock-incomplete-identity-"),
+    );
+    writeFileSync(
+      path.join(stateDir, ".active.lock"),
+      JSON.stringify({
+        pid: 99_999_999,
+        nonce: "ae".repeat(16),
+        acquiredAt: "2000-01-01T00:00:00.000Z",
+        bootId: "00000000-0000-0000-0000-000000000000",
+      }),
+    );
+    expect(() => acquireStateLock(stateDir)).toThrow(
+      /incomplete process identity/,
+    );
     expect(readdirSync(stateDir)).toContain(".active.lock");
   });
 

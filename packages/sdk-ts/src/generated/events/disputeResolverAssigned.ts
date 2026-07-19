@@ -18,7 +18,10 @@ export const DISPUTE_RESOLVER_ASSIGNED_EVENT_DISCRIMINATOR: ReadonlyUint8Array =
   51, 132, 198, 221, 116, 105, 154, 12,
 ]);
 
-/** Emitted when the protocol authority assigns a wallet to the dispute-resolver roster. */
+/**
+ * Emitted after an authority-proposed resolver assignment receives configured M-of-N
+ * approval.
+ */
 export type DisputeResolverAssignedEventData = {
   resolver: Address;
   assignedBy: Address;

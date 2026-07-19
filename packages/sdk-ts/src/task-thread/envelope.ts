@@ -12,11 +12,88 @@
 // byte-for-byte.
 //
 // Browser-safe: WebCrypto + the existing values codecs only — no Node built-ins.
+import { address } from "@solana/kit";
 import {
   canonicalJobSpecJson,
   type CanonicalJobSpecHash,
 } from "../values/job-spec.js";
 import { sha256, bytesToHex } from "../values/hash.js";
+
+const HASH_HEX = /^[0-9a-f]{64}$/;
+const ENVELOPE_KEYS = [
+  "attachments",
+  "body",
+  "parentHash",
+  "role",
+  "taskPda",
+  "ts",
+  "v",
+] as const;
+const ATTACHMENT_KEYS = ["hash", "uri"] as const;
+const MAX_BODY_CHARS = 16_384;
+const MAX_ATTACHMENTS = 32;
+const MAX_URI_CHARS = 2_048;
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  context: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const want = [...expected].sort();
+  if (
+    actual.length !== want.length ||
+    actual.some((key, index) => key !== want[index])
+  ) {
+    throw new TypeError(`${context}: unknown or missing keys`);
+  }
+}
+
+/** Validate and return a canonical Solana task address string. */
+export function assertTaskThreadTaskPda(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new TypeError(
+      "task-thread envelope: `taskPda` must be a Solana address",
+    );
+  }
+  try {
+    return address(value);
+  } catch {
+    throw new TypeError(
+      "task-thread envelope: `taskPda` must be a valid Solana address",
+    );
+  }
+}
+
+function assertAttachmentUri(value: unknown, index: number): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_URI_CHARS
+  ) {
+    throw new TypeError(
+      `task-thread envelope: attachment[${index}].uri is invalid`,
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new TypeError(
+      `task-thread envelope: attachment[${index}].uri is invalid`,
+    );
+  }
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "agenc:") ||
+    parsed.username !== "" ||
+    parsed.password !== ""
+  ) {
+    throw new TypeError(
+      `task-thread envelope: attachment[${index}].uri must use https: or agenc: without credentials`,
+    );
+  }
+  return value;
+}
 
 /** The current task-thread envelope version. */
 export const TASK_THREAD_ENVELOPE_VERSION = 1;
@@ -98,44 +175,67 @@ export function assertTaskThreadEnvelope(value: unknown): TaskThreadEnvelope {
     throw new TypeError("task-thread envelope: not a JSON object");
   }
   const e = value as Record<string, unknown>;
+  assertExactKeys(e, ENVELOPE_KEYS, "task-thread envelope");
   if (e.v !== TASK_THREAD_ENVELOPE_VERSION) {
     throw new TypeError(
       `task-thread envelope: unsupported version ${String(e.v)} (expected ${TASK_THREAD_ENVELOPE_VERSION})`,
     );
   }
-  if (typeof e.taskPda !== "string" || e.taskPda.length === 0) {
-    throw new TypeError("task-thread envelope: `taskPda` must be a non-empty string");
-  }
-  if (e.parentHash !== null && typeof e.parentHash !== "string") {
-    throw new TypeError("task-thread envelope: `parentHash` must be a hex string or null");
+  const taskPda = assertTaskThreadTaskPda(e.taskPda);
+  if (
+    e.parentHash !== null &&
+    (typeof e.parentHash !== "string" || !HASH_HEX.test(e.parentHash))
+  ) {
+    throw new TypeError(
+      "task-thread envelope: `parentHash` must be 64 lowercase hex chars or null",
+    );
   }
   if (e.role !== "buyer" && e.role !== "worker") {
-    throw new TypeError('task-thread envelope: `role` must be "buyer" or "worker"');
+    throw new TypeError(
+      'task-thread envelope: `role` must be "buyer" or "worker"',
+    );
   }
-  if (typeof e.body !== "string") {
-    throw new TypeError("task-thread envelope: `body` must be a string");
+  if (typeof e.body !== "string" || e.body.length > MAX_BODY_CHARS) {
+    throw new TypeError(
+      `task-thread envelope: \`body\` must be at most ${MAX_BODY_CHARS} chars`,
+    );
   }
   if (!Array.isArray(e.attachments)) {
     throw new TypeError("task-thread envelope: `attachments` must be an array");
   }
+  if (e.attachments.length > MAX_ATTACHMENTS) {
+    throw new TypeError(
+      `task-thread envelope: at most ${MAX_ATTACHMENTS} attachments are allowed`,
+    );
+  }
   const attachments: TaskThreadAttachment[] = e.attachments.map((a, i) => {
     if (a === null || typeof a !== "object") {
-      throw new TypeError(`task-thread envelope: attachment[${i}] is not an object`);
-    }
-    const att = a as Record<string, unknown>;
-    if (typeof att.uri !== "string" || typeof att.hash !== "string") {
       throw new TypeError(
-        `task-thread envelope: attachment[${i}] must be { uri: string, hash: string }`,
+        `task-thread envelope: attachment[${i}] is not an object`,
       );
     }
-    return { uri: att.uri, hash: att.hash };
+    const att = a as Record<string, unknown>;
+    assertExactKeys(
+      att,
+      ATTACHMENT_KEYS,
+      `task-thread envelope: attachment[${i}]`,
+    );
+    const uri = assertAttachmentUri(att.uri, i);
+    if (typeof att.hash !== "string" || !HASH_HEX.test(att.hash)) {
+      throw new TypeError(
+        `task-thread envelope: attachment[${i}].hash must be 64 lowercase hex chars`,
+      );
+    }
+    return { uri, hash: att.hash };
   });
-  if (typeof e.ts !== "number" || !Number.isFinite(e.ts)) {
-    throw new TypeError("task-thread envelope: `ts` must be a finite number");
+  if (typeof e.ts !== "number" || !Number.isSafeInteger(e.ts) || e.ts < 0) {
+    throw new TypeError(
+      "task-thread envelope: `ts` must be a non-negative safe integer",
+    );
   }
   return {
     v: TASK_THREAD_ENVELOPE_VERSION,
-    taskPda: e.taskPda,
+    taskPda,
     parentHash: e.parentHash,
     role: e.role,
     body: e.body,

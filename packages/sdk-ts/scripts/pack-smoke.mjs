@@ -11,7 +11,10 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const packageDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const pkg = JSON.parse(
   execFileSync("node", ["-p", "JSON.stringify(require('./package.json'))"], {
     cwd: packageDir,
@@ -21,6 +24,9 @@ const pkg = JSON.parse(
 const peerSpecs = Object.entries(pkg.peerDependencies ?? {}).map(
   ([name, range]) => `${name}@${range}`,
 );
+const requiredPeerSpecs = Object.entries(pkg.peerDependencies ?? {})
+  .filter(([name]) => pkg.peerDependenciesMeta?.[name]?.optional !== true)
+  .map(([name, range]) => `${name}@${range}`);
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "agenc-sdk-pack-"));
 
@@ -37,14 +43,72 @@ try {
   if (!tarballName) {
     throw new Error("npm pack did not produce a tarball");
   }
+  const tarballPath = path.join(packDir, tarballName);
 
-  execFileSync("npm", ["init", "-y"], { cwd: tempDir, stdio: "ignore" });
-  execFileSync("npm", ["pkg", "set", "type=module"], { cwd: tempDir, stdio: "ignore" });
+  // Optional-peer boundary: a clean consumer that installs only the package's
+  // required peers must be able to import every advertised ./testing runtime
+  // entry. LiteSVM use itself then fails with a clear install instruction.
+  const cleanDir = path.join(tempDir, "clean-import");
+  await mkdir(cleanDir, { recursive: true });
+  execFileSync("npm", ["init", "-y"], { cwd: cleanDir, stdio: "ignore" });
+  execFileSync("npm", ["pkg", "set", "type=module"], {
+    cwd: cleanDir,
+    stdio: "ignore",
+  });
   execFileSync(
     "npm",
-    ["install", path.join(packDir, tarballName), ...peerSpecs],
-    { cwd: tempDir, stdio: "inherit" },
+    ["install", "--ignore-scripts", tarballPath, ...requiredPeerSpecs],
+    { cwd: cleanDir, stdio: "inherit" },
   );
+
+  const missingPeerAssertion = [
+    "try {",
+    "  await startLocalMarketplace();",
+    '  throw new Error("startLocalMarketplace unexpectedly loaded without litesvm");',
+    "} catch (error) {",
+    '  if (!String(error?.message ?? error).includes("npm install --save-dev litesvm")) throw error;',
+    "}",
+  ];
+  const cleanMjs = path.join(cleanDir, "testing-import.mjs");
+  await writeFile(
+    cleanMjs,
+    [
+      'import { startLocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";',
+      'if (typeof startLocalMarketplace !== "function") throw new Error("ESM testing export missing");',
+      ...missingPeerAssertion,
+      'console.log("testing subpath clean ESM import ok");',
+    ].join("\n"),
+    "utf8",
+  );
+  const cleanCjs = path.join(cleanDir, "testing-import.cjs");
+  await writeFile(
+    cleanCjs,
+    [
+      'const { startLocalMarketplace } = require("@tetsuo-ai/marketplace-sdk/testing");',
+      'if (typeof startLocalMarketplace !== "function") throw new Error("CJS testing export missing");',
+      "(async () => {",
+      ...missingPeerAssertion.map((line) => `  ${line}`),
+      '  console.log("testing subpath clean CJS import ok");',
+      "})().catch((error) => { console.error(error); process.exit(1); });",
+    ].join("\n"),
+    "utf8",
+  );
+  execFileSync("node", [cleanMjs], { cwd: cleanDir, stdio: "inherit" });
+  execFileSync("node", [cleanCjs], { cwd: cleanDir, stdio: "inherit" });
+
+  // Full testing smoke: install every peer (including optional litesvm), then
+  // prove both module systems boot and execute the packaged SBF.
+  const fullDir = path.join(tempDir, "full");
+  await mkdir(fullDir, { recursive: true });
+  execFileSync("npm", ["init", "-y"], { cwd: fullDir, stdio: "ignore" });
+  execFileSync("npm", ["pkg", "set", "type=module"], {
+    cwd: fullDir,
+    stdio: "ignore",
+  });
+  execFileSync("npm", ["install", tarballPath, ...peerSpecs], {
+    cwd: fullDir,
+    stdio: "inherit",
+  });
 
   const quickstart = [
     "const authority = await generateKeyPairSigner();",
@@ -61,7 +125,7 @@ try {
     'if (!ix.data?.length) throw new Error("no data");',
   ];
 
-  const smokeMjs = path.join(tempDir, "smoke.mjs");
+  const smokeMjs = path.join(fullDir, "smoke.mjs");
   await writeFile(
     smokeMjs,
     [
@@ -73,7 +137,7 @@ try {
     "utf8",
   );
 
-  const smokeCjs = path.join(tempDir, "smoke.cjs");
+  const smokeCjs = path.join(fullDir, "smoke.cjs");
   await writeFile(
     smokeCjs,
     [
@@ -90,14 +154,14 @@ try {
     "utf8",
   );
 
-  execFileSync("node", [smokeMjs], { cwd: tempDir, stdio: "inherit" });
-  execFileSync("node", [smokeCjs], { cwd: tempDir, stdio: "inherit" });
+  execFileSync("node", [smokeMjs], { cwd: fullDir, stdio: "inherit" });
+  execFileSync("node", [smokeCjs], { cwd: fullDir, stdio: "inherit" });
 
   // ./testing subpath: the tarball must ship the program .so and the subpath
   // must boot the litesvm sandbox from BOTH entry points (this guards the
   // dist-relative testing-assets path resolution against tsup config drift).
-  const tarList = execFileSync("tar", ["-tzf", path.join(packDir, tarballName)], {
-    cwd: tempDir,
+  const tarList = execFileSync("tar", ["-tzf", tarballPath], {
+    cwd: fullDir,
     encoding: "utf8",
   });
   if (!tarList.includes("package/testing-assets/agenc_coordination.so")) {
@@ -117,13 +181,16 @@ try {
     "});",
     'console.log("testing subpath sandbox ok");',
   ];
-  const testingMjs = path.join(tempDir, "testing-smoke.mjs");
+  const testingMjs = path.join(fullDir, "testing-smoke.mjs");
   await writeFile(
     testingMjs,
-    ['import { startLocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";', ...testingBody].join("\n"),
+    [
+      'import { startLocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";',
+      ...testingBody,
+    ].join("\n"),
     "utf8",
   );
-  const testingCjs = path.join(tempDir, "testing-smoke.cjs");
+  const testingCjs = path.join(fullDir, "testing-smoke.cjs");
   await writeFile(
     testingCjs,
     [
@@ -134,8 +201,8 @@ try {
     ].join("\n"),
     "utf8",
   );
-  execFileSync("node", [testingMjs], { cwd: tempDir, stdio: "inherit" });
-  execFileSync("node", [testingCjs], { cwd: tempDir, stdio: "inherit" });
+  execFileSync("node", [testingMjs], { cwd: fullDir, stdio: "inherit" });
+  execFileSync("node", [testingCjs], { cwd: fullDir, stdio: "inherit" });
 } finally {
   await rm(tempDir, { recursive: true, force: true });
 }

@@ -31,8 +31,6 @@ import {
   getU32Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -48,6 +46,11 @@ import {
   type OptionOrNullable,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 
 export const HIRE_RATING_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   250, 116, 242, 149, 241, 55, 164, 63,
@@ -116,7 +119,10 @@ export function getHireRatingEncoder(): Encoder<HireRatingArgs> {
       ["buyer", getAddressEncoder()],
       ["score", getU8Encoder()],
       ["reviewHash", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32))],
-      ["reviewUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "reviewUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["ratedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
       ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
@@ -134,7 +140,10 @@ export function getHireRatingDecoder(): Decoder<HireRating> {
     ["buyer", getAddressDecoder()],
     ["score", getU8Decoder()],
     ["reviewHash", getOptionDecoder(fixDecoderSize(getBytesDecoder(), 32))],
-    ["reviewUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "reviewUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["ratedAt", getI64Decoder()],
     ["bump", getU8Decoder()],
     ["reserved", fixDecoderSize(getBytesDecoder(), 32)],

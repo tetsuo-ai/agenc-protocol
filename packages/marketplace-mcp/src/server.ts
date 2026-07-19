@@ -137,8 +137,9 @@ export function createMarketplaceMcpServer(
 ): MarketplaceMcpServer {
   const { context } = options;
   const enableMutations = options.enableMutations ?? false;
-  const tools = options.tools ?? selectTools(enableMutations);
-  const registry = createToolRegistry(tools);
+  const requestedTools = options.tools ?? selectTools(enableMutations);
+  const registry = createToolRegistry(requestedTools);
+  const tools = [...registry.values()];
 
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
@@ -208,8 +209,12 @@ function toStructured(result: unknown): Record<string, unknown> {
  * otherwise reach the MCP client and its logs over the protocol channel.
  * Exported for tests.
  */
-export function toErrorResult(toolName: string, error: unknown): CallToolResult {
-  const code = error instanceof MarketplaceToolError ? error.code : "TOOL_ERROR";
+export function toErrorResult(
+  toolName: string,
+  error: unknown,
+): CallToolResult {
+  const code =
+    error instanceof MarketplaceToolError ? error.code : "TOOL_ERROR";
   const message = sanitizeDiagnostic(
     error instanceof Error ? error.message : String(error),
   );
@@ -218,7 +223,11 @@ export function toErrorResult(toolName: string, error: unknown): CallToolResult 
     content: [
       {
         type: "text",
-        text: JSON.stringify({ error: { tool: toolName, code, message } }, null, 2),
+        text: JSON.stringify(
+          { error: { tool: toolName, code, message } },
+          null,
+          2,
+        ),
       },
     ],
   };

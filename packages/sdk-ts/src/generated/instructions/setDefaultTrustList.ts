@@ -18,8 +18,6 @@ import {
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -38,6 +36,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -99,7 +102,10 @@ export function getSetDefaultTrustListInstructionDataEncoder(): Encoder<SetDefau
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["listHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["listUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "listUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
     ]),
     (value) => ({
       ...value,
@@ -112,7 +118,7 @@ export function getSetDefaultTrustListInstructionDataDecoder(): Decoder<SetDefau
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["listHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["listUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["listUri", addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder())],
   ]);
 }
 

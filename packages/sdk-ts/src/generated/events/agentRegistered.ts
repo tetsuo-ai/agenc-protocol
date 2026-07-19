@@ -13,16 +13,15 @@ import {
   getStructDecoder,
   getU32Decoder,
   getU64Decoder,
-  getUtf8Decoder,
   type Address,
   type Decoder,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+import { getBorshStringDecoder } from "../codecs/borshString";
 
 /** 8-byte Anchor event discriminator for `AgentRegistered` (sha256("event:AgentRegistered")[0..8]). */
-export const AGENT_REGISTERED_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
-  191, 78, 217, 54, 232, 100, 189, 85,
-]);
+export const AGENT_REGISTERED_EVENT_DISCRIMINATOR: ReadonlyUint8Array =
+  new Uint8Array([191, 78, 217, 54, 232, 100, 189, 85]);
 
 /** Emitted when a new agent registers */
 export type AgentRegisteredEventData = {
@@ -43,7 +42,10 @@ export function getAgentRegisteredEventDecoder(): Decoder<AgentRegisteredEventDa
     ["agentId", fixDecoderSize(getBytesDecoder(), 32)],
     ["authority", getAddressDecoder()],
     ["capabilities", getU64Decoder()],
-    ["endpoint", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "endpoint",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["stakeAmount", getU64Decoder()],
     ["timestamp", getI64Decoder()],
   ]);

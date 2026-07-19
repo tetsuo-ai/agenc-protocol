@@ -52,7 +52,10 @@ function taskFixture({ currentWorkers = 0, status = 0, marker = 101 } = {}) {
   return { address, creator, data };
 }
 
-function jobSpecFixture(task, { bidLocked = false, marker = 111 } = {}) {
+function jobSpecFixture(
+  task,
+  { bidLocked = false, marker = 111, jobSpecUri } = {},
+) {
   const hash = Buffer.alloc(32, marker);
   const [address, bump] = PublicKey.findProgramAddressSync(
     [Buffer.from("task_job_spec"), task.address.toBuffer()],
@@ -63,7 +66,7 @@ function jobSpecFixture(task, { bidLocked = false, marker = 111 } = {}) {
   task.address.toBuffer().copy(data, 8);
   task.creator.toBuffer().copy(data, 40);
   hash.copy(data, 72);
-  const uri = Buffer.from(`agenc://job-spec/${marker}`, "utf8");
+  const uri = Buffer.from(jobSpecUri ?? `agenc://job-spec/${marker}`, "utf8");
   data.writeUInt32LE(uri.length, 104);
   uri.copy(data, 108);
   const end = 108 + uri.length;
@@ -74,7 +77,10 @@ function jobSpecFixture(task, { bidLocked = false, marker = 111 } = {}) {
   return { address, data, hash };
 }
 
-function blockFixture(jobSpec, { status = 1, marker = 121 } = {}) {
+function blockFixture(
+  jobSpec,
+  { status = 1, marker = 121, rationaleUri } = {},
+) {
   const [address, bump] = PublicKey.findProgramAddressSync(
     [Buffer.from("moderation_block"), jobSpec.hash],
     PROGRAM_ID,
@@ -84,7 +90,10 @@ function blockFixture(jobSpec, { status = 1, marker = 121 } = {}) {
   jobSpec.hash.copy(data, 8);
   data[40] = status;
   Buffer.alloc(32, marker).copy(data, 41);
-  const uri = Buffer.from(`agenc://moderation/${marker}`, "utf8");
+  const uri = Buffer.from(
+    rationaleUri ?? `agenc://moderation/${marker}`,
+    "utf8",
+  );
   data.writeUInt32LE(uri.length, 73);
   uri.copy(data, 77);
   const end = 77 + uri.length;
@@ -99,7 +108,10 @@ function connectionFor(tasks, records = new Map(), genesis = MAINNET_GENESIS) {
   return {
     getGenesisHash: async () => genesis,
     getProgramAccounts: async () =>
-      tasks.map((task) => ({ pubkey: task.address, account: account(task.data) })),
+      tasks.map((task) => ({
+        pubkey: task.address,
+        account: account(task.data),
+      })),
     getMultipleAccountsInfo: async (addresses) =>
       addresses.map((address) => records.get(address.toBase58()) ?? null),
   };
@@ -118,6 +130,44 @@ test("exact-decodes canonical job specs, bid locks, and moderation blocks", () =
   assert.throws(
     () => decodeCanonicalTaskJobSpec(invalidLock),
     /bid_locked: invalid bool/,
+  );
+});
+
+test("job-spec and moderation URI codecs match Rust UTF-8 and trim semantics", () => {
+  const task = taskFixture();
+  for (const value of ["\ufeff", "\0", "prefix\0suffix"]) {
+    const spec = jobSpecFixture(task, { jobSpecUri: value });
+    assert.equal(decodeCanonicalTaskJobSpec(spec.data).jobSpecUri, value);
+    const block = blockFixture(spec, { rationaleUri: value });
+    assert.equal(decodeModerationBlock(block.data).rationaleUri, value);
+  }
+
+  // Rust char::is_whitespace includes U+0085 but excludes U+FEFF and U+0000.
+  const whitespaceSpec = jobSpecFixture(task, { jobSpecUri: "\u0085" });
+  assert.throws(
+    () => decodeCanonicalTaskJobSpec(whitespaceSpec.data),
+    /job_spec_uri: empty/,
+  );
+  const whitespaceBlock = blockFixture(whitespaceSpec, {
+    rationaleUri: "\u0085",
+  });
+  assert.throws(
+    () => decodeModerationBlock(whitespaceBlock.data),
+    /rationale_uri: empty/,
+  );
+
+  const invalidSpec = jobSpecFixture(task, { jobSpecUri: "x" });
+  invalidSpec.data[108] = 0xff;
+  assert.throws(
+    () => decodeCanonicalTaskJobSpec(invalidSpec.data),
+    /job_spec_uri: invalid UTF-8/,
+  );
+  const validSpec = jobSpecFixture(task);
+  const invalidBlock = blockFixture(validSpec, { rationaleUri: "x" });
+  invalidBlock.data[77] = 0xff;
+  assert.throws(
+    () => decodeModerationBlock(invalidBlock.data),
+    /rationale_uri: invalid UTF-8/,
   );
 });
 
@@ -184,12 +234,12 @@ test("malformed job-spec and mismatched block state are hard blockers", async ()
   const spec = jobSpecFixture(task);
   const malformedSpec = Buffer.from(spec.data);
   malformedSpec[0] ^= 0xff;
-  let records = new Map([
-    [spec.address.toBase58(), account(malformedSpec)],
-  ]);
+  let records = new Map([[spec.address.toBase58(), account(malformedSpec)]]);
   let result = await scanActiveJobSpecBlocks(connectionFor([task], records));
   assert.ok(
-    result.blockers.some((item) => item.kind === "invalid-active-job-spec-layout"),
+    result.blockers.some(
+      (item) => item.kind === "invalid-active-job-spec-layout",
+    ),
   );
 
   const block = blockFixture(spec);

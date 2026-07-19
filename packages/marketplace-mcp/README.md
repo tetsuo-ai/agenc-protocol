@@ -28,11 +28,15 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`.
   `prepare_*` tools are added. They **build an unsigned transaction artifact** and return
   it — the caller signs it with **their own** signer behind **their own** policy gate and
   broadcasts it. This mirrors the AgenC kit's signer-local, policy-gated philosophy: the
-  server is a transaction *builder*, never a *signer*.
+  server is a transaction _builder_, never a _signer_.
 - **Endpoint URLs are redacted in diagnostics.** RPC and indexer URLs are redacted to
   their origin in **all** diagnostic output — boot/config logs, the fatal error handler,
   and tool-error results — so a URL carrying credentials in its path or query can never
   leak into logs or a model's context (2026-07 audit L-4).
+- **Advertised schemas are enforced.** Every `tools/call` argument object is validated
+  against the exact immutable schema returned by `tools/list` before dispatch. Missing,
+  mistyped, out-of-range, nested-invalid, and undeclared fields return a sanitized tool
+  error with stable code `INVALID_TOOL_INPUT`; the target handler is not invoked.
 
 ## The write path (and the hosted connector)
 
@@ -42,7 +46,7 @@ There are two ways to run these tools:
   locally next to a signer you control. Enable `AGENC_MCP_ENABLE_MUTATIONS=1` to expose the
   keyless `prepare_*` builders, then sign the returned unsigned artifact with your own
   wallet behind your own policy gate. This is where hires, listings, claims, submissions,
-  and settlement are *prepared* — the signer never leaves your machine.
+  and settlement are _prepared_ — the signer never leaves your machine.
 - **Hosted / remote HTTP connectors (e.g. a Grok "connector") — readonly.** When these
   tools are surfaced through a hosted, multi-tenant HTTP connector, run them **readonly**:
   expose only the discovery/inspection tools and leave `AGENC_MCP_ENABLE_MUTATIONS` off. A
@@ -61,7 +65,7 @@ npx @tetsuo-ai/marketplace-mcp
 > **Set a read transport before you rely on discovery.** With no configuration the server
 > falls back to the shared public RPC (`api.mainnet-beta.solana.com`), which **disables or
 > rate-limits `getProgramAccounts`** — the exact call the `list_*` and `search` tools make.
-> A fresh `npx` boot therefore *starts* keyless and readonly, but `list_*`/`search` will
+> A fresh `npx` boot therefore _starts_ keyless and readonly, but `list_*`/`search` will
 > throttle or return nothing until you pick one of:
 >
 > - **`AGENC_INDEXER_URL`** — the hosted indexer / read-API (preferred: it is the scale
@@ -101,14 +105,14 @@ To enable the keyless prepare tools, add `"AGENC_MCP_ENABLE_MUTATIONS": "1"` to 
 
 ## Configuration (environment)
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `AGENC_RPC_URL` | cluster default | A `getProgramAccounts`-capable Solana RPC (the read path). |
-| `AGENC_MARKETPLACE_CLUSTER` | `mainnet` | `mainnet` \| `devnet` \| `localnet` — picks the default RPC when `AGENC_RPC_URL` is unset. |
-| `AGENC_INDEXER_URL` | _(none)_ | Optional hosted indexer base URL (the scale read path; preferred for `get_agent_track_record`). |
-| `AGENC_INDEXER_API_KEY` | _(none)_ | Optional indexer API key. |
-| `AGENC_PROGRAM_ADDRESS` | SDK default | Override the agenc-coordination program id. |
-| `AGENC_MCP_ENABLE_MUTATIONS` | _(off)_ | `1`/`true`/`yes`/`on` exposes the keyless `prepare_*` tools. |
+| Variable                     | Default         | Purpose                                                                                         |
+| ---------------------------- | --------------- | ----------------------------------------------------------------------------------------------- |
+| `AGENC_RPC_URL`              | cluster default | A `getProgramAccounts`-capable Solana RPC (the read path).                                      |
+| `AGENC_MARKETPLACE_CLUSTER`  | `mainnet`       | `mainnet` \| `devnet` \| `localnet` — picks the default RPC when `AGENC_RPC_URL` is unset.      |
+| `AGENC_INDEXER_URL`          | _(none)_        | Optional hosted indexer base URL (the scale read path; preferred for `get_agent_track_record`). |
+| `AGENC_INDEXER_API_KEY`      | _(none)_        | Optional indexer API key.                                                                       |
+| `AGENC_PROGRAM_ADDRESS`      | SDK default     | Override the agenc-coordination program id.                                                     |
+| `AGENC_MCP_ENABLE_MUTATIONS` | _(off)_         | `1`/`true`/`yes`/`on` exposes the keyless `prepare_*` tools.                                    |
 
 Cluster default RPCs: `mainnet` → `https://api.mainnet-beta.solana.com`, `devnet` →
 `https://api.devnet.solana.com`, `localnet` → `http://127.0.0.1:8899` (matches
@@ -118,32 +122,32 @@ Cluster default RPCs: `mainnet` → `https://api.mainnet-beta.solana.com`, `devn
 
 ### Readonly (always on)
 
-| Tool | Purpose |
-|------|---------|
-| `list_listings` | List active service listings (filter by category / provider / state). |
-| `get_listing` | Fetch + decode one listing by PDA. |
-| `list_open_tasks` | List Open tasks (filter by capability bitmask / min reward / creator). |
-| `get_task` | Fetch + decode one task by PDA. |
-| `get_agent_track_record` | An agent's completion rate, dispute rate, and slash history. |
-| `search` | Free-text discovery across listings and open tasks. |
+| Tool                     | Purpose                                                                |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `list_listings`          | List active service listings (filter by category / provider / state).  |
+| `get_listing`            | Fetch + decode one listing by PDA.                                     |
+| `list_open_tasks`        | List Open tasks (filter by capability bitmask / min reward / creator). |
+| `get_task`               | Fetch + decode one task by PDA.                                        |
+| `get_agent_track_record` | An agent's completion rate, dispute rate, and slash history.           |
+| `search`                 | Free-text discovery across listings and open tasks.                    |
 
 ### Mutation-prepare (opt-in via `AGENC_MCP_ENABLE_MUTATIONS=1`, keyless)
 
-| Tool | Purpose |
-|------|---------|
-| `prepare_register_agent` | Build an **unsigned** `register_agent` transaction — the one-time onboarding step that creates an agent's `AgentRegistration` PDA before it can hire, claim, list, or complete work. |
-| `prepare_hire` | Build an **unsigned** registered-agent `hire_from_listing` transaction. |
-| `prepare_hire_humanless` | Build an **unsigned** human-buyer `hire_from_listing_humanless` transaction. |
-| `prepare_set_task_job_spec` | Build an **unsigned** activation transaction that pins a moderated job spec. |
-| `prepare_claim` | Build an **unsigned** `claim_task_with_job_spec` transaction. |
-| `prepare_submit` | Build an **unsigned** `submit_task_result` transaction. |
-| `prepare_accept_task_result` | Build an **unsigned** CreatorReview accept transaction. |
-| `prepare_reject_task_result` | Build an **unsigned** CreatorReview reject transaction. |
-| `prepare_auto_accept_task_result` | Build an **unsigned** auto-accept transaction; the caller must verify the review window and decide who submits it. |
-| `prepare_cancel_task` | Build an **unsigned** cancel/refund transaction for eligible tasks. |
-| `prepare_close_task` | Build an **unsigned** close transaction for terminal tasks and listing-capacity cleanup. |
-| `prepare_rate_hire` | Build an **unsigned** buyer rating transaction for completed hires. |
-| `prepare_create_service_listing` | Build an **unsigned** `create_service_listing` transaction for provider supply. |
+| Tool                              | Purpose                                                                                                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prepare_register_agent`          | Build an **unsigned** `register_agent` transaction — the one-time onboarding step that creates an agent's `AgentRegistration` PDA before it can hire, claim, list, or complete work. |
+| `prepare_hire`                    | Build an **unsigned** registered-agent `hire_from_listing` transaction.                                                                                                              |
+| `prepare_hire_humanless`          | Build an **unsigned** human-buyer `hire_from_listing_humanless` transaction.                                                                                                         |
+| `prepare_set_task_job_spec`       | Build an **unsigned** activation transaction that pins a moderated job spec.                                                                                                         |
+| `prepare_claim`                   | Build an **unsigned** `claim_task_with_job_spec` transaction.                                                                                                                        |
+| `prepare_submit`                  | Build an **unsigned** `submit_task_result` transaction.                                                                                                                              |
+| `prepare_accept_task_result`      | Build an **unsigned** CreatorReview accept transaction.                                                                                                                              |
+| `prepare_reject_task_result`      | Build an **unsigned** CreatorReview reject transaction.                                                                                                                              |
+| `prepare_auto_accept_task_result` | Build an **unsigned** auto-accept transaction; the caller must verify the review window and decide who submits it.                                                                   |
+| `prepare_cancel_task`             | Build an **unsigned** cancel/refund transaction for eligible tasks.                                                                                                                  |
+| `prepare_close_task`              | Build an **unsigned** close transaction for terminal tasks and listing-capacity cleanup.                                                                                             |
+| `prepare_rate_hire`               | Build an **unsigned** buyer rating transaction for completed hires.                                                                                                                  |
+| `prepare_create_service_listing`  | Build an **unsigned** `create_service_listing` transaction for provider supply.                                                                                                      |
 
 Each prepare tool returns `{ programAddress, accounts, dataBase64, signatures: [] }` — an
 unsigned artifact. The empty `signatures` is the contract: the server signed nothing.
@@ -160,8 +164,8 @@ import {
   createMarketplaceMcpServer,
 } from "@tetsuo-ai/marketplace-mcp";
 
-const config = resolveMcpConfig();              // read env
-const context = buildToolContext(config);       // kit RPC + optional indexer (keyless)
+const config = resolveMcpConfig(); // read env
+const context = buildToolContext(config); // kit RPC + optional indexer (keyless)
 const { server, tools } = createMarketplaceMcpServer({
   context,
   enableMutations: config.enableMutations,

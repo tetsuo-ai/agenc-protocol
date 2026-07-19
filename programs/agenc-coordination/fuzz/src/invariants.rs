@@ -61,11 +61,13 @@ pub enum DisputeInvariantResult {
 }
 
 /// Direct-resolver authorization result. The order mirrors `resolve_dispute`:
-/// roster/protocol authorization, initiator exclusion, then party exclusion.
+/// roster/protocol authorization, direct-authority threshold approval, initiator
+/// exclusion, then party exclusion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolverAuthorizationResult {
     Authorized,
     Unauthorized,
+    MissingThresholdApproval,
     InitiatorConflict,
     PartyConflict,
 }
@@ -358,12 +360,17 @@ pub fn check_resolver_authorization(
     resolver: &[u8; 32],
     protocol_authority: &[u8; 32],
     resolver_assigned: bool,
+    has_configured_threshold_approval: bool,
     initiator_authority: &[u8; 32],
     creator_authority: &[u8; 32],
     worker_authority: &[u8; 32],
 ) -> ResolverAuthorizationResult {
-    if resolver != protocol_authority && !resolver_assigned {
+    let is_protocol_authority = resolver == protocol_authority;
+    if !is_protocol_authority && !resolver_assigned {
         return ResolverAuthorizationResult::Unauthorized;
+    }
+    if is_protocol_authority && !resolver_assigned && !has_configured_threshold_approval {
+        return ResolverAuthorizationResult::MissingThresholdApproval;
     }
     if resolver == initiator_authority {
         return ResolverAuthorizationResult::InitiatorConflict;

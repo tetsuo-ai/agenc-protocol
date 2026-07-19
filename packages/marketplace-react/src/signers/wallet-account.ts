@@ -7,25 +7,28 @@
  * — so it needs a PARTIAL signer (one that returns signatures without sending),
  * NOT a `TransactionSendingSigner` (which `signTransactionMessageWithSigners`
  * deliberately ignores). This bridge therefore produces a
- * {@link TransactionPartialSigner}: it serializes each transaction, hands it to
- * the wallet's `solana:signTransaction` feature, and diffs the returned signed
- * transaction to recover THIS account's signature.
+ * {@link TransactionPartialSigner}: it batches transactions through the
+ * wallet's variadic `solana:signTransaction` feature, requires byte-identical
+ * returned messages, and recovers THIS account's verified signatures.
  *
  * @see {@link signerFromWalletAccount}
  * @module signers/wallet-account
  */
 import {
   address,
+  getPublicKeyFromAddress,
   getTransactionDecoder,
   getTransactionEncoder,
+  verifySignature,
   type Address,
   type SignatureBytes,
   type Transaction,
 } from "@solana/kit";
 import { ts } from "./strings.js";
 import type {
+  ChainBoundTransactionSigner,
   SignerFromWalletAccountOptions,
-  TransactionSigner,
+  SolanaWalletNetwork,
   WalletStandardAccountLike,
   WalletStandardSignTransaction,
 } from "./types.js";
@@ -45,13 +48,67 @@ function resolveSignTransaction(
   throw new Error(ts("signer.walletNoSignFeature", { address: account.address }));
 }
 
-/** Pick the CAIP-2 chain to forward to the wallet. */
+/** Map an AgenC provider network to the Wallet Standard chain identifier. */
+export function walletStandardChainForNetwork(
+  network: SolanaWalletNetwork,
+): string {
+  return `solana:${network}`;
+}
+
+/** Resolve and validate the CAIP-2 chain forwarded to the wallet. */
 function resolveChain(
   account: WalletStandardAccountLike,
   options: SignerFromWalletAccountOptions,
-): string | undefined {
-  if (options.chain) return options.chain;
-  return account.chains?.find((c) => c.startsWith("solana:"));
+): string {
+  const networkChain = options.network
+    ? walletStandardChainForNetwork(options.network)
+    : undefined;
+  if (options.chain && networkChain && options.chain !== networkChain) {
+    throw new Error(
+      ts("signer.walletChainNetworkMismatch", {
+        chain: options.chain,
+        network: options.network!,
+        expected: networkChain,
+      }),
+    );
+  }
+
+  const solanaChains =
+    account.chains?.filter((chain) => chain.startsWith("solana:")) ?? [];
+  const requested = options.chain ?? networkChain;
+  const chain =
+    requested ?? (solanaChains.length === 1 ? solanaChains[0] : undefined);
+  if (!chain) {
+    throw new Error(
+      ts("signer.walletChainRequired", {
+        address: account.address,
+        count: solanaChains.length,
+      }),
+    );
+  }
+  if (
+    !chain.startsWith("solana:") ||
+    (account.chains !== undefined && !account.chains.includes(chain))
+  ) {
+    throw new Error(
+      ts("signer.walletChainUnsupported", {
+        address: account.address,
+        chain,
+      }),
+    );
+  }
+  return chain;
+}
+
+function bytesEqual(
+  left: ArrayLike<number>,
+  right: ArrayLike<number>,
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 /**
@@ -63,12 +120,9 @@ function resolveChain(
  * the `solana:signTransaction` feature. The returned signer is a
  * {@link TransactionPartialSigner}, the exact shape the SDK client expects.
  *
- * Wallets may MODIFY a transaction before signing (priority fees, guard
- * instructions). We honor that by decoding the wallet's returned signed
- * transaction and extracting only THIS account's signature; the SDK client then
- * re-assembles and submits. (If a wallet rewrites the message such that the
- * fee-payer's own prior signing is invalidated, that is a wallet contract the
- * SDK's single-fee-payer flow already assumes won't happen for the payer.)
+ * The SDK client re-assembles and submits the ORIGINAL transaction. This bridge
+ * therefore accepts only byte-identical returned message bytes and verifies the
+ * extracted signature over them.
  *
  * SSR-safe: constructs no browser globals; the wallet round-trip only runs when
  * a transaction is actually signed.
@@ -89,40 +143,72 @@ function resolveChain(
 export function signerFromWalletAccount(
   account: WalletStandardAccountLike,
   options: SignerFromWalletAccountOptions = {},
-): TransactionSigner {
+): ChainBoundTransactionSigner {
   const signerAddress: Address = address(account.address);
   const signTransaction = resolveSignTransaction(account, options);
   const chain = resolveChain(account, options);
   const encoder = getTransactionEncoder();
   const decoder = getTransactionDecoder();
+  let publicKeyPromise: ReturnType<typeof getPublicKeyFromAddress> | undefined;
 
-  async function signOne(transaction: Transaction): Promise<SignatureBytes> {
-    const wireBytes = new Uint8Array(encoder.encode(transaction));
-    const [output] = await signTransaction({
-      transaction: wireBytes,
-      ...(chain ? { chain } : {}),
-    });
-    if (!output) {
-      throw new Error(ts("signer.walletNoSignature", { address: account.address }));
+  async function extractSignature(
+    transaction: Transaction,
+    signedTransaction: Uint8Array,
+  ): Promise<SignatureBytes> {
+    const signed = decoder.decode(signedTransaction);
+    if (!bytesEqual(transaction.messageBytes, signed.messageBytes)) {
+      throw new Error(
+        ts("signer.walletModifiedTransaction", { address: account.address }),
+      );
     }
-    const signed = decoder.decode(output.signedTransaction);
     const signature = signed.signatures[signerAddress];
     if (!signature) {
       throw new Error(ts("signer.walletNoSignature", { address: account.address }));
+    }
+    publicKeyPromise ??= getPublicKeyFromAddress(signerAddress);
+    const valid = await verifySignature(
+      await publicKeyPromise,
+      signature,
+      transaction.messageBytes,
+    );
+    if (!valid) {
+      throw new Error(
+        ts("signer.walletInvalidSignature", { address: account.address }),
+      );
     }
     return signature as SignatureBytes;
   }
 
   return {
     address: signerAddress,
+    chain,
     async signTransactions(transactions) {
-      // Sign in parallel — partial signers are order-independent (each returns a
-      // single-entry SignatureDictionary the caller merges).
+      if (transactions.length === 0) return [];
+      // Wallet Standard is variadic: one call preserves single-flight approval
+      // behavior and output ordering.
+      const outputs = await signTransaction(
+        ...transactions.map((transaction) => ({
+          account,
+          chain,
+          transaction: new Uint8Array(encoder.encode(transaction)),
+        })),
+      );
+      if (outputs.length !== transactions.length) {
+        throw new Error(
+          ts("signer.walletResponseCount", {
+            got: outputs.length,
+            expected: transactions.length,
+          }),
+        );
+      }
       return Promise.all(
-        transactions.map(async (transaction) => ({
-          [signerAddress]: await signOne(transaction),
+        outputs.map(async (output, index) => ({
+          [signerAddress]: await extractSignature(
+            transactions[index]!,
+            output.signedTransaction,
+          ),
         })),
       );
     },
-  } satisfies TransactionSigner;
+  } satisfies ChainBoundTransactionSigner;
 }

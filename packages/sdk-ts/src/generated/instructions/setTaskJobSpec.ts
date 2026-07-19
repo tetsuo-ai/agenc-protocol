@@ -20,8 +20,6 @@ import {
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -40,6 +38,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -130,7 +133,10 @@ export function getSetTaskJobSpecInstructionDataEncoder(): Encoder<SetTaskJobSpe
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["jobSpecHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["jobSpecUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "jobSpecUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["moderator", getAddressEncoder()],
     ]),
     (value) => ({ ...value, discriminator: SET_TASK_JOB_SPEC_DISCRIMINATOR }),
@@ -141,7 +147,10 @@ export function getSetTaskJobSpecInstructionDataDecoder(): Decoder<SetTaskJobSpe
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["jobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["jobSpecUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "jobSpecUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["moderator", getAddressDecoder()],
   ]);
 }

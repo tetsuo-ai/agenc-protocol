@@ -35,8 +35,6 @@ import {
   getU64Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -52,6 +50,11 @@ import {
   type OptionOrNullable,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getListingStateDecoder,
   getListingStateEncoder,
@@ -212,7 +215,10 @@ export function getServiceListingEncoder(): Encoder<ServiceListingArgs> {
       ["category", fixEncoderSize(getBytesEncoder(), 32)],
       ["tags", fixEncoderSize(getBytesEncoder(), 64)],
       ["specHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["specUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "specUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
       ["requiredCapabilities", getU64Encoder()],
@@ -246,7 +252,7 @@ export function getServiceListingDecoder(): Decoder<ServiceListing> {
     ["category", fixDecoderSize(getBytesDecoder(), 32)],
     ["tags", fixDecoderSize(getBytesDecoder(), 64)],
     ["specHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["specUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["specUri", addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder())],
     ["price", getU64Decoder()],
     ["priceMint", getOptionDecoder(getAddressDecoder())],
     ["requiredCapabilities", getU64Decoder()],

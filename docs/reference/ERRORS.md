@@ -115,7 +115,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6101 | 0x17d5 | `NotArbiter` | Not authorized to vote (not an arbiter) |
 | 6102 | 0x17d6 | `InsufficientVotes` | Insufficient votes to resolve |
 | 6103 | 0x17d7 | `DisputeAlreadyResolved` | Dispute has already been resolved |
-| 6104 | 0x17d8 | `UnauthorizedResolver` | Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator |
+| 6104 | 0x17d8 | `UnauthorizedResolver` | Only the protocol authority with configured M-of-N approval or an assigned dispute resolver can resolve disputes, and never the dispute initiator |
 | 6105 | 0x17d9 | `InvalidDisputeResolver` | Invalid dispute resolver: pubkey must be non-zero |
 | 6106 | 0x17da | `ActiveDisputeVotes` | Agent has initiated dispute outcomes pending finalization |
 | 6107 | 0x17db | `RecentVoteActivity` | Agent must wait 24 hours after voting before deregistering |

@@ -89,12 +89,12 @@ export function useListings(
   filter?: UseListingsFilter,
   options?: UseListingsOptions,
 ): UseListingsResult {
-  const { read } = useAgencContext();
+  const { read, cacheNamespace } = useAgencContext();
   const pageSize = options?.pageSize ?? DEFAULT_PAGE_SIZE;
   const enabled = options?.enabled ?? true;
 
   const query = useQuery<ListingRow[], Error>({
-    queryKey: queryKeys.listings(filter),
+    queryKey: queryKeys.listings(filter, cacheNamespace),
     queryFn: () => read.listActiveListings(filter),
     enabled,
   });

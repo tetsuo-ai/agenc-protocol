@@ -7,11 +7,36 @@
 // `indexer.listActiveListings()` and the gPA queries module's
 // `listActiveListings()` over the same bytes.
 import { describe, it, expect } from "vitest";
-import { getAddressDecoder, getBase64Decoder, type Address } from "@solana/kit";
 import {
+  appendTransactionMessageInstruction,
+  compileTransaction,
+  createNoopSigner,
+  createTransactionMessage,
+  getAddressDecoder,
+  getBase58Decoder,
+  getBase64Decoder,
+  getBase64Encoder,
+  getCompiledTransactionMessageDecoder,
+  getCompiledTransactionMessageEncoder,
+  getTransactionDecoder,
+  getTransactionEncoder,
+  pipe,
+  setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash,
+  type Address,
+  type Blockhash,
+  type Instruction,
+} from "@solana/kit";
+import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
   createIndexerClient,
+  findEscrowPda,
+  findHireRecordPda,
+  findTaskPda,
+  facade,
   IndexerError,
   ListingState,
+  getHireRecordEncoder,
   getServiceListingEncoder,
   type IndexerFetchLike,
   type ServiceListingArgs,
@@ -27,6 +52,11 @@ import {
 
 const addressDecoder = getAddressDecoder();
 const base64Decoder = getBase64Decoder();
+const base58Decoder = getBase58Decoder();
+const VALID_SIGNATURE = base58Decoder.decode(new Uint8Array(64));
+const VALID_BLOCKHASH = base58Decoder.decode(
+  new Uint8Array(32).fill(7),
+) as Blockhash;
 
 function addrFromByte(b: number): Address {
   return addressDecoder.decode(new Uint8Array(32).fill(b));
@@ -106,7 +136,7 @@ function asIndexerItem(pda: Address, args: ServiceListingArgs) {
       metadataValid: true,
       metadataIssues: [],
       lastSlot: 1234,
-      lastSignature: "5sig".padEnd(16, "x"),
+      lastSignature: VALID_SIGNATURE,
     },
     bytes: new Uint8Array(bytes),
   };
@@ -114,7 +144,12 @@ function asIndexerItem(pda: Address, args: ServiceListingArgs) {
 
 type FakeRoute = (
   url: URL,
-  init: { method: string; headers: Record<string, string>; body?: string },
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+    signal?: AbortSignal;
+  },
 ) => { status?: number; payload: unknown };
 
 /** Recording fake fetch with a tiny router. */
@@ -127,11 +162,17 @@ function createFakeFetch(route: FakeRoute) {
   }> = [];
   const impl: IndexerFetchLike = async (rawUrl, init) => {
     const url = new URL(rawUrl);
-    calls.push({ url, method: init.method, headers: init.headers, body: init.body });
+    calls.push({
+      url,
+      method: init.method,
+      headers: init.headers,
+      body: init.body,
+    });
     const { status = 200, payload } = route(url, init);
     return {
       ok: status >= 200 && status < 300,
       status,
+      body: new Response(JSON.stringify(payload)).body,
       json: async () => payload,
       text: async () => JSON.stringify(payload),
     };
@@ -156,6 +197,91 @@ function listingsPageRoute(items: unknown[]): FakeRoute {
 }
 
 const BASE_URL = "https://indexer.test";
+
+async function validHireBuild(input: {
+  buyer: Address;
+  listing: Address;
+  creatorAgent: Address;
+  taskId?: string;
+  expectedPrice?: bigint;
+  expectedVersion?: bigint;
+  listingSpecHash?: string;
+  extraInstruction?: Instruction;
+  programOverride?: Address;
+}) {
+  const taskIdHex = input.taskId ?? "ab".repeat(32);
+  const taskId = Uint8Array.from(taskIdHex.match(/../g)!, (part) =>
+    Number.parseInt(part, 16),
+  );
+  const listingSpecHash = input.listingSpecHash ?? "13".repeat(32);
+  const specHash = Uint8Array.from(listingSpecHash.match(/../g)!, (part) =>
+    Number.parseInt(part, 16),
+  );
+  const signer = createNoopSigner(input.buyer);
+  const ix = await facade.hireFromListing({
+    listing: input.listing,
+    providerAgent: addrFromByte(0x54),
+    creatorAgent: input.creatorAgent,
+    authority: signer,
+    creator: signer,
+    taskId,
+    expectedPrice: input.expectedPrice ?? 1_000_000n,
+    expectedVersion: input.expectedVersion ?? 2n,
+    listingSpecHash: specHash,
+    moderator: addrFromByte(0x55),
+  });
+  const instruction: Instruction = input.programOverride
+    ? { ...ix, programAddress: input.programOverride }
+    : ix;
+  const message = pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(input.buyer, m),
+    (m) =>
+      setTransactionMessageLifetimeUsingBlockhash(
+        { blockhash: VALID_BLOCKHASH, lastValidBlockHeight: 123_456n },
+        m,
+      ),
+    (m) => appendTransactionMessageInstruction(instruction, m),
+  );
+  const compiled = input.extraInstruction
+    ? compileTransaction(
+        appendTransactionMessageInstruction(input.extraInstruction, message),
+      )
+    : compileTransaction(message);
+  const transaction = base64Decoder.decode(
+    getTransactionEncoder().encode(compiled),
+  );
+  const [taskPda] = await findTaskPda({ creator: input.buyer, taskId });
+  const [escrowPda] = await findEscrowPda({ task: taskPda });
+  const [hireRecordPda] = await findHireRecordPda({ task: taskPda });
+  return {
+    transaction,
+    blockhash: VALID_BLOCKHASH,
+    lastValidBlockHeight: 123_456,
+    taskPda,
+    escrowPda,
+    hireRecordPda,
+    taskId: taskIdHex,
+  };
+}
+
+function makeAllNonSignersWritable(transactionBase64: string): string {
+  const transaction = getTransactionDecoder().decode(
+    new Uint8Array(getBase64Encoder().encode(transactionBase64)),
+  );
+  const message = getCompiledTransactionMessageDecoder().decode(
+    transaction.messageBytes,
+  );
+  return getBase64Decoder().decode(
+    getTransactionEncoder().encode({
+      ...transaction,
+      messageBytes: getCompiledTransactionMessageEncoder().encode({
+        ...message,
+        header: { ...message.header, numReadonlyNonSignerAccounts: 0 },
+      }) as typeof transaction.messageBytes,
+    }),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Decode parity with the queries module (THE load-bearing contract)
@@ -226,10 +352,7 @@ describe("createIndexerClient().listActiveListings — decode parity", () => {
     const fixtures = [0x21, 0x22, 0x23].map((b) =>
       asIndexerItem(addrFromByte(b), listingFixtureArgs()),
     );
-    const pages = [
-      [fixtures[0]!.item, fixtures[1]!.item],
-      [fixtures[2]!.item],
-    ];
+    const pages = [[fixtures[0]!.item, fixtures[1]!.item], [fixtures[2]!.item]];
     const { impl, calls } = createFakeFetch((url) => {
       const page = Number(url.searchParams.get("page"));
       return {
@@ -312,7 +435,13 @@ describe("createIndexerClient reads", () => {
   it("listings() passes filters + paging through and returns the page", async () => {
     const { item } = asIndexerItem(addrFromByte(0x31), listingFixtureArgs());
     const { impl, calls } = createFakeFetch((url) => ({
-      payload: { success: true, page: 2, pageSize: 10, total: 21, items: [item] },
+      payload: {
+        success: true,
+        page: 2,
+        pageSize: 10,
+        total: 21,
+        items: [item],
+      },
     }));
     const indexer = createIndexerClient({ baseUrl: BASE_URL, fetchImpl: impl });
     const page = await indexer.listings({
@@ -347,17 +476,45 @@ describe("createIndexerClient reads", () => {
     expect(calls[0]!.method).toBe("GET");
   });
 
+  it("rejects resource identities that do not match the request", async () => {
+    const requested = addrFromByte(0x41);
+    const different = addrFromByte(0x42);
+    const { item } = asIndexerItem(different, listingFixtureArgs());
+    const indexer = createIndexerClient({
+      baseUrl: BASE_URL,
+      fetchImpl: createFakeFetch(() => ({
+        payload: { success: true, listing: item },
+      })).impl,
+    });
+
+    await expect(indexer.getListing(requested)).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
   it("listingHires() unwraps { items }", async () => {
     const pda = addrFromByte(0x42);
+    const taskPda = addrFromByte(0x44);
     const hire = {
-      taskPda: "task",
-      hireRecordPda: "hire",
-      accountData: "AAEC",
-      buyer: "buyer",
+      taskPda,
+      hireRecordPda: addrFromByte(0x45),
+      accountData: base64Decoder.decode(
+        getHireRecordEncoder().encode({
+          task: taskPda,
+          listing: pda,
+          operator: DEFAULT_ADDR,
+          operatorFeeBps: 0,
+          bump: 255,
+          designatedProvider: addrFromByte(0x47),
+          referrer: DEFAULT_ADDR,
+          referrerFeeBps: 0,
+        }),
+      ),
+      buyer: addrFromByte(0x46),
       listing: pda,
       price: "1000000",
       slot: 9,
-      signature: "sig",
+      signature: VALID_SIGNATURE,
     };
     const { impl, calls } = createFakeFetch(() => ({
       payload: { success: true, items: [hire] },
@@ -376,7 +533,7 @@ describe("createIndexerClient reads", () => {
         completions: 5,
         disputesInitiated: 1,
         disputesLost: 0,
-        slashHistory: [{ slot: 7, signature: "slashsig", amount: "100" }],
+        slashHistory: [{ slot: 7, signature: VALID_SIGNATURE, amount: "100" }],
         source: "events",
       },
     }));
@@ -386,7 +543,7 @@ describe("createIndexerClient reads", () => {
       completions: 5,
       disputesInitiated: 1,
       disputesLost: 0,
-      slashHistory: [{ slot: 7, signature: "slashsig", amount: "100" }],
+      slashHistory: [{ slot: 7, signature: VALID_SIGNATURE, amount: "100" }],
       source: "events",
     });
     expect(calls[0]!.url.pathname).toBe(
@@ -401,15 +558,10 @@ describe("createIndexerClient reads", () => {
 
 describe("createIndexerClient writes", () => {
   it("buildHireTransaction() POSTs stringified params and returns the build", async () => {
-    const build = {
-      transaction: "dHg=",
-      blockhash: "BLOCKHASH",
-      lastValidBlockHeight: 123_456,
-      taskPda: "task",
-      escrowPda: "escrow",
-      hireRecordPda: "hire",
-      taskId: "ab".repeat(32),
-    };
+    const buyer = addrFromByte(0x51);
+    const listing = addrFromByte(0x52);
+    const creatorAgent = addrFromByte(0x53);
+    const build = await validHireBuild({ buyer, listing, creatorAgent });
     const { impl, calls } = createFakeFetch((url) => {
       expect(url.pathname).toBe("/v1/hires");
       return { payload: { success: true, ...build } };
@@ -418,27 +570,30 @@ describe("createIndexerClient writes", () => {
       baseUrl: BASE_URL,
       apiKey: "ak_test",
       fetchImpl: impl,
+      verifyHireTransaction: async () => {},
     });
     await expect(
       indexer.buildHireTransaction({
-        buyer: addrFromByte(0x51),
-        listing: addrFromByte(0x52),
+        buyer,
+        listing,
+        taskId: "ab".repeat(32),
         expectedPrice: 1_000_000n,
         expectedVersion: 2n,
         listingSpecHash: "13".repeat(32),
-        creatorAgent: addrFromByte(0x53),
+        creatorAgent,
       }),
     ).resolves.toEqual(build);
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.headers["content-type"]).toBe("application/json");
     expect(calls[0]!.headers["X-Agenc-Api-Key"]).toBe("ak_test");
     expect(JSON.parse(calls[0]!.body!)).toEqual({
-      buyer: addrFromByte(0x51),
-      listing: addrFromByte(0x52),
+      buyer,
+      listing,
+      taskId: "ab".repeat(32),
       expectedPrice: "1000000",
       expectedVersion: "2",
       listingSpecHash: "13".repeat(32),
-      creatorAgent: addrFromByte(0x53),
+      creatorAgent,
     });
   });
 
@@ -454,7 +609,13 @@ describe("createIndexerClient writes", () => {
         return {
           payload: {
             success: true,
-            items: [{ id: "wh_1", url: "https://h.example", events: ["listing.hired"] }],
+            items: [
+              {
+                id: "wh_1",
+                url: "https://h.example",
+                events: ["listing.hired"],
+              },
+            ],
           },
         };
       }
@@ -501,6 +662,228 @@ describe("createIndexerClient writes", () => {
     expect(calls[3]!.url.pathname).toBe("/v1/events");
     expect(calls[3]!.url.searchParams.get("after")).toBe("evt_0");
     expect(calls[3]!.url.searchParams.get("limit")).toBe("50");
+  });
+});
+
+describe("indexer trust and resource boundaries", () => {
+  const buyer = addrFromByte(0x61);
+  const listing = addrFromByte(0x62);
+  const creatorAgent = addrFromByte(0x63);
+  const params = {
+    buyer,
+    listing,
+    taskId: "ab".repeat(32),
+    expectedPrice: 1_000_000n,
+    expectedVersion: 2n,
+    listingSpecHash: "13".repeat(32),
+    creatorAgent,
+  };
+
+  it("requires an explicit exact-intent verifier before returning a signable hire", async () => {
+    const build = await validHireBuild({ buyer, listing, creatorAgent });
+    const { impl } = createFakeFetch(() => ({
+      payload: { success: true, ...build },
+    }));
+    const indexer = createIndexerClient({ baseUrl: BASE_URL, fetchImpl: impl });
+    await expect(indexer.buildHireTransaction(params)).rejects.toMatchObject({
+      code: "TRANSACTION_VERIFIER_REQUIRED",
+    });
+  });
+
+  it("rejects malformed wire bytes, extra instructions, wrong programs/terms, and metadata disagreement", async () => {
+    const valid = await validHireBuild({ buyer, listing, creatorAgent });
+    const extra = await validHireBuild({
+      buyer,
+      listing,
+      creatorAgent,
+      extraInstruction: {
+        programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
+        data: new Uint8Array([1]),
+      },
+    });
+    const wrongProgram = await validHireBuild({
+      buyer,
+      listing,
+      creatorAgent,
+      programOverride: addrFromByte(0x64),
+    });
+    const wrongTerms = await validHireBuild({
+      buyer,
+      listing,
+      creatorAgent,
+      expectedPrice: 9_999_999n,
+    });
+    const candidates = [
+      { ...valid, transaction: "NOT_BASE64" },
+      extra,
+      wrongProgram,
+      wrongTerms,
+      {
+        ...valid,
+        transaction: makeAllNonSignersWritable(valid.transaction),
+      },
+      { ...valid, taskPda: addrFromByte(0x65) },
+      { ...valid, lastValidBlockHeight: Number.NaN },
+    ];
+    for (const candidate of candidates) {
+      const { impl } = createFakeFetch(() => ({
+        payload: { success: true, ...candidate },
+      }));
+      const indexer = createIndexerClient({
+        baseUrl: BASE_URL,
+        fetchImpl: impl,
+        verifyHireTransaction: async () => {},
+      });
+      await expect(indexer.buildHireTransaction(params)).rejects.toMatchObject({
+        code: "INVALID_TRANSACTION",
+      });
+    }
+  });
+
+  it("lets the mandatory verifier reject context the wire cannot establish independently", async () => {
+    const build = await validHireBuild({ buyer, listing, creatorAgent });
+    const { impl } = createFakeFetch(() => ({
+      payload: { success: true, ...build },
+    }));
+    const indexer = createIndexerClient({
+      baseUrl: BASE_URL,
+      fetchImpl: impl,
+      verifyHireTransaction: async ({ instructionAccounts }) => {
+        expect(instructionAccounts[4]).toBe(addrFromByte(0x54));
+        throw new Error(
+          "provider does not match independently fetched listing",
+        );
+      },
+    });
+    await expect(indexer.buildHireTransaction(params)).rejects.toMatchObject({
+      code: "TRANSACTION_VERIFICATION_FAILED",
+    });
+  });
+
+  it("rejects malformed successful schemas", async () => {
+    const { impl } = createFakeFetch(() => ({
+      payload: {
+        success: true,
+        page: "1",
+        pageSize: -5,
+        total: "many",
+        items: [null],
+      },
+    }));
+    const indexer = createIndexerClient({ baseUrl: BASE_URL, fetchImpl: impl });
+    await expect(indexer.listings()).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+
+    const pda = addrFromByte(0x67);
+    const { item } = asIndexerItem(pda, listingFixtureArgs());
+    const wrongAccount = new Uint8Array(
+      getBase64Encoder().encode(item.accountData),
+    );
+    wrongAccount[0] ^= 0xff;
+    const wrongDiscriminator = createIndexerClient({
+      baseUrl: BASE_URL,
+      fetchImpl: createFakeFetch(
+        listingsPageRoute([
+          {
+            ...item,
+            accountData: base64Decoder.decode(wrongAccount),
+          },
+        ]),
+      ).impl,
+    });
+    await expect(wrongDiscriminator.listings()).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+    });
+  });
+
+  it("times out ignored aborts, passes a signal, and bounds streamed bytes", async () => {
+    let signal: AbortSignal | undefined;
+    const slow = createIndexerClient({
+      baseUrl: BASE_URL,
+      timeoutMs: 5,
+      fetchImpl: async (_url, init) => {
+        signal = init.signal;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return new Response(
+          '{"success":true,"page":1,"pageSize":0,"total":0,"items":[]}',
+        );
+      },
+    });
+    await expect(slow.listings()).rejects.toMatchObject({ code: "TIMEOUT" });
+    expect(signal?.aborted).toBe(true);
+
+    const large = createIndexerClient({
+      baseUrl: BASE_URL,
+      maxResponseBytes: 32,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({ success: true, padding: "x".repeat(100) }),
+        ),
+    });
+    await expect(large.listings()).rejects.toMatchObject({
+      code: "RESPONSE_TOO_LARGE",
+    });
+  });
+
+  it("honors caller abort even when an injected fetch ignores its signal", async () => {
+    const controller = new AbortController();
+    let fetchSignal: AbortSignal | undefined;
+    const indexer = createIndexerClient({
+      baseUrl: BASE_URL,
+      timeoutMs: 1_000,
+      signal: controller.signal,
+      fetchImpl: async (_url, init) => {
+        fetchSignal = init.signal;
+        return await new Promise<never>(() => undefined);
+      },
+    });
+
+    const pending = indexer.listings();
+    controller.abort("caller stopped");
+    await expect(pending).rejects.toMatchObject({ code: "ABORTED" });
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
+  it("bounds pagination and rejects non-progressing pages", async () => {
+    const fixture = asIndexerItem(
+      addrFromByte(0x66),
+      listingFixtureArgs(),
+    ).item;
+    const { impl } = createFakeFetch(() => ({
+      payload: {
+        success: true,
+        page: 1,
+        pageSize: 1,
+        total: 3,
+        items: [fixture],
+      },
+    }));
+    const indexer = createIndexerClient({
+      baseUrl: BASE_URL,
+      fetchImpl: impl,
+      maxPages: 2,
+      maxItems: 10,
+    });
+    await expect(indexer.listActiveListings()).rejects.toMatchObject({
+      code: "PAGINATION_NO_PROGRESS",
+    });
+
+    const emptyEarly = createIndexerClient({
+      baseUrl: BASE_URL,
+      fetchImpl: createFakeFetch(() => ({
+        payload: {
+          success: true,
+          page: 1,
+          pageSize: 1,
+          total: 1,
+          items: [],
+        },
+      })).impl,
+    });
+    await expect(emptyEarly.listActiveListings()).rejects.toMatchObject({
+      code: "PAGINATION_NO_PROGRESS",
+    });
   });
 });
 

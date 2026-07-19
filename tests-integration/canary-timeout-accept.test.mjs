@@ -1,13 +1,17 @@
 // Opt-in LiteSVM regression for the frozen mainnet-canary binary.
 // Run after `npm run canary:build` with:
-//   AGENC_CANARY_LITESVM=1 node --test tests-integration/canary-timeout-accept.test.mjs
+//   AGENC_CANARY_LITESVM=1 node --test tests-integration/canary-*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  TransactionInstruction,
+} from "@solana/web3.js";
+import {
   REPO,
   SO,
+  IDL,
   PID,
   enc,
   arr,
@@ -58,6 +62,79 @@ function makeCanaryProgram(payer) {
   );
   return new Program(CANARY_IDL, provider);
 }
+
+test(
+  "canary compiled dispatcher recognizes every frozen instruction discriminator",
+  { skip: !RUN_CANARY },
+  () => {
+    const svm = new LiteSVM();
+    svm.addProgramFromFile(PID, SO);
+    const payer = Keypair.generate();
+    svm.airdrop(payer.publicKey, 10_000_000_000n);
+    assert.equal(CANARY_IDL.instructions.length, 25, "frozen canary surface size");
+
+    for (const instruction of CANARY_IDL.instructions) {
+      const result = send(
+        svm,
+        new TransactionInstruction({
+          programId: PID,
+          keys: [],
+          data: Buffer.from(instruction.discriminator),
+        }),
+        [payer],
+      );
+      assert.ok(
+        result instanceof FailedTransactionMetadata,
+        `${instruction.name}: account-less dispatch must fail`,
+      );
+      const logs = result.meta().logs().join("\n");
+      const displayName = instruction.name
+        .split("_")
+        .map((word) => `${word[0].toUpperCase()}${word.slice(1)}`)
+        .join("");
+      assert.match(
+        logs,
+        new RegExp(`Instruction: ${displayName}`),
+        `${instruction.name}: compiled dispatcher did not recognize the frozen discriminator`,
+      );
+      assert.doesNotMatch(
+        logs,
+        /panicked at|memory allocation failed|Access violation|Program failed to complete/i,
+        `${instruction.name}: malformed account surface must fail without a processor panic`,
+      );
+      svm.expireBlockhash();
+    }
+
+    // A full-surface binary is a superset and would satisfy every positive
+    // discriminator assertion above. Prove the loaded artifact is actually
+    // the restricted canary by requiring one production-only instruction to
+    // miss the compiled dispatcher entirely.
+    const productionOnly = IDL.instructions.find(
+      ({ name }) => name === "create_dependent_task",
+    );
+    assert.ok(productionOnly, "full IDL must expose create_dependent_task");
+    const productionOnlyResult = send(
+      svm,
+      new TransactionInstruction({
+        programId: PID,
+        keys: [],
+        data: Buffer.from(productionOnly.discriminator),
+      }),
+      [payer],
+    );
+    assert.ok(
+      productionOnlyResult instanceof FailedTransactionMetadata,
+      "production-only discriminator must fail against the canary binary",
+    );
+    const productionOnlyLogs = productionOnlyResult.meta().logs().join("\n");
+    assert.match(productionOnlyLogs, /InstructionFallbackNotFound/);
+    assert.doesNotMatch(
+      productionOnlyLogs,
+      /Instruction: CreateDependentTask/,
+      "canary binary must not dispatch production-only instructions",
+    );
+  },
+);
 
 test(
   "canary CreatorReview timeout: permissionless crank settles exactly once without redirecting creator rent",

@@ -31,6 +31,8 @@ export {
   type IndexerEvent,
   type IndexerFetchLike,
   type IndexerHire,
+  type IndexerHireTransactionVerificationContext,
+  type IndexerHireTransactionVerifier,
   type IndexerListActiveListingsOptions,
   type IndexerListing,
   type IndexerListingDecoded,

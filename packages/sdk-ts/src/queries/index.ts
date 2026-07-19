@@ -50,19 +50,23 @@ export {
   TASK_STATUS_OFFSET,
 } from "./offsets.js";
 export {
+  DEFAULT_DIRECT_CLAIM_DEADLINE_SAFETY_SECONDS,
   COMPLETION_BOND_ROLE_CREATOR,
   COMPLETION_BOND_ROLE_WORKER,
   bidsByTask,
   fetchTaskGuarantee,
   isTaskJobSpecPinned,
+  isTaskStateDirectlyClaimable,
   listActiveListings,
   listClaimsForWorker,
+  listDirectClaimableTasks,
   listHireRecordsForBuyer,
   listingsByProvider,
   listOpenTasks,
   listPinnedJobSpecTasks,
   type DecodedProgramAccount,
   type ListActiveListingsOptions,
+  type ListDirectClaimableTasksOptions,
   type ListOpenTasksOptions,
   type TaskGuarantee,
 } from "./helpers.js";

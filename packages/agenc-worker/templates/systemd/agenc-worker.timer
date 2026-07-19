@@ -6,7 +6,7 @@ Description=Run the AgenC marketplace worker tick every 5 minutes
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=5min
-# Ticks are cheap when there is nothing claimable; randomize a little so a
+# Ticks are cheap when there are no claim candidates; randomize a little so a
 # fleet of workers doesn't sweep the RPC in lockstep.
 RandomizedDelaySec=30
 

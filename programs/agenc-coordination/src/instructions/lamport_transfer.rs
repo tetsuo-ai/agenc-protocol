@@ -45,7 +45,7 @@ pub fn transfer_lamports<'info>(
 /// then two recipients are credited individually).
 ///
 /// Returns `Ok(())` immediately if `amount == 0`.
-pub fn credit_lamports<'info>(to: &AccountInfo<'info>, amount: u64) -> Result<()> {
+pub fn credit_lamports(to: &AccountInfo<'_>, amount: u64) -> Result<()> {
     if amount == 0 {
         return Ok(());
     }
@@ -61,7 +61,7 @@ pub fn credit_lamports<'info>(to: &AccountInfo<'info>, amount: u64) -> Result<()
 /// Use this when the destination account will be credited separately.
 ///
 /// Returns `Ok(())` immediately if `amount == 0`.
-pub fn debit_lamports<'info>(from: &AccountInfo<'info>, amount: u64) -> Result<()> {
+pub fn debit_lamports(from: &AccountInfo<'_>, amount: u64) -> Result<()> {
     if amount == 0 {
         return Ok(());
     }

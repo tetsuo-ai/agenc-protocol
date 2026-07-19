@@ -7,7 +7,6 @@
 //   - "sandbox": the in-process litesvm fallback — the REAL compiled program
 //     shipped inside the sdk, zero toolchain, seconds on a cold machine.
 //     This is what a fresh `npx @tetsuo-ai/agenc-cli dev` hits.
-import { readFile } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -24,6 +23,7 @@ import {
   createMarketplaceClient,
   settlementReceiptUrl,
 } from "@tetsuo-ai/marketplace-sdk";
+import { loadSolanaKeypairFile } from "@tetsuo-ai/agenc-worker";
 import { loadConfig, defaultConfig, type AgencConfig } from "./config.js";
 import { detectProject } from "./detect.js";
 import { runDevLoop, type DevActor, type DevListingTerms, type DevLoopResult } from "./bots.js";
@@ -101,10 +101,7 @@ async function airdropped(
 }
 
 async function loadKeypairSigner(filePath: string): Promise<KeyPairSigner> {
-  const bytes = Uint8Array.from(
-    JSON.parse(await readFile(filePath, "utf8")) as number[],
-  );
-  return createKeyPairSignerFromBytes(bytes);
+  return createKeyPairSignerFromBytes(loadSolanaKeypairFile(filePath));
 }
 
 /**
@@ -242,6 +239,8 @@ export async function runDev(
   }
   const listing: DevListingTerms = {
     name: config.name,
+    category: config.listing.category,
+    tags: config.listing.tags,
     priceLamports: BigInt(config.listing.priceLamports),
     operatorFeeBps: config.listing.operatorFeeBps,
     referrerFeeBps: config.listing.referrerFeeBps,
@@ -285,6 +284,16 @@ export async function runDev(
     BigInt(
       (await rpc.getBalance(address, { commitment: "confirmed" }).send()).value,
     );
+  const getMinimumBalanceForRentExemption = async (
+    space: number,
+  ): Promise<bigint> =>
+    BigInt(
+      await rpc
+        .getMinimumBalanceForRentExemption(BigInt(space), {
+          commitment: "finalized",
+        })
+        .send(),
+    );
 
   // Throwaway funded actors: buyer + provider sign transactions; operator +
   // referrer are pure payees (funded so the fee legs land on rent-exempt
@@ -309,6 +318,7 @@ export async function runDev(
     referrer: referrerSigner.address,
     readAccount,
     getBalance,
+    getMinimumBalanceForRentExemption,
     gpa: rpc,
     stateDir,
     log,

@@ -104,7 +104,10 @@ export function useTaskGuarantee(
     (options?.enabled ?? true) && Boolean(taskPda) && reader !== null;
 
   const query = useQuery<TaskGuarantee, Error>({
-    queryKey: queryKeys.taskGuarantee(taskPda ? pdaKey(taskPda) : ""),
+    queryKey: queryKeys.taskGuarantee(
+      taskPda ? pdaKey(taskPda) : "",
+      ctx.cacheNamespace,
+    ),
     enabled,
     queryFn: () => reader!(taskPda as Address | string),
   });

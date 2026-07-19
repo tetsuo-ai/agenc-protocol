@@ -1,14 +1,16 @@
-// Persistent worker state under `stateDir` (default
-// `~/.local/state/agenc-worker`): agent identity, the one in-flight claim WAL,
+// Persistent worker state under `stateDir` (default is an RPC+wallet-namespaced
+// child of `~/.local/state/agenc-worker`): agent identity, the in-flight WAL,
 // and the submission ledger. State is private (0700 directory / 0600 file),
 // validated fail-closed, written through a unique+fsynced temp file, and
 // protected by an exclusive active-runtime lock.
 import { createHash, randomBytes } from "node:crypto";
 import {
-  chmodSync,
   closeSync,
+  constants,
+  fstatSync,
   fsyncSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -17,10 +19,17 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import { address } from "@solana/kit";
 
 export const WORKER_STATE_VERSION = 1 as const;
+
+/** Hard resource ceilings for the hot worker WAL/state file. */
+export const MAX_WORKER_STATE_BYTES = 16 * 1024 * 1024;
+export const MAX_UNSETTLED_SUBMISSIONS = 10_000;
+export const SETTLED_SUBMISSION_RETENTION = 1_000;
+const MAX_PARSED_SUBMISSIONS = 50_000;
 
 /** Executor stdout persisted immediately after a successful execution. */
 export type ExecutionIntent = {
@@ -85,12 +94,7 @@ export type SubmissionRecord = {
   /** True once a settlement (or terminal outcome) was observed. */
   settled: boolean;
   /** Terminal outcome once settled. */
-  outcome?:
-    | "accepted"
-    | "rejected"
-    | "cancelled"
-    | "closed"
-    | "straggler";
+  outcome?: "accepted" | "rejected" | "cancelled" | "closed" | "straggler";
   /** Durable evidence observed before terminal child-account reclamation. */
   terminalEvidence?: "collaborative-straggler";
   /** Lamports actually earned (decimal string), when attributable. */
@@ -460,9 +464,23 @@ function currentState(value: unknown): WorkerState {
   }
   if (!Array.isArray(parsed.submissions))
     fail("root.submissions must be an array");
+  if (parsed.submissions.length > MAX_PARSED_SUBMISSIONS) {
+    fail(
+      `root.submissions exceeds the ${MAX_PARSED_SUBMISSIONS} record parse limit`,
+    );
+  }
   const submissions = parsed.submissions.map((item, index) =>
     submissionRecord(item, `root.submissions[${index}]`),
   );
+  const unsettledCount = submissions.reduce(
+    (count, submission) => count + (submission.settled ? 0 : 1),
+    0,
+  );
+  if (unsettledCount > MAX_UNSETTLED_SUBMISSIONS) {
+    fail(
+      `root.submissions exceeds the ${MAX_UNSETTLED_SUBMISSIONS} unsettled-record limit`,
+    );
+  }
   if (
     new Set(submissions.map(({ task }) => task)).size !== submissions.length
   ) {
@@ -529,6 +547,37 @@ export function emptyState(): WorkerState {
   };
 }
 
+/**
+ * Bound the hot ledger without ever discarding unsettled work. On-chain
+ * settlement is the canonical long-term receipt; the local state retains the
+ * newest settled records for operator diagnostics.
+ */
+export function pruneSettledSubmissions(
+  state: WorkerState,
+  retention = SETTLED_SUBMISSION_RETENTION,
+): number {
+  if (!Number.isSafeInteger(retention) || retention < 0) {
+    throw new WorkerStateError(
+      "settled submission retention must be a non-negative safe integer",
+    );
+  }
+  let settledToRemove = Math.max(
+    0,
+    state.submissions.reduce(
+      (count, submission) => count + (submission.settled ? 1 : 0),
+      0,
+    ) - retention,
+  );
+  if (settledToRemove === 0) return 0;
+  const originalLength = state.submissions.length;
+  state.submissions = state.submissions.filter((submission) => {
+    if (!submission.settled || settledToRemove === 0) return true;
+    settledToRemove -= 1;
+    return false;
+  });
+  return originalLength - state.submissions.length;
+}
+
 /** Generate a fresh random 32-byte agent id. */
 export function newAgentId(): Uint8Array {
   return new Uint8Array(randomBytes(32));
@@ -546,14 +595,132 @@ export function hexToBytes(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, "hex"));
 }
 
+function assertPrivateOwner(
+  metadata: Stats,
+  sourcePath: string,
+  kind: "directory" | "file",
+): void {
+  if (
+    typeof process.getuid === "function" &&
+    metadata.uid !== process.getuid()
+  ) {
+    throw new WorkerStateError(
+      `worker state ${kind} ${sourcePath} must be owned by the current user`,
+    );
+  }
+  if (process.platform !== "win32" && (metadata.mode & 0o077) !== 0) {
+    throw new WorkerStateError(
+      `worker state ${kind} ${sourcePath} must have private permissions (chmod ${kind === "directory" ? "700" : "600"})`,
+    );
+  }
+}
+
+/** Open the real private state directory without following a final symlink. */
+function openPrivateStateDirectory(
+  stateDir: string,
+  { create, missingOk }: { create: boolean; missingOk: boolean },
+): number | null {
+  if (create) mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  let before: Stats;
+  try {
+    before = lstatSync(stateDir);
+  } catch (error) {
+    if (missingOk && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw new WorkerStateError(
+      `worker state directory ${stateDir} is unavailable: ${(error as Error).message}`,
+    );
+  }
+  if (before.isSymbolicLink() || !before.isDirectory()) {
+    throw new WorkerStateError(
+      `worker state directory ${stateDir} must be a real directory, not a symbolic link`,
+    );
+  }
+  assertPrivateOwner(before, stateDir, "directory");
+
+  let fd: number | null = null;
+  try {
+    fd = openSync(
+      stateDir,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    const opened = fstatSync(fd);
+    if (
+      !opened.isDirectory() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino
+    ) {
+      throw new Error("directory changed while it was being opened");
+    }
+    assertPrivateOwner(opened, stateDir, "directory");
+    return fd;
+  } catch (error) {
+    if (fd !== null) closeSync(fd);
+    throw new WorkerStateError(
+      `worker state directory ${stateDir} is unsafe: ${(error as Error).message}`,
+    );
+  }
+}
+
+/** Linux `/proc/self/fd` gives state leaf operations openat-like anchoring. */
+function stateLeafPath(stateDir: string, directoryFd: number, leaf: string) {
+  return process.platform === "linux"
+    ? path.join("/proc/self/fd", String(directoryFd), leaf)
+    : path.join(stateDir, leaf);
+}
+
+function assertPrivateStateFile(metadata: Stats, sourcePath: string): void {
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw new WorkerStateError(
+      `worker state file ${sourcePath} must be a regular file and not a symbolic link`,
+    );
+  }
+  assertPrivateOwner(metadata, sourcePath, "file");
+  if (metadata.size > MAX_WORKER_STATE_BYTES) {
+    throw new WorkerStateError(
+      `worker state exceeds ${MAX_WORKER_STATE_BYTES} bytes`,
+    );
+  }
+}
+
 /** Load and validate state, or return an empty state when none exists. */
 export function loadState(stateDir: string): WorkerState {
   let raw: string;
+  const directoryFd = openPrivateStateDirectory(stateDir, {
+    create: false,
+    missingOk: true,
+  });
+  if (directoryFd === null) return emptyState();
+  const statePath = stateLeafPath(stateDir, directoryFd, STATE_FILE);
+  let stateFd: number | null = null;
   try {
-    raw = readFileSync(path.join(stateDir, STATE_FILE), "utf8");
+    const before = lstatSync(statePath);
+    assertPrivateStateFile(before, path.join(stateDir, STATE_FILE));
+    stateFd = openSync(statePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(stateFd);
+    if (
+      !opened.isFile() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino
+    ) {
+      throw new WorkerStateError(
+        `worker state file ${path.join(stateDir, STATE_FILE)} changed while it was being opened`,
+      );
+    }
+    assertPrivateStateFile(opened, path.join(stateDir, STATE_FILE));
+    raw = readFileSync(stateFd, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyState();
     throw error;
+  } finally {
+    if (stateFd !== null) closeSync(stateFd);
+    closeSync(directoryFd);
+  }
+  if (Buffer.byteLength(raw, "utf8") > MAX_WORKER_STATE_BYTES) {
+    throw new WorkerStateError(
+      `worker state exceeds ${MAX_WORKER_STATE_BYTES} bytes`,
+    );
   }
   let parsed: unknown;
   try {
@@ -564,16 +731,29 @@ export function loadState(stateDir: string): WorkerState {
     );
   }
   const root = record(parsed, "root");
-  return "version" in root ? currentState(root) : migrateLegacyState(root);
+  const state =
+    "version" in root ? currentState(root) : migrateLegacyState(root);
+  pruneSettledSubmissions(state);
+  return state;
 }
 
 function ensurePrivateStateDir(stateDir: string): void {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(stateDir, 0o700);
+  const fd = openPrivateStateDirectory(stateDir, {
+    create: true,
+    missingOk: false,
+  });
+  if (fd === null)
+    throw new WorkerStateError("worker state directory vanished");
+  closeSync(fd);
 }
 
 function fsyncDirectory(stateDir: string): void {
-  const fd = openSync(stateDir, "r");
+  const fd = openPrivateStateDirectory(stateDir, {
+    create: false,
+    missingOk: false,
+  });
+  if (fd === null)
+    throw new WorkerStateError("worker state directory vanished");
   try {
     fsyncSync(fd);
   } finally {
@@ -584,19 +764,31 @@ function fsyncDirectory(stateDir: string): void {
 /** Persist validated state atomically and durably. */
 export function saveState(stateDir: string, state: WorkerState): void {
   const validated = currentState(state);
-  ensurePrivateStateDir(stateDir);
-  const target = path.join(stateDir, STATE_FILE);
+  pruneSettledSubmissions(validated);
+  const serialized = `${JSON.stringify(validated, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_WORKER_STATE_BYTES) {
+    throw new WorkerStateError(
+      `worker state exceeds ${MAX_WORKER_STATE_BYTES} bytes`,
+    );
+  }
+  const directoryFd = openPrivateStateDirectory(stateDir, {
+    create: true,
+    missingOk: false,
+  });
+  if (directoryFd === null)
+    throw new WorkerStateError("worker state directory vanished");
+  const target = stateLeafPath(stateDir, directoryFd, STATE_FILE);
   const nonce = randomBytes(8).toString("hex");
   const tmp = `${target}.${process.pid}.${nonce}.tmp`;
   let fd: number | null = null;
   try {
     fd = openSync(tmp, "wx", 0o600);
-    writeFileSync(fd, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
+    writeFileSync(fd, serialized, "utf8");
     fsyncSync(fd);
     closeSync(fd);
     fd = null;
     renameSync(tmp, target);
-    fsyncDirectory(stateDir);
+    fsyncSync(directoryFd);
   } catch (error) {
     if (fd !== null) closeSync(fd);
     try {
@@ -605,6 +797,8 @@ export function saveState(stateDir: string, state: WorkerState): void {
       // The temp may already have been renamed or removed.
     }
     throw error;
+  } finally {
+    closeSync(directoryFd);
   }
 }
 
@@ -621,11 +815,98 @@ type LockOwner = {
   pid: number;
   nonce: string;
   acquiredAt: string;
+  bootId?: string;
+  processStartTime?: string;
 };
 
 type ReaperOwner = LockOwner & {
   targetNonce: string;
 };
+
+type ProcessIdentity = {
+  bootId: string;
+  processStartTime: string;
+};
+
+/** Linux process identity, stable across PID reuse; null is a safe fallback. */
+export function readProcessIdentity(pid: number): ProcessIdentity | null {
+  if (process.platform !== "linux" || !Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+  try {
+    const bootId = readFileSync(
+      "/proc/sys/kernel/random/boot_id",
+      "utf8",
+    ).trim();
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8").trim();
+    const commEnd = stat.lastIndexOf(")");
+    if (commEnd < 0) return null;
+    // The suffix starts at field 3 (state); process start time is field 22.
+    const fields = stat
+      .slice(commEnd + 1)
+      .trim()
+      .split(/\s+/u);
+    const processStartTime = fields[19];
+    if (
+      !/^[0-9a-f-]{16,64}$/iu.test(bootId) ||
+      processStartTime === undefined ||
+      !/^\d+$/u.test(processStartTime)
+    ) {
+      return null;
+    }
+    return { bootId, processStartTime };
+  } catch {
+    return null;
+  }
+}
+
+function lockIdentity(owner: LockOwner): ProcessIdentity | null {
+  if (owner.bootId === undefined || owner.processStartTime === undefined) {
+    return null;
+  }
+  return { bootId: owner.bootId, processStartTime: owner.processStartTime };
+}
+
+function processStillOwnsLock(owner: LockOwner): boolean {
+  if (!processIsAlive(owner.pid)) return false;
+  const expected = lockIdentity(owner);
+  if (expected === null) return true; // Legacy/platform fallback: conservative.
+  const observed = readProcessIdentity(owner.pid);
+  if (observed === null) return true; // Never guess stale when identity is unavailable.
+  return (
+    observed.bootId === expected.bootId &&
+    observed.processStartTime === expected.processStartTime
+  );
+}
+
+function parseOptionalProcessIdentity(
+  parsed: Record<string, unknown>,
+  label: string,
+  sourcePath: string,
+): Pick<LockOwner, "bootId" | "processStartTime"> {
+  const hasBoot = "bootId" in parsed;
+  const hasStart = "processStartTime" in parsed;
+  if (hasBoot !== hasStart) {
+    throw new WorkerStateError(
+      `${label} ${sourcePath} has incomplete process identity; refusing to remove it`,
+    );
+  }
+  if (!hasBoot) return {};
+  if (
+    typeof parsed.bootId !== "string" ||
+    !/^[0-9a-f-]{16,64}$/iu.test(parsed.bootId) ||
+    typeof parsed.processStartTime !== "string" ||
+    !/^\d+$/u.test(parsed.processStartTime)
+  ) {
+    throw new WorkerStateError(
+      `${label} ${sourcePath} has invalid process identity; refusing to remove it`,
+    );
+  }
+  return {
+    bootId: parsed.bootId,
+    processStartTime: parsed.processStartTime,
+  };
+}
 
 function readLockOwner(lockPath: string): LockOwner {
   let value: unknown;
@@ -637,7 +918,12 @@ function readLockOwner(lockPath: string): LockOwner {
     );
   }
   const parsed = record(value, "worker state lock");
-  exactKeys(parsed, "worker state lock", ["pid", "nonce", "acquiredAt"]);
+  exactKeys(
+    parsed,
+    "worker state lock",
+    ["pid", "nonce", "acquiredAt"],
+    ["bootId", "processStartTime"],
+  );
   if (
     !Number.isInteger(parsed.pid) ||
     (parsed.pid as number) <= 0 ||
@@ -663,7 +949,12 @@ function readLockOwner(lockPath: string): LockOwner {
       `worker state lock ${lockPath} has an invalid timestamp; refusing to remove it (${(error as Error).message})`,
     );
   }
-  return { pid: parsed.pid as number, nonce: parsed.nonce, acquiredAt };
+  return {
+    pid: parsed.pid as number,
+    nonce: parsed.nonce,
+    acquiredAt,
+    ...parseOptionalProcessIdentity(parsed, "worker state lock", lockPath),
+  };
 }
 
 function readReaperOwner(reaperPath: string): ReaperOwner {
@@ -683,6 +974,7 @@ function readReaperOwner(reaperPath: string): ReaperOwner {
     legacyHardLink
       ? ["pid", "nonce", "acquiredAt"]
       : ["pid", "nonce", "targetNonce", "acquiredAt"],
+    ["bootId", "processStartTime"],
   );
   if (
     !Number.isInteger(parsed.pid) ||
@@ -723,6 +1015,7 @@ function readReaperOwner(reaperPath: string): ReaperOwner {
       ? (parsed.nonce as string)
       : (parsed.targetNonce as string),
     acquiredAt,
+    ...parseOptionalProcessIdentity(parsed, "worker state reaper", reaperPath),
   };
 }
 
@@ -745,12 +1038,14 @@ function acquireReaperMarker(
   attempt: number,
 ): { acquired: boolean; nonce: string } {
   const reaperNonce = randomBytes(16).toString("hex");
+  const identity = readProcessIdentity(process.pid);
   const publicationPath = `${reaperPath}.${process.pid}.${contenderNonce}.${attempt}.tmp`;
   const body = `${JSON.stringify({
     pid: process.pid,
     nonce: reaperNonce,
     targetNonce,
     acquiredAt: new Date().toISOString(),
+    ...(identity ?? {}),
   })}\n`;
   let fd: number | null = null;
   try {
@@ -790,7 +1085,7 @@ function acquireReaperMarker(
           `worker state reaper ${reaperPath} targets a different lock generation`,
         );
       }
-      if (processIsAlive(incumbent.pid)) {
+      if (processStillOwnsLock(incumbent)) {
         throw new WorkerStateError(
           `worker state lock ${path.join(stateDir, LOCK_FILE)} is being reclaimed by another process`,
         );
@@ -834,10 +1129,12 @@ export function acquireStateLock(stateDir: string): () => void {
   ensurePrivateStateDir(stateDir);
   const lockPath = path.join(stateDir, LOCK_FILE);
   const nonce = randomBytes(16).toString("hex");
+  const identity = readProcessIdentity(process.pid);
   const body = `${JSON.stringify({
     pid: process.pid,
     nonce,
     acquiredAt: new Date().toISOString(),
+    ...(identity ?? {}),
   })}\n`;
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -904,7 +1201,7 @@ export function acquireStateLock(stateDir: string): () => void {
         unlinkSync(observationPath);
         throw readError;
       }
-      if (processIsAlive(existing.pid)) {
+      if (processStillOwnsLock(existing)) {
         unlinkSync(observationPath);
         throw new WorkerStateError(
           `worker state directory ${stateDir} is already active in another process`,

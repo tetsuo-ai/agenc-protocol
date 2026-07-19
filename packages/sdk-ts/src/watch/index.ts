@@ -1,12 +1,13 @@
 /**
  * Watch layer — worker-notification convenience.
  *
- * {@link watchClaimableTasks} lets a worker agent learn about NEW claimable
- * tasks without writing a bespoke poll loop: it fuses the live
+ * {@link watchClaimableTasks} lets a worker agent learn about NEW direct-claim
+ * candidates without writing a bespoke poll loop: it fuses the live
  * `TaskCreated` event stream (`subscribeMarketplaceEvents`) with periodic
- * `listOpenTasks` catch-up sweeps (the queries gPA / indexer read path),
- * de-dupes by Task PDA, applies the worker's eligibility filter (capability
- * superset, minReward, creator), and delivers each newly-claimable task once.
+ * `listDirectClaimableTasks` catch-up sweeps (the queries gPA / indexer read path),
+ * de-dupes by Task PDA, applies local discovery filters (capability superset,
+ * minReward, creator), and delivers each newly discovered candidate once.
+ * The claim transaction remains authoritative for all task/worker/config gates.
  * The returned handle is both async-iterable and stoppable.
  *
  * Browser-safety is NOT required here — worker bots are node — but this module

@@ -9,9 +9,8 @@
  * into `client` for hook e2e, and a mock {@link ReadTransport} plugs into
  * `queryTransport`.
  *
- * SSR-safe: no `window`/`document` access at module scope or during render; all
- * resolution is pure. The provider memoizes the context value and the
- * QueryClient on config identity so SSR + hydration stay stable.
+ * SSR-safe: no `window`/`document` access at module scope or during render. The
+ * provider memoizes the context value and QueryClient on config identity.
  *
  * @module provider/AgencProvider
  */
@@ -22,6 +21,7 @@ import {
 } from "@tanstack/react-query";
 import { createMarketplaceClient } from "@tetsuo-ai/marketplace-sdk";
 import { useMemo, useState, type ReactNode } from "react";
+import { walletStandardChainForNetwork } from "../signers/wallet-account.js";
 import { createReadTransport } from "../transport/index.js";
 import type {
   AgencContextValue,
@@ -65,6 +65,53 @@ const DEFAULT_QUERY_CLIENT_CONFIG: QueryClientConfig = {
     },
   },
 };
+
+// Opaque override objects do not expose a deployment id. Give each one a
+// process-local identity so switching objects is cache-safe. Persisted/SSR
+// caches should use config.cacheNamespace for a stable cross-runtime id.
+const OPAQUE_DEPLOYMENT_IDS = new WeakMap<object, number>();
+let nextOpaqueDeploymentId = 1;
+
+function opaqueDeploymentId(value: object | undefined): number | null {
+  if (value === undefined) return null;
+  const existing = OPAQUE_DEPLOYMENT_IDS.get(value);
+  if (existing !== undefined) return existing;
+  const allocated = nextOpaqueDeploymentId++;
+  OPAQUE_DEPLOYMENT_IDS.set(value, allocated);
+  return allocated;
+}
+
+/** Keep credentials/private labels out of query keys (identity use only). */
+function cacheFingerprint(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= BigInt(value.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+function resolveCacheNamespace(
+  config: AgencProviderConfig,
+  network: AgencNetwork,
+  rpcUrl: string | null,
+): string {
+  const explicit = config.cacheNamespace?.trim();
+  if (config.cacheNamespace !== undefined && !explicit) {
+    throw new TypeError("AgencProvider cacheNamespace must not be empty.");
+  }
+  return JSON.stringify({
+    version: 1,
+    network,
+    rpc: cacheFingerprint(rpcUrl),
+    indexer: cacheFingerprint(config.indexer?.baseUrl),
+    custom: cacheFingerprint(explicit),
+    queryTransport:
+      explicit === undefined ? opaqueDeploymentId(config.queryTransport) : null,
+    client: explicit === undefined ? opaqueDeploymentId(config.client) : null,
+  });
+}
 
 /**
  * Build the read transport from config. The `queryTransport` override wins;
@@ -114,6 +161,25 @@ function buildWriteClient(
   });
 }
 
+/** Validate wallet-bridge signers with chain metadata; generic signers are opaque. */
+function assertSignerMatchesNetwork(
+  signer: unknown,
+  network: AgencNetwork,
+  source: string,
+): void {
+  const chain =
+    typeof signer === "object" && signer !== null && "chain" in signer
+      ? (signer as { readonly chain?: unknown }).chain
+      : undefined;
+  if (typeof chain !== "string") return;
+  const expected = walletStandardChainForNetwork(network);
+  if (chain !== expected) {
+    throw new Error(
+      `${source} is bound to ${chain}, but AgencProvider network ${network} requires ${expected}.`,
+    );
+  }
+}
+
 /**
  * The AgenC provider. Place at the root of any tree that uses AgenC hooks or
  * components.
@@ -140,6 +206,13 @@ export function AgencProvider(props: AgencProviderProps): ReactNode {
   const value = useMemo<AgencContextValue>(() => {
     const network: AgencNetwork = config.network ?? "mainnet";
 
+    assertSignerMatchesNetwork(config.signer, network, "config.signer");
+    assertSignerMatchesNetwork(
+      config.client?.signer,
+      network,
+      "config.client.signer",
+    );
+
     // Validate + normalize referrer at provider construction. A bad config
     // throws here, before any hire transaction can be built.
     const referrer: ValidatedReferrerConfig | null = config.referrer
@@ -158,9 +231,15 @@ export function AgencProvider(props: AgencProviderProps): ReactNode {
       config.rpcUrl,
       config.rpcSubscriptionsUrl,
     );
+    const cacheNamespace = resolveCacheNamespace(
+      config,
+      network,
+      rpcUrl ?? null,
+    );
 
     return {
       network,
+      cacheNamespace,
       read,
       client,
       rpcUrl: rpcUrl ?? null,

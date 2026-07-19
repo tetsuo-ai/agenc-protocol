@@ -1,6 +1,6 @@
 # Playwright deps + run artifacts.
+# package-lock.json is intentionally committed for reproducible CI installs.
 node_modules/
-package-lock.json
 test-results/
 playwright-report/
 .cache/

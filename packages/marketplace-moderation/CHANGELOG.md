@@ -5,6 +5,24 @@ All notable changes to `@tetsuo-ai/marketplace-moderation` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 (unreleased candidate)
+
+### Fixed
+
+- Reject non-finite programmatic values during canonicalization so `NaN` and
+  infinities cannot collide with valid JSON `null` while preserving every v1
+  hash for valid JSON inputs.
+- Reject all other non-JSON/coercive programmatic inputs (including
+  `undefined`, bigint, typed arrays, sparse or extended arrays, exotic objects,
+  accessors, symbols, cycles, and over-deep structures) while preserving the
+  canonical bytes of every valid JSON value.
+- Add an explicit `agenc-task-moderation-c14n-v2` structured preimage that
+  retains the complete worker-visible job-spec payload, including constraints,
+  execution policy, and future extensions. The new
+  `normalizeTaskModerationInputStrict` API requires advertised backend support
+  for `job_spec_semantic_v2` and fails closed for unknown or lossy structured
+  objects; the published c14n-v1 API and pinned vectors remain unchanged.
+
 ## 0.1.0
 
 ### Minor Changes

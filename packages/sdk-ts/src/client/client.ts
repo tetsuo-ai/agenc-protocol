@@ -171,6 +171,14 @@ export interface MarketplaceClient {
   readonly signer: TransactionSigner;
   /** The transport this client submits through. */
   readonly transport: Transport;
+  /**
+   * Client-level referral default applied by hire/create helpers. Exposed so
+   * higher-level recovery flows can reconcile the exact economic intent that
+   * the client submitted. Omitted when no default is configured.
+   */
+  readonly defaultReferrer?: Readonly<
+    NonNullable<MarketplaceClientConfig["referrer"]>
+  >;
 
   /**
    * Assemble, sign, submit, and confirm a transaction from instructions.
@@ -317,8 +325,8 @@ export interface MarketplaceClient {
     input: FacadeInput<typeof facade.initiateDispute>,
     options?: SendOptions,
   ): Promise<SendResult>;
-  // P6.3: `voteDispute` removed — the arbiter vote/quorum model is retired; disputes are
-  // decided by an assigned resolver via `resolveDispute` (+ `assignDisputeResolver`).
+  // P6.3: `voteDispute` removed — the per-case arbiter vote/quorum model is retired;
+  // a threshold-approved authority or threshold-seated assigned resolver decides.
   /** Build (facade.resolveDispute) and send a resolve_dispute transaction. */
   resolveDispute(
     input: FacadeInput<typeof facade.resolveDispute>,
@@ -451,7 +459,13 @@ export function createMarketplaceClient(
     config.computeUnitLimit ?? DEFAULT_COMPUTE_UNIT_LIMIT;
   const defaultComputeUnitPrice = config.computeUnitPrice;
   const defaultMaxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
-  const defaultReferrer = config.referrer;
+  const defaultReferrer =
+    config.referrer === undefined
+      ? undefined
+      : Object.freeze({
+          address: config.referrer.address,
+          feeBps: config.referrer.feeBps,
+        });
 
   function computeBudgetInstructions(options?: SendOptions): Instruction[] {
     if (options?.computeBudget === false) return [];
@@ -510,7 +524,8 @@ export function createMarketplaceClient(
       typeof carrier.signature !== "string" ||
       carrier.signature.length === 0
     ) {
-      defect = "the transport returned an empty or non-string success signature";
+      defect =
+        "the transport returned an empty or non-string success signature";
     } else if (carrier.signature !== localSignature) {
       defect =
         `the transport reported success for signature ${carrier.signature}, ` +
@@ -610,7 +625,8 @@ export function createMarketplaceClient(
       failure.signature = signature;
       throw toAgencError(failure);
     }
-    const targetCommitment = transport.confirmationCommitment ?? DEFAULT_COMMITMENT;
+    const targetCommitment =
+      transport.confirmationCommitment ?? DEFAULT_COMMITMENT;
     const statusRank =
       status.confirmationStatus === "finalized"
         ? 2
@@ -736,6 +752,7 @@ export function createMarketplaceClient(
   return {
     signer,
     transport,
+    ...(defaultReferrer === undefined ? {} : { defaultReferrer }),
     send,
     registerAgent: viaFacade(facade.registerAgent),
     createServiceListing: viaFacade(facade.createServiceListing),

@@ -1392,4 +1392,21 @@ describe("withReferrerDefault (P6.2 demand-side referral default)", () => {
     const input = { taskId: "t" };
     expect(withReferrerDefault(input, undefined)).toBe(input);
   });
+
+  it("snapshots and freezes the configured referral recovery intent", async () => {
+    const configured: { address: ReturnType<typeof address>; feeBps: number } = {
+      address: REF,
+      feeBps: 500,
+    };
+    const client = createMarketplaceClient({
+      transport: fakeTransport(),
+      signer: await generateKeyPairSigner(),
+      referrer: configured,
+    });
+    configured.address = OTHER;
+    configured.feeBps = 999;
+
+    expect(client.defaultReferrer).toEqual({ address: REF, feeBps: 500 });
+    expect(Object.isFrozen(client.defaultReferrer)).toBe(true);
+  });
 });

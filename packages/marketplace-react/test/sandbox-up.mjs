@@ -11,9 +11,9 @@
  *
  *   1. <repo>/scripts/localnet-up.mjs
  *        boots solana-test-validator with the REAL program id genesis-loaded as
- *        an UPGRADEABLE program (real ProgramData PDA + upgrade authority), runs
- *        the real initialize_protocol + configure_task_moderation through the
- *        published SDK, and writes <repo>/.localnet/env.json.
+ *        an UPGRADEABLE program (real ProgramData PDA + upgrade authority),
+ *        establishes ProtocolConfig + ModerationConfig through the published
+ *        SDK/local fixture mode, and writes <repo>/.localnet/env.json.
  *   2. packages/sdk-ts/scripts/seed-devnet-sandbox.mjs --env-file <env.json>
  *        registers the 10 sandbox provider agents, creates one Active
  *        ServiceListing each, attests every listing CLEAN (so the fail-closed
@@ -35,6 +35,7 @@
  *
  * CLI:
  *   node test/sandbox-up.mjs up      # boot + init + seed (idempotent; converges)
+ *   node test/sandbox-up.mjs up --unsafe-unpaused-fixture  # disposable browser fixture
  *   node test/sandbox-up.mjs down    # stop the validator
  *   node test/sandbox-up.mjs down --purge   # stop + wipe the ledger
  *   node test/sandbox-up.mjs env     # print the resolved sandbox env JSON
@@ -50,7 +51,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -58,6 +59,8 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // test/ -> packages/marketplace-react -> packages -> <repo root>
 const REPO_ROOT = path.resolve(HERE, "../../..");
+const STATE_DIR = path.join(REPO_ROOT, ".localnet");
+const VALIDATOR_PID_FILE = path.join(STATE_DIR, "validator.pid");
 const LOCALNET_UP = path.join(REPO_ROOT, "scripts/localnet-up.mjs");
 const LOCALNET_DOWN = path.join(REPO_ROOT, "scripts/localnet-down.mjs");
 const SEED_SCRIPT = path.join(
@@ -82,8 +85,39 @@ async function fileExists(p) {
   }
 }
 
+/**
+ * Conservatively report whether the recorded validator process may still be
+ * live. Malformed or unreadable identity state is treated as live so fixture
+ * code never destroys a caller-owned sandbox on ambiguous evidence.
+ */
+export async function recordedValidatorMayBeLive() {
+  if (!(await fileExists(VALIDATOR_PID_FILE))) return false;
+  let raw;
+  try {
+    raw = await readFile(VALIDATOR_PID_FILE, "utf8");
+  } catch {
+    return true;
+  }
+
+  let pid;
+  try {
+    pid = Number(JSON.parse(raw)?.pid);
+  } catch {
+    return true;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+}
+
 async function hashFile(p) {
-  return createHash("sha256").update(await readFile(p)).digest("hex");
+  return createHash("sha256")
+    .update(await readFile(p))
+    .digest("hex");
 }
 
 /**
@@ -92,14 +126,19 @@ async function hashFile(p) {
  */
 function runNode(scriptPath, args, { quiet = false } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
+    // Node 20+ has its own --env-file flag. The explicit option terminator is
+    // required so fixture-script flags are never consumed by the Node runtime.
+    const child = spawn(process.execPath, ["--", scriptPath, ...args], {
       cwd: REPO_ROOT,
       stdio: quiet ? ["ignore", "ignore", "inherit"] : "inherit",
     });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`${path.basename(scriptPath)} exited with code ${code}`));
+      else
+        reject(
+          new Error(`${path.basename(scriptPath)} exited with code ${code}`),
+        );
     });
   });
 }
@@ -171,59 +210,116 @@ export async function readSandboxEnv(envFile = ENV_FILE) {
  *                                               (do not reset the ledger).
  * @param {boolean} [options.seed=true]  Run the seed step after boot.
  * @param {boolean} [options.quiet=false]  Suppress child stdout (stderr kept).
+ * @param {boolean} [options.disposable=false]  This caller first established
+ *   exclusive ownership of a fresh fixture and authorizes full cleanup if any
+ *   bootstrap stage fails. Never inferred for an idempotently reused sandbox.
+ * @param {boolean} [options.unsafeUnpausedFixture=false]  On a fresh disposable
+ *   ledger, genesis-inject the current unpaused ProtocolConfig required by the
+ *   browser fixture. Bypasses the production release-stamp ceremony; test only.
  * @returns {Promise<object>} the resolved sandbox env (see readSandboxEnv).
  */
-export async function start(options = {}) {
+export async function start(options = {}, dependencies = {}) {
   const {
     port = SANDBOX_PORT,
     keepLedger = false,
     seed = true,
     quiet = false,
+    unsafeUnpausedFixture = false,
+    disposable = false,
   } = options;
 
-  await assertPrereqs();
+  if (disposable && keepLedger) {
+    throw new Error(
+      "a disposable sandbox cannot preserve a caller-owned ledger",
+    );
+  }
 
-  // 1) Boot + initialize the protocol/moderation config + write env.json.
+  await (dependencies.assertPrereqs ?? assertPrereqs)();
+
   const upArgs = ["--port", String(port)];
   if (keepLedger) upArgs.push("--keep-ledger");
-  await runNode(LOCALNET_UP, upArgs, { quiet });
+  if (unsafeUnpausedFixture) upArgs.push("--unsafe-unpaused-fixture");
+  return runSandboxBootstrap(
+    {
+      up: dependencies.up ?? (() => runNode(LOCALNET_UP, upArgs, { quiet })),
+      readEnv: dependencies.readEnv ?? (() => readLocalnetEnv(ENV_FILE)),
+      seed:
+        dependencies.seed ??
+        (() => runNode(SEED_SCRIPT, ["--env-file", ENV_FILE], { quiet })),
+      resolve: dependencies.resolve ?? (() => readSandboxEnv(ENV_FILE)),
+      cleanup:
+        dependencies.cleanup ??
+        (() => stop({ purge: true, removeState: true, quiet: true })),
+    },
+    {
+      seed,
+      // Cleanup authority is explicit. `start()` is otherwise idempotent and
+      // may have converged a caller-owned sandbox that it must never tear down.
+      cleanupOnFailure: disposable,
+    },
+  );
+}
 
-  const env = await readLocalnetEnv(ENV_FILE);
-  if (env === null) {
-    throw new Error(
-      `localnet-up.mjs did not write ${ENV_FILE} — boot likely failed`,
-    );
-  }
+/**
+ * Transactional core of {@link start}. Exported so the failure path can be
+ * regression-tested without spawning a real validator. `up` is considered to
+ * have acquired resources even when it rejects: localnet-up can fail after it
+ * has published the validator identity file.
+ */
+export async function runSandboxBootstrap(
+  { up, readEnv, seed: runSeed, resolve, cleanup },
+  { seed = true, cleanupOnFailure = true } = {},
+) {
+  try {
+    await up();
+    const env = await readEnv();
+    if (env === null) {
+      throw new Error(
+        `localnet-up.mjs did not write ${ENV_FILE} — boot likely failed`,
+      );
+    }
 
-  // 2) Seed providers + Active listings, attested CLEAN, into env.fixturesPath.
-  if (seed) {
-    await runNode(
-      SEED_SCRIPT,
-      ["--env-file", ENV_FILE],
-      { quiet },
-    );
-  }
+    if (seed) await runSeed();
 
-  const resolved = await readSandboxEnv(ENV_FILE);
-  if (resolved === null) {
-    throw new Error(`could not resolve sandbox env from ${ENV_FILE} after start`);
+    const resolved = await resolve();
+    if (resolved === null) {
+      throw new Error(
+        `could not resolve sandbox env from ${ENV_FILE} after start`,
+      );
+    }
+    if (seed && (resolved.fixtures === null || !resolved.fixtures.seeded)) {
+      throw new Error(
+        `seed step did not produce seeded fixtures at ${resolved.fixturesPath}`,
+      );
+    }
+    return resolved;
+  } catch (error) {
+    if (!cleanupOnFailure) throw error;
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "sandbox bootstrap failed and its disposable state could not be cleaned",
+      );
+    }
+    throw error;
   }
-  if (seed && (resolved.fixtures === null || !resolved.fixtures.seeded)) {
-    throw new Error(
-      `seed step did not produce seeded fixtures at ${resolved.fixturesPath}`,
-    );
-  }
-  return resolved;
 }
 
 /**
  * Stop the sandbox validator (localnet-down.mjs). Safe when nothing runs.
  * @param {object} [options]
  * @param {boolean} [options.purge=false]  Also wipe the ledger.
+ * @param {boolean} [options.removeState=false]  Remove all generated localnet
+ *   keys, logs, fixtures, and env files after the identity-safe shutdown.
  */
 export async function stop(options = {}) {
   const args = options.purge ? ["--purge"] : [];
   await runNode(LOCALNET_DOWN, args, { quiet: options.quiet });
+  if (options.removeState) {
+    await rm(STATE_DIR, { recursive: true, force: true });
+  }
 }
 
 /** Fail fast with an actionable message if a prerequisite is missing. */
@@ -255,7 +351,12 @@ async function cli() {
     case undefined: {
       const keepLedger = rest.includes("--keep-ledger");
       const noSeed = rest.includes("--no-seed");
-      const env = await start({ keepLedger, seed: !noSeed });
+      const unsafeUnpausedFixture = rest.includes("--unsafe-unpaused-fixture");
+      const env = await start({
+        keepLedger,
+        seed: !noSeed,
+        unsafeUnpausedFixture,
+      });
       console.log("\nsandbox-up: ready.");
       console.log(`  rpc:       ${env.rpcUrl}`);
       console.log(`  ws:        ${env.rpcSubscriptionsUrl}`);
@@ -279,14 +380,17 @@ async function cli() {
     }
     default:
       console.error(
-        `sandbox-up: unknown command "${cmd}". Use: up | down [--purge] | env`,
+        `sandbox-up: unknown command "${cmd}". Use: up [--unsafe-unpaused-fixture] | down [--purge] | env`,
       );
       process.exit(1);
   }
 }
 
 // Run the CLI only when invoked directly (not when imported by global-setup).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   cli().catch((error) => {
     console.error(`\nsandbox-up: ERROR: ${error?.stack ?? error}`);
     process.exit(1);

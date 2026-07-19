@@ -97,9 +97,9 @@ describe("disputes facade (structural)", () => {
     expect(Array.from(decoded.evidenceHash)).toEqual(Array.from(evidenceHash));
   });
 
-  // P6.3: the `voteDispute` structural test is removed — the arbiter vote/quorum model is
-  // retired (`vote_dispute` no longer exists). Disputes are decided by an assigned
-  // resolver via `resolveDispute` (+ `assignDisputeResolver`), covered below.
+  // P6.3: the `voteDispute` structural test is removed — the per-case arbiter
+  // vote/quorum model is retired. A threshold-approved protocol authority or
+  // threshold-seated assigned resolver decides via `resolveDispute`, covered below.
 
   it("resolveDispute: program, derives + passes both bond PDAs in order, data round-trips", async () => {
     // P6.4 accountable rulings: rationaleHash (32 bytes) + rationaleUri are now REQUIRED.
@@ -123,6 +123,7 @@ describe("disputes facade (structural)", () => {
         acceptedBid: ACCEPTED_BID,
         bidderMarketState: BIDDER_STATE,
       },
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -147,7 +148,7 @@ describe("disputes facade (structural)", () => {
     expect(accs).toContain(submission);
     const [peerSubmission] = await findTaskSubmissionPda({ claim: PEER_CLAIM });
     const [bidBook] = await findBidBookPda({ task: TASK });
-    expect(accs.slice(-7)).toEqual([
+    expect(accs.slice(-9)).toEqual([
       PARENT_TASK,
       PEER_CLAIM,
       PEER_WORKER,
@@ -155,12 +156,25 @@ describe("disputes facade (structural)", () => {
       bidBook,
       ACCEPTED_BID,
       BIDDER_STATE,
+      MULTISIG_APPROVER_A.address,
+      MULTISIG_APPROVER_B.address,
     ]);
+    for (const [index, signer] of [
+      MULTISIG_APPROVER_A,
+      MULTISIG_APPROVER_B,
+    ].entries()) {
+      expect(ix.accounts[ix.accounts.length - 2 + index]).toMatchObject({
+        role: AccountRole.READONLY_SIGNER,
+        signer,
+      });
+    }
 
     // P6.4: the reasoned ruling (approve + rationaleHash + rationaleUri) round-trips.
     const decoded = getResolveDisputeInstructionDataDecoder().decode(ix.data);
     expect(decoded.approve).toBe(true);
-    expect(Array.from(decoded.rationaleHash)).toEqual(Array.from(rationaleHash));
+    expect(Array.from(decoded.rationaleHash)).toEqual(
+      Array.from(rationaleHash),
+    );
     expect(decoded.rationaleUri).toBe(rationaleUri);
   });
 
@@ -399,7 +413,9 @@ describe("disputes facade (structural)", () => {
       });
     }
 
-    const decoded = getResolveRejectFrozenInstructionDataDecoder().decode(ix.data);
+    const decoded = getResolveRejectFrozenInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.approveCompletion).toBe(true);
   });
 
@@ -465,6 +481,7 @@ describe("disputes facade (structural)", () => {
     const ix = await facade.assignDisputeResolver({
       authority: AUTHORITY,
       resolver: AGENT,
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
     });
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     const accs = order(ix);
@@ -473,6 +490,14 @@ describe("disputes facade (structural)", () => {
     expect(accs[1]).toBe(roster);
     expect(accs[2]).toBe(AUTHORITY_ADDR);
     expect(accs[3]).toBe(SYSTEM_PROGRAM);
+    expect(accs.slice(4)).toEqual([
+      MULTISIG_APPROVER_A.address,
+      MULTISIG_APPROVER_B.address,
+    ]);
+    expect(ix.accounts.slice(4).map((account) => account.role)).toEqual([
+      AccountRole.READONLY_SIGNER,
+      AccountRole.READONLY_SIGNER,
+    ]);
 
     const decoded = getAssignDisputeResolverInstructionDataDecoder().decode(
       ix.data,
@@ -484,12 +509,26 @@ describe("disputes facade (structural)", () => {
     const ix = await facade.revokeDisputeResolver({
       authority: AUTHORITY,
       resolver: AGENT,
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
     });
     const accs = order(ix);
     const [roster] = await findDisputeResolverPda({ resolver: AGENT });
     // protocolConfig(0, derived), disputeResolver(1, facade-derived), authority(2)
     expect(accs[1]).toBe(roster);
     expect(accs[2]).toBe(AUTHORITY_ADDR);
+    expect(accs.slice(3)).toEqual([
+      MULTISIG_APPROVER_A.address,
+      MULTISIG_APPROVER_B.address,
+    ]);
+    for (const [index, signer] of [
+      MULTISIG_APPROVER_A,
+      MULTISIG_APPROVER_B,
+    ].entries()) {
+      expect(ix.accounts[3 + index]).toMatchObject({
+        role: AccountRole.READONLY_SIGNER,
+        signer,
+      });
+    }
     expect(() =>
       getRevokeDisputeResolverInstructionDataDecoder().decode(ix.data),
     ).not.toThrow();
@@ -497,7 +536,20 @@ describe("disputes facade (structural)", () => {
 
   it("revokeDisputeResolver: throws when neither resolver nor disputeResolver is given", async () => {
     await expect(
-      facade.revokeDisputeResolver({ authority: AUTHORITY }),
+      facade.revokeDisputeResolver({
+        authority: AUTHORITY,
+        multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
+      }),
     ).rejects.toThrow(/resolver/);
+  });
+
+  it("resolver roster multisig suffix rejects duplicate approvers", async () => {
+    await expect(
+      facade.assignDisputeResolver({
+        authority: AUTHORITY,
+        resolver: AGENT,
+        multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_A],
+      }),
+    ).rejects.toThrow(/duplicate signer address/);
   });
 });

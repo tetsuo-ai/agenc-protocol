@@ -29,8 +29,6 @@ import {
   getU32Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -44,6 +42,11 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 
 export const MODERATION_BLOCK_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([90, 220, 89, 93, 67, 217, 235, 20]);
@@ -117,7 +120,10 @@ export function getModerationBlockEncoder(): Encoder<ModerationBlockArgs> {
       ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
       ["status", getU8Encoder()],
       ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["rationaleUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "rationaleUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["setAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["updatedBy", getAddressEncoder()],
@@ -135,7 +141,10 @@ export function getModerationBlockDecoder(): Decoder<ModerationBlock> {
     ["contentHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["status", getU8Decoder()],
     ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["rationaleUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "rationaleUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["setAt", getI64Decoder()],
     ["updatedAt", getI64Decoder()],
     ["updatedBy", getAddressDecoder()],

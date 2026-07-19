@@ -59,6 +59,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 import { assertPrivateTaskReleaseDisabled } from "./private-task-release-policy.mjs";
+import { parseBinaryEnvFlag } from "./env-flags.mjs";
 import {
   assertApprovedExecutableSnapshot,
   assertImmediatePreUpgradeSnapshot,
@@ -173,15 +174,21 @@ try {
   die(error instanceof Error ? error.message : String(error));
 }
 let stampMode;
+let skipBidMarketplace;
+let skipModeration;
 try {
   stampMode = resolveStampMode(process.env);
+  skipBidMarketplace = parseBinaryEnvFlag(
+    process.env,
+    "SKIP_BID_MARKETPLACE",
+  );
+  skipModeration = parseBinaryEnvFlag(process.env, "SKIP_MODERATION");
 } catch (error) {
   die(error instanceof Error ? error.message : String(error));
 }
 if (
   stampMode.runStamp &&
-  (process.env.SKIP_BID_MARKETPLACE !== "1" ||
-    process.env.SKIP_MODERATION !== "1")
+  (!skipBidMarketplace || !skipModeration)
 ) {
   die(
     "RUN_STAMP=1 is a stamp-only phase and requires SKIP_BID_MARKETPLACE=1 and SKIP_MODERATION=1.",
@@ -748,7 +755,7 @@ async function main() {
     `  eligible multisig signers passed: ${eligibleSigners.length} of required ${cfg.multisigThreshold}`,
   );
   const needMultisig =
-    !process.env.SKIP_BID_MARKETPLACE || !stampMode.skipStamp;
+    !skipBidMarketplace || !stampMode.skipStamp;
   if (needMultisig && eligibleSigners.length < cfg.multisigThreshold) {
     die(
       `multisig-gated steps need >= ${cfg.multisigThreshold} signers that are ProtocolConfig owners; ` +
@@ -775,7 +782,7 @@ async function main() {
   }
 
   // === Step 4a: initialize_bid_marketplace (MULTISIG-gated) ===============================
-  if (process.env.SKIP_BID_MARKETPLACE) {
+  if (skipBidMarketplace) {
     const expectedEconomics = reviewedBidEconomicsFromEnv(process.env);
     const existing = await connection.getAccountInfo(bidMarketplacePda);
     const decoded = decodeBidMarketplaceConfigAccount(
@@ -894,7 +901,7 @@ async function main() {
   );
 
   // === Step 4c: configure_task_moderation (single authority; verify/realign) ===============
-  if (process.env.SKIP_MODERATION) {
+  if (skipModeration) {
     const expectedPolicy = reviewedModerationPolicyFromEnv(process.env);
     const existing = await connection.getAccountInfo(moderationPda);
     const decoded = decodeModerationConfigAccount(existing, moderationPda, {

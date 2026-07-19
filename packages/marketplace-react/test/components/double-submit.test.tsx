@@ -17,7 +17,13 @@
  * async `status`/`pending` prop) both assertions go red with "expected 2".
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { AgencProvider } from "../../src/provider/index.js";
 import { HireButton, HireCheckoutModal } from "../../src/components/index.js";
@@ -130,5 +136,30 @@ describe("double-submit guard (finding #1)", () => {
 
     // Pre-fix: the SDK money path fired twice (two funded escrows).
     expect(hireFromListing).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the latch after rejection without an unhandled rejection", async () => {
+    const onConfirm = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("hire rejected"))
+      .mockImplementationOnce(() => new Promise<void>(() => {}));
+    render(
+      <HireCheckoutModal
+        open
+        onClose={() => {}}
+        listing={listing}
+        onConfirm={onConfirm}
+      />,
+    );
+    const button = screen.getByRole("button", { name: /confirm and fund/i });
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect((button as HTMLButtonElement).disabled).toBe(false),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fireEvent.click(button);
+    expect(onConfirm).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,7 +1,9 @@
 //! Assign a wallet to the moderation-attestor roster (P6.8 — registry MECHANISM only).
 //!
-//! Mirrors `assign_dispute_resolver`. The moderation authority (the wallet that configures
-//! the moderation gate, `ModerationConfig.authority`) designates specific wallets that may
+//! Mirrors only the PDA-roster mechanics of `assign_dispute_resolver`; moderation keeps
+//! its separate authority-managed trust model rather than inheriting resolver M-of-N.
+//! The moderation authority (the wallet that configures the moderation gate,
+//! `ModerationConfig.authority`) designates specific wallets that may
 //! record moderation attestations in addition to the single global
 //! `ModerationConfig.moderation_authority`. Each assignment is its own PDA
 //! (`["moderation_attestor", attestor]`); its existence authorizes that wallet to call
@@ -37,8 +39,9 @@ pub struct AssignModerationAttestor<'info> {
     )]
     pub moderation_attestor: Box<Account<'info, ModerationAttestor>>,
 
-    /// Must be the moderation authority that owns the moderation config (the roster is
-    /// authority-managed, exactly like the dispute-resolver roster).
+    /// Must be the moderation authority that owns the moderation config. Unlike the
+    /// threshold-approved dispute-resolver roster, this moderation roster remains
+    /// authority-managed under its separate trust model.
     #[account(
         mut,
         constraint = authority.key() == moderation_config.authority

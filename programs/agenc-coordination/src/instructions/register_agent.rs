@@ -44,8 +44,9 @@ const INITIAL_REPUTATION: u16 = 5000;
 ///   (create_task / hire_from_listing / *_humanless all pass 0; the live tasks gate on
 ///   0), and the highest min_reputation seen in fixtures/tests is well under 3000 (e.g.
 ///   the agent-social post floor uses 5500 as an UNREACHABLE-by-default gate, and skill
-///   fixtures use 250). So 3000 keeps honest new agents claimable on essentially all
-///   entry-level work while still ranking below any single-slash veteran.
+///   fixtures use 250). So 3000 avoids excluding honest new agents through the
+///   `min_reputation` gate on essentially all entry-level work; every other claim
+///   gate remains authoritative. It still ranks below any single-slash veteran.
 /// - EARN-UP: economically qualified SOL completions add up to
 ///   `REPUTATION_PER_COMPLETION` (100), proportional to the irreversible protocol fee,
 ///   and saturate at `MAX_REPUTATION` (10000). A probationary agent can therefore reach

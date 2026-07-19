@@ -153,7 +153,7 @@ export async function createDependentTask(
 }
 
 /**
- * Claim a task while pinning its job-spec pointer. Wraps claim_task_with_job_spec
+ * Claim a task against its pre-existing pinned job-spec pointer. Wraps claim_task_with_job_spec
  * (plain claim_task is fail-closed in the program). Auto-derives the task-job-spec
  * pointer, the claim PDA, and protocol config from `task`/`worker`. Proof-dependent
  * tasks must pass their exact `parentTask`; the facade appends it as the read-only

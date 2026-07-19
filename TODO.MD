@@ -1,5 +1,11 @@
 # TODO — Security Fixes (Audit Pass 3, `fix/audit-findings-2026-07-16`)
 
+> **Completed historical remediation record.** All F-1–F-19 items in this
+> document are closed. The constraints and branch-relative commands below
+> describe that 2026-07-16/17 campaign; they are retained as audit evidence and
+> are not the current work queue. Current candidate state and validation live in
+> `fixme.md`, `docs/ENTERPRISE_READINESS.md`, and `docs/VALIDATION.md`.
+
 Source: final audit report on `d7f9d40` vs `07c2891`. Every item below was
 verified firsthand against executable code. Ordered by priority. Each entry has:
 problem, evidence, exploit/failure scenario, the required change, pitfalls,
@@ -16,12 +22,12 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 - **Canary freeze**: these 25 instructions have FROZEN account lists/args —
   do not add/remove/flip accounts on them:
   `accept_task_result, cancel_task, claim_task_with_job_spec,
-  configure_task_moderation, configure_task_validation, create_task,
-  deregister_agent, expire_claim, initialize_protocol, migrate_protocol,
-  migrate_task, record_task_moderation, register_agent, reject_task_result,
-  set_task_job_spec, submit_task_result, suspend_agent, unsuspend_agent,
-  update_agent, update_launch_controls, update_min_version, update_multisig,
-  update_protocol_fee, update_rate_limits, update_treasury`.
+configure_task_moderation, configure_task_validation, create_task,
+deregister_agent, expire_claim, initialize_protocol, migrate_protocol,
+migrate_task, record_task_moderation, register_agent, reject_task_result,
+set_task_job_spec, submit_task_result, suspend_agent, unsuspend_agent,
+update_agent, update_launch_controls, update_min_version, update_multisig,
+update_protocol_fee, update_rate_limits, update_treasury`.
   Handler-logic changes on these are fine. Account-list changes are only
   allowed on NON-canary instructions (full surface), and the SDK must be
   updated in the same PR.
@@ -87,7 +93,7 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
   available: the claim triples in `remaining_accounts` — `rent_recipient` is
   constrained `== worker.authority`), and `require!` the passed
   `worker_completion_bond == that PDA` and `worker_bond_authority == that
-  worker's authority`. Multi-worker (Collaborative) no-shows: forfeit is only
+worker's authority`. Multi-worker (Collaborative) no-shows: forfeit is only
   valid for a bond owned by one of the drained live claims; otherwise refund.
 - **Pitfalls**: do NOT add required accounts (canary freeze). Do not bind to
   `claim.worker` (agent PDA) — bind the wallet authority. Keep the Open-cancel
@@ -146,7 +152,7 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
      `current_workers == 0` guard then blocks the brick atomically.
   3. Defense-in-depth: `close_task` also refuses when a bound dispute passed as
      an optional remaining account is `Resolved && (!slash_applied ||
-     !initiator_slash_applied)` (not omission-proof on its own — item 2 is the
+!initiator_slash_applied)` (not omission-proof on its own — item 2 is the
      load-bearing fix for the worker side, item 1 for the initiator side).
 - **Pitfalls**: `expected_worker_pairs`/`current_workers` accounting in
   `resolve_dispute` must stay consistent for multi-worker disputes (only the
@@ -283,7 +289,8 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 ## P1 — Required before SPL/token rewards are enabled anywhere
 
 > **ALL P1 ITEMS DONE (2026-07-18, commit `56f2451`)** — F-7 SOL-only freeze guard
-> + F-4 token-task expire_claim reward skip, with litesvm SPL coverage.
+>
+> - F-4 token-task expire_claim reward skip, with litesvm SPL coverage.
 
 (No token tasks exist on mainnet today; these are hard locks the moment the SPL
 surface is used. Cheap guards; do them in the same PR.)
@@ -291,18 +298,18 @@ surface is used. Cheap guards; do them in the same PR.)
 ### [x] F-7 — `reject_and_freeze` must reject SPL tasks (MEDIUM, SPL-only)
 
 - **RESOLVED 2026-07-18 (`56f2451`)**: `require!(task.reward_mint.is_none(),
-  CoordinationError::RejectFrozenSolOnly)` right after the task-type guard (new
+CoordinationError::RejectFrozenSolOnly)` right after the task-type guard (new
   error 6358, appended). litesvm: the freeze is rejected on a token task with
   the token escrow untouched; SOL tasks unaffected.
 - **Problem** (original entry): freezing an SPL CreatorReview task locks 100% of the token
   escrow — both frozen exits settle SOL-only (`execute_completion_rewards(...,
-  None, ...)`), which can never succeed against a rent-only PDA with
+None, ...)`), which can never succeed against a rent-only PDA with
   token-denominated accounting.
 - **Evidence**: `reject_and_freeze.rs:85-115` (no mint guard). Existing
   precedent guards: `post_completion_bond.rs:86-89`,
   `task_init_helpers.rs:205-208`, `distribute_ghost_share.rs:192-195`.
 - **Required change**: `require!(ctx.accounts.task.reward_mint.is_none(),
-  CoordinationError::<SOL-only variant>)` next to the task-type guard. Reuse an
+CoordinationError::<SOL-only variant>)` next to the task-type guard. Reuse an
   existing error (e.g. `BondUnsupportedTaskType`-style) or append a new one at
   the enum END.
 - **Tests**: unit revert-sensitive (SPL → err; SOL → ok) + one integration call.
@@ -422,12 +429,14 @@ surface is used. Cheap guards; do them in the same PR.)
 > F-17 decision recorded in `docs/DESIGN_DECISIONS.md` (D5/D6).
 
 ### [x] F-11 — `expire_claim` InProgress+live-Submitted evidence guard (LOW, defense-in-depth)
+
 - **RESOLVED 2026-07-18 (`631a10f`)**: the guard now rejects any expirable-status
   task whose claim carries a live (Submitted) submission, via the pure
   `claim_is_expirable` helper + a revert-sensitive unit matrix (InProgress and
   PendingValidation × live/not-live).
 
 ### [x] F-12 — Pre-P6.3 disputes with `total_voters > 0` are unexitable (LOW, deploy preflight)
+
 - **RESOLVED 2026-07-18**: `scripts/preflight-dispute-scan.mjs` scans the on-chain
   Dispute set for `total_voters > 0` (offset 202) and hard-fails on any hit. Run
   against mainnet today: **3 Dispute accounts, all `total_voters == 0`** — no
@@ -435,29 +444,35 @@ surface is used. Cheap guards; do them in the same PR.)
   lifecycle; result recorded in `docs/DESIGN_DECISIONS.md` (D6).
 
 ### [x] F-14 — Bid-settlement remaining-accounts offset on reject/expire paths (LOW)
+
 - **RESOLVED 2026-07-18 (`0c8f1a0`)**: `reject_task_result`, `validate_task_result`'s
   reject branch, and `expire_claim` now compute the bid-settlement offset via the
   shared `bid_settlement_offset(task)` (Proof-dependency ⇒ 1) exactly like the
   accept paths; revert-sensitive unit test on the offset.
 
 ### [x] F-15 — `checked_sub` → `saturating_sub` on counter decrements in `reclaim_terminal_claim` / `expire_claim` (LOW)
+
 - **RESOLVED 2026-07-18 (`631a10f`)**: both recovery paths now decrement
   `current_workers`/`active_tasks` via the shared `saturating_dec_counter`
   (u8/u16) — the un-brickers can no longer brick on drifted legacy counters;
   drift unit test covers 0/1/N/MAX for both widths.
 
 ### [x] F-16 — Fee math overflow in `completion_helpers` (LOW)
+
 - **RESOLVED 2026-07-18 (`0c8f1a0`)**: all three fee-multiply sites
   (`calculate_reward_split_for_amount`, `calculate_combined_fees` operator +
   referrer legs) use u128 intermediates; a u64-scale unit test (~4.6e18
   lamports) proves no overflow.
 
 ### [x] F-17 — Document: no-deadline underfilled Collaborative has no creator refund (INFO→doc)
+
 - **RESOLVED 2026-07-18**: recorded as accepted design decision D5 in
   `docs/DESIGN_DECISIONS.md` — a deadline-free task is a standing offer (escrow
-  stays claimable by future workers; not a lock, by design).
+  remains funded for future eligible claim attempts, subject to all execution-time
+  gates; not a lock, by design).
 
 ### [x] F-18 — Multisig hardening cluster (LOW)
+
 - **RESOLVED 2026-07-18 (`dd519ad` + adversarial-review follow-up)**:
   - `update_multisig`: the "owner set must retain authority" require was
     **REVERTED** after on-chain verification showed the mainnet authority is a
@@ -477,6 +492,7 @@ surface is used. Cheap guards; do them in the same PR.)
     vs authority-bound admin paths).
 
 ### [x] F-19 — Off-chain lows
+
 - **RESOLVED 2026-07-18 (`3285675`)**:
   - `templates.ts`: `commentSafeName` sanitizes `config.name` at every comment
     interpolation site (both router templates + worker template).
@@ -496,12 +512,14 @@ queue landed. Every confirmed finding was fixed in a staged commit with
 revert-sensitive tests; each commit is independently gate-green.
 
 ### [x] S-1 — CRITICAL: `expire_dispute` paid a self-disputing no-show 50% of escrow
+
 - **RESOLVED (`1b562b4`)**: post-P6.3 every expired dispute is UNRESOLVED (arbiter
   voting is retired), so expiry now refunds the funder in full and the accepted
   bid bond is always Refunded (was FullSlashToCreator). Test:
   `expire-refund-default.test.mjs`.
 
 ### [x] S-2 — HIGH: initiator-slash guard was dead code
+
 - **RESOLVED (`96fa6bd`)**: `initiate_dispute` now stamps
   `agent.last_dispute_initiated`, so the `deregister_agent` cooldown (which read
   the never-written field) actually binds — a frivolous-dispute creator can no
@@ -509,20 +527,24 @@ revert-sensitive tests; each commit is independently gate-green.
   `initiator-slash-guard.test.mjs`.
 
 ### [x] S-3 — MED: `validate_task_result` settled no completion bonds
+
 - **RESOLVED (`ab5b297`)**: both bonds are now REQUIRED + seeds-pinned and
   refunded on accept (the only Completed path that skipped settlement).
 
 ### [x] S-4 — MED: `close_task` bricked live bids
+
 - **RESOLVED (`3e7a364`)**: requires the canonical bid book for BidExclusive
   tasks (fail-closed on omission) and refuses while `active_bids > 0`. Test:
   `close-task-bid-guard.test.mjs`.
 
 ### [x] S-5 — MED: ValidatorQuorum sybil voting was free
+
 - **RESOLVED (`81d3be2`)**: votes now require
   `validator_agent.stake >= protocol_config.min_stake_for_dispute`. Design
   context recorded as D8.
 
 ### [x] S-6 — MED: delegation slash-vault + re-registration inflation loop
+
 - **RESOLVED (`ed0752a`)**: `delegate_reputation` rejects active dispute
   defendants (the delegated pot was slash-exempt); `revoke_delegation` requires
   `registered_at <= delegation.created_at` so a deregister→re-register cycle
@@ -530,6 +552,7 @@ revert-sensitive tests; each commit is independently gate-green.
   Errors 6359/6360 (appended). Test: `delegation-guards.test.mjs`.
 
 ### [x] S-7 — LOW batch (`0b34a81`)
+
 - `create_dependent_task` hard-failed on legacy 382B parents (typed
   `Account<Task>` load) → owner-check + zero-pad deserialize in-handler.
 - `purchase_good` / `purchase_skill` fee math → u128 intermediates (F-16 class).
@@ -541,6 +564,7 @@ revert-sensitive tests; each commit is independently gate-green.
   (a mainnet proposal already ran a 600s snap vote).
 
 ### [x] S-8 — LOW batch (`89779cf`)
+
 - `cancel_task` claim drain refunded a no-show squatter's contest entry
   deposit → now forfeited to the treasury like every other no-show exit
   (cfg-gated optional treasury account, required when a deposit is drained).
@@ -556,6 +580,7 @@ revert-sensitive tests; each commit is independently gate-green.
   as D13 (gating the sole exits could lock escrow when a parent stalls).
 
 ### [x] S-9 — Documentation-only residuals
+
 Recorded in `docs/DESIGN_DECISIONS.md`: D8 (quorum is friction, not Byzantine
 resistance), D9 (governance stake remains locked through an election), D10
 (settlement beneficiaries cannot resolve), D11 (V-2 same-round revote tombstone
@@ -583,17 +608,17 @@ later findings and reviewed trade-offs). Kept here as the short index:
 
 ## Tracking
 
-| ID | Priority | Owner | Status |
-|----|----------|-------|--------|
-| F-1 | ~~P0~~ DONE (4b70630) | | ☒ |
-| F-2 | ~~P0~~ DONE (aa6aae5; omission-proof follow-up 8ca868d) | | ☒ |
-| F-3 | ~~P0~~ DONE (cc8870e) | | ☒ |
-| F-5 | ~~P0~~ DONE (b3eb824) | | ☒ |
-| F-6 | ~~P0~~ CLOSED — init already executed with sane params (verified on-chain 2026-07-17) | | ☒ |
-| F-7 | ~~P1~~ DONE (56f2451) | | ☒ |
-| F-4 | ~~P1~~ DONE (56f2451) | | ☒ |
-| F-8 | ~~P2~~ DONE (b72ff99) | | ☒ |
-| F-9 | ~~P2~~ DONE (53e2c4b) | | ☒ |
-| F-10 | ~~P2~~ DONE (e89e525) | | ☒ |
-| F-11–F-19 | ~~P3~~ DONE (631a10f F-11/15, 0c8f1a0 F-14/16, dd519ad F-18, 3285675 F-19; F-12/17 docs) | | ☒ |
-| S-1–S-9 (swarm wave) | ~~CRITICAL–LOW~~ DONE (1b562b4 S-1, 96fa6bd S-2, ab5b297 S-3, 3e7a364 S-4, 81d3be2 S-5, ed0752a S-6, 0b34a81 S-7, 89779cf S-8; S-9 docs D8–D13) | | ☒ |
+| ID                   | Priority                                                                                                                                        | Owner | Status |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------ |
+| F-1                  | ~~P0~~ DONE (4b70630)                                                                                                                           |       | ☒      |
+| F-2                  | ~~P0~~ DONE (aa6aae5; omission-proof follow-up 8ca868d)                                                                                         |       | ☒      |
+| F-3                  | ~~P0~~ DONE (cc8870e)                                                                                                                           |       | ☒      |
+| F-5                  | ~~P0~~ DONE (b3eb824)                                                                                                                           |       | ☒      |
+| F-6                  | ~~P0~~ CLOSED — init already executed with sane params (verified on-chain 2026-07-17)                                                           |       | ☒      |
+| F-7                  | ~~P1~~ DONE (56f2451)                                                                                                                           |       | ☒      |
+| F-4                  | ~~P1~~ DONE (56f2451)                                                                                                                           |       | ☒      |
+| F-8                  | ~~P2~~ DONE (b72ff99)                                                                                                                           |       | ☒      |
+| F-9                  | ~~P2~~ DONE (53e2c4b)                                                                                                                           |       | ☒      |
+| F-10                 | ~~P2~~ DONE (e89e525)                                                                                                                           |       | ☒      |
+| F-11–F-19            | ~~P3~~ DONE (631a10f F-11/15, 0c8f1a0 F-14/16, dd519ad F-18, 3285675 F-19; F-12/17 docs)                                                        |       | ☒      |
+| S-1–S-9 (swarm wave) | ~~CRITICAL–LOW~~ DONE (1b562b4 S-1, 96fa6bd S-2, ab5b297 S-3, 3e7a364 S-4, 81d3be2 S-5, ed0752a S-6, 0b34a81 S-7, 89779cf S-8; S-9 docs D8–D13) |       | ☒      |

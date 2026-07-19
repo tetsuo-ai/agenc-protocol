@@ -23,11 +23,12 @@
  * - Polling: TanStack Query `refetchInterval` re-runs `taskReader` until the
  *   task reaches a terminal status (`Completed`/`Cancelled`/`RejectFrozen`) or
  *   the optional `targetStatus` — then stops.
- * - Subscription: when an `events` async-iterable is supplied (e.g. from the
- *   SDK's `subscribeMarketplaceEvents`), a `useEffect` (browser-only; never runs
- *   during SSR) drains it, appends each event to `events`, and triggers a
- *   refetch so status stays fresh without tight polling. The effect aborts the
- *   iterable and clears state on unmount.
+ * - Subscription: `events` prefers an abort-aware source factory, while still
+ *   accepting the original `AsyncIterable` API for compatibility. A browser-
+ *   only effect owns its `AbortController`, drains the iterable, retains a
+ *   bounded tail, and triggers a refetch. Cleanup races blocked legacy
+ *   `next()` calls against abort and requests iterator return; factories can
+ *   additionally release their transport cooperatively through the signal.
  *
  * @module hooks/useTaskStatus
  */
@@ -48,11 +49,25 @@ export type TaskReader = (pda: Address | string) => Promise<Task | null>;
 export type ObservedEvent = unknown;
 
 /**
- * An async source of coordination events for the watched task. Pass the result
- * of the SDK's `subscribeMarketplaceEvents(...)` (already address-filtered) or
- * any async iterable. Optional.
+ * Original coordination-event stream API.
+ *
+ * @deprecated Prefer {@link TaskEventsSourceFactory}. A pre-created iterable
+ * cannot pass this hook's abort signal into its subscription transport. Legacy
+ * streams remain cancellation-safe at the iterator boundary through an abort
+ * race and best-effort `iterator.return()` cleanup.
  */
 export type TaskEventsSource = AsyncIterable<ObservedEvent>;
+
+/**
+ * Abort-aware coordination-event factory. Implementations should pass the
+ * signal to their subscription transport. The task identity lets a factory
+ * construct an address-filtered stream. This form is preferred over the
+ * deprecated pre-created {@link TaskEventsSource}.
+ */
+export type TaskEventsSourceFactory = (options: {
+  signal: AbortSignal;
+  taskPda: Address | string;
+}) => AsyncIterable<ObservedEvent>;
 
 /** Options for {@link useTaskStatus}. */
 export interface UseTaskStatusOptions {
@@ -62,17 +77,24 @@ export interface UseTaskStatusOptions {
    */
   taskReader?: TaskReader;
   /**
-   * Optional event source. When given, observed events are appended to
-   * `events` and each triggers a refetch. Drained in a browser-only effect and
-   * aborted on unmount.
+   * Optional event stream. Prefer an abort-aware factory; the deprecated
+   * pre-created AsyncIterable form remains supported for compatibility. Each
+   * event triggers a refetch.
    */
-  events?: TaskEventsSource;
+  events?: TaskEventsSourceFactory | TaskEventsSource;
+  /** Maximum recent events retained in memory (default `256`). */
+  maxEvents?: number;
   /**
    * Stop polling once the task reaches this status (in addition to terminal
    * statuses). Useful to await a specific transition (e.g. `Completed`).
    */
   targetStatus?: TaskStatus;
-  /** Poll interval in ms while non-terminal. Default `2000`. */
+  /**
+   * Poll interval in ms while non-terminal. Default `2000`.
+   *
+   * Must be a non-negative integer no greater than `2_147_483_647`, the
+   * maximum portable JavaScript timer delay; invalid values throw RangeError.
+   */
   pollIntervalMs?: number;
   /** Disable the hook entirely. Default `true` when `taskPda` + reader exist. */
   enabled?: boolean;
@@ -106,10 +128,14 @@ const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   TaskStatus.Cancelled,
   TaskStatus.RejectFrozen,
 ]);
+const DEFAULT_MAX_EVENTS = 256;
+const MAX_POLL_INTERVAL_MS = 2_147_483_647;
 
 /** True when the task's `result` bytes are present and non-empty. */
 function hasResult(task: Task | null): boolean {
-  return task !== null && task.result.length > 0 && task.result.some((b) => b !== 0);
+  return (
+    task !== null && task.result.length > 0 && task.result.some((b) => b !== 0)
+  );
 }
 
 /**
@@ -123,19 +149,41 @@ export function useTaskStatus(
   taskPda: Address | string | undefined | null,
   options?: UseTaskStatusOptions,
 ): UseTaskStatusResult {
-  // Touch context so the hook is provider-bound (and throws clearly outside it),
-  // matching every other hook's contract even though reads come via the reader.
-  useAgencContext();
+  // Bind custom readers to the provider's deployment cache namespace.
+  const ctx = useAgencContext();
 
   const reader = options?.taskReader;
   const enabled =
     (options?.enabled ?? true) && Boolean(taskPda) && Boolean(reader);
   const pollIntervalMs = options?.pollIntervalMs ?? 2000;
+  const maxEvents = options?.maxEvents ?? DEFAULT_MAX_EVENTS;
+  if (
+    !Number.isSafeInteger(pollIntervalMs) ||
+    pollIntervalMs < 0 ||
+    pollIntervalMs > MAX_POLL_INTERVAL_MS
+  ) {
+    throw new RangeError(
+      `useTaskStatus: pollIntervalMs must be a non-negative integer no greater than ${MAX_POLL_INTERVAL_MS} (got ${pollIntervalMs})`,
+    );
+  }
+  if (!Number.isSafeInteger(maxEvents) || maxEvents < 0) {
+    throw new RangeError(
+      `useTaskStatus: maxEvents must be a non-negative safe integer (got ${maxEvents})`,
+    );
+  }
+  const taskIdentity = taskPda ? pdaKey(taskPda) : "";
 
-  const [events, setEvents] = useState<ObservedEvent[]>([]);
+  const [eventState, setEventState] = useState<{
+    taskIdentity: string;
+    events: ObservedEvent[];
+  }>(() => ({ taskIdentity, events: [] }));
+  // Effects run after render, so derive an empty list synchronously when the
+  // task changes rather than exposing task A's history for one task-B frame.
+  const events =
+    eventState.taskIdentity === taskIdentity ? eventState.events : [];
 
   const query = useQuery<Task | null, Error>({
-    queryKey: queryKeys.taskStatus(taskPda ? pdaKey(taskPda) : ""),
+    queryKey: queryKeys.taskStatus(taskIdentity, ctx.cacheNamespace),
     enabled,
     queryFn: () => reader!(taskPda as Address | string),
     // Poll until terminal / target reached; then stop (return `false`).
@@ -153,31 +201,78 @@ export function useTaskStatus(
     },
   });
 
-  // Drain the optional event source in a browser-only effect (never during SSR;
-  // effects don't run on the server). Abort + reset on unmount / source change.
+  // Own the optional event iterator so cleanup can release a subscription that
+  // is blocked in next(). Event history is scoped to the current task.
   const refetchRef = useRef(query.refetch);
   refetchRef.current = query.refetch;
   const eventsSource = options?.events;
   useEffect(() => {
-    if (!eventsSource) return;
+    setEventState({ taskIdentity, events: [] });
+    if (!enabled || !eventsSource || !taskPda) return;
+
+    const controller = new AbortController();
+    const aborted = Symbol("aborted");
+    const abortPromise = new Promise<typeof aborted>((resolve) => {
+      controller.signal.addEventListener("abort", () => resolve(aborted), {
+        once: true,
+      });
+    });
+    let iterator: AsyncIterator<ObservedEvent> | null = null;
     let cancelled = false;
-    (async () => {
+    let finished = false;
+    void (async () => {
       try {
-        for await (const ev of eventsSource) {
+        // A callable value wins even if it also implements AsyncIterable: the
+        // factory form is the only one able to propagate cooperative abort
+        // into the underlying subscription transport.
+        const iterable =
+          typeof eventsSource === "function"
+            ? eventsSource({ signal: controller.signal, taskPda })
+            : eventsSource;
+        iterator = iterable[Symbol.asyncIterator]();
+        while (!cancelled) {
+          const next = await Promise.race([iterator.next(), abortPromise]);
+          if (next === aborted) break;
           if (cancelled) break;
-          setEvents((prev) => [...prev, ev]);
+          if (next.done) {
+            finished = true;
+            break;
+          }
+          setEventState((prev) => ({
+            taskIdentity,
+            events:
+              prev.taskIdentity === taskIdentity
+                ? maxEvents === 0
+                  ? []
+                  : [...prev.events, next.value].slice(-maxEvents)
+                : maxEvents === 0
+                  ? []
+                  : [next.value],
+          }));
           // A status-changing event landed — pull a fresh read.
           void refetchRef.current();
         }
       } catch {
         // A torn-down subscription (unmount) surfaces as an iterator throw;
         // swallow it — the read query owns the surfaced error channel.
+      } finally {
+        finished = true;
       }
     })();
     return () => {
       cancelled = true;
+      controller.abort();
+      if (!finished && iterator?.return) {
+        try {
+          // React cleanup cannot await. Start closing immediately and consume
+          // either a synchronous throw or asynchronous rejection locally.
+          void Promise.resolve(iterator.return()).catch(() => undefined);
+        } catch {
+          // Best-effort teardown; the query owns the visible error channel.
+        }
+      }
     };
-  }, [eventsSource]);
+  }, [enabled, eventsSource, maxEvents, taskIdentity, taskPda]);
 
   const task = query.data ?? null;
   return {

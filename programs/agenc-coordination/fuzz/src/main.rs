@@ -233,7 +233,12 @@ fn run_resolve_dispute_fuzz(iterations: usize) -> (usize, usize) {
             is_closed: false,
         };
 
-        let ruling = direct_ruling(input.resolver_role, input.approve, input.has_rationale);
+        let ruling = direct_ruling_with_threshold_approval(
+            input.resolver_role,
+            input.approve,
+            input.has_rationale,
+            input.has_configured_threshold_approval,
+        );
         let expected_success = input.dispute_active
             && input.task_disputed
             && dispute_resolution_window_open(&dispute, input.current_timestamp)
@@ -241,6 +246,8 @@ fn run_resolve_dispute_fuzz(iterations: usize) -> (usize, usize) {
                 input.resolver_role,
                 ResolverRole::ProtocolAuthority | ResolverRole::AssignedResolver
             )
+            && (input.resolver_role != ResolverRole::ProtocolAuthority
+                || input.has_configured_threshold_approval)
             && input.has_rationale;
         let result = simulate_resolve_dispute(
             &mut dispute,

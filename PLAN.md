@@ -1,6 +1,6 @@
 # PLAN.md — AgenC Embeddable Marketplace: Road to Mass Adoption
 
-> **Historical planning record (banner added 2026-07-17).** This roadmap is a dated planning document, not current state: mainnet has run the full 99-instruction surface (`surface_revision = 4`) since 2026-07-09 — see `docs/MAINNET_MAINLINE.md` for live state and `TODO.MD` for remaining work. Dated body claims (surface sizes, gates, phases) are kept as written.
+> **Historical planning record (banner added 2026-07-17).** This roadmap is a dated planning document, not current state: mainnet has run the full 99-instruction surface (`surface_revision = 4`) since 2026-07-09 — see `docs/MAINNET_MAINLINE.md` for live state and `TODO.MD` for the completed remediation record. Dated body claims (surface sizes, gates, phases) are kept as written.
 
 **Status:** authored 2026-06-09, immediately after PR #47 (humanless hire, completion
 bonds, dispute-resolver roster) merged to `main`.
@@ -102,6 +102,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > the §11.5 go/no-go consume its output, and D1 gates the P6.2 migration rehearsal.
 
 ### D1 Design-partner embedder LOIs — BEFORE the referral migration is rehearsed **[HUMAN: outreach + signs]**
+
 - **Why:** the entire embeddable go-to-market assumes third parties integrate because
   referral fees pay them (P6.2). A referral fee on zero volume is zero — test the
   premise while the program change is still cheap to reshape.
@@ -117,6 +118,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   thesis itself) with the human first.
 
 ### D2 First paid-service experiment on the sandbox (target: month 2)
+
 - **Why:** the cheapest falsification test of demand — one real service, real strangers,
   measured funnel. Depends on minimal P2.2 + P2.3 (devnet full surface + auto-attestor).
 - **Steps:** put ONE fixed-price, first-party-fulfilled service listing live on the
@@ -130,15 +132,16 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   strangers complete a hire in 30 days, that is §11.5 input, not a reason to build more.
 
 ### D3 First-party worker agents with fulfillment SLAs in 2–3 verticals
+
 - **Why:** supply is software — the one cheat agent marketplaces get. 50 credible
   fixed-price listings that actually deliver beat 5,000 idle registrations; quality
   DENSITY in few verticals beats breadth (every empty-shelf marketplace death).
-  P10.1 dogfoods *listings*; this task dogfoods *fulfillment*.
+  P10.1 dogfoods _listings_; this task dogfoods _fulfillment_.
 - **Steps:** build worker agents on the kit/SDK that auto-claim and fulfill with an
   SLA, in verticals where work recurs and is verifiable:
   (a) **code/security review** — deliberately the confidential, high-ticket vertical
   that wires `agenc-prover`'s ZK private completion into the adoption funnel as the
-  *reason to choose AgenC* (settle work without revealing it — no competitor can);
+  _reason to choose AgenC_ (settle work without revealing it — no competitor can);
   (b) **data extraction/cleanup**; (c) **content QA**. Publicly subsidize early worker
   earnings if needed — the first 100 agents earning real SOL are worth more than any
   marketing spend, and an announced-but-unshipped revenue promise is ecosystem poison.
@@ -147,6 +150,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   end-to-end in vertical (a).
 
 ### D4 Demand-evidence ledger (feeds §11.5)
+
 - **Steps:** maintain `docs/DEMAND_EVIDENCE.md` as a living document: repeat-purchase
   rate per buyer (**north star**), count of unsubsidized repeat buyers, median settled
   ticket size, D1 LOI status + rejection reasons, D2 funnel numbers, and a competitor
@@ -156,6 +160,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 - **Done when:** updated at least monthly; P9.1's §11.5 go/no-go cites it directly.
 
 ### D5 Two-tier settlement strategy (fixes the ticket-size mismatch)
+
 - **Why:** AgenC's per-hire machinery (5–7 transactions, rent, optional 25% bonds)
   amortizes at roughly $50+ jobs; observed market medians are $0.20 (x402) to $8–35
   (gig boards). Two coherent responses — do both:
@@ -178,6 +183,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > Nothing else in this plan matters to an outside integrator until this phase ships.
 
 ### P0.1 Resolve the license conflict **[HUMAN decision, AI prepares]**
+
 - **Why:** root `LICENSE` is GPL-3.0; `packages/sdk-ts/package.json` and
   `packages/protocol/package.json` claim MIT. This legally clouds any npm publish.
 - **Steps:** present the human the options (a: relicense repo to MIT; b: keep GPL root,
@@ -188,6 +194,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   `license` fields are consistent with shipped texts.
 
 ### P0.2 Fix the SDK README install + peer deps
+
 - **Steps:** in `packages/sdk-ts/README.md`, fix the install line to
   `npm install @tetsuo-ai/marketplace-sdk @solana/kit @solana/program-client-core`
   (the second peer dep is declared in package.json but omitted from the README). Audit
@@ -198,6 +205,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   after P0.5.
 
 ### P0.3 Add `sdk.yml` CI workflow
+
 - **Steps:** create `.github/workflows/sdk.yml` running on PR + main push:
   `npm run sdk:drift`, `npx tsc --noEmit`, `npm test`, `npm run build`,
   `npm run examples:check` in `packages/sdk-ts`. Keep the existing `ci.yml` for the
@@ -206,6 +214,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   script names against package.json, and is referenced accurately by the README.
 
 ### P0.4 Versioning + changelog + publish pipeline
+
 - **Why:** three-way version drift already exists for `@tetsuo-ai/protocol`
   (git tag v0.1.1 / npm 0.2.0 / local CHANGELOG 0.2.1). The SDK has no changelog at all.
 - **Steps:** adopt changesets (or release-please) for `packages/protocol` and
@@ -217,6 +226,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   packages; CHANGELOGs exist; version drift resolved.
 
 ### P0.5 Publish `@tetsuo-ai/marketplace-sdk@0.1.0` + `@tetsuo-ai/protocol@0.2.1` **[HUMAN: confirms publish]**
+
 - **Steps:** after P0.1–P0.4, stage BOTH releases and ask the human to approve
   `npm publish` (publishing is an external, irreversible action — never do it silently).
   Publishing protocol@0.2.1 closes the existing three-way drift (npm is still 0.2.0).
@@ -225,6 +235,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   quickstart work in a clean project.
 
 ### P0.6 Repo visibility **[HUMAN decision]**
+
 - **Why:** the repo is private, so the clone fallback, verifiable builds (P8.3), and
   "public source of truth" branding are all blocked. Publishing the npm package does
   NOT require the repo to be public — flag the decision, don't block Phase 0 on it.
@@ -244,6 +255,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > litesvm (the existing `tests-e2e/harness.ts` pattern) and TypeDoc comments.
 
 ### P1.1 Transaction runtime: `createMarketplaceClient`
+
 - **What:** a client object wrapping the facade so
   `await client.hireFromListing({...})` returns a confirmed signature or throws a typed
   error.
@@ -252,7 +264,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
      `signTransactionMessageWithSigners` → send → confirm) into
      `src/client/` as the implementation seed.
   2. `createMarketplaceClient({ rpc | rpcUrl, rpcSubscriptions?, signer, commitment?,
-     computeUnitLimit?, priorityFee? })`: per-call overrides allowed; defaults applied
+computeUnitLimit?, priorityFee? })`: per-call overrides allowed; defaults applied
      via compute-budget instructions prepended to each tx.
   3. Confirmation: blockhash-expiry-aware retry (re-fetch blockhash and re-sign on
      expiry, bounded attempts), configurable confirm commitment.
@@ -272,6 +284,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   compute-budget defaults and overrides.
 
 ### P1.2 Query layer: `queries` module (trustless gPA read path)
+
 - **What:** typed getProgramAccounts helpers so "list active listings / open tasks / my
   claims" is one call. Port the dropped patterns from the legacy
   `agenc-sdk/src/queries.ts` onto the current layouts (Task is 432B post-Batch-2).
@@ -291,6 +304,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   exactly the matching subset; offsets are asserted against decoded fixtures.
 
 ### P1.3 Event layer: codecs + subscriptions
+
 - **What:** the program emits ~87 events (IDL defines 82); the generated client renders
   zero event codecs. Generate them and add subscription/await helpers.
 - **Steps:**
@@ -308,6 +322,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   `sdk:drift` fails if an event is added to the IDL without a codec.
 
 ### P1.4 Domain-value helpers: `values` module
+
 - **What:** today the public API is raw fixed-width byte arrays and unspecified hashing
   (the canonical example uses `new Uint8Array(32).fill(9)` placeholders).
 - **Steps:**
@@ -315,8 +330,8 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
      `descriptionHash(uri | text): Uint8Array` with a documented canonicalization rule
      (UTF-8 NFC text vs URI-bytes — pick one convention, document it, test vectors).
   2. `encodeListingName(str)` / `encodeListingCategory(str)` / `encodeListingTags(string[])`
-     + matching decoders — UTF-8, NUL-padded, length-checked, throw on overflow (the
-     encoding standard itself is defined in P1.5).
+     - matching decoders — UTF-8, NUL-padded, length-checked, throw on overflow (the
+       encoding standard itself is defined in P1.5).
   3. `canonicalJobSpecHash(spec)`: make the kit's canonical-JSON spec hashing publicly
      available so third-party spec hashes interoperate with moderation + explorer
      verification. **[HUMAN: the kit's `packages/job-spec` is EULA-licensed — porting
@@ -329,6 +344,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   no raw `.fill()` placeholder values.
 
 ### P1.5 LISTING_METADATA v1 standard
+
 - **What:** `ServiceListing.name/category/tags` are documented only as "client-encoded";
   nothing defines the encoding, the category taxonomy, or what `spec_uri` points at.
 - **Steps:**
@@ -346,6 +362,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   encode→on-chain→decode e2e test passes; the JSON Schema is published in the package.
 
 ### P1.6 Release 0.2.0 **[HUMAN confirms publish]**
+
 - Ship P1.1–P1.5 as `@tetsuo-ai/marketplace-sdk@0.2.0` with changeset + changelog.
 
 ---
@@ -360,6 +377,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > to execute the flagship flow) is resolved by the upgrade.
 
 ### P2.1 `@tetsuo-ai/marketplace-sdk/testing` (local litesvm sandbox)
+
 - **Steps:**
   1. Add a `./testing` subpath export to `packages/sdk-ts/package.json`.
   2. Export the litesvm harness: `startLocalMarketplace()` boots litesvm with the
@@ -379,6 +397,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   Phase 2.
 
 ### P2.2 Devnet full-surface deployment + cadence **[HUMAN: runs the deploy]**
+
 - **Steps:** prepare a `scripts/devnet-deploy.md` runbook (build full surface, deploy to
   devnet program ID `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, initialize
   protocol + moderation config); document the refresh cadence (e.g. redeploy on every
@@ -387,6 +406,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   published on devnet (see P6.5); runbook committed.
 
 ### P2.3 Sandbox moderation auto-attestor (hosted) **[HUMAN: deploys + provisions the key]**
+
 - **Where:** `agenc-services-storefront` (or a small standalone service) — hosted rails.
 - **Steps:** a devnet-only service holding the devnet moderation authority key: accepts
   `POST /sandbox/attest { listing | task, specHash }` and records a CLEAN
@@ -397,6 +417,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   human involvement, via `sdk.requestSandboxAttestation(...)` helper.
 
 ### P2.4 Seeded fixtures + `createSandboxClient()`
+
 - **Steps:** seed devnet with ~10 provider agents + Active listings at known addresses;
   publish them as `@tetsuo-ai/marketplace-sdk/sandbox` constants. Add
   `createSandboxClient()` wiring devnet RPC + airdrop + a funded throwaway signer.
@@ -411,12 +432,14 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 
 > Audit findings #19, #20, #28 + the refuted-finding correction: a public paginated read
 > API ALREADY EXISTS (`marketplace.agenc.tech/api/explorer/{tasks,agents,disputes,search}`
-> + SSE `/events`, served from `agenc-services-storefront/server/explorer.ts`, fed by the
-> private runtime EventMonitor). The right move is to EXTEND it, not build a new indexer
-> from scratch. What it lacks: ServiceListing/HireRecord coverage (the just-merged
-> catalog is indexed NOWHERE), public docs, API keys/quotas, and webhooks.
+>
+> - SSE `/events`, served from `agenc-services-storefront/server/explorer.ts`, fed by the
+>   private runtime EventMonitor). The right move is to EXTEND it, not build a new indexer
+>   from scratch. What it lacks: ServiceListing/HireRecord coverage (the just-merged
+>   catalog is indexed NOWHERE), public docs, API keys/quotas, and webhooks.
 
 ### P3.1 Index ServiceListing + HireRecord into the explorer API
+
 - **Where:** `agenc-services-storefront/server/explorer.ts` + a NEW ingestion module.
 - **Architecture constraint:** the existing explorer pipeline is `EventMonitor` imported
   from the private `@tetsuo-ai/runtime` package — do NOT modify that package. Build a
@@ -441,6 +464,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   by service tests (verified locally; live after human deploys).
 
 ### P3.2 Publish the API: OpenAPI spec, docs, keys, quotas, tx-builder endpoint
+
 - **Steps:** write the OpenAPI 3 spec for the whole explorer surface; publish it (docs
   site + `GET /api/openapi.json`); add self-serve API keys with per-key quotas and rate
   limits (anonymous tier stays for low-volume reads); published terms.
@@ -457,6 +481,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   a hire built by `POST /v1/hires`, signed locally, lands on devnet.
 
 ### P3.3 Outbound webhooks (Stripe-style) **[HUMAN: deploys]**
+
 - **Steps:** on the indexer, endpoint registration (URL + signing secret) scoped to an
   API key; HMAC-signed JSON deliveries with event IDs (idempotency), retries with
   backoff, and a replayable `GET /v1/events` log. Event types v1: `task.created`,
@@ -467,6 +492,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   helper exported from the SDK.
 
 ### P3.4 Public moderation-attestation endpoint (mainnet) **[HUMAN: deploys + provisions the mainnet moderation-authority key]**
+
 - **Why (finding #16/#28):** production moderation is marketplace-managed with no public
   request path — non-kit integrators cannot get a listing attested, so the fail-closed
   hire gate is a dead end for them.
@@ -478,6 +504,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   devnet via public endpoints only; policy doc published.
 
 ### P3.5 RPC story + status page
+
 - **Steps:** document the RPC strategy in the SDK README (bring-your-own RPC guidance +
   recommended providers + gPA restrictions); evaluate extending the kit's
   marketplace-managed RPC proxy to SDK/API-key holders **[HUMAN: cost decision]**.
@@ -495,6 +522,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > devnet sandbox), and P3 (indexer/webhooks).
 
 ### P4.1 Wallet signing bridge (browser story)
+
 - **Steps:** document + helper for turning browser wallets into the kit
   `TransactionSigner` the SDK expects: `@solana/react`'s
   `useWalletAccountTransactionSendingSigner` (Wallet Standard), plus a compatibility
@@ -503,6 +531,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 - **Done when:** the example app works against the devnet sandbox end to end.
 
 ### P4.2 `@tetsuo-ai/marketplace-react` (new package in this repo's `packages/`)
+
 - **Steps:**
   1. Headless hooks over the P1 client + P3 API: `useListing(pda)`, `useListings(filter)`,
      `useHire()`, `useTaskStatus(taskPda)` (event subscription with poll fallback),
@@ -517,6 +546,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   **[HUMAN confirms publish]**.
 
 ### P4.3 Script-tag / iframe hire widget (the Stripe-Checkout equivalent) **[HUMAN: deploys to production hosting]**
+
 - **Where:** hosted at `marketplace.agenc.tech/embed/:listingPda`
   (`agenc-services-storefront`).
 - **Steps:** a framework-agnostic embed: `<script>` snippet or iframe rendering the
@@ -527,6 +557,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   hire; integration doc published.
 
 ### P4.4 Non-crypto buyer onboarding **[HUMAN: vendor + custody decisions]**
+
 - **Steps:** (1) signer adapters wrapping embedded-wallet providers
   (Privy/Dynamic/Web3Auth email-login wallets) into the `TransactionSigner` interface —
   pick vendor with the human; (2) the fiat leg: EITHER an on-ramp session
@@ -537,6 +568,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 - **Done when:** a buyer with no wallet and no SOL completes a sandbox hire in the demo.
 
 ### P4.5 Store templates + `create-agenc-store` (tier 4 of the embeddable ladder)
+
 - **What:** "deploy your own agent store" as a self-serve product: a public
   `agenc-store-templates` repo (three Next.js variants: marketplace store,
   single-provider storefront, vertical store), config-first via one `agenc.config.ts`
@@ -562,12 +594,13 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 
 ## Phase 5 — Agent-native distribution (open the machine funnel)
 
-> Audit finding #22. For an *agent* marketplace, there is currently no open machine
+> Audit finding #22. For an _agent_ marketplace, there is currently no open machine
 > path: every MCP/tool package is 404 on public npm or locked inside the signed kit
 > binary. Depends on Phase 0–1, plus P3.1/P3.2 (P5.1's discovery tools), P3.3 + Phase 2
 > (P5.3). Parallel with Phase 4.
 
 ### P5.1 Public `@tetsuo-ai/marketplace-mcp`
+
 - **Steps:** an open-source, npx-able MCP server built on the new SDK (NOT the private
   kit internals): readonly by default — listings/tasks/agents discovery via the P3 API,
   listing/task inspection, track-record lookup; mutation tools (hire, claim, submit)
@@ -580,6 +613,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   listing live **[HUMAN confirms publish + registry]**.
 
 ### P5.2 `@tetsuo-ai/marketplace-tools` + framework adapters **[HUMAN: confirms publish + approves relicensing]**
+
 - **Steps:** publish the framework-neutral JSON-schema tool definitions (they exist,
   unpublished, in `agenc-marketplace-agent-kit/packages/tools/src/index.ts` — but that
   package is `private: true` under the kit's EULA license; releasing its code publicly
@@ -590,14 +624,16 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   hire using only public packages.
 
 ### P5.3 Worker notification path
-- **Steps:** document + helper for worker agents to learn about new claimable tasks
+
+- **Steps:** document + helper for worker agents to learn about new direct-claim candidates
   without bespoke polling: SSE `/events` subscription + webhook subscription (P3.3) +
   `subscribeMarketplaceEvents` (P1.3). Add a `watchClaimableTasks(filter)` convenience
   in the SDK.
-- **Done when:** an example worker bot claims a sandbox task within seconds of creation
-  with no hand-tuned poll loop.
+- **Done when:** an example worker bot discovers a candidate and successfully lands its
+  sandbox claim within seconds of creation with no hand-tuned poll loop.
 
 ### P5.4 x402 fast-path + A2A surface (PROMOTED from exploratory — see D5)
+
 - **Why promoted:** x402 is where agent-payment volume actually is (165M cumulative
   transactions, ~49% on Solana, now Linux Foundation-neutral), and AgenC's per-hire
   overhead only amortizes at ~$50+ tickets. The two-tier story — x402 for cheap
@@ -628,6 +664,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > own litesvm coverage.
 
 ### P6.1 `rate_hire` — make the dead rating fields live
+
 - **What:** `ServiceListing.total_hires/total_rating/rating_count` exist
   (`state.rs:1666-1670`) but NO instruction writes the rating fields.
 - **Steps:** new instruction `rate_hire`: signer must equal the buyer recorded on the
@@ -641,6 +678,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 - **Done when:** full gate green; revert-sensitive tests prove each guard.
 
 ### P6.2 Demand-side referral fee (the embedder incentive)
+
 - **What:** today an embedder who brings the buyer earns nothing — the operator leg is
   supply-side (chosen by the provider at listing time). This is the answer to "why
   would a third party embed this?"
@@ -660,6 +698,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   SOL + SPL paths; cap violations rejected; migration coverage updated; full gate green.
 
 ### P6.3 Retire `vote_dispute` + arbiter machinery (standing decision)
+
 - **What:** since the resolver-roster rework, votes/quorum no longer gate resolution —
   `vote_dispute` and arbiter instructions execute but are advisory dead weight.
 - **Steps:** remove `vote_dispute`, the vote PDAs, arbiter-specific slash paths and
@@ -673,6 +712,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   green on the roster model alone; full gate green.
 
 ### P6.4 Accountable dispute rulings
+
 - **What:** today a ruling is one boolean with no rationale, no resolver in the event,
   no challenge window.
 - **Steps (ordered by leverage, ship at least 1):**
@@ -695,6 +735,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   flag **[HUMAN: approve challenge-window + resolver-stake design before build]**.
 
 ### P6.5 Surface-versioning contract
+
 - **What:** one program ID can serve the 25-instruction canary build and the full
   surface (84 ixs); nothing lets a client ask what's live. (As of 2026-06-11 the full
   84-ix surface is what is live on mainnet, `surface_revision = FULL`.)
@@ -715,6 +756,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   committed.
 
 ### P6.6 Track-record counters on AgentRegistration
+
 - **What:** only success-side stats exist; rejections, disputes, expirations vanish.
 - **Steps:** append counters (`tasks_rejected`, `disputes_won`, `disputes_lost`,
   `claims_expired`, `total_cancelled`) to AgentRegistration. **Layout reality:**
@@ -736,6 +778,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   coverage if option (b); full gate green.
 
 ### P6.7 Sybil/reputation reset economics
+
 - **What:** a slashed agent (5000→4700) re-registers fresh at 5000 for ~rent; fresh
   sybil strictly beats punished veteran. **[HUMAN: approve the economic parameters]**
 - **Steps (present options, then build the approved set):**
@@ -750,6 +793,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   re-registered sybil no longer outranks its slashed predecessor.
 
 ### P6.8 Moderation attestor registry
+
 - **What:** moderation is a single hardcoded global authority; no path for third-party
   or per-integrator attestors.
 - **Steps:** mirror the dispute-resolver roster pattern (it's already in the codebase):
@@ -781,6 +825,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > the design docs now, build after Batch 4.
 
 ### P7.1 Task-thread message envelope (buyer↔worker comms)
+
 - **What:** `request_changes`/`reject_task_result` anchor 32-byte hashes with no defined
   envelope, transport, or fetch path — the worker can't learn WHAT changes were asked.
 - **Steps:** define a hash-anchored message envelope as a sibling of the job-spec
@@ -794,6 +839,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   the actual change list whose hash matches on-chain.
 
 ### P7.2 Encrypted deliverable handoff (fair exchange, layer 1 — off-chain)
+
 - **What:** today the buyer downloads the full plaintext artifact before paying and can
   then reject; the bonds/disputes that mitigate this were not in the canary but ARE in the
   full surface now live on mainnet (since the 2026-06-11 upgrade).
@@ -809,6 +855,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   bounds. **[HUMAN: approve design before build]**
 
 ### P7.3 Agent identity & verification
+
 - **Steps:** (1) publish a versioned agent-metadata JSON Schema (name, description,
   operator domain, contact, logo, ToS URI) and validate/render it in the SDK — pure
   spec work, immediate; (2) a domain-verification attestation service: operator proves
@@ -822,6 +869,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   trustlessly readable on-chain and rendered in the demo embed.
 
 ### P7.4 Milestones & partial settlement (design → build)
+
 - **What:** escrow is all-or-nothing; partial payment exists only as a dispute outcome.
 - **Steps:** design doc first (`docs/MILESTONES_DESIGN.md`): bounded milestone schedule
   (≤8 of `{amount, spec_hash, status}` — child `TaskMilestone` PDA per stage preferred
@@ -834,6 +882,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   lamport-exact split tests per milestone.
 
 ### P7.5 Recurring engagements / retainers (design → build)
+
 - **Steps:** design doc (`docs/ENGAGEMENTS_DESIGN.md`): `Engagement` PDA referencing a
   ServiceListing; buyer prefunds N periods at locked price into one escrow;
   permissionless `renew_period` mints each period's Task (reusing the existing
@@ -852,6 +901,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > the audit still pending.
 
 ### P8.1 SECURITY.md + disclosure policy (immediate, small)
+
 - **Steps:** add `SECURITY.md` (+ `.well-known/security.txt` on the hosted domains —
   **[HUMAN: deploys the hosted-domain piece]**):
   security contact, scope (program + hosted rails), disclosure SLA, safe-harbor
@@ -861,6 +911,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 - **Done when:** files committed; contact alias live **[HUMAN: create the alias]**.
 
 ### P8.2 External audit **[HUMAN: commissions; AI prepares]**
+
 - **Steps:** keep `docs/BATCH_1_3_AUDIT_PREP.md` current through Batch 4 (extend with a
   Batch 4 section as Phase 6 lands); assemble the auditor handoff pack (scope, invariant
   list, threat model, test inventory, prior internal-audit results). When the report
@@ -870,22 +921,26 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   rationale.
 
 ### P8.3 Verifiable builds
+
 - **Depends on:** P0.6 (repo public) — flag, don't block other work.
 - **Steps:** add `solana-verify` to the release workflow; on-chain verification PDA via
   osec.io so `HJsZ...` provably matches the public repo at a tag; document in README.
 - **Done when:** `solana-verify verify-from-repo` passes against the deployed program.
 
 ### P8.4 Bug bounty **[HUMAN: budget + platform decision]**
+
 - **Steps:** draft scope doc (program money paths > hosted rails > SDK), reward tiers,
   exclusions. Human picks platform/budget; publish.
 
 ### P8.5 Upgrade-authority custody **[HUMAN: executes]**
+
 - **Steps:** document the current single-key upgrade authority; prepare the runbook to
   move it to a multisig (e.g. Squads) and state custody in README/SECURITY.md.
 - **Done when:** multisig is the upgrade authority on mainnet (human-executed);
   documented.
 
 ### P8.6 The credible-exit test ("the operator vanishes and it still works")
+
 - **Why:** neutrality is AgenC's only wedge against both the token-captured incumbent
   and Web2 platforms — and a sophisticated embedder will spend one day discovering
   that hires need our attestation, reads need our indexer, artifacts live on our
@@ -918,6 +973,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > the AI prepared every artifact and rehearsed on devnet.
 
 ### P9.1 Pre-flight gates (all must be green)
+
 - §11.5 human go/no-go (demand thesis + SDK slice + a success signal) — **decided on
   the D4 demand-evidence ledger**, not on engineering completeness: D1 LOI outcomes,
   D2 funnel data (stranger hires, median ticket, repeat rate), D3 fulfillment record.
@@ -928,9 +984,10 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   revised) against real embedder responses before this point.
 
 ### P9.2 Migration rehearsal (AI does this on devnet now)
+
 - **Scope — ALL live-account migrations Batch 4 creates, not just Task:**
   1. `migrate_task` over all mainnet-shaped Task accounts (Batch 2 operator fields
-     + P6.2 referrer fields → realloc to the new size). (Executed against 169 live tasks.)
+     - P6.2 referrer fields → realloc to the new size). (Executed against 169 live tasks.)
   2. The P6.5 ProtocolConfig realloc/extend (`surface_revision`) on the live config
      account.
   3. The P6.6 AgentRegistration migration over ALL live agent accounts — only if
@@ -947,12 +1004,14 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   `docs/MAINNET_ROLLOUT_RUNBOOK.md`.
 
 ### P9.3 Surface expansion decision **[HUMAN]**
+
 - Decide canary-widening vs full-surface flip (which instruction groups go live:
   listings+hire first, bonds+disputes with them or staged after). Update the canary
   feature gates and `scripts/check-canary-idl.mjs` expected surface accordingly; the
   P6.5 `surface_revision` is bumped at each stage so `getDeployedSurface` stays truthful.
 
 ### P9.4 Execute **[HUMAN runs; AI verifies]**
+
 - Human executes the runbook. AI verifies post-conditions: all live tasks migrated (169
   on 2026-06-11, 0 failures), the ProtocolConfig realloc applied (`surface_revision`
   readable = FULL), all live
@@ -966,6 +1025,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 > Audit findings #11, #12. An embeddable marketplace with an empty book converts no one.
 
 ### P10.1 Dogfood: first-party surfaces use the on-chain listing book **[HUMAN: approves and signs the mainnet listing-creation and first-hire transactions]**
+
 - **What:** today the on-chain ServiceListing book has ZERO consumers — even the
   storefront sells from a file-backed template catalog.
 - **Steps:** (1) migrate the storefront catalog so each service template is backed by a
@@ -980,6 +1040,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   one real, human-approved hire flows through `hire_from_listing` on mainnet.
 
 ### P10.2 Seed supply **[HUMAN: outreach/curation]**
+
 - **Steps:** a launch program of 20–50 curated provider listings so the first
   third-party embedder renders a populated marketplace on day one. AI prepares the
   onboarding doc + scripts; human recruits. The D3 first-party SLA-backed worker
@@ -989,6 +1050,7 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
   listings buyers actually purchased on the sandbox).
 
 ### P10.3 Web-visible & syndicable listings
+
 - **Steps:** (1) public SSR listing pages at `marketplace.agenc.tech/listings/:pda`
   with schema.org Service/Offer JSON-LD, OpenGraph tags, `sitemap.xml` regenerated from
   the index; (2) a public versioned listings feed (JSON + the P3.2 OpenAPI) explicitly
@@ -1014,42 +1076,42 @@ P6.2 referral-migration rehearsal, and the D4 ledger feeds the §11.5 go/no-go i
 
 ## Finding → task traceability (all 33 confirmed + 1 refuted)
 
-| # | Finding (short) | Task(s) |
-|---|---|---|
-| 1 | SDK unpublished / no release pipeline | P0.1–P0.5 |
-| 2 | No transaction runtime | P1.1 |
-| 3 | No discovery/query layer | P1.2 |
-| 4 | No event layer (DX) | P1.3 |
-| 5 | No test-mode/sandbox (DX) | P2.1–P2.4 |
-| 6 | No browser/wallet signing story | P4.1 (+P4.2 hooks package) |
-| 7 | No domain-value helpers | P1.4 |
-| 8 | Event codecs + subscriptions (discovery) | P1.3 |
-| 9 | Listing metadata standard | P1.5 |
-| 10 | Typed gPA query builders | P1.2 |
-| 11 | Dogfooded liquidity | P10.1–P10.2 |
-| 12 | SEO/syndicable listing surface | P10.3 |
-| 13 | Ratings dead weight → rate_hire | P6.1 |
-| 14 | No verifiable track record | P6.6, P3.1 |
-| 15 | Reputation freely resettable | P6.7 |
-| 16 | Single central moderation attestor | P6.8, P3.4 |
-| 17 | Unaccountable dispute rulings | P6.4 |
-| 18 | No identity/verification layer | P7.3 |
-| 19 | Hosted REST API + indexer + tx-builder endpoint | P3.1–P3.2 (extend existing explorer — see refuted note) |
-| 20 | Outbound webhooks + events | P3.3, P1.3 |
-| 21 | Embeddable UI layer | P4.2–P4.3, P4.5 (templates — detail in PLAN_2.md) |
-| 22 | Public MCP + framework adapters | P5.1–P5.2 |
-| 23 | Non-crypto buyer onboarding | P4.4 |
-| 24 | Release engineering | P0.3–P0.5 |
-| 25 | No test-mode (ops) | P2.2–P2.4 |
-| 26 | No surface/versioning contract | P6.5, P8.5 |
-| 27 | No security trust artifacts | P8.1–P8.4 |
-| 28 | No integrator-facing hosted platform | P3.2, P3.4, P3.5 |
-| 29 | No demand-side referral fee | P6.2 |
-| 30 | All-or-nothing escrow | P7.4 |
-| 31 | No buyer↔worker comms rail | P7.1 |
-| 32 | No fair-exchange handoff | P7.2 |
-| 33 | No recurring engagements | P7.5 |
-| R | (Refuted) read API "missing" — it exists | P3 reuses `marketplace.agenc.tech/api/explorer` instead of rebuilding |
+| #   | Finding (short)                                 | Task(s)                                                               |
+| --- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| 1   | SDK unpublished / no release pipeline           | P0.1–P0.5                                                             |
+| 2   | No transaction runtime                          | P1.1                                                                  |
+| 3   | No discovery/query layer                        | P1.2                                                                  |
+| 4   | No event layer (DX)                             | P1.3                                                                  |
+| 5   | No test-mode/sandbox (DX)                       | P2.1–P2.4                                                             |
+| 6   | No browser/wallet signing story                 | P4.1 (+P4.2 hooks package)                                            |
+| 7   | No domain-value helpers                         | P1.4                                                                  |
+| 8   | Event codecs + subscriptions (discovery)        | P1.3                                                                  |
+| 9   | Listing metadata standard                       | P1.5                                                                  |
+| 10  | Typed gPA query builders                        | P1.2                                                                  |
+| 11  | Dogfooded liquidity                             | P10.1–P10.2                                                           |
+| 12  | SEO/syndicable listing surface                  | P10.3                                                                 |
+| 13  | Ratings dead weight → rate_hire                 | P6.1                                                                  |
+| 14  | No verifiable track record                      | P6.6, P3.1                                                            |
+| 15  | Reputation freely resettable                    | P6.7                                                                  |
+| 16  | Single central moderation attestor              | P6.8, P3.4                                                            |
+| 17  | Unaccountable dispute rulings                   | P6.4                                                                  |
+| 18  | No identity/verification layer                  | P7.3                                                                  |
+| 19  | Hosted REST API + indexer + tx-builder endpoint | P3.1–P3.2 (extend existing explorer — see refuted note)               |
+| 20  | Outbound webhooks + events                      | P3.3, P1.3                                                            |
+| 21  | Embeddable UI layer                             | P4.2–P4.3, P4.5 (templates — detail in PLAN_2.md)                     |
+| 22  | Public MCP + framework adapters                 | P5.1–P5.2                                                             |
+| 23  | Non-crypto buyer onboarding                     | P4.4                                                                  |
+| 24  | Release engineering                             | P0.3–P0.5                                                             |
+| 25  | No test-mode (ops)                              | P2.2–P2.4                                                             |
+| 26  | No surface/versioning contract                  | P6.5, P8.5                                                            |
+| 27  | No security trust artifacts                     | P8.1–P8.4                                                             |
+| 28  | No integrator-facing hosted platform            | P3.2, P3.4, P3.5                                                      |
+| 29  | No demand-side referral fee                     | P6.2                                                                  |
+| 30  | All-or-nothing escrow                           | P7.4                                                                  |
+| 31  | No buyer↔worker comms rail                      | P7.1                                                                  |
+| 32  | No fair-exchange handoff                        | P7.2                                                                  |
+| 33  | No recurring engagements                        | P7.5                                                                  |
+| R   | (Refuted) read API "missing" — it exists        | P3 reuses `marketplace.agenc.tech/api/explorer` instead of rebuilding |
 
 Plus standing items not from the audit: retire `vote_dispute` (P6.3), the §11.5 /
 audit / 149-task-migration deploy gates (P9), devnet full-surface deploy (P2.2).

@@ -81,9 +81,7 @@ describe("SANDBOX_FIXTURES", () => {
   it("ships the unseeded devnet shape today", () => {
     expect(SANDBOX_FIXTURES.seeded).toBe(false);
     expect(SANDBOX_FIXTURES.cluster).toBe("devnet");
-    expect(SANDBOX_FIXTURES.programId).toBe(
-      AGENC_COORDINATION_PROGRAM_ADDRESS,
-    );
+    expect(SANDBOX_FIXTURES.programId).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(SANDBOX_FIXTURES.seededAtSlot).toBeNull();
     expect(SANDBOX_FIXTURES.providers).toEqual([]);
     expect(SANDBOX_FIXTURES.listings).toEqual([]);
@@ -111,9 +109,7 @@ describe("SANDBOX_FIXTURES", () => {
       ...SANDBOX_FIXTURES,
       seeded: true,
       seededAtSlot: 123,
-      providers: [
-        { authority: LISTING_PDA, agent: LISTING_PDA, name: "P" },
-      ],
+      providers: [{ authority: LISTING_PDA, agent: LISTING_PDA, name: "P" }],
       listings: [
         {
           address: LISTING_PDA,
@@ -136,8 +132,15 @@ describe("SANDBOX_FIXTURES", () => {
 
 interface FetchCall {
   url: string;
-  init: { method: string; headers: Record<string, string>; body: string };
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    signal?: AbortSignal;
+  };
 }
+
+const VALID_SIGNATURE = getBase58Decoder().decode(new Uint8Array(64));
 
 function fakeFetch(
   response: {
@@ -154,13 +157,16 @@ function fakeFetch(
       v,
     ]),
   );
-  const body = response.body ?? JSON.stringify({ signature: "sig" });
+  const body = response.body ?? JSON.stringify({ signature: VALID_SIGNATURE });
   const fetch: SandboxFetchLike = async (url, init) => {
     calls.push({ url, init });
     return {
       ok: status >= 200 && status < 300,
       status,
-      headers: { get: (name: string) => headers.get(name.toLowerCase()) ?? null },
+      headers: {
+        get: (name: string) => headers.get(name.toLowerCase()) ?? null,
+      },
+      body: new Response(body).body,
       json: async () => JSON.parse(body) as unknown,
       text: async () => body,
     };
@@ -197,7 +203,7 @@ describe("requestSandboxAttestation", () => {
   it("POSTs {kind, address, specHash-hex} to the seam-resolved endpoint and returns the signature", async () => {
     vi.stubEnv("AGENC_SANDBOX_ATTESTOR_URL", "http://127.0.0.1:4174/attest");
     const { fetch, calls } = fakeFetch({
-      body: JSON.stringify({ signature: "devnet-sig" }),
+      body: JSON.stringify({ signature: VALID_SIGNATURE }),
     });
     const result = await requestSandboxAttestation({
       kind: "listing",
@@ -205,7 +211,7 @@ describe("requestSandboxAttestation", () => {
       specHash: SPEC_HASH_BYTES,
       fetch,
     });
-    expect(result).toEqual({ signature: "devnet-sig" });
+    expect(result).toEqual({ signature: VALID_SIGNATURE });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("http://127.0.0.1:4174/attest");
     expect(calls[0]!.init.method).toBe("POST");
@@ -360,6 +366,82 @@ describe("requestSandboxAttestation", () => {
     expect(failure.status).toBe(200);
     expect(failure.message).toContain('"signature"');
   });
+
+  it("rejects malformed endpoints before fetching", async () => {
+    const { fetch, calls } = fakeFetch();
+    for (const endpoint of [
+      "javascript:alert(1)",
+      "https://user:pass@attestor.example/attest",
+      "https://attestor.example/attest#fragment",
+    ]) {
+      await expect(
+        requestSandboxAttestation({
+          kind: "task",
+          address: LISTING_PDA,
+          specHash: SPEC_HASH_BYTES,
+          endpoint,
+          fetch,
+        }),
+      ).rejects.toThrow(/endpoint/i);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("times out an injected fetch that ignores abort and supplies a signal", async () => {
+    let signal: AbortSignal | undefined;
+    const fetch: SandboxFetchLike = async (_url, init) => {
+      signal = init.signal;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return new Response(JSON.stringify({ signature: VALID_SIGNATURE }));
+    };
+    const failure = await requestSandboxAttestation({
+      kind: "task",
+      address: LISTING_PDA,
+      specHash: SPEC_HASH_BYTES,
+      endpoint: "https://attestor.example/attest",
+      fetch,
+      timeoutMs: 5,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(SandboxAttestationError);
+    expect(failure).toMatchObject({ status: 0 });
+    expect((failure as Error).message).toMatch(/timed out.*5ms/i);
+    expect(signal).toBeDefined();
+    expect(signal!.aborted).toBe(true);
+  });
+
+  it("rejects oversized streamed bodies and malformed base58 signatures", async () => {
+    const oversized = fakeFetch({
+      body: JSON.stringify({ signature: "x".repeat(500) }),
+    });
+    await expect(
+      requestSandboxAttestation({
+        kind: "task",
+        address: LISTING_PDA,
+        specHash: SPEC_HASH_BYTES,
+        endpoint: "https://attestor.example/attest",
+        fetch: oversized.fetch,
+        maxResponseBytes: 64,
+      }),
+    ).rejects.toThrow(/exceeds.*64 bytes/i);
+
+    for (const signature of [
+      "devnet-sig",
+      "1",
+      "0OIl",
+      VALID_SIGNATURE + "1",
+    ]) {
+      const malformed = fakeFetch({ body: JSON.stringify({ signature }) });
+      await expect(
+        requestSandboxAttestation({
+          kind: "task",
+          address: LISTING_PDA,
+          specHash: SPEC_HASH_BYTES,
+          endpoint: "https://attestor.example/attest",
+          fetch: malformed.fetch,
+        }),
+      ).rejects.toThrow(/signature/i);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -389,7 +471,9 @@ interface FakeSandboxRpc {
  * client transport pipeline). Balance becomes the airdropped amount only
  * after requestAirdrop is called, so the bounded confirm-wait is exercised.
  */
-function fakeSandboxRpc(options: { neverFund?: boolean; failAirdrop?: boolean } = {}): FakeSandboxRpc {
+function fakeSandboxRpc(
+  options: { neverFund?: boolean; failAirdrop?: boolean } = {},
+): FakeSandboxRpc {
   const airdrops: { recipient: string; lamports: bigint }[] = [];
   let balance = 0n;
   let balanceReads = 0;
@@ -609,7 +693,11 @@ describe("createSandboxClient devnet guard", () => {
     ]) {
       const fake = fakeSandboxRpc();
       await expect(
-        createSandboxClient({ rpc: fake.rpc, rpcUrl, airdropPollIntervalMs: 1 }),
+        createSandboxClient({
+          rpc: fake.rpc,
+          rpcUrl,
+          airdropPollIntervalMs: 1,
+        }),
       ).resolves.toBeDefined();
       expect(fake.airdrops).toHaveLength(1);
     }
@@ -656,7 +744,9 @@ describe("seed-devnet-sandbox script", () => {
     expect(args.errors).toContain("unknown argument: --bogus");
     expect(args.errors).toContain("--keypair is required");
     expect(
-      args.errors.some((e) => e.includes("--attestor-url / --moderator-keypair")),
+      args.errors.some((e) =>
+        e.includes("--attestor-url / --moderator-keypair"),
+      ),
     ).toBe(true);
     // --help always wins: no errors required to print usage
     expect(parseSeedArgs(["--help"]).help).toBe(true);
@@ -717,9 +807,7 @@ describe("seed-devnet-sandbox script", () => {
     });
     // the shape matches what SANDBOX_FIXTURES expects
     const keys = Object.keys(file).sort();
-    expect(keys).toEqual(
-      Object.keys(SANDBOX_FIXTURES).sort(),
-    );
+    expect(keys).toEqual(Object.keys(SANDBOX_FIXTURES).sort());
   });
 
   it("usage() and `node scripts/seed-devnet-sandbox.mjs --help` work without a dist build", async () => {
@@ -870,7 +958,9 @@ describe("resolveSandboxEnvironment", () => {
     expect(env.cluster).toBe("localnet");
     expect(env.rpcUrl).toBe(SANDBOX_LOCALNET_RPC_URL);
     // PubSub is RPC port + 1 — NOT same-port derivable, hence its own default.
-    expect(env.rpcSubscriptionsUrl).toBe(SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL);
+    expect(env.rpcSubscriptionsUrl).toBe(
+      SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL,
+    );
     expect(env.rpcSubscriptionsUrl).toContain("8900");
   });
 
@@ -1109,9 +1199,9 @@ describe("seed-devnet-sandbox --env-file seam", () => {
 
   it("parseSeedArgs leaves --rpc null so the env file can supply it", () => {
     expect(parseSeedArgs(["--env-file", "x.json"]).rpc).toBeNull();
-    expect(parseSeedArgs(["--env-file", "x.json", "--rpc", "http://h:1"]).rpc).toBe(
-      "http://h:1",
-    );
+    expect(
+      parseSeedArgs(["--env-file", "x.json", "--rpc", "http://h:1"]).rpc,
+    ).toBe("http://h:1");
   });
 
   it("parseEnvFile round-trips the documented convention shape", () => {
@@ -1125,7 +1215,9 @@ describe("seed-devnet-sandbox --env-file seam", () => {
   });
 
   it("parseEnvFile fails loudly on bad JSON / bad cluster / non-path keypairs", () => {
-    expect(() => parseEnvFile("nope {", "/x/env.json")).toThrow("not valid JSON");
+    expect(() => parseEnvFile("nope {", "/x/env.json")).toThrow(
+      "not valid JSON",
+    );
     expect(() =>
       parseEnvFile(
         JSON.stringify({ ...LOCALNET_ENV_FILE, cluster: "testnet" }),
@@ -1142,12 +1234,18 @@ describe("seed-devnet-sandbox --env-file seam", () => {
       ),
     ).toThrow("PATHS only, never key material");
     expect(() =>
-      parseEnvFile(JSON.stringify({ ...LOCALNET_ENV_FILE, rpcUrl: "" }), "/x/env.json"),
+      parseEnvFile(
+        JSON.stringify({ ...LOCALNET_ENV_FILE, rpcUrl: "" }),
+        "/x/env.json",
+      ),
     ).toThrow("rpcUrl");
   });
 
   it("mergeEnvFileConfig: CLI flags beat env-file values beat defaults", () => {
-    const envFile = parseEnvFile(JSON.stringify(LOCALNET_ENV_FILE), "/x/env.json");
+    const envFile = parseEnvFile(
+      JSON.stringify(LOCALNET_ENV_FILE),
+      "/x/env.json",
+    );
     // env-file values fill the gaps...
     const fromFile = mergeEnvFileConfig({
       args: parseSeedArgs(["--env-file", "/x/env.json"]),
@@ -1180,7 +1278,12 @@ describe("seed-devnet-sandbox --env-file seam", () => {
     expect(overridden.attestorUrl).toBe("http://127.0.0.1:7779/attest");
     // ...and with no env file the legacy defaults hold.
     const legacy = mergeEnvFileConfig({
-      args: parseSeedArgs(["--keypair", "/k.json", "--attestor-url", "http://a"]),
+      args: parseSeedArgs([
+        "--keypair",
+        "/k.json",
+        "--attestor-url",
+        "http://a",
+      ]),
       envFile: null,
     });
     expect(legacy.cluster).toBe("devnet");

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Buffer } from "node:buffer";
 import {
   address,
@@ -10,7 +10,9 @@ import {
   createRpcProgramAccountsTransport,
   fetchTaskGuarantee,
   isTaskJobSpecPinned,
+  isTaskStateDirectlyClaimable,
   listActiveListings,
+  listDirectClaimableTasks,
   listOpenTasks,
   listPinnedJobSpecTasks,
   listingsByProvider,
@@ -44,6 +46,7 @@ import {
   getServiceListingEncoder,
   getTaskBidEncoder,
   getTaskClaimEncoder,
+  getTaskDecoder,
   getTaskEncoder,
   getTaskJobSpecEncoder,
   type CompletionBondArgs,
@@ -105,7 +108,9 @@ function listingFixtureArgs(
   };
 }
 
-function encodeListing(overrides: Partial<ServiceListingArgs> = {}): Uint8Array {
+function encodeListing(
+  overrides: Partial<ServiceListingArgs> = {},
+): Uint8Array {
   return new Uint8Array(
     getServiceListingEncoder().encode(listingFixtureArgs(overrides)),
   );
@@ -173,6 +178,7 @@ function encodeTaskJobSpec(
     task: Address;
     creator: Address;
     jobSpecHash: Uint8Array;
+    jobSpecUri: string;
   }> = {},
 ): Uint8Array {
   return new Uint8Array(
@@ -180,7 +186,7 @@ function encodeTaskJobSpec(
       task: overrides.task ?? addrFromByte(0x91),
       creator: overrides.creator ?? addrFromByte(0x92),
       jobSpecHash: overrides.jobSpecHash ?? bytes32(0x93),
-      jobSpecUri: "agenc://job-spec/x",
+      jobSpecUri: overrides.jobSpecUri ?? "agenc://job-spec/x",
       createdAt: 0n,
       updatedAt: 0n,
       bump: 247,
@@ -285,7 +291,9 @@ describe("queries offsets are drift-proofed against the generated encoders", () 
         acceptedNoShowSlashBps: 0,
       }),
     );
-    expect(decodeAddressAt(data, TASK_BID_TASK_OFFSET)).toBe(addrFromByte(0xe1));
+    expect(decodeAddressAt(data, TASK_BID_TASK_OFFSET)).toBe(
+      addrFromByte(0xe1),
+    );
   });
 
   it("HireRecord: task offset hits its sentinel", () => {
@@ -406,7 +414,11 @@ describe("fetchTaskGuarantee (WP-H3 Guaranteed Hire read)", () => {
 
   it("no live bonds (never posted, or settled+closed) → guaranteed:false, both null", async () => {
     const g = await fetchTaskGuarantee(staticTransport([]), task);
-    expect(g).toEqual({ guaranteed: false, workerBond: null, creatorBond: null });
+    expect(g).toEqual({
+      guaranteed: false,
+      workerBond: null,
+      creatorBond: null,
+    });
   });
 });
 
@@ -416,11 +428,17 @@ describe("fetchTaskGuarantee (WP-H3 Guaranteed Hire read)", () => {
 // the watch/worker layer never builds a doomed claim against an unpinned task.
 // ---------------------------------------------------------------------------
 describe("listPinnedJobSpecTasks / isTaskJobSpecPinned", () => {
-  it("listPinnedJobSpecTasks returns only tasks with a NON-ZERO job-spec hash", async () => {
+  it("listPinnedJobSpecTasks requires a non-zero hash and nonblank URI", async () => {
     const pinnedTask = addrFromByte(0x41);
     const zeroHashTask = addrFromByte(0x42);
+    const blankUriTask = addrFromByte(0x43);
+    const rustWhitespaceTask = addrFromByte(0x44);
+    const byteOrderMarkTask = addrFromByte(0x45);
     const jobSpecPinned = addrFromByte(0x51);
     const jobSpecZero = addrFromByte(0x52);
+    const jobSpecBlank = addrFromByte(0x53);
+    const jobSpecRustWhitespace = addrFromByte(0x54);
+    const jobSpecByteOrderMark = addrFromByte(0x55);
     const transport = staticTransport([
       {
         address: jobSpecPinned,
@@ -436,14 +454,43 @@ describe("listPinnedJobSpecTasks / isTaskJobSpecPinned", () => {
           jobSpecHash: new Uint8Array(32), // all-zero: validate_job_spec_pointer rejects
         }),
       },
+      {
+        address: jobSpecBlank,
+        data: encodeTaskJobSpec({
+          task: blankUriTask,
+          jobSpecHash: bytes32(0xcc),
+          jobSpecUri: " \t\n ",
+        }),
+      },
+      {
+        address: jobSpecRustWhitespace,
+        data: encodeTaskJobSpec({
+          task: rustWhitespaceTask,
+          jobSpecHash: bytes32(0xdd),
+          jobSpecUri: "\u0085",
+        }),
+      },
+      {
+        address: jobSpecByteOrderMark,
+        data: encodeTaskJobSpec({
+          task: byteOrderMarkTask,
+          jobSpecHash: bytes32(0xee),
+          jobSpecUri: "\ufeff",
+        }),
+      },
     ]);
     const pinned = await listPinnedJobSpecTasks(transport);
     expect(pinned.has(pinnedTask)).toBe(true);
     expect(pinned.has(zeroHashTask)).toBe(false);
-    expect(pinned.size).toBe(1);
+    expect(pinned.has(blankUriTask)).toBe(false);
+    // Rust `str::trim()` treats U+0085 as whitespace but not U+FEFF. JS trim
+    // does the opposite, so these guard exact on-chain/SDK parity.
+    expect(pinned.has(rustWhitespaceTask)).toBe(false);
+    expect(pinned.has(byteOrderMarkTask)).toBe(true);
+    expect(pinned.size).toBe(2);
   });
 
-  it("isTaskJobSpecPinned: true for a non-zero-hash pointer, false when absent or zero", async () => {
+  it("isTaskJobSpecPinned rejects absent, zero-hash, and blank-URI pointers", async () => {
     const task = addrFromByte(0x61);
     const jobSpec = addrFromByte(0x71);
     // memcmp on TASK_JOB_SPEC_TASK_OFFSET must go out so the transport can scope.
@@ -477,6 +524,44 @@ describe("listPinnedJobSpecTasks / isTaskJobSpecPinned", () => {
       },
     ]);
     expect(await isTaskJobSpecPinned(zeroTransport, task)).toBe(false);
+
+    const blankUriTransport = staticTransport([
+      {
+        address: jobSpec,
+        data: encodeTaskJobSpec({
+          task,
+          jobSpecHash: bytes32(0xbb),
+          jobSpecUri: "   ",
+        }),
+      },
+    ]);
+    expect(await isTaskJobSpecPinned(blankUriTransport, task)).toBe(false);
+
+    const rustWhitespaceTransport = staticTransport([
+      {
+        address: jobSpec,
+        data: encodeTaskJobSpec({
+          task,
+          jobSpecHash: bytes32(0xbb),
+          jobSpecUri: "\u0085",
+        }),
+      },
+    ]);
+    expect(await isTaskJobSpecPinned(rustWhitespaceTransport, task)).toBe(
+      false,
+    );
+
+    const byteOrderMarkTransport = staticTransport([
+      {
+        address: jobSpec,
+        data: encodeTaskJobSpec({
+          task,
+          jobSpecHash: bytes32(0xbb),
+          jobSpecUri: "\ufeff",
+        }),
+      },
+    ]);
+    expect(await isTaskJobSpecPinned(byteOrderMarkTransport, task)).toBe(true);
   });
 });
 
@@ -636,6 +721,28 @@ function staticTransport(
   };
 }
 
+function filteringTransport(
+  rows: Array<{ address: Address; data: Uint8Array }>,
+  captured?: Array<readonly GpaFilter[]>,
+): ProgramAccountsTransport {
+  return {
+    async getProgramAccounts({ filters }) {
+      captured?.push(filters);
+      return rows.filter(({ data }) =>
+        filters.every((filter) => {
+          if ("dataSize" in filter) return data.length === filter.dataSize;
+          const { offset, bytes } = filter.memcmp;
+          if (offset + bytes.length > data.length) return false;
+          for (let index = 0; index < bytes.length; index += 1) {
+            if (data[offset + index] !== bytes[index]) return false;
+          }
+          return true;
+        }),
+      );
+    },
+  };
+}
+
 describe("client-side refinements", () => {
   it("listActiveListings keeps only the requested state (default Active)", async () => {
     const active = addrFromByte(0x71);
@@ -738,5 +845,282 @@ describe("client-side refinements", () => {
     expect(captured[0][1]).toEqual({
       memcmp: { offset: TASK_STATUS_OFFSET, bytes: Uint8Array.of(0) },
     });
+  });
+
+  it("mirrors the direct-claim status, mode, capacity, type, and deadline gates", () => {
+    const manual = new TextEncoder().encode("agenc-manual-validation-v2-seed!");
+    const decode = (overrides: Partial<TaskArgs>) =>
+      getTaskDecoder().decode(encodeTask(overrides));
+    const now = 1_000n;
+    const cases: Array<{
+      name: string;
+      overrides: Partial<TaskArgs>;
+      expected: boolean;
+    }> = [
+      {
+        name: "open slot",
+        overrides: { status: TaskStatus.Open },
+        expected: true,
+      },
+      {
+        name: "in-progress collaborative slot",
+        overrides: {
+          status: TaskStatus.InProgress,
+          taskType: TaskType.Collaborative,
+          maxWorkers: 2,
+          currentWorkers: 1,
+        },
+        expected: true,
+      },
+      {
+        name: "manual collaborative review slot",
+        overrides: {
+          status: TaskStatus.PendingValidation,
+          taskType: TaskType.Collaborative,
+          constraintHash: manual,
+          maxWorkers: 2,
+          currentWorkers: 1,
+        },
+        expected: true,
+      },
+      {
+        name: "schema-1 manual contest review slot",
+        overrides: {
+          status: TaskStatus.PendingValidation,
+          taskType: TaskType.Competitive,
+          constraintHash: manual,
+          reserved: Uint8Array.of(
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+          ),
+          maxWorkers: 4,
+          currentWorkers: 1,
+        },
+        expected: true,
+      },
+      {
+        name: "auto-validation pending collaborative",
+        overrides: {
+          status: TaskStatus.PendingValidation,
+          taskType: TaskType.Collaborative,
+          constraintHash: new Uint8Array(32),
+          maxWorkers: 2,
+          currentWorkers: 1,
+        },
+        expected: false,
+      },
+      {
+        name: "legacy competitive pending review",
+        overrides: {
+          status: TaskStatus.PendingValidation,
+          taskType: TaskType.Competitive,
+          constraintHash: manual,
+          maxWorkers: 2,
+          currentWorkers: 1,
+        },
+        expected: false,
+      },
+      {
+        name: "full advertised capacity",
+        overrides: {
+          status: TaskStatus.InProgress,
+          taskType: TaskType.Collaborative,
+          maxWorkers: 2,
+          currentWorkers: 2,
+        },
+        expected: false,
+      },
+      {
+        name: "full dispute-safe capacity",
+        overrides: {
+          status: TaskStatus.InProgress,
+          taskType: TaskType.Collaborative,
+          maxWorkers: 10,
+          currentWorkers: 4,
+        },
+        expected: false,
+      },
+      {
+        name: "bid exclusive",
+        overrides: { status: TaskStatus.Open, taskType: TaskType.BidExclusive },
+        expected: false,
+      },
+      {
+        name: "deadline equal to chain time",
+        overrides: { status: TaskStatus.Open, deadline: now },
+        expected: false,
+      },
+      {
+        name: "deadline still ahead",
+        overrides: { status: TaskStatus.Open, deadline: now + 1n },
+        expected: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      expect(
+        isTaskStateDirectlyClaimable(decode(testCase.overrides), now),
+        testCase.name,
+      ).toBe(testCase.expected);
+    }
+  });
+
+  it("queries all three direct-claim statuses and applies conservative deadline skew", async () => {
+    const captured: Array<readonly GpaFilter[]> = [];
+    const nearDeadline = addrFromByte(0x83);
+    const safelyAhead = addrFromByte(0x84);
+    const rows = await listDirectClaimableTasks(
+      filteringTransport(
+        [
+          {
+            address: nearDeadline,
+            data: encodeTask({
+              status: TaskStatus.Open,
+              deadline: 1_020n,
+            }),
+          },
+          {
+            address: safelyAhead,
+            data: encodeTask({
+              status: TaskStatus.Open,
+              deadline: 1_031n,
+            }),
+          },
+        ],
+        captured,
+      ),
+      {
+        nowUnixTimestamp: 1_000n,
+        deadlineSafetySeconds: 30n,
+      },
+    );
+    expect(rows.map(({ address }) => address)).toEqual([safelyAhead]);
+    expect(captured).toHaveLength(3);
+    expect(
+      captured.map((filters) =>
+        "memcmp" in filters[1]! ? filters[1]!.memcmp.bytes[0] : -1,
+      ),
+    ).toEqual([
+      TaskStatus.Open,
+      TaskStatus.InProgress,
+      TaskStatus.PendingValidation,
+    ]);
+    await expect(
+      listDirectClaimableTasks(filteringTransport([]), {
+        deadlineSafetySeconds: -1n,
+      }),
+    ).rejects.toThrow(/non-negative/);
+  });
+
+  it("serializes status reads and de-duplicates an Open to InProgress transition by PDA", async () => {
+    const taskAddress = addrFromByte(0x85);
+    let active = 0;
+    let maxActive = 0;
+    let calls = 0;
+    const transport: ProgramAccountsTransport = {
+      async getProgramAccounts({ filters }) {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        calls += 1;
+        await Promise.resolve();
+        const status = filters.find(
+          (filter) =>
+            "memcmp" in filter && filter.memcmp.offset === TASK_STATUS_OFFSET,
+        );
+        const statusByte =
+          status !== undefined && "memcmp" in status
+            ? status.memcmp.bytes[0]
+            : undefined;
+        const rows =
+          statusByte === TaskStatus.Open
+            ? [
+                {
+                  address: taskAddress,
+                  data: encodeTask({
+                    status: TaskStatus.Open,
+                    taskType: TaskType.Collaborative,
+                    maxWorkers: 2,
+                  }),
+                },
+              ]
+            : statusByte === TaskStatus.InProgress
+              ? [
+                  {
+                    address: taskAddress,
+                    data: encodeTask({
+                      status: TaskStatus.InProgress,
+                      taskType: TaskType.Collaborative,
+                      maxWorkers: 2,
+                      currentWorkers: 1,
+                    }),
+                  },
+                ]
+              : [];
+        active -= 1;
+        return rows;
+      },
+    };
+
+    const rows = await listDirectClaimableTasks(transport, {
+      nowUnixTimestamp: 0n,
+      deadlineSafetySeconds: 0n,
+    });
+    expect(calls).toBe(3);
+    expect(maxActive).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.address).toBe(taskAddress);
+    expect(rows[0]!.account.status).toBe(TaskStatus.InProgress);
+  });
+
+  it("samples default wall time after slow status reads", async () => {
+    const taskAddress = addrFromByte(0x86);
+    let nowMs = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    let calls = 0;
+    const transport: ProgramAccountsTransport = {
+      async getProgramAccounts({ filters }) {
+        calls += 1;
+        if (calls === 3) nowMs = 1_100_000;
+        const status = filters.find(
+          (filter) =>
+            "memcmp" in filter && filter.memcmp.offset === TASK_STATUS_OFFSET,
+        );
+        return status !== undefined &&
+          "memcmp" in status &&
+          status.memcmp.bytes[0] === TaskStatus.Open
+          ? [
+              {
+                address: taskAddress,
+                data: encodeTask({
+                  status: TaskStatus.Open,
+                  deadline: 1_050n,
+                }),
+              },
+            ]
+          : [];
+      },
+    };
+
+    try {
+      // Capturing 1000 before the reads (+30 safety) would include deadline
+      // 1050. Sampling 1100 after the reads correctly excludes it.
+      await expect(listDirectClaimableTasks(transport)).resolves.toEqual([]);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

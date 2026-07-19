@@ -7,6 +7,23 @@ function localPath(path: string): string {
 }
 
 export default defineConfig({
+  build: {
+    rollupOptions: {
+      onwarn(warning, warn) {
+        const normalized = warning.id?.replaceAll("\\", "/") ?? "";
+        if (
+          warning.code === "MODULE_LEVEL_DIRECTIVE" &&
+          warning.message.includes('"use client"') &&
+          normalized.includes("/node_modules/@tanstack/react-query/")
+        ) {
+          // This is a client-only SPA; the exact code/path guard leaves every
+          // unrelated Rollup warning visible.
+          return;
+        }
+        warn(warning);
+      },
+    },
+  },
   resolve: {
     alias: hasLocalPackageSource()
       ? [
@@ -16,15 +33,21 @@ export default defineConfig({
           },
           {
             find: /^react\/jsx-runtime$/,
-            replacement: localPath("../../../../node_modules/react/jsx-runtime.js"),
+            replacement: localPath(
+              "../../../../node_modules/react/jsx-runtime.js",
+            ),
           },
           {
             find: /^react-dom$/,
-            replacement: localPath("../../../../node_modules/react-dom/index.js"),
+            replacement: localPath(
+              "../../../../node_modules/react-dom/index.js",
+            ),
           },
           {
             find: /^react-dom\/client$/,
-            replacement: localPath("../../../../node_modules/react-dom/client.js"),
+            replacement: localPath(
+              "../../../../node_modules/react-dom/client.js",
+            ),
           },
           {
             find: "@tetsuo-ai/marketplace-react/theme.css",

@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact public webhook HMAC regression vector introduced in commit 5942b669108b3209824e90f6f7a1b4598f345bf6"
+regexTarget = "match"
+regexes = [
+  '''^SECRET\s*=\s*"whsec_3q9QGiHxBcDdXxJZBkPMV7Fy"$'''
+]

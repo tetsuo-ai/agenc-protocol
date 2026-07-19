@@ -57,8 +57,9 @@ solana program show HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK \
 
 > The **upgrade authority** (this document) is distinct from the **protocol /
 > config authority** stored inside `ProtocolConfig` (the on-chain multisig that
-> pauses via `update_launch_controls`, updates fees, and manages the
-> dispute-resolver roster). This runbook only moves the **program upgrade
+> pauses via `update_launch_controls`, updates fees, and threshold-approves
+> authority-proposed dispute-resolver roster changes and direct authority
+> rulings). This runbook only moves the **program upgrade
 > authority**. Migrating the protocol/config multisig is a separate, on-chain
 > `update_multisig` operation and is out of scope here.
 
@@ -204,25 +205,25 @@ ProgramData allocation:
 
 - live ProgramData: 2,183,269 account-data bytes = 45 bytes of loader metadata
   + 2,183,224 bytes of executable capacity;
-- candidate SBF: 2,277,664 bytes;
-- required extension: at least 94,440 bytes (94,440 is the exact minimum);
+- candidate SBF: 2,280,376 bytes;
+- required extension: at least 97,152 bytes (97,152 is the exact minimum);
 - loader ceiling: 10,485,760 account-data bytes = 10,485,715 executable bytes.
 
 Mainnet has the SIMD-0431 minimum-extension rule active. An ordinary checked
 extension must add at least 10,240 bytes; only an extension within 10,240 bytes
 of the loader ceiling may be smaller, and then it must consume all remaining
-headroom. The candidate's 94,440-byte exact-minimum extension satisfies that
+headroom. The candidate's 97,152-byte exact-minimum extension satisfies that
 rule directly.
 
 Current read-only rent evidence, to be re-queried at the ceremony:
 
 - live ProgramData balance/rent floor: 15,196,443,120 lamports;
-- exact candidate-capacity ProgramData floor: 15,853,745,520 lamports;
-- extension top-up: 657,302,400 lamports (0.6573024 SOL);
-- Agave CLI 3.0.13 Buffer allocation: 2,277,701 bytes (37-byte Buffer header),
-  rent floor 15,853,689,840 lamports;
-- Agave CLI 3.0.13 Buffer funding basis: 2,277,709 bytes (the 45-byte
-  ProgramData basis), 15,853,745,520 lamports, or 55,680 lamports above the
+- exact candidate-capacity ProgramData floor: 15,872,621,040 lamports;
+- extension top-up: 676,177,920 lamports (0.67617792 SOL);
+- Agave CLI 3.0.13 Buffer allocation: 2,280,413 bytes (37-byte Buffer header),
+  rent floor 15,872,565,360 lamports;
+- Agave CLI 3.0.13 Buffer funding basis: 2,280,421 bytes (the 45-byte
+  ProgramData basis), 15,872,621,040 lamports, or 55,680 lamports above the
   Buffer allocation floor.
 
 Required choreography:
@@ -232,7 +233,7 @@ Required choreography:
    and the independently approved SBF/IDL hashes. The rail accepts only Solana
    CLI 3.0.13 for these reviewed loader semantics.
 2. In a separately reviewed Squads transaction, invoke loader
-   `ExtendProgramChecked` through Squads CPI for at least 94,440 bytes and fund
+   `ExtendProgramChecked` through Squads CPI for at least 97,152 bytes and fund
    the required rent top-up. The Squads vault PDA must sign through the Squads
    program; it cannot be provided to `solana program deploy` as a keypair.
 3. Confirm the extension on-chain and wait for a later slot. Extension writes

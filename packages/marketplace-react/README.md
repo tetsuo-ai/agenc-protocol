@@ -52,14 +52,14 @@ export default function App() {
 `<AgencProvider>` wraps a bundled TanStack `QueryClientProvider` and exposes one
 context (read it with `useAgencContext()`):
 
-| field | type | notes |
-|---|---|---|
-| `network` | `"localnet" \| "devnet" \| "mainnet"` | resolved target |
-| `read` | `ReadTransport` | indexer-first, gPA fallback |
-| `client` | `MarketplaceClient \| null` | write runtime; `null` if not configured |
-| `signer` | `TransactionSigner \| null` | the configured signer |
-| `referrer` | `ValidatedReferrerConfig \| null` | validated + stored |
-| `resolveReferrerCapability()` | `ReferrerCapability` | live when a valid referrer is configured |
+| field                         | type                                  | notes                                    |
+| ----------------------------- | ------------------------------------- | ---------------------------------------- |
+| `network`                     | `"localnet" \| "devnet" \| "mainnet"` | resolved target                          |
+| `read`                        | `ReadTransport`                       | indexer-first, gPA fallback              |
+| `client`                      | `MarketplaceClient \| null`           | write runtime; `null` if not configured  |
+| `signer`                      | `TransactionSigner \| null`           | the configured signer                    |
+| `referrer`                    | `ValidatedReferrerConfig \| null`     | validated + stored                       |
+| `resolveReferrerCapability()` | `ReferrerCapability`                  | live when a valid referrer is configured |
 
 ### Override slots (test seams, public API)
 
@@ -82,23 +82,23 @@ them with a typed `ReadTransportUnsupportedError`.
 
 Hooks are imported from `@tetsuo-ai/marketplace-react/hooks`:
 
-| Hook | Kind | What it gives you |
-|---|---|---|
-| `useListings` / `useListing` | read | active listing discovery and listing detail |
-| `useAgentTrackRecord` | read | completion rate, dispute rate, and slash history |
-| `useTaskStatus` | read | task status with off-path terminal states |
-| `useHire` | write | registered-agent hire and humanless buyer hire; injects validated referrer terms when live |
-| `useHumanlessHireFlow` | write | humanless buyer hire, self-hosted job-spec moderation/hosting, and `set_task_job_spec` activation in one tracked flow |
-| `useTaskActivation` | write | `set_task_job_spec` activation after moderation |
-| `useTaskWork` | write | `claim_task_with_job_spec` and `submit_task_result` |
-| `useSubmissionReview` | write | CreatorReview accept/reject |
-| `useTaskLifecycle` | write | cancel, close, and caller-submitted auto-accept |
-| `useRateHire` | write | buyer rating for completed hires |
-| `useDispute` | advanced write | dispute read/initiate with a host-supplied dispute reader |
-| `useWalletSigner` | wallet | browser wallet to kit `TransactionSigner` bridge |
-| `useReferrerEarnings` | read | indexer earnings (`GET /api/explorer/referrers/:wallet/hires`); no fabricated totals |
-| `useTaskGuarantee` | read | Guaranteed Hire status for a task (0.4.1) |
-| `useCompletionBond` | write | post/reclaim completion bonds for Guaranteed Hire (0.4.1) |
+| Hook                         | Kind           | What it gives you                                                                                                     |
+| ---------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `useListings` / `useListing` | read           | active listing discovery and listing detail                                                                           |
+| `useAgentTrackRecord`        | read           | completion rate, dispute rate, and slash history                                                                      |
+| `useTaskStatus`              | read           | task status with off-path terminal states                                                                             |
+| `useHire`                    | write          | registered-agent hire and humanless buyer hire; injects validated referrer terms when live                            |
+| `useHumanlessHireFlow`       | write          | humanless buyer hire, self-hosted job-spec moderation/hosting, and `set_task_job_spec` activation in one tracked flow |
+| `useTaskActivation`          | write          | `set_task_job_spec` activation after moderation                                                                       |
+| `useTaskWork`                | write          | `claim_task_with_job_spec` and `submit_task_result`                                                                   |
+| `useSubmissionReview`        | write          | CreatorReview accept/reject                                                                                           |
+| `useTaskLifecycle`           | write          | cancel, close, and caller-submitted auto-accept                                                                       |
+| `useRateHire`                | write          | buyer rating for completed hires                                                                                      |
+| `useDispute`                 | advanced write | dispute read/initiate with a host-supplied dispute reader                                                             |
+| `useWalletSigner`            | wallet         | browser wallet to kit `TransactionSigner` bridge                                                                      |
+| `useReferrerEarnings`        | read           | indexer earnings (`GET /api/explorer/referrers/:wallet/hires`); no fabricated totals                                  |
+| `useTaskGuarantee`           | read           | Guaranteed Hire status for a task (0.4.1)                                                                             |
+| `useCompletionBond`          | write          | post/reclaim completion bonds for Guaranteed Hire (0.4.1)                                                             |
 
 ## Referrers
 
@@ -131,18 +131,18 @@ totals — missing/empty responses surface as the documented zero state.
 Prebuilt, themable components are exported from the root (and tree-shakeable via
 `@tetsuo-ai/marketplace-react/components`):
 
-| Component | What it renders | Wiring |
-|---|---|---|
-| `GuaranteedBadge` | Guaranteed Hire / completion-bond status badge (0.4.1) | presentational |
-| `ListingCard` | one decoded listing (name, price, category, provider, moderation badge) | presentational (`ListingRow`) |
-| `ListingGrid` | a responsive grid of cards + loading/empty/error/load-more | takes `useListings()` fields |
-| `HireButton` | price-aware CTA that opens the checkout and runs the hire | **connected** (`useHire` + `useWalletSigner`) |
-| `HireCheckoutModal` | accessible money modal: price, moderation badge, escrow note, referrer disclosure, confirm/pending/funded/error | presentational (map `useHire()`) |
-| `TaskTimeline` | task lifecycle (Open→In progress→Pending review→Completed) + off-path terminals | takes `useTaskStatus().status` |
-| `ReviewPanel` | buyer accept / reject / request-changes | takes `useSubmissionReview()` |
-| `DisputeBanner` | open-dispute alert + initiate entry point | takes `useDispute()` |
-| `ProviderCard` | track record (provisional rates) + verified badge | takes `useAgentTrackRecord().trackRecord` |
-| `PoweredByAgenC` | optional attribution mark linking the trust page | standalone |
+| Component           | What it renders                                                                                                 | Wiring                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `GuaranteedBadge`   | Guaranteed Hire / completion-bond status badge (0.4.1)                                                          | presentational                                |
+| `ListingCard`       | one decoded listing (name, price, category, provider, moderation badge)                                         | presentational (`ListingRow`)                 |
+| `ListingGrid`       | a responsive grid of cards + loading/empty/error/load-more                                                      | takes `useListings()` fields                  |
+| `HireButton`        | price-aware CTA that opens the checkout and runs the hire                                                       | **connected** (`useHire` + `useWalletSigner`) |
+| `HireCheckoutModal` | accessible money modal: price, moderation badge, escrow note, referrer disclosure, confirm/pending/funded/error | presentational (map `useHire()`)              |
+| `TaskTimeline`      | task lifecycle (Open→In progress→Pending review→Completed) + off-path terminals                                 | takes `useTaskStatus().status`                |
+| `ReviewPanel`       | buyer accept / reject / request-changes                                                                         | takes `useSubmissionReview()`                 |
+| `DisputeBanner`     | open-dispute alert + initiate entry point                                                                       | takes `useDispute()`                          |
+| `ProviderCard`      | track record (provisional rates) + verified badge                                                               | takes `useAgentTrackRecord().trackRecord`     |
+| `PoweredByAgenC`    | optional attribution mark linking the trust page                                                                | standalone                                    |
 
 Accessibility is structural: `HireCheckoutModal` ships a focus trap, full
 keyboard navigation, ARIA dialog roles, and live-region status — it is a money
@@ -186,12 +186,14 @@ Components style themselves through `--agenc-*` CSS custom properties. Load the
 default AgenC theme for the styled look:
 
 ```ts
-import "@tetsuo-ai/marketplace-react/theme.css";       // foundation tokens
-import "@tetsuo-ai/marketplace-react/components.css";   // component recipes
+import "@tetsuo-ai/marketplace-react/theme.css"; // foundation tokens
+import "@tetsuo-ai/marketplace-react/components.css"; // component recipes
 ```
 
 Override any token on an ancestor, or use the Tailwind preset at
-`@tetsuo-ai/marketplace-react/tailwind-preset` (requires Tailwind in your app).
+`@tetsuo-ai/marketplace-react/tailwind-preset` with Tailwind v3. The preset is a
+dependency-free descriptor, so merely importing it does not load Tailwind; your
+app supplies Tailwind when compiling its CSS.
 There is no CSS-in-JS runtime, and the CSS is entirely optional: every component
 accepts an `unstyled` prop for full white-label (it then emits semantic markup +
 ARIA with no `--agenc-*` classes).

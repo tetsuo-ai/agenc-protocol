@@ -18,11 +18,7 @@
 // new layout (or a missing account) as `surface_revision = 0` (= "unstamped /
 // conservative"). On an old-layout account this returns `listings: false`
 // WITHOUT throwing.
-import {
-  fetchEncodedAccount,
-  getU16Decoder,
-  type Address,
-} from "@solana/kit";
+import { fetchEncodedAccount, getU16Decoder, type Address } from "@solana/kit";
 import { findProtocolConfigPda } from "../generated/index.js";
 
 /**
@@ -139,8 +135,11 @@ function fullSurface(surfaceRevision: number): CapabilitySet {
  *
  * @param surfaceRevision - the raw on-chain u16.
  */
-export function capabilitiesForRevision(surfaceRevision: number): CapabilitySet {
-  return surfaceRevision >= SURFACE_REVISION_FULL
+export function capabilitiesForRevision(
+  surfaceRevision: number,
+): CapabilitySet {
+  return surfaceRevision >= SURFACE_REVISION_FULL &&
+    surfaceRevision <= SURFACE_REVISION_CURRENT
     ? fullSurface(surfaceRevision)
     : canarySurface(surfaceRevision);
 }

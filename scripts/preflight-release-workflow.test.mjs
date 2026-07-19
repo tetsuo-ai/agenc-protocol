@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { parse } from "yaml";
+
+import { resolveReleaseTag } from "./release-policy.mjs";
 
 const RELEASE_WORKFLOW = new URL(
   "../.github/workflows/release.yml",
@@ -32,6 +32,15 @@ const TAG_BINDING_SCRIPT = new URL(
   "./verify-release-tag-binding.mjs",
   import.meta.url,
 );
+const RELEASE_POLICY_SCRIPT = new URL("./release-policy.mjs", import.meta.url);
+const RELEASE_STATE_SCRIPT = new URL("./release-state.mjs", import.meta.url);
+const NPM_PROVENANCE_SCRIPT = new URL("./verify-npm-provenance.mjs", import.meta.url);
+const RELEASE_SBOM_SCRIPT = new URL("./release-sbom.mjs", import.meta.url);
+const RUST_SUPPLY_WORKFLOW = new URL(
+  "../.github/workflows/rust-supply-chain.yml",
+  import.meta.url,
+);
+const RELEASE_TRAIN = new URL("../release-train.json", import.meta.url);
 const ANNOTATION_PRESERVING_CHECKOUT =
   "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 
@@ -48,10 +57,11 @@ function externalActionUses(workflow) {
 }
 
 test("protocol publication is fail-closed on the reusable verifiable build", async () => {
-  const [release, verify, idlDrift] = await Promise.all([
+  const [release, verify, idlDrift, rustSupply] = await Promise.all([
     loadWorkflow(RELEASE_WORKFLOW),
     loadWorkflow(VERIFY_WORKFLOW),
     loadWorkflow(IDL_DRIFT_WORKFLOW),
+    loadWorkflow(RUST_SUPPLY_WORKFLOW),
   ]);
 
   assert.ok(Object.hasOwn(verify.on, "workflow_call"));
@@ -63,8 +73,14 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   assert.equal(verifier.permissions.contents, "read");
 
   const releaseJob = release.jobs.release;
-  assert.equal(releaseJob.needs, "protocol_verifiable_build");
+  assert.deepEqual(releaseJob.needs, ["protocol_verifiable_build", "rust_supply_chain"]);
   assert.match(releaseJob.if, /protocol_verifiable_build\.result == 'success'/);
+  assert.match(releaseJob.if, /rust_supply_chain\.result == 'success'/);
+  assert.ok(Object.hasOwn(rustSupply.on, "workflow_call"));
+  assert.equal(
+    release.jobs.rust_supply_chain.uses,
+    "./.github/workflows/rust-supply-chain.yml",
+  );
   assert.equal(releaseJob.permissions.actions, "read");
   assert.equal(releaseJob.permissions.contents, "write");
   assert.equal(releaseJob.permissions["id-token"], "write");
@@ -79,17 +95,39 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   const download = names.indexOf("Download required verifiable-build hashes");
   const draft = names.indexOf("Prepare GitHub Release draft");
   const attach = names.indexOf("Attach required verifiable-build hashes");
-  const npmPublish = names.indexOf("Publish to npm");
+  const sbom = names.indexOf("Generate deterministic SPDX release SBOM");
+  const attachSbom = names.indexOf("Attach required SPDX release SBOM");
+  const cutover = names.indexOf("Require finalized mainnet cutover for stable releases");
+  const inspect = names.indexOf("Inspect resumable release state before mutation");
+  const npmPublish = names.indexOf("Publish reviewed tarball to npm staging tag");
+  const npmVerify = names.indexOf(
+    "Verify npm integrity and provenance before changing public dist-tags",
+  );
+  const npmDistTag = names.indexOf("Advance reviewed npm dist-tag");
   const releasePublish = names.indexOf("Publish GitHub Release");
-  assert.ok(download >= 0 && download < draft);
   assert.ok(
-    draft < attach && attach < npmPublish && npmPublish < releasePublish,
+    download >= 0 &&
+      download < cutover &&
+      cutover < sbom &&
+      sbom < inspect &&
+      inspect < draft,
+  );
+  assert.ok(
+    draft < attach &&
+      attach < attachSbom &&
+      attachSbom < npmPublish &&
+      npmPublish < npmVerify &&
+      npmVerify < npmDistTag &&
+      npmDistTag < releasePublish,
   );
 
   const draftStep = releaseJob.steps[draft];
   assert.match(draftStep.run, /--verify-tag/);
   assert.match(draftStep.run, /--draft/);
   assert.match(releaseJob.steps[attach].run, /verifiable-build-hashes\.txt/);
+  assert.match(releaseJob.steps[attach].if, /missing_assets/);
+  assert.match(releaseJob.steps[attachSbom].if, /missing_assets/);
+  assert.match(releaseJob.steps[attachSbom].run, /gh release upload/);
   assert.match(releaseJob.steps[releasePublish].run, /--draft=false/);
 
   const productionBuild = names.indexOf(
@@ -116,9 +154,9 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
     "production gates must finish before the shared .so is replaced by the canary build",
   );
   assert.equal(releaseJob.steps[canaryCompiled].env.AGENC_CANARY_LITESVM, "1");
-  assert.match(
+  assert.equal(
     releaseJob.steps[canaryCompiled].run,
-    /canary-timeout-accept\.test\.mjs/,
+    "node --test tests-integration/canary-*.test.mjs",
   );
 
   const driftSteps = idlDrift.jobs["idl-drift"].steps;
@@ -153,16 +191,17 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   );
   assert.match(driftSteps[driftIntegrationInstall].run, /^npm ci$/);
   assert.equal(driftSteps[driftCanaryCompiled].env.AGENC_CANARY_LITESVM, "1");
-  assert.match(
+  assert.equal(
     driftSteps[driftCanaryCompiled].run,
-    /canary-timeout-accept\.test\.mjs/,
+    "node --test tests-integration/canary-*.test.mjs",
   );
 });
 
 test("release shell never directly interpolates tag-derived package outputs", async () => {
-  const [release, verify] = await Promise.all([
+  const [release, verify, releasePolicySource] = await Promise.all([
     loadWorkflow(RELEASE_WORKFLOW),
     loadWorkflow(VERIFY_WORKFLOW),
+    readFile(RELEASE_POLICY_SCRIPT, "utf8"),
   ]);
   const scripts = [release, verify]
     .flatMap((workflow) => Object.values(workflow.jobs))
@@ -179,7 +218,7 @@ test("release shell never directly interpolates tag-derived package outputs", as
     scripts,
     /\$\{\{\s*steps\.(?:full_hash|canary_hash)\.outputs\.hash\s*\}\}/,
   );
-  assert.match(scripts, /invalid semantic version/);
+  assert.match(releasePolicySource, /invalid semantic version/);
   assert.match(scripts, /git merge-base --is-ancestor/);
   assert.match(scripts, /invalid production executable hash/);
   assert.match(scripts, /invalid canary executable hash/);
@@ -268,13 +307,13 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
     integrationLock.packages["node_modules/rpc-websockets"].version,
     "9.3.8",
   );
+  assert.equal(integrationLock.packages["node_modules/uuid"].version, "11.1.1");
   assert.equal(
-    integrationLock.packages[
-      "node_modules/rpc-websockets/node_modules/uuid"
-    ].version,
-    "11.1.1",
+    integrationLock.packages[""].dependencies["@solana/spl-token"],
+    undefined,
   );
-  assert.match(integrationAuditSource, /reviewedHighAdvisories/);
+  assert.match(integrationAuditSource, /fail on every advisory severity/);
+  assert.doesNotMatch(integrationAuditSource, /reviewedHighAdvisories/);
   assert.match(integrationAuditSource, /report\.error !== undefined/);
   assert.match(integrationAuditSource, /require\("@solana\/web3\.js"\)/);
   const idlStage = sdkSteps.find(
@@ -308,54 +347,44 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
   }
 });
 
-test("package resolver exports only shell-safe version text", async (t) => {
-  const release = await loadWorkflow(RELEASE_WORKFLOW);
-  const resolver = release.jobs.release.steps.find(
-    (step) => step.name === "Resolve package from tag",
+test("package resolver accepts only canonical semver and covers every release route", async () => {
+  const train = JSON.parse(await readFile(RELEASE_TRAIN, "utf8"));
+  const valid = resolveReleaseTag("sdk-v1.2.3-rc.1", train);
+  assert.deepEqual(
+    { name: valid.name, directory: valid.directory, version: valid.version, distTag: valid.distTag },
+    {
+      name: "@tetsuo-ai/marketplace-sdk",
+      directory: "packages/sdk-ts",
+      version: "1.2.3-rc.1",
+      distTag: "next",
+    },
   );
-  assert.ok(resolver);
-
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "agenc-release-resolve-"));
-  t.after(() => rm(temporaryRoot, { recursive: true, force: true }));
-
-  function resolve(tag, suffix) {
-    const output = join(temporaryRoot, `output-${suffix}`);
-    const result = spawnSync("bash", ["-euo", "pipefail"], {
-      cwd: temporaryRoot,
-      env: {
-        ...process.env,
-        GITHUB_REF_NAME: tag,
-        GITHUB_OUTPUT: output,
-      },
-      input: resolver.run,
-      encoding: "utf8",
-    });
-    return { output, result };
-  }
-
-  const valid = resolve("sdk-v1.2.3-rc.1+build.7", "valid");
-  assert.equal(valid.result.status, 0, valid.result.stderr);
-  assert.equal(
-    await readFile(valid.output, "utf8"),
-    "name=@tetsuo-ai/marketplace-sdk\n" +
-      "dir=packages/sdk-ts\n" +
-      "version=1.2.3-rc.1+build.7\n",
+  assert.throws(
+    () => resolveReleaseTag("sdk-v1.2.3-rc.1+build.7", train),
+    /invalid semantic version/,
   );
-
-  const shellLooking = resolve(
-    "sdk-v1.2.3;touch resolver_PWNED",
-    "shell-looking",
+  assert.throws(
+    () => resolveReleaseTag("sdk-v1.2.3;touch resolver_PWNED", train),
+    /invalid semantic version/,
   );
-  assert.notEqual(shellLooking.result.status, 0);
-  assert.match(shellLooking.result.stderr, /invalid semantic version/);
-  await assert.rejects(access(join(temporaryRoot, "resolver_PWNED")));
-
-  const outputLooking = resolve(
-    "sdk-v1.2.3\nname=attacker-controlled",
-    "output-looking",
+  assert.throws(
+    () => resolveReleaseTag("sdk-v1.2.3\nname=attacker-controlled", train),
+    /invalid semantic version/,
   );
-  assert.notEqual(outputLooking.result.status, 0);
-  assert.match(outputLooking.result.stderr, /invalid semantic version/);
+  assert.deepEqual(
+    new Set(train.packages.map(({ tagPrefix }) => tagPrefix)),
+    new Set([
+      "protocol-v",
+      "sdk-v",
+      "react-v",
+      "tools-v",
+      "mcp-v",
+      "moderation-v",
+      "worker-v",
+      "cli-v",
+      "cli-alias-v",
+    ]),
+  );
 });
 
 test("release and verifier external actions are immutable-SHA pinned", async () => {
@@ -374,6 +403,53 @@ test("release and verifier external actions are immutable-SHA pinned", async () 
   }
 });
 
+test("every release carries a deterministic SPDX SBOM bound to its reviewed tarball", async () => {
+  const [release, sbomSource] = await Promise.all([
+    loadWorkflow(RELEASE_WORKFLOW),
+    readFile(RELEASE_SBOM_SCRIPT, "utf8"),
+  ]);
+  const steps = release.jobs.release.steps;
+  const pack = steps.find((step) => step.name === "Build reviewed npm tarball");
+  const generate = steps.find(
+    (step) => step.name === "Generate deterministic SPDX release SBOM",
+  );
+  const inspect = steps.find(
+    (step) => step.name === "Inspect resumable release state before mutation",
+  );
+  const attach = steps.find(
+    (step) => step.name === "Attach required SPDX release SBOM",
+  );
+  assert.ok(pack && generate && inspect && attach);
+  assert.ok(steps.indexOf(pack) < steps.indexOf(generate));
+  assert.ok(steps.indexOf(generate) < steps.indexOf(inspect));
+  assert.ok(steps.indexOf(inspect) < steps.indexOf(attach));
+  assert.match(generate.run, /release-sbom\.mjs generate/);
+  assert.equal(inspect.env.SBOM_RELEASE_ASSET, "${{ steps.sbom.outputs.name }}");
+  assert.equal(inspect.env.SBOM_RELEASE_ASSET_PATH, "${{ steps.sbom.outputs.path }}");
+  assert.match(sbomSource, /SPDX-2\.3/);
+  assert.match(sbomSource, /npm pack integrity\/shasum/);
+  assert.match(sbomSource, /Source commit/);
+});
+
+test("release rechecks expiring npm license exceptions before publication", async () => {
+  const release = await loadWorkflow(RELEASE_WORKFLOW);
+  const steps = release.jobs.release.steps;
+  const install = steps.find(
+    (step) => step.name === "Install independent npm license evidence",
+  );
+  const policy = steps.find(
+    (step) => step.name === "Enforce release-time npm license policy",
+  );
+  const publish = steps.find(
+    (step) => step.name === "Publish reviewed tarball to npm staging tag",
+  );
+  assert.ok(install && policy && publish);
+  assert.match(install.run, /npm ci --prefix tests-integration --ignore-scripts/);
+  assert.match(policy.run, /check-npm-licenses\.mjs/);
+  assert.ok(steps.indexOf(install) < steps.indexOf(policy));
+  assert.ok(steps.indexOf(policy) < steps.indexOf(publish));
+});
+
 test("every release mutation re-resolves the remote tag to the event commit", async () => {
   const [release, bindingScript] = await Promise.all([
     loadWorkflow(RELEASE_WORKFLOW),
@@ -383,7 +459,9 @@ test("every release mutation re-resolves the remote tag to the event commit", as
   const guardedSteps = [
     "Prepare GitHub Release draft",
     "Attach required verifiable-build hashes",
-    "Publish to npm",
+    "Attach required SPDX release SBOM",
+    "Publish reviewed tarball to npm staging tag",
+    "Advance reviewed npm dist-tag",
     "Publish GitHub Release",
   ];
 
@@ -392,7 +470,7 @@ test("every release mutation re-resolves the remote tag to the event commit", as
     assert.ok(step, `missing release step: ${name}`);
     assert.match(step.run, /verify-release-tag-binding\.mjs/);
     const guard = step.run.indexOf("verify-release-tag-binding.mjs");
-    const firstRemoteOperation = ["gh release", "npm view", "npm publish"]
+    const firstRemoteOperation = ["gh release", "npm publish", "npm dist-tag"]
       .map((command) => step.run.indexOf(command))
       .filter((index) => index >= 0)
       .sort((left, right) => left - right)[0];
@@ -426,19 +504,54 @@ test("every release mutation re-resolves the remote tag to the event commit", as
   );
 });
 
-test("an existing npm version fails closed instead of bypassing provenance", async () => {
-  const release = await loadWorkflow(RELEASE_WORKFLOW);
-  const publish = release.jobs.release.steps.find(
-    (step) => step.name === "Publish to npm",
+test("an existing npm version resumes only after exact integrity and provenance verification", async () => {
+  const [release, stateSource, provenanceSource] = await Promise.all([
+    loadWorkflow(RELEASE_WORKFLOW),
+    readFile(RELEASE_STATE_SCRIPT, "utf8"),
+    readFile(NPM_PROVENANCE_SCRIPT, "utf8"),
+  ]);
+  const steps = release.jobs.release.steps;
+  const inspect = steps.find(
+    (step) => step.name === "Inspect resumable release state before mutation",
   );
-  assert.ok(publish);
-  const lookup = publish.run.indexOf("if npm view");
-  const refusal = publish.run.indexOf("exit 1", lookup);
-  const provenancePublish = publish.run.indexOf(
-    "npm publish --access public --provenance",
+  const publish = steps.find(
+    (step) => step.name === "Publish reviewed tarball to npm staging tag",
   );
-
-  assert.ok(lookup >= 0 && refusal > lookup && provenancePublish > refusal);
-  assert.doesNotMatch(publish.run, /skipping publish/i);
-  assert.match(publish.run, /refusing to endorse an unverified tarball/);
+  const verify = steps.find(
+    (step) =>
+      step.name ===
+      "Verify npm integrity and provenance before changing public dist-tags",
+  );
+  const distTag = steps.find(
+    (step) => step.name === "Advance reviewed npm dist-tag",
+  );
+  const finalize = steps.find(
+    (step) => step.name === "Reinspect every immutable release surface before finalization",
+  );
+  const publishRelease = steps.find((step) => step.name === "Publish GitHub Release");
+  assert.ok(inspect && publish && verify && distTag && finalize && publishRelease);
+  assert.match(inspect.run, /release-state\.mjs inspect/);
+  assert.match(publish.if, /publish_npm == 'true'/);
+  assert.match(publish.run, /--provenance --tag agenc-staging/);
+  assert.match(verify.run, /release-state\.mjs verify-npm/);
+  assert.match(distTag.run, /remove_staging_tag/);
+  assert.match(distTag.run, /npm dist-tag rm "\$\{PACKAGE_NAME\}" agenc-staging/);
+  assert.match(distTag.if, /remove_staging_tag == 'true'/);
+  assert.ok(steps.indexOf(inspect) < steps.indexOf(publish));
+  assert.ok(steps.indexOf(publish) < steps.indexOf(verify));
+  assert.ok(steps.indexOf(verify) < steps.indexOf(distTag));
+  assert.ok(steps.indexOf(distTag) < steps.indexOf(finalize));
+  assert.ok(steps.indexOf(finalize) < steps.indexOf(publishRelease));
+  assert.match(finalize.run, /release-state\.mjs finalize/);
+  assert.ok(finalize.env.EXPECTED_REVIEWED_INTEGRITY);
+  assert.match(stateSource, /published\.dist\?\.integrity === pack\.integrity/);
+  assert.match(stateSource, /verifyNpmProvenance/);
+  assert.match(provenanceSource, /npm.*audit.*signatures/s);
+  assert.match(provenanceSource, /--include-attestations/);
+  assert.match(provenanceSource, /https:\/\/slsa\.dev\/provenance\/v1/);
+  assert.match(provenanceSource, /resolvedDependencies/);
+  assert.match(stateSource, /perAssetState\[required\.name\] =.*"matching" : "mismatch"/s);
+  assert.match(stateSource, /missingAssets = Object\.entries\(perAssetState\)/);
+  assert.match(stateSource, /registryResponse\.status !== 404/);
+  assert.match(stateSource, /refusing to move npm \$\{distTag\} backwards/);
 });

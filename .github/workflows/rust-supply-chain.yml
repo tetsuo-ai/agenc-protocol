@@ -1,0 +1,91 @@
+name: Rust Supply Chain
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "protocol-v*"
+      - "sdk-v*"
+      - "react-v*"
+      - "tools-v*"
+      - "mcp-v*"
+      - "moderation-v*"
+      - "worker-v*"
+      - "cli-v*"
+      - "cli-alias-v*"
+  schedule:
+    - cron: "41 9 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-supply-chain-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-supply-chain:
+    name: Advisory, license, and source policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.18.0"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: "1.85.0"
+
+      - name: Test fail-closed policy controls
+        run: node --test scripts/rust-supply-chain-policy.test.mjs
+
+      - name: Validate policy metadata and repository coverage
+        run: node scripts/check-rust-supply-chain-policy.mjs
+
+      - name: Install checksum-pinned audit tools
+        shell: bash
+        env:
+          CARGO_AUDIT_VERSION: "0.22.2"
+          CARGO_AUDIT_VERSION_OUTPUT: "cargo-audit 0.22.2"
+          CARGO_AUDIT_URL: "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz"
+          CARGO_AUDIT_SHA256: "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428"
+          CARGO_AUDIT_MEMBER: "cargo-audit-x86_64-unknown-linux-musl-v0.22.2/cargo-audit"
+          CARGO_DENY_VERSION: "0.20.2"
+          CARGO_DENY_VERSION_OUTPUT: "cargo-deny 0.20.2"
+          CARGO_DENY_URL: "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
+          CARGO_DENY_SHA256: "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+          CARGO_DENY_MEMBER: "cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny"
+        run: |
+          set -euo pipefail
+          tools_dir="${RUNNER_TEMP}/rust-supply-chain-bin"
+          audit_archive="${RUNNER_TEMP}/cargo-audit-${CARGO_AUDIT_VERSION}.tgz"
+          deny_archive="${RUNNER_TEMP}/cargo-deny-${CARGO_DENY_VERSION}.tar.gz"
+          mkdir -p "${tools_dir}"
+
+          curl --fail --location --silent --show-error "${CARGO_AUDIT_URL}" --output "${audit_archive}"
+          printf '%s  %s\n' "${CARGO_AUDIT_SHA256}" "${audit_archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${audit_archive}" --directory "${RUNNER_TEMP}"
+          install -m 0755 "${RUNNER_TEMP}/${CARGO_AUDIT_MEMBER}" "${tools_dir}/cargo-audit"
+
+          curl --fail --location --silent --show-error "${CARGO_DENY_URL}" --output "${deny_archive}"
+          printf '%s  %s\n' "${CARGO_DENY_SHA256}" "${deny_archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${deny_archive}" --directory "${RUNNER_TEMP}"
+          install -m 0755 "${RUNNER_TEMP}/${CARGO_DENY_MEMBER}" "${tools_dir}/cargo-deny"
+
+          test "$("${tools_dir}/cargo-audit" --version)" = "${CARGO_AUDIT_VERSION_OUTPUT}"
+          test "$("${tools_dir}/cargo-deny" --version)" = "${CARGO_DENY_VERSION_OUTPUT}"
+
+      - name: Audit all independent Cargo locks
+        env:
+          CARGO_AUDIT_BIN: ${{ runner.temp }}/rust-supply-chain-bin/cargo-audit
+          CARGO_DENY_BIN: ${{ runner.temp }}/rust-supply-chain-bin/cargo-deny
+        run: node scripts/check-rust-supply-chain-policy.mjs --run-tools

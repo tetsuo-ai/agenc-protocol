@@ -17,7 +17,9 @@ import {
 } from "./preflight-dispute-scan.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
+const require = createRequire(
+  path.join(ROOT, "tests-integration", "package.json"),
+);
 const { Connection, PublicKey } = require("@solana/web3.js");
 
 const SYSTEM_PROGRAM_ID = new PublicKey("11111111111111111111111111111111");
@@ -36,12 +38,24 @@ const BLOCK_DISCRIMINATOR = createHash("sha256")
   .update("account:ModerationBlock")
   .digest()
   .subarray(0, 8);
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+const utf8 = new TextDecoder("utf-8", {
+  fatal: true,
+  // Rust/Borsh preserves a leading U+FEFF; TextDecoder otherwise consumes it.
+  ignoreBOM: true,
+});
+const RUST_WHITESPACE_ONLY_PATTERN =
+  /^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u;
+
+function isRustBlank(value) {
+  return RUST_WHITESPACE_ONLY_PATTERN.test(value);
+}
 
 function exact(dataLike, size, discriminator, name) {
   const data = Buffer.from(dataLike);
   if (data.length !== size) {
-    throw new Error(`${name}: unexpected size ${data.length}; expected ${size}`);
+    throw new Error(
+      `${name}: unexpected size ${data.length}; expected ${size}`,
+    );
   }
   if (!data.subarray(0, 8).equals(discriminator)) {
     throw new Error(`${name}: discriminator mismatch`);
@@ -88,10 +102,11 @@ export function decodeCanonicalTaskJobSpec(dataLike) {
   const jobSpecHash = Buffer.from(data.subarray(72, 104));
   requireNonzero(jobSpecHash, "TaskJobSpec.job_spec_hash");
   const uri = readString(data, 104, 256, "TaskJobSpec.job_spec_uri");
-  if (uri.value.trim().length === 0) {
+  if (isRustBlank(uri.value)) {
     throw new Error("TaskJobSpec.job_spec_uri: empty");
   }
-  if (uri.end + 24 > data.length) throw new Error("TaskJobSpec: truncated tail");
+  if (uri.end + 24 > data.length)
+    throw new Error("TaskJobSpec: truncated tail");
   const createdAt = data.readBigInt64LE(uri.end);
   const updatedAt = data.readBigInt64LE(uri.end + 8);
   if (createdAt <= 0n || updatedAt < createdAt) {
@@ -133,10 +148,11 @@ export function decodeModerationBlock(dataLike) {
   requireNonzero(contentHash, "ModerationBlock.content_hash");
   requireNonzero(rationaleHash, "ModerationBlock.rationale_hash");
   const uri = readString(data, 73, 256, "ModerationBlock.rationale_uri");
-  if (uri.value.trim().length === 0) {
+  if (isRustBlank(uri.value)) {
     throw new Error("ModerationBlock.rationale_uri: empty");
   }
-  if (uri.end + 65 > data.length) throw new Error("ModerationBlock: truncated tail");
+  if (uri.end + 65 > data.length)
+    throw new Error("ModerationBlock: truncated tail");
   requireZero(data, uri.end + 49, uri.end + 65, "ModerationBlock");
   return {
     contentHash,
@@ -152,13 +168,18 @@ function blocker(kind, task, detail, extra = {}) {
 }
 
 async function fetchAccountMap(connection, addresses) {
-  const unique = [...new Map(
-    addresses.map((address) => [address.toBase58(), address]),
-  ).values()];
+  const unique = [
+    ...new Map(
+      addresses.map((address) => [address.toBase58(), address]),
+    ).values(),
+  ];
   const result = new Map();
   for (let offset = 0; offset < unique.length; offset += 100) {
     const chunk = unique.slice(offset, offset + 100);
-    const accounts = await connection.getMultipleAccountsInfo(chunk, "confirmed");
+    const accounts = await connection.getMultipleAccountsInfo(
+      chunk,
+      "confirmed",
+    );
     for (let index = 0; index < chunk.length; index++) {
       result.set(chunk[index].toBase58(), accounts[index] ?? null);
     }
@@ -348,8 +369,10 @@ export async function scanActiveJobSpecBlocks(connection) {
     ).length,
     missingJobSpecs,
     blockedCount: blocked.length,
-    blockedUnassignedCount: blocked.filter((item) => item.currentWorkers === 0).length,
-    blockedWithWorkersCount: blocked.filter((item) => item.currentWorkers > 0).length,
+    blockedUnassignedCount: blocked.filter((item) => item.currentWorkers === 0)
+      .length,
+    blockedWithWorkersCount: blocked.filter((item) => item.currentWorkers > 0)
+      .length,
     clearedCount: cleared.length,
     blocked,
     cleared,

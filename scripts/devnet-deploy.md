@@ -5,7 +5,7 @@
 > IDL, test counts, rent math) are that day's measurements — recompute them per
 > the in-line instructions. As of 2026-07-09 the full surface is **99
 > instructions** (`surface_revision = 4`); current mainnet state lives in
-> `docs/MAINNET_MAINLINE.md` and remaining work in `TODO.MD`.
+> `docs/MAINNET_MAINLINE.md` and the completed remediation record in `TODO.MD`.
 
 The human runs every command tagged **[HUMAN, writes on-chain]**. Everything else is
 local/read-only and was verified runnable on 2026-06-09 with the exact pinned toolchain.

@@ -222,7 +222,7 @@ export const AGENC_COORDINATION_ERROR__NOT_ARBITER = 0x17d5; // 6101
 export const AGENC_COORDINATION_ERROR__INSUFFICIENT_VOTES = 0x17d6; // 6102
 /** DisputeAlreadyResolved: Dispute has already been resolved */
 export const AGENC_COORDINATION_ERROR__DISPUTE_ALREADY_RESOLVED = 0x17d7; // 6103
-/** UnauthorizedResolver: Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator */
+/** UnauthorizedResolver: Only the protocol authority with configured M-of-N approval or an assigned dispute resolver can resolve disputes, and never the dispute initiator */
 export const AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER = 0x17d8; // 6104
 /** InvalidDisputeResolver: Invalid dispute resolver: pubkey must be non-zero */
 export const AGENC_COORDINATION_ERROR__INVALID_DISPUTE_RESOLVER = 0x17d9; // 6105
@@ -1572,7 +1572,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_ATTESTOR]: `Signer is neither the moderation authority nor a registered attestor`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_MODERATION_HEARTBEAT]: `Only the moderation config authority or the moderation authority may heartbeat`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_PROTOCOL_AUTHORITY]: `Only protocol authority can perform this action`,
-    [AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER]: `Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator`,
+    [AGENC_COORDINATION_ERROR__UNAUTHORIZED_RESOLVER]: `Only the protocol authority with configured M-of-N approval or an assigned dispute resolver can resolve disputes, and never the dispute initiator`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_REVIEW_DECISION]: `Caller is not authorized to make this review decision`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_TASK_ACTION]: `Only the task creator can perform this action`,
     [AGENC_COORDINATION_ERROR__UNAUTHORIZED_TASK_MODERATOR]: `Only the configured moderation authority can record moderation decisions`,

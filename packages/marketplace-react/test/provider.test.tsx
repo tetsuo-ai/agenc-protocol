@@ -9,6 +9,7 @@
  */
 import { address, createNoopSigner } from "@solana/kit";
 import { render, renderHook, screen } from "@testing-library/react";
+import { format } from "node:util";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -61,10 +62,60 @@ function wrapper(config: AgencProviderConfig) {
   };
 }
 
+/**
+ * React/jsdom reports a render-phase exception to `console.error` before it
+ * rethrows it to the assertion. Capture only that expected exception and
+ * React's matching component-stack diagnostic. Any different console error is
+ * surfaced as a test failure rather than hidden.
+ */
+function expectReactRenderFailure(
+  renderAttempt: () => unknown,
+  expected: RegExp,
+  component: "AgencProvider" | "TestComponent",
+): void {
+  const captured: string[] = [];
+  const matcher = new RegExp(expected.source, expected.flags.replace("g", ""));
+  let expectedWindowErrors = 0;
+  const onWindowError = (event: ErrorEvent) => {
+    const message =
+      event.error instanceof Error ? event.error.message : event.message;
+    if (!matcher.test(message)) return;
+    expectedWindowErrors += 1;
+    // jsdom reports an unhandled render exception through its virtual console
+    // unless the matching window error is explicitly handled.
+    event.preventDefault();
+  };
+  const errorSpy = vi
+    .spyOn(console, "error")
+    .mockImplementation((...args: unknown[]) => {
+      captured.push(format(...args));
+    });
+  window.addEventListener("error", onWindowError);
+
+  try {
+    expect(renderAttempt).toThrowError(expected);
+  } finally {
+    window.removeEventListener("error", onWindowError);
+    errorSpy.mockRestore();
+  }
+
+  expect(expectedWindowErrors).toBeGreaterThan(0);
+  expect(captured.length).toBeGreaterThan(0);
+  const expectedComponentDiagnostic = `The above error occurred in the <${component}> component:`;
+  const unexpected = captured.filter(
+    (message) =>
+      !matcher.test(message) &&
+      !message.startsWith(expectedComponentDiagnostic),
+  );
+  expect(unexpected).toEqual([]);
+}
+
 describe("AgencProvider", () => {
   it("renders children", () => {
     render(
-      <AgencProvider config={{ network: "devnet", queryTransport: mockReadTransport() }}>
+      <AgencProvider
+        config={{ network: "devnet", queryTransport: mockReadTransport() }}
+      >
         <div>hello-marketplace</div>
       </AgencProvider>,
     );
@@ -94,22 +145,64 @@ describe("AgencProvider", () => {
 
   it("exposes a null client when neither client nor signer+rpc is given", () => {
     const { result } = renderHook(() => useAgencContext(), {
-      wrapper: wrapper({ network: "devnet", queryTransport: mockReadTransport() }),
+      wrapper: wrapper({
+        network: "devnet",
+        queryTransport: mockReadTransport(),
+      }),
     });
     expect(result.current.client).toBeNull();
     expect(result.current.signer).toBeNull();
   });
 
+  it("rejects a chain-bound signer that mismatches the provider network", () => {
+    const signer = {
+      ...createNoopSigner(address(VALID_WALLET)),
+      chain: "solana:mainnet",
+    };
+    expectReactRenderFailure(
+      () =>
+        renderHook(() => useAgencContext(), {
+          wrapper: wrapper({
+            network: "devnet",
+            signer,
+            queryTransport: mockReadTransport(),
+          }),
+        }),
+      /solana:mainnet.*devnet|devnet.*solana:mainnet/i,
+      "AgencProvider",
+    );
+  });
+
+  it("keeps endpoint credentials and custom labels out of query keys", () => {
+    const { result } = renderHook(() => useAgencContext(), {
+      wrapper: wrapper({
+        network: "devnet",
+        rpcUrl: "https://rpc.example.test/?api-key=super-secret",
+        cacheNamespace: "private-customer-name",
+        queryTransport: mockReadTransport(),
+      }),
+    });
+    expect(result.current.cacheNamespace).not.toContain("super-secret");
+    expect(result.current.cacheNamespace).not.toContain(
+      "private-customer-name",
+    );
+  });
+
   it("throws a clear error when useAgencContext is used outside a provider", () => {
-    expect(() => renderHook(() => useAgencContext())).toThrowError(
+    expectReactRenderFailure(
+      () => renderHook(() => useAgencContext()),
       /within <AgencProvider>/,
+      "TestComponent",
     );
   });
 });
 
 describe("referrer validation", () => {
   it("accepts and normalizes a valid referrer config", () => {
-    const validated = validateReferrerConfig({ wallet: VALID_WALLET, feeBps: 250 });
+    const validated = validateReferrerConfig({
+      wallet: VALID_WALLET,
+      feeBps: 250,
+    });
     expect(validated.wallet).toBe(VALID_WALLET);
     expect(validated.feeBps).toBe(250);
   });
@@ -122,7 +215,10 @@ describe("referrer validation", () => {
 
   it("rejects an over-range feeBps", () => {
     expect(() =>
-      validateReferrerConfig({ wallet: VALID_WALLET, feeBps: REFERRER_FEE_BPS_MAX + 1 }),
+      validateReferrerConfig({
+        wallet: VALID_WALLET,
+        feeBps: REFERRER_FEE_BPS_MAX + 1,
+      }),
     ).toThrowError(/basis points/);
   });
 
@@ -139,15 +235,18 @@ describe("referrer validation", () => {
   });
 
   it("surfaces a referrer validation error at provider construction", () => {
-    expect(() =>
-      renderHook(() => useAgencContext(), {
-        wrapper: wrapper({
-          network: "devnet",
-          queryTransport: mockReadTransport(),
-          referrer: { wallet: "bad", feeBps: 100 },
+    expectReactRenderFailure(
+      () =>
+        renderHook(() => useAgencContext(), {
+          wrapper: wrapper({
+            network: "devnet",
+            queryTransport: mockReadTransport(),
+            referrer: { wallet: "bad", feeBps: 100 },
+          }),
         }),
-      }),
-    ).toThrowError(/valid base58/);
+      /valid base58/,
+      "AgencProvider",
+    );
   });
 });
 
@@ -160,7 +259,10 @@ describe("resolveReferrerCapability", () => {
   });
 
   it("returns live with a valid referrer", () => {
-    const validated = validateReferrerConfig({ wallet: VALID_WALLET, feeBps: 250 });
+    const validated = validateReferrerConfig({
+      wallet: VALID_WALLET,
+      feeBps: 250,
+    });
     const cap = resolveReferrerCapability(validated);
     expect(cap.live).toBe(true);
     expect(cap.reason).toBeUndefined();
@@ -226,7 +328,11 @@ describe("string catalog", () => {
 
   it("leaves unmatched placeholders intact", () => {
     expect(
-      t("referrer.invalidWallet", {}, { catalog: { "referrer.invalidWallet": "{wallet}" } }),
+      t(
+        "referrer.invalidWallet",
+        {},
+        { catalog: { "referrer.invalidWallet": "{wallet}" } },
+      ),
     ).toBe("{wallet}");
   });
 });

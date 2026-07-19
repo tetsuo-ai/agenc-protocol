@@ -139,6 +139,8 @@ export async function runDevSandbox(
     referrer: referrer.address,
     readAccount,
     getBalance: async (address: Address) => market.svm.getBalance(address) ?? 0n,
+    getMinimumBalanceForRentExemption: async (space: number) =>
+      market.svm.minimumBalanceForRentExemption(BigInt(space)),
     gpa,
     stateDir: options.stateDir,
     log,

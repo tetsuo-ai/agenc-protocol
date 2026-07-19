@@ -6,6 +6,54 @@ import react from "@vitejs/plugin-react";
 // served from `public/` (written by the Playwright global-setup at run time).
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      // Model a production checkout entry point with independently cacheable
+      // framework, chain-runtime, and AgenC chunks instead of one 572 kB file.
+      output: {
+        manualChunks(id) {
+          const normalized = id.replaceAll("\\", "/");
+          if (
+            normalized.includes("/node_modules/react/") ||
+            normalized.includes("/node_modules/react-dom/") ||
+            normalized.includes("/node_modules/scheduler/") ||
+            normalized.includes("/node_modules/@tanstack/")
+          ) {
+            return "react-vendor";
+          }
+          if (
+            normalized.includes("/node_modules/@solana/") ||
+            normalized.includes("/node_modules/@noble/") ||
+            normalized.includes("/node_modules/@scure/") ||
+            normalized.includes("/node_modules/base-x/") ||
+            normalized.includes("/node_modules/bs58/")
+          ) {
+            return "solana-vendor";
+          }
+          if (
+            normalized.includes("/packages/sdk-ts/dist/") ||
+            normalized.includes("/packages/marketplace-react/dist/")
+          ) {
+            return "agenc-vendor";
+          }
+          return undefined;
+        },
+      },
+      onwarn(warning, warn) {
+        const normalized = warning.id?.replaceAll("\\", "/") ?? "";
+        if (
+          warning.code === "MODULE_LEVEL_DIRECTIVE" &&
+          warning.message.includes('"use client"') &&
+          normalized.includes("/node_modules/@tanstack/react-query/")
+        ) {
+          // This is a client-only SPA; the exact code/path guard leaves every
+          // unrelated Rollup warning visible.
+          return;
+        }
+        warn(warning);
+      },
+    },
+  },
   server: { port: 3200, strictPort: true },
   preview: { port: 3200, strictPort: true },
   resolve: {

@@ -13,7 +13,7 @@ import { Buffer } from "node:buffer";
 import {
   PID, coder, enc, arr, pda, id32,
   makeProgram, send, sendMany, expectOk, decode, isClosed, tokenAmount,
-  freshWorld, taskModV2Pda, moderationBlockPda,
+  freshWorld, taskModV2Pda, moderationBlockPda, seatTestAuthorityResolver,
   BN, Keypair, SystemProgram,
   MINT_SIZE, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
   createInitializeMintInstruction, createAssociatedTokenAccountInstruction,
@@ -194,12 +194,13 @@ async function setupTokenDispute(w, resolutionType) {
 }
 
 async function resolveTokenDispute(w, r, approve) {
+  const authorityResolver = await seatTestAuthorityResolver(w);
   const ix = await makeProgram(w.admin).methods
     .resolveDispute(approve, arr(Buffer.alloc(32, 9)), "agenc://ruling/sha256/token-settlement")
     .accounts({
       dispute: r.dispute, task: r.task, escrow: r.escrow,
       protocolConfig: w.protocolPda, authority: w.admin.publicKey,
-      resolverAssignment: null, creator: w.buyer.publicKey,
+      resolverAssignment: authorityResolver, creator: w.buyer.publicKey,
       workerClaim: r.claim, worker: w.providerAgent,
       agentStats: null, workerWallet: w.provider.publicKey,
       hireRecord: r.hireRecord, disputeOperator: null, disputeReferrer: null,

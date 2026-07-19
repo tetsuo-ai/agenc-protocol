@@ -25,8 +25,8 @@ export const DISPUTE_RESOLVED_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint
 /**
  * Emitted when a dispute is resolved
  * 
- * The `outcome` field reflects the assigned resolver's binary ruling (P6.3 — the
- * arbiter vote/quorum model is retired):
+ * The `outcome` field reflects the authorized resolver's binary ruling (P6.3 — the
+ * per-case arbiter vote/quorum model is retired):
  * - 0 = Rejected (the resolver passed `approve = false` — creator refunded)
  * - 1 = Approved (the resolver passed `approve = true` — initiator's resolution upheld)
  * 
@@ -46,7 +46,7 @@ export type DisputeResolvedEventData = {
   timestamp: bigint;
   /**
    * P6.4 accountable rulings: the wallet that decided this dispute (the protocol
-   * authority OR the assigned resolver who signed `resolve_dispute`).
+   * authority with M-of-N approval OR the threshold-seated assigned resolver).
    */
   resolvedBy: Address;
   /** P6.4: 32-byte content hash of the off-chain ruling rationale. */

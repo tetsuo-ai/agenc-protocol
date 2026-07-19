@@ -324,7 +324,7 @@ pub enum CoordinationError {
     #[msg("Dispute has already been resolved")]
     DisputeAlreadyResolved,
 
-    #[msg("Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator")]
+    #[msg("Only the protocol authority with configured M-of-N approval or an assigned dispute resolver can resolve disputes, and never the dispute initiator")]
     UnauthorizedResolver,
 
     #[msg("Invalid dispute resolver: pubkey must be non-zero")]

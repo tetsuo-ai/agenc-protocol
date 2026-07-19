@@ -9,8 +9,10 @@ devnet matrix lives in [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLA
 
 - Anchor `0.32.1`
 - Solana `3.0.13`
-- Rust `1.79` for the program crate
-- Node `20` for protocol/IDL CI; Node `24` for SDK, sandbox, and release jobs
+- Rust `1.85.0` for reproducible host CI/release builds; the program crate's
+  independently tested MSRV is `1.82.0`
+- Node `24.18.0` with npm `11.18.0` for reproducible CI/release builds; Node
+  `20.18.0` is the independently tested package compatibility floor
 
 See `Anchor.toml`, `programs/agenc-coordination/Cargo.toml`, and `.github/workflows/ci.yml`.
 
@@ -49,21 +51,22 @@ additionally builds the program fresh and runs `npm run artifacts:check:built`
 (`--require-build`) plus the canary-IDL gate (`.github/workflows/idl-drift.yml`).
 
 Current candidate evidence, measured from the commands and built artifacts on
-2026-07-18:
+2026-07-19:
 
-| Gate | Result |
-|------|--------|
-| Rust production/default | 524 tests |
-| Rust `validation-timings` | 524 tests |
-| Rust explicit `private-zk` | 549 tests |
-| Rust restricted `mainnet-canary` | 321 tests |
-| Model/property suite | 76 tests |
-| Compiled-program litesvm | 395 total: 394 pass, one canary-only conditional skip; separate canary run 1 pass |
-| SDK | 576 total: 575 pass, one conditional skip |
-| All npm workspaces | 1,093 total: 1,092 pass, one conditional skip |
-| Deployment/preflight scripts | 225 pass |
-| Production SBF | 2,277,664 bytes; SHA-256 `2b4b80b899d36073417c0ace53c0f62aedc2bfa801af20038c8d83fe5678bf0a` |
-| Candidate IDL | 98 instructions / 43 accounts / 99 events / 393 errors; SHA-256 `5951d233e98c61ce77243fe807b9df4c79905532185495e0b36e9d8b14d43604` |
+| Gate                             | Result                                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Rust production/default          | 524 tests                                                                                                                          |
+| Rust `validation-timings`        | 524 tests                                                                                                                          |
+| Rust explicit `private-zk`       | 549 tests                                                                                                                          |
+| Rust restricted `mainnet-canary` | 321 tests                                                                                                                          |
+| Model/property suite             | 77 tests                                                                                                                           |
+| Compiled-program litesvm         | 408 total: 399 pass, 9 explicit canary-profile skips; separate canary run 11 pass                                                  |
+| SDK                              | 657 total: 656 pass, one environment-gated skip                                                                                    |
+| All npm workspaces               | 1,431 total: 1,429 pass, two environment-gated skips                                                                               |
+| Deployment/preflight scripts     | 231 pass                                                                                                                           |
+| Repository policy scripts        | 346 pass                                                                                                                           |
+| Production SBF                   | 2,280,376 bytes; SHA-256 `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`                                        |
+| Candidate IDL                    | 98 instructions / 43 accounts / 99 events / 393 errors; SHA-256 `5ae986603626d0dfe9024c7dc180f184931622c350c0c32b4abf920a0d918f1b` |
 
 These are candidate facts, not a claim that this binary is deployed: mainnet
 still runs the verified revision-4 artifact at commit `097ded1` (99 instructions /
@@ -214,7 +217,7 @@ Use `anchor build` before refreshing artifacts when the on-chain program or IDL 
 
 ## Fuzz Harness
 
-`programs/agenc-coordination/fuzz/` is an active 76-test model/property regression
+`programs/agenc-coordination/fuzz/` is an active 77-test model/property regression
 suite and a required CI/release gate. Its task, bid, dependency, completion,
 dispute, timing, and reputation scenarios model the current single-resolver
 dispute lifecycle; the retired `vote_dispute` target has been removed. Treat it
@@ -240,9 +243,9 @@ run.
 
 Both the protocol-tag release job and the IDL-drift job finish all production
 artifact/package comparisons before building the shared-path canary SBF, then
-build its frozen IDL and run the opt-in canary LiteSVM regression with
+build its frozen IDL and run the opt-in canary LiteSVM semantic suite with
 `AGENC_CANARY_LITESVM=1`. The normal production wildcard suite can therefore
-register its one intentional skip from a clean checkout without requiring a
+register its intentional opt-in canary skips from a clean checkout without requiring a
 pre-existing ignored canary IDL.
 
 The upgrade preflight separately checks loader-v3 ProgramData capacity and rent
@@ -275,7 +278,7 @@ canonical stake and AgentRegistration PDA bindings, and each account's own rent
 plus tracked `staked_amount` backing. Fully backed nonzero stake is compatible;
 malformed state, principal without its agent identity, or a per-account deficit
 blocks deployment even when aggregate balances appear sufficient.
-The current candidate remains blocked on a separate 94,440-byte Squads-CPI
+The current candidate remains blocked on a separate 97,152-byte Squads-CPI
 `ExtendProgramChecked` action in a slot before the binary upgrade.
 
 The SDK drift gate snapshots a deterministic digest of every generated path and

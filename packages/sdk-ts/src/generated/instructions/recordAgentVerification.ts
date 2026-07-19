@@ -22,8 +22,6 @@ import {
   getU32Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -42,6 +40,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -111,7 +114,7 @@ export function getRecordAgentVerificationInstructionDataEncoder(): Encoder<Reco
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       [
         "verifiedDomain",
-        addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder()),
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
       ],
       ["method", getU8Encoder()],
       ["expiresAt", getI64Encoder()],
@@ -126,7 +129,10 @@ export function getRecordAgentVerificationInstructionDataEncoder(): Encoder<Reco
 export function getRecordAgentVerificationInstructionDataDecoder(): Decoder<RecordAgentVerificationInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
-    ["verifiedDomain", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "verifiedDomain",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["method", getU8Decoder()],
     ["expiresAt", getI64Decoder()],
   ]);

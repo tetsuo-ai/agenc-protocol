@@ -3,19 +3,9 @@
 import { spawnSync } from "node:child_process";
 
 // tests-integration is deliberately outside the npm workspace, but its locked
-// Anchor/web3 tree is also loaded by the production deployment and fee rails.
-// Keep the one currently unpatched transitive advisory explicit. Any new high
-// or critical advisory fails this gate instead of disappearing behind the root
-// workspace audit.
-const reviewedHighAdvisories = new Map([
-  [
-    1103747,
-    {
-      package: "bigint-buffer",
-      url: "https://github.com/advisories/GHSA-3gc7-fjrx-p6mg",
-    },
-  ],
-]);
+// Anchor/web3 tree is also loaded by production deployment and fee rails. Keep
+// its audit independent and fail on every advisory severity so a vulnerable
+// resolution cannot be hidden by the root workspace audit.
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const result = spawnSync(
@@ -25,7 +15,7 @@ const result = spawnSync(
     "--prefix",
     "tests-integration",
     "--omit=dev",
-    "--audit-level=high",
+    "--audit-level=low",
     "--json",
   ],
   { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
@@ -65,57 +55,17 @@ if (
   );
 }
 
-const vulnerabilities = report.vulnerabilities;
-
-function advisorySourcesFor(packageName, seen = new Set()) {
-  if (seen.has(packageName)) return [];
-  seen.add(packageName);
-  const vulnerability = vulnerabilities[packageName];
-  if (!vulnerability || !Array.isArray(vulnerability.via)) return [];
-  return vulnerability.via.flatMap((entry) =>
-    typeof entry === "string" ? advisorySourcesFor(entry, seen) : [entry],
-  );
-}
-
-const failures = [];
-const reviewed = new Map();
-for (const [packageName, vulnerability] of Object.entries(vulnerabilities)) {
-  if (vulnerability.severity === "critical") {
-    failures.push(`${packageName}: critical vulnerability`);
-    continue;
-  }
-  if (vulnerability.severity !== "high") continue;
-
-  const sources = advisorySourcesFor(packageName);
-  if (sources.length === 0) {
-    failures.push(
-      `${packageName}: high vulnerability has no traceable advisory`,
-    );
-    continue;
-  }
-  for (const source of sources) {
-    if (source.severity !== "high" && source.severity !== "critical") {
-      continue;
-    }
-    const policy = reviewedHighAdvisories.get(Number(source.source));
-    if (
-      !policy ||
-      source.name !== policy.package ||
-      source.url !== policy.url
-    ) {
-      failures.push(
-        `${packageName}: unreviewed high advisory ${source.url ?? source.source ?? "unknown"}`,
-      );
-      continue;
-    }
-    reviewed.set(Number(source.source), policy);
-  }
-}
-
-if (failures.length > 0) {
-  console.error("tests-integration dependency audit failed:");
-  for (const failure of [...new Set(failures)].sort()) {
-    console.error(`- ${failure}`);
+const counts = report.metadata.vulnerabilities;
+const total = ["critical", "high", "moderate", "low", "info"].reduce(
+  (sum, severity) => sum + Number(counts[severity] ?? 0),
+  0,
+);
+if (total !== 0 || Object.keys(report.vulnerabilities).length !== 0) {
+  console.error("tests-integration dependency audit found vulnerabilities:");
+  for (const [packageName, vulnerability] of Object.entries(
+    report.vulnerabilities,
+  ).sort(([left], [right]) => left.localeCompare(right))) {
+    console.error(`- ${packageName}: ${vulnerability.severity}`);
   }
   process.exit(1);
 }
@@ -145,14 +95,8 @@ if (compatibility.status !== 0) {
   );
 }
 
-const counts = report.metadata.vulnerabilities;
 console.log(
   `tests-integration audit: ${counts.critical ?? 0} critical, ` +
-    `${counts.high ?? 0} high package paths, ${counts.moderate ?? 0} moderate`,
+    `${counts.high ?? 0} high, ${counts.moderate ?? 0} moderate, ` +
+    `${counts.low ?? 0} low`,
 );
-for (const [source, policy] of reviewed) {
-  console.warn(
-    `reviewed exception: ${policy.package} advisory ${source} (${policy.url}); ` +
-      "see tests-integration/SECURITY.md",
-  );
-}

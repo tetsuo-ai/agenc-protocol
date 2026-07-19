@@ -4,6 +4,14 @@
   "private": true,
   "description": "Committed Next.js 15 App Router SSR fixture for @tetsuo-ai/marketplace-react (PLAN_2 A1 Done-when: provider + one hook + one component, SSR with no hydration errors).",
   "type": "module",
+  "packageManager": "npm@11.18.0",
+  "engines": {
+    "node": ">=20.18.0",
+    "npm": "11.18.0"
+  },
+  "allowScripts": {
+    "sharp@0.34.5": true
+  },
   "scripts": {
     "dev": "next dev -p 3100",
     "build": "next build",

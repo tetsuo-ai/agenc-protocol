@@ -3,7 +3,7 @@
  * `agenc-worker <up|once|status>` — install a reviewed, exact package version
  * first; timer units never resolve mutable registry state at startup.
  *
- * - `up`     long-running: register if needed, watch claimable tasks, claim →
+ * - `up`     long-running: register if needed, watch claim candidates, claim →
  *            execute (your own coding-agent CLI) → submit, report settlements.
  * - `once`   a single sweep + claim + execute + submit, then exit — what the
  *            systemd/launchd timers run (see templates/).
@@ -15,7 +15,6 @@
  *
  * @module cli
  */
-import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import {
   createKeyPairSignerFromBytes,
@@ -37,6 +36,8 @@ import {
 } from "./config.js";
 import type { AccountReader } from "./job-spec.js";
 import { formatDiagnosticError } from "./redact.js";
+import { findVerifiedSettlementSignature } from "./settlement.js";
+import { loadSolanaKeypairFile } from "./wallet.js";
 import {
   lamportsToSol,
   runTickOnce,
@@ -52,16 +53,17 @@ USAGE
   agenc-worker <up|once|status> [flags]
 
 SUBCOMMANDS
-  up       register if needed, watch claimable tasks, claim -> execute -> submit (long-running)
+  up       register if needed, watch claim candidates, claim -> execute -> submit (long-running)
   once     one sweep + claim + execute + submit, then exit (what the timers run)
   status   readonly: registration, balance, open claim, recent submissions
 
-FUNDING (first run is NOT free)
-  Registration stakes the live on-chain minimum (ProtocolConfig.minAgentStake,
-  0.01 SOL on mainnet) and pays account rents; working a task pays claim +
-  submission rents. Fund the hot wallet with at least ~0.021 SOL. The worker
-  preflights the balance BEFORE its first transaction and prints the exact
-  lamports needed and the address to fund if it is short.
+FUNDING (registration and recurring work are NOT free)
+  Registration stakes live ProtocolConfig.minAgentStake and pays account rent;
+  a task pays claim + submission rent and may require a contest deposit. Before
+  registration and immediately before every NEW claim, the worker queries live
+  rent, checks balance through submission + worst-case deposit + fee headroom,
+  and reports the exact lamports/address/delta when short. Recovery of a claim
+  that already landed runs first and is never blocked by the fresh-claim gate.
 
 FLAGS (flags > AGENC_WORKER_* env > config file > defaults)
   --rpc-url <url>            HTTP RPC endpoint (required); task discovery polls
@@ -157,20 +159,13 @@ function flagsToConfigInput(values: {
 
 /** Load the 64-byte Solana keypair JSON and build a kit signer. */
 async function loadSigner(walletPath: string) {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(walletPath, "utf8"));
+    return createKeyPairSignerFromBytes(loadSolanaKeypairFile(walletPath));
   } catch (error) {
     throw new ConfigError(
       `wallet ${walletPath}: ${formatDiagnosticError(error)}`,
     );
   }
-  if (!Array.isArray(parsed) || !parsed.every((n) => typeof n === "number")) {
-    throw new ConfigError(
-      `wallet ${walletPath}: expected a Solana keypair JSON array`,
-    );
-  }
-  return createKeyPairSignerFromBytes(new Uint8Array(parsed));
 }
 
 /** Build the runtime context from the resolved config (kit RPC wiring). */
@@ -188,19 +183,6 @@ async function buildContext(
     if (value === null) return null;
     return new Uint8Array(Buffer.from(value.data[0], "base64"));
   };
-  const findSettlementSignature = async (
-    task: Address,
-  ): Promise<string | null> => {
-    // The most recent transaction touching a settled Task account is its
-    // settlement (accept/auto-accept/complete) — the receipt page verifies it.
-    const signatures = await rpc
-      .getSignaturesForAddress(task, { limit: 1 })
-      .send();
-    const newest = signatures[0];
-    return newest === undefined || newest.err !== null
-      ? null
-      : (newest.signature as string);
-  };
   const ctx: WorkerContext = {
     config,
     client,
@@ -213,11 +195,21 @@ async function buildContext(
     taskThreadTransport: taskThread.createContentTransport({
       baseUrl: config.taskThreadBaseUrl,
     }),
-    findSettlementSignature,
-    // Pre-registration funding preflight: fail with the exact lamports needed
-    // BEFORE the first transaction instead of an on-chain revert.
+    findSettlementSignature: (task) =>
+      findVerifiedSettlementSignature(rpc, task),
+    // Live funding gates: registration checks the complete first-task budget;
+    // every later fresh claim rechecks claim/submission rent, worst-case
+    // contest deposit, and fee headroom immediately before broadcast.
     getBalance: async (address) =>
       BigInt((await rpc.getBalance(address).send()).value),
+    getMinimumBalanceForRentExemption: async (space) =>
+      BigInt(
+        await rpc
+          .getMinimumBalanceForRentExemption(BigInt(space), {
+            commitment: "finalized",
+          })
+          .send(),
+      ),
   };
   return { ctx, rpc };
 }

@@ -13,6 +13,7 @@
 //
 // Browser-safe: WebCrypto only — no Node built-ins.
 import { bytesToHex, hexToBytes } from "../values/hash.js";
+import { canonicalJobSpecJson } from "../values/job-spec.js";
 import {
   DELIVERY_ENC_ALGO,
   DELIVERY_KEY_AGREEMENT,
@@ -63,10 +64,7 @@ export type DeliveryKeyWrap =
       recipientPublicKey: string;
     };
 
-/** The PUBLIC delivery manifest the buyer reviews (P7.2). */
-export interface DeliveryManifest {
-  /** Manifest version. */
-  v: 1;
+interface DeliveryManifestFields {
   /** The Task PDA this deliverable is for (base58). */
   taskPda: string;
   /** URI of the ciphertext blob (`iv || ciphertext`), e.g. an `agenc://` pointer. */
@@ -81,8 +79,23 @@ export interface DeliveryManifest {
   keyWrap: DeliveryKeyWrap;
 }
 
+/** Legacy v1 manifest. Ciphertext has no AAD, but plaintextHash is verified. */
+export interface DeliveryManifestV1 extends DeliveryManifestFields {
+  v: 1;
+}
+
+/** v2 manifest. The complete stable manifest is authenticated as AES-GCM AAD. */
+export interface DeliveryManifestV2 extends DeliveryManifestFields {
+  v: 2;
+}
+
+/** Every supported public delivery manifest version. */
+export type DeliveryManifest = DeliveryManifestV1 | DeliveryManifestV2;
+
 /** Result of {@link encryptDeliverable}. */
-export interface EncryptDeliverableResult {
+export interface EncryptDeliverableResult<
+  TManifest extends DeliveryManifest = DeliveryManifestV1,
+> {
   /** The encrypted blob (`iv || ciphertext`) to upload to `ciphertextUri`. */
   ciphertext: Uint8Array;
   /**
@@ -99,7 +112,7 @@ export interface EncryptDeliverableResult {
    * the `x25519` wrap is recipient-encrypted, and the `symmetric` descriptor is
    * key-free (only `mode` + an opaque `gateRef`). Safe to publish verbatim.
    */
-  manifest: DeliveryManifest;
+  manifest: TManifest;
 }
 
 /** Recipient for {@link encryptDeliverable}: a raw symmetric key OR an X25519 pubkey wrap. */
@@ -116,7 +129,10 @@ export type DeliveryRecipient =
 const utf8 = new TextEncoder();
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes.slice());
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    bytes.slice(),
+  );
   return bytesToHex(new Uint8Array(digest));
 }
 
@@ -134,7 +150,7 @@ export function buildDeliveryManifest(input: {
   previewUri?: string;
   plaintextHash: string;
   keyWrap: DeliveryKeyWrap;
-}): DeliveryManifest {
+}): DeliveryManifestV1 {
   return {
     v: 1,
     taskPda: input.taskPda,
@@ -144,6 +160,32 @@ export function buildDeliveryManifest(input: {
     plaintextHash: input.plaintextHash,
     keyWrap: input.keyWrap,
   };
+}
+
+/** Build the context-bound v2 public manifest. */
+export function buildDeliveryManifestV2(input: {
+  taskPda: string;
+  ciphertextUri: string;
+  previewUri?: string;
+  plaintextHash: string;
+  keyWrap: DeliveryKeyWrap;
+}): DeliveryManifestV2 {
+  return {
+    v: 2,
+    taskPda: input.taskPda,
+    ciphertextUri: input.ciphertextUri,
+    ...(input.previewUri !== undefined ? { previewUri: input.previewUri } : {}),
+    encAlgo: DELIVERY_ENC_ALGO,
+    plaintextHash: input.plaintextHash,
+    keyWrap: input.keyWrap,
+  };
+}
+
+/** Canonical bytes authenticated as v2 AES-GCM additional data. */
+export function deliveryManifestV2Aad(
+  manifest: DeliveryManifestV2,
+): Uint8Array {
+  return utf8.encode(canonicalJobSpecJson(manifest));
 }
 
 /**
@@ -173,9 +215,53 @@ export function buildDeliveryManifest(input: {
 export async function encryptDeliverable(
   plaintext: Uint8Array | string,
   recipient: DeliveryRecipient,
-  meta: { taskPda: string; ciphertextUri: string; previewUri?: string; gateRef?: string },
-): Promise<EncryptDeliverableResult> {
-  const pt = typeof plaintext === "string" ? utf8.encode(plaintext) : plaintext;
+  meta: {
+    taskPda: string;
+    ciphertextUri: string;
+    previewUri?: string;
+    gateRef?: string;
+  },
+): Promise<EncryptDeliverableResult<DeliveryManifestV1>> {
+  return encryptDeliverableVersion(1, plaintext, recipient, meta);
+}
+
+/**
+ * Encrypt using the v2 context-bound format. Unlike v1, the complete stable
+ * public manifest is authenticated as AES-GCM AAD; any task/URI/hash/key-wrap
+ * substitution therefore fails before plaintext is returned.
+ */
+export async function encryptDeliverableV2(
+  plaintext: Uint8Array | string,
+  recipient: DeliveryRecipient,
+  meta: {
+    taskPda: string;
+    ciphertextUri: string;
+    previewUri?: string;
+    gateRef?: string;
+  },
+): Promise<EncryptDeliverableResult<DeliveryManifestV2>> {
+  return encryptDeliverableVersion(2, plaintext, recipient, meta);
+}
+
+async function encryptDeliverableVersion<TVersion extends 1 | 2>(
+  version: TVersion,
+  plaintext: Uint8Array | string,
+  recipient: DeliveryRecipient,
+  meta: {
+    taskPda: string;
+    ciphertextUri: string;
+    previewUri?: string;
+    gateRef?: string;
+  },
+): Promise<
+  EncryptDeliverableResult<
+    TVersion extends 1 ? DeliveryManifestV1 : DeliveryManifestV2
+  >
+> {
+  // Snapshot caller-owned bytes before the first async boundary so the hash
+  // and ciphertext always commit to the same immutable plaintext.
+  const pt =
+    typeof plaintext === "string" ? utf8.encode(plaintext) : plaintext.slice();
   const plaintextHash = await sha256Hex(pt);
 
   let symKey: Uint8Array;
@@ -204,15 +290,25 @@ export async function encryptDeliverable(
     };
   }
 
-  const ciphertext = await aesGcmEncrypt(pt, symKey);
-  const manifest = buildDeliveryManifest({
+  const manifestInput = {
     taskPda: meta.taskPda,
     ciphertextUri: meta.ciphertextUri,
     ...(meta.previewUri !== undefined ? { previewUri: meta.previewUri } : {}),
     plaintextHash,
     keyWrap,
-  });
-  return { ciphertext, symKey, manifest };
+  };
+  const manifest =
+    version === 1
+      ? buildDeliveryManifest(manifestInput)
+      : buildDeliveryManifestV2(manifestInput);
+  const ciphertext = await aesGcmEncrypt(
+    pt,
+    symKey,
+    manifest.v === 2 ? deliveryManifestV2Aad(manifest) : undefined,
+  );
+  return { ciphertext, symKey, manifest } as EncryptDeliverableResult<
+    TVersion extends 1 ? DeliveryManifestV1 : DeliveryManifestV2
+  >;
 }
 
 /** Key material for {@link decryptDeliverable}. */
@@ -232,12 +328,15 @@ export type DeliveryDecryptKey =
  * or unwraps the manifest's `x25519` key with the recipient's private key and
  * decrypts. Verifies nothing about the task status — that gate lives on the
  * host that serves the ciphertext/key — but a wrong key throws (GCM tag
- * mismatch), so a leaked manifest without the gated key cannot decrypt.
+ * mismatch), so a leaked manifest without the gated key cannot decrypt. A
+ * manifest is mandatory in both key modes so the plaintext hash is never an
+ * optional caller-owned check; v2 additionally authenticates manifest context
+ * as AES-GCM AAD.
  *
  * @param ciphertext - The `iv || ciphertext` blob from `ciphertextUri`.
  * @param key - Raw `symKey`, or recipient key material for the `x25519` wrap.
- * @param manifest - Required for the `x25519` unwrap path (carries the wrap);
- *   optional for the raw-`symKey` path.
+ * @param manifest - Required in every mode for mandatory plaintext-hash
+ *   verification; the `x25519` path also reads its wrapped key from here.
  * @returns The recovered plaintext bytes.
  */
 export async function decryptDeliverable(
@@ -245,20 +344,44 @@ export async function decryptDeliverable(
   key: DeliveryDecryptKey,
   manifest?: DeliveryManifest,
 ): Promise<Uint8Array> {
-  if ("symKey" in key) {
-    return aesGcmDecrypt(ciphertext, key.symKey);
+  if (manifest === undefined) {
+    throw new TypeError(
+      "decryptDeliverable: a v1/v2 manifest is required for mandatory plaintext integrity verification",
+    );
   }
-  if (manifest === undefined || manifest.keyWrap.mode !== "x25519") {
+  if (
+    (manifest.v !== 1 && manifest.v !== 2) ||
+    manifest.encAlgo !== DELIVERY_ENC_ALGO ||
+    !/^[0-9a-f]{64}$/.test(manifest.plaintextHash)
+  ) {
+    throw new TypeError("decryptDeliverable: invalid or unsupported manifest");
+  }
+  let symKey: Uint8Array;
+  if ("symKey" in key) {
+    symKey = key.symKey;
+  } else if (manifest.keyWrap.mode !== "x25519") {
     throw new TypeError(
       "decryptDeliverable: recipient-key path requires a manifest with an x25519 keyWrap",
     );
+  } else {
+    const wrap = manifest.keyWrap;
+    symKey = await unwrapKeyWithPrivateKey(
+      hexToBytes(wrap.wrappedKey),
+      hexToBytes(wrap.ephemeralPublicKey),
+      key.recipientPrivateKey,
+      key.recipientPublicKey,
+    );
   }
-  const wrap = manifest.keyWrap;
-  const symKey = await unwrapKeyWithPrivateKey(
-    hexToBytes(wrap.wrappedKey),
-    hexToBytes(wrap.ephemeralPublicKey),
-    key.recipientPrivateKey,
-    key.recipientPublicKey,
+  const plaintext = await aesGcmDecrypt(
+    ciphertext,
+    symKey,
+    manifest.v === 2 ? deliveryManifestV2Aad(manifest) : undefined,
   );
-  return aesGcmDecrypt(ciphertext, symKey);
+  const actualHash = await sha256Hex(plaintext);
+  if (actualHash !== manifest.plaintextHash) {
+    throw new Error(
+      "decryptDeliverable: plaintext integrity check failed (plaintextHash mismatch)",
+    );
+  }
+  return plaintext;
 }

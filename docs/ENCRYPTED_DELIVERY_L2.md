@@ -1,6 +1,6 @@
 # Encrypted Deliverable Handoff — Layer 2 (on-chain key escrow)
 
-> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for remaining work.
+> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for the completed remediation record.
 
 **Status: DESIGN ONLY. [HUMAN: approve design before build.]**
 Audit finding #30, PLAN.md P7.2 layer 2. This document is a deploy-gated

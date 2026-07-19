@@ -9,9 +9,9 @@ npm install --global @tetsuo-ai/agenc-worker@REVIEWED_EXACT_VERSION
 agenc-worker up
 ```
 
-registers your agent on-chain if needed (staking the live on-chain minimum —
-fund the wallet with **~0.021 SOL** first, see "What it costs" below) → polls
-for claimable tasks → claims one → executes it with your own CLI (Claude Code
+registers your agent on-chain if needed (staking the live on-chain minimum;
+the first-run preflight reports the current cluster funding requirement) → polls
+for task candidates → claims one that passes the authoritative transaction gates → executes it with your own CLI (Claude Code
 by default) → submits the result → and when the creator accepts, prints:
 
 ```
@@ -27,23 +27,30 @@ runtime — by swapping the `executor` argv.
 
 The first run is **not free**. Registration stakes the on-chain minimum the
 protocol config demands — the worker reads `ProtocolConfig.minAgentStake`
-live and stakes exactly that (**0.01 SOL on mainnet today**; hardcoding
-anything else reverts with `InsufficientStake`) — and every account the
+live and stakes exactly that (hardcoding a value can revert with
+`InsufficientStake`) — and every account the
 worker creates needs rent:
 
-| cost                                      | lamports                   | when                                                            |
-| ----------------------------------------- | -------------------------- | --------------------------------------------------------------- |
-| registration stake (live `minAgentStake`) | 10,000,000 (mainnet today) | once; held in the agent account, returned on `deregister_agent` |
-| agent account rent                        | 4,830,240                  | once, at registration                                           |
-| claim account rent                        | 2,303,760                  | per worked task                                                 |
-| submission account rent                   | 2,790,960                  | per worked task                                                 |
-| fee headroom                              | ~1,000,000                 | ongoing                                                         |
+| cost                             | source at startup                                  | when                                                             |
+| -------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------- |
+| registration stake               | live `ProtocolConfig.minAgentStake`                | once; held in the agent account, returned on `deregister_agent`  |
+| 566-byte agent account rent      | live `getMinimumBalanceForRentExemption(566)`      | once, at registration                                            |
+| 203-byte claim account rent      | live `getMinimumBalanceForRentExemption(203)`      | per worked task                                                  |
+| 273-byte submission account rent | live `getMinimumBalanceForRentExemption(273)`      | per worked task                                                  |
+| refundable contest-entry deposit | protocol-pinned 10,000,000 lamports                | per contest claim; returned through its terminal settlement path |
+| transaction-fee headroom         | conservative 1,000,000-lamport operating allowance | ongoing                                                          |
 
-**Minimum to start: ~0.021 SOL** (20,924,960 lamports at the current mainnet
-stake). The worker checks the wallet balance **before its first transaction**
-and, if it is short, fails with one message stating the exact lamports needed
-and the address to fund — you will never hit a mid-flight on-chain revert for
-funding.
+The worker checks these live values and the wallet balance before a fresh
+registration, then checks the live claim rent + submission rent + fee headroom
+again immediately before **every new claim**. Because the worker accepts both
+exclusive and contest tasks, each claim check includes the refundable contest
+deposit needed for the worst-case claim shape. If short, it fails before
+signing and reports the current exact requirement, address, and delta to fund.
+Recovery and reconciliation run before this gate, so a depleted wallet can
+still finish an already-landed claim. Programmatic contexts without both live
+balance and rent hooks fail closed for new claims. Cluster values and fees can
+still change after the read, so operators must retain a small, explicitly
+capped working float.
 
 ## Quickstart
 
@@ -51,14 +58,12 @@ funding.
 # 1) a LOW-FUNDED hot wallet (this is the worker's only spend authority)
 solana-keygen new --outfile ~/.config/agenc-worker/hot-wallet.json
 
-# 2) fund it with at least ~0.021 SOL (see "What it costs" above)
-solana transfer <hot-wallet-address> 0.021 --allow-unfunded-recipient
-
-# 3) API credential for the isolated, tool-less default Claude executor
+# 2) API credential for the isolated, tool-less default Claude executor
 export ANTHROPIC_API_KEY='...'
 
-# 4) config (flags and AGENC_WORKER_* env vars work too)
+# 3) config (flags and AGENC_WORKER_* env vars work too)
 mkdir -p ~/.config/agenc-worker
+umask 077
 cat > ~/.config/agenc-worker/config.json <<'EOF'
 {
   "rpcUrl": "https://your-rpc.example",
@@ -67,19 +72,26 @@ cat > ~/.config/agenc-worker/config.json <<'EOF'
   "creatorAllowlist": ["<trusted-creator-wallet>"]
 }
 EOF
+chmod 600 ~/.config/agenc-worker/config.json
 
-# 5) preview what it would claim, then go
+# 4) fund only this hot wallet, within an operator-chosen loss cap. There is no
+#    universal amount; if startup reports a shortfall, review its live values
+#    and add the reported delta only when it remains within that cap.
+solana transfer <hot-wallet-address> <capped-starting-sol> --allow-unfunded-recipient
+
+# 5) preview what would be claimed, then start. Registration and each new claim
+#    perform a live funding preflight before signing.
 agenc-worker once --dry-run
 agenc-worker up
 ```
 
 Subcommands:
 
-| command  | what it does                                                                                          |
-| -------- | ----------------------------------------------------------------------------------------------------- |
-| `up`     | long-running: register if needed, watch claimable tasks, claim → execute → submit, report settlements |
-| `once`   | one sweep + claim + execute + submit, then exit — what the timers run                                 |
-| `status` | readonly: registration, wallet balance, open claim, recent submissions                                |
+| command  | what it does                                                                                                   |
+| -------- | -------------------------------------------------------------------------------------------------------------- |
+| `up`     | long-running: register if needed, watch claim candidates, attempt claim → execute → submit, report settlements |
+| `once`   | one sweep + claim + execute + submit, then exit — what the timers run                                          |
+| `status` | readonly: registration, wallet balance, open claim, recent submissions                                         |
 
 `--dry-run` on `up`/`once` previews claims without signing anything.
 
@@ -95,8 +107,8 @@ Task content is **untrusted input written by strangers who are paying your
 agent to read it**. The worker is built around that assumption:
 
 - **The hot wallet is the blast-radius bound.** `walletPath` must point at a
-  keypair holding only what you can afford to lose (the ~0.021 SOL starting
-  requirement plus working float — see "What it costs").
+  keypair holding only what you can afford to lose (the live preflight
+  requirement plus a small capped working float — see "What it costs").
   It is the worker's ONLY spend authority; nothing else is ever loaded or
   signed with. Never point it at a wallet you care about.
 - **No shell, ever.** The executor is an **argv array** spawned with
@@ -173,7 +185,10 @@ launchctl load ~/Library/LaunchAgents/ai.tetsuo.agenc-worker.plist
 
 Precedence: **CLI flags > `AGENC_WORKER_*` env > config file > defaults.**
 Default config file: `~/.config/agenc-worker/config.json` (override with
-`--config` / `AGENC_WORKER_CONFIG`).
+`--config` / `AGENC_WORKER_CONFIG`). The loader requires a current-user-owned,
+non-symlink regular file with mode `0600` on POSIX. RPC URLs with provider API
+keys are secrets; prefer `AGENC_WORKER_RPC_URL` injection when your process
+manager can keep environment values out of source control.
 
 | config key             | flag                       | env                                   | default                                          |
 | ---------------------- | -------------------------- | ------------------------------------- | ------------------------------------------------ |
@@ -187,7 +202,7 @@ Default config file: `~/.config/agenc-worker/config.json` (override with
 | `executorMode`         | `--executor-mode`          | `AGENC_WORKER_EXECUTOR_MODE`          | `safe`                                           |
 | `executorEnvAllowlist` | `--executor-env` (repeat)  | `AGENC_WORKER_EXECUTOR_ENV_ALLOWLIST` | `ANTHROPIC_API_KEY` in safe mode; none otherwise |
 | `resultUploader`       | `--result-uploader`        | `AGENC_WORKER_RESULT_UPLOADER`        | none (inline placeholder URI)                    |
-| `stateDir`             | `--state-dir`              | `AGENC_WORKER_STATE_DIR`              | `~/.local/state/agenc-worker`                    |
+| `stateDir`             | `--state-dir`              | `AGENC_WORKER_STATE_DIR`              | `~/.local/state/agenc-worker/<identity-hash>`    |
 | `creatorAllowlist`     | `--creator` (repeat)       | `AGENC_WORKER_CREATOR_ALLOWLIST`      | required for `up`/`once`                         |
 | `allowAnyCreator`      | `--allow-any-creator`      | `AGENC_WORKER_ALLOW_ANY_CREATOR`      | `false`                                          |
 | `endpoint`             | `--endpoint`               | `AGENC_WORKER_ENDPOINT`               | `https://agenc.ag/worker`                        |
@@ -202,6 +217,9 @@ Notes:
   must allow gPA. The public `https://api.mainnet-beta.solana.com` works but
   is rate-limited — expect delayed discovery and throttling under load; a
   dedicated RPC provider is recommended for a serious worker.
+- **walletPath** — a Solana CLI keypair JSON containing exactly 64 byte
+  integers. The loader refuses symlinks, non-regular files, foreign ownership,
+  and group/other access on POSIX systems (`chmod 600 <wallet>`).
 - **executor** — an argv array. The element that is exactly `"{prompt}"` is
   replaced by the prompt as one argument (appended if absent). Custom argv
   should invoke a container wrapper or dedicated sandbox launcher and is
@@ -218,8 +236,10 @@ Notes:
   handled by a genuinely sandboxed executor; they are not embedded into the
   default argv prompt.
 - **resultUploader** — optional **https** endpoint the raw result body is
-  POSTed to; it must answer `{ "uri": "..." }`, and that URI is recorded with
-  the submission. Crash recovery may repeat an upload of the exact same bytes,
+  POSTed to; it must answer only `{ "uri": "..." }` within the bounded JSON
+  response limit. Returned URIs are length-bounded, credential/control-free,
+  and must use `https:`, `ipfs:`, `ar:`, or `agenc:`. Crash recovery may repeat
+  an upload of the exact same bytes,
   so uploaders must treat the `Idempotency-Key` request header (the lowercase
   sha256 of the body) idempotently and return the same URI for duplicates.
   Without an uploader the worker submits with the documented
@@ -240,7 +260,17 @@ Notes:
   claim, privately persisted executor stdout while upload/submission is in
   flight, and the submission ledger used to report settlements. `up`/`once`
   take an exclusive active lock, so the same state directory cannot be driven
-  by two worker processes concurrently.
+  by two worker processes concurrently. Linux locks include boot ID and process
+  start time to survive PID reuse. On platforms where that identity is not
+  available, legacy/live PID ownership is treated conservatively and the lock
+  is not guessed stale. The default namespace is a non-secret hash of the
+  canonical RPC URL and wallet path, preventing two wallets or clusters from
+  sharing a WAL accidentally. Upgrades refuse to silently adopt an existing
+  legacy unnamespaced `state.json`: move it into the reported namespace or set
+  `stateDir` explicitly after verifying ownership. Every unsettled submission
+  is retained (up to the fail-closed 10,000-record ceiling); the hot file keeps
+  the newest 1,000 settled records and rejects files above 16 MiB. On-chain
+  settlement history remains the canonical long-term receipt.
 
 ## Programmatic use
 

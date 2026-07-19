@@ -85,7 +85,10 @@ export function useDispute(
     (options?.enabled ?? true) && Boolean(taskPda) && Boolean(reader);
 
   const read = useQuery<Dispute | null, Error>({
-    queryKey: queryKeys.dispute(taskPda ? pdaKey(taskPda) : ""),
+    queryKey: queryKeys.dispute(
+      taskPda ? pdaKey(taskPda) : "",
+      ctx.cacheNamespace,
+    ),
     enabled,
     queryFn: () => reader!(taskPda as Address | string),
   });

@@ -5,10 +5,11 @@ export default defineConfig({
     // Programmatic surface (detection, init planning, the dev bot loop core,
     // split formatting, and the promote checklist — all embeddable).
     index: "src/index.ts",
-    // The npx-able CLI entry. Its source carries the `#!/usr/bin/env node`
-    // shebang, which tsup preserves on the emitted `./dist/cli.js` so
-    // `npx @tetsuo-ai/agenc-cli init` runs directly.
+    // Side-effect-free command API advertised as the `./cli` export.
     cli: "src/cli.ts",
+    // Executable-only wrapper. Its source carries the shebang, which tsup
+    // preserves on `./dist/bin.js`; this file is deliberately not exported.
+    bin: "src/bin.ts",
   },
   format: ["cjs", "esm"],
   dts: true,

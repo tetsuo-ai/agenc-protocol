@@ -41,7 +41,8 @@
 //   4. Buyer runs `hireAndActivate` — the blessed open-SDK hire
 //      orchestration (WP-D6): hire_from_listing_humanless → host/moderate
 //      the buyer-specific job spec (attested CLEAN the same way) →
-//      set_task_job_spec. After this the task is claimable.
+//      set_task_job_spec. After this the task is activated for provider
+//      discovery and claim attempts; transaction-time gates remain authoritative.
 //   5. Provider claims (waitForTaskStatus -> InProgress) and submits the
 //      result; the buyer accepts it (humanless-hired tasks force
 //      CreatorReview validation, so settlement is the Task Validation V2
@@ -212,7 +213,9 @@ async function waitForAccount(
   for (;;) {
     if ((await fetchAccountBytes(rpc, address)) !== null) return;
     if (Date.now() >= deadline) {
-      throw new Error(`${what} (${address}) did not appear within ${timeoutMs}ms`);
+      throw new Error(
+        `${what} (${address}) did not appear within ${timeoutMs}ms`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 1_500));
   }
@@ -247,7 +250,9 @@ async function fundedSandboxClient(
         rpcSubscriptionsUrl: environment.rpcSubscriptionsUrl,
         signer,
       });
-      log(`${label}: throwaway signer ${sandbox.signer.address} funded with ${environment.cluster} SOL`);
+      log(
+        `${label}: throwaway signer ${sandbox.signer.address} funded with ${environment.cluster} SOL`,
+      );
       return sandbox;
     } catch (error) {
       if (error instanceof SandboxAirdropError) {
@@ -256,7 +261,9 @@ async function fundedSandboxClient(
             `${error.address} — ${error.message}`,
         );
         if (attempt < maxAttempts) {
-          log(`${label}: retrying once after ${AIRDROP_RETRY_BACKOFF_MS}ms backoff`);
+          log(
+            `${label}: retrying once after ${AIRDROP_RETRY_BACKOFF_MS}ms backoff`,
+          );
           await new Promise((resolve) =>
             setTimeout(resolve, AIRDROP_RETRY_BACKOFF_MS),
           );
@@ -375,7 +382,9 @@ export async function runFirstHire(
         `${fixtureListing.price}, fixtures say ${fixture.priceLamports} — re-seed`,
     );
   }
-  log(`fixtures: "${fixture.name}" is Active at ${fixture.address} (${fixture.priceLamports} lamports)`);
+  log(
+    `fixtures: "${fixture.name}" is Active at ${fixture.address} (${fixture.priceLamports} lamports)`,
+  );
 
   // ---- 2b) protocol config: register_agent enforces stake_amount >=
   // min_agent_stake (the initialize_protocol floor is 0.001 SOL, so a 0n
@@ -400,7 +409,10 @@ export async function runFirstHire(
   // Both attestation paths below record as the GLOBAL moderation authority,
   // so read it once from the on-chain ModerationConfig.
   const [moderationConfigPda] = await findModerationConfigPda();
-  const moderationConfigBytes = await fetchAccountBytes(rpc, moderationConfigPda);
+  const moderationConfigBytes = await fetchAccountBytes(
+    rpc,
+    moderationConfigPda,
+  );
   if (moderationConfigBytes === null) {
     throw new Error(
       `ModerationConfig ${moderationConfigPda} not found on ${environment.cluster} ` +
@@ -447,7 +459,9 @@ export async function runFirstHire(
       rpcUrl: environment.rpcUrl,
       signer: moderatorSigner,
     });
-    log(`attestation: directly via moderator keypair ${moderatorSigner.address}`);
+    log(
+      `attestation: directly via moderator keypair ${moderatorSigner.address}`,
+    );
     const clean = {
       status: 0, // CLEAN
       riskScore: 0,
@@ -571,7 +585,9 @@ export async function runFirstHire(
     onPhase: (phase) => log(`hireAndActivate: ${phase}`),
   });
   const task = result.taskPda;
-  log(`buyer: hired + activated -> task ${task} (hire sig ${result.hireSignature})`);
+  log(
+    `buyer: hired + activated -> task ${task} (hire sig ${result.hireSignature})`,
+  );
 
   // ---- 6) provider claims + submits; buyer accepts (Task Validation V2) ----
   // Humanless-hired tasks force CreatorReview validation, so settlement is

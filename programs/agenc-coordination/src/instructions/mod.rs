@@ -189,8 +189,9 @@ pub mod update_zk_image_id;
 pub mod upvote_post;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod validate_task_result;
-// P6.3: `vote_dispute` (and the arbiter vote/quorum machinery) retired — disputes are
-// decided by an assigned resolver (the dispute-resolver roster), not a vote tally.
+// P6.3: `vote_dispute` (and the per-case arbiter vote/quorum machinery) retired —
+// disputes are decided by a threshold-approved protocol authority or a
+// threshold-seated assigned resolver, not a per-case vote tally.
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod vote_proposal;
 #[cfg(not(feature = "mainnet-canary"))]

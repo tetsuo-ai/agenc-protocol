@@ -11,9 +11,9 @@ use anchor_lang::prelude::*;
 /// These distinguish how a dispute was resolved, enabling consumers
 /// to differentiate between active rejection and default behavior.
 pub mod dispute_outcome {
-    /// The assigned resolver ruled to reject (P6.3: `approve = false` — creator refunded).
+    /// The authorized resolver ruled to reject (P6.3: `approve = false` — creator refunded).
     pub const REJECTED: u8 = 0;
-    /// The assigned resolver ruled to approve (P6.3: `approve = true`).
+    /// The authorized resolver ruled to approve (P6.3: `approve = true`).
     pub const APPROVED: u8 = 1;
     /// DEPRECATED (P6.3): the arbiter vote/quorum model is retired, so a dispute can no
     /// longer resolve via "no votes cast → default rejection". `resolve_dispute` only ever
@@ -373,8 +373,9 @@ pub struct DisputeInitiated {
     pub timestamp: i64,
 }
 
-// P6.3: `DisputeVoteCast` removed with `vote_dispute` — the arbiter vote/quorum model
-// is retired (disputes are decided by an assigned resolver, not a tally).
+// P6.3: `DisputeVoteCast` removed with `vote_dispute` — the per-case arbiter
+// vote/quorum model is retired. An authorized resolver (threshold-approved protocol
+// authority or threshold-seated assigned resolver) decides, not a tally.
 
 /// Emitted when a dispute is cancelled by its initiator (fix #587)
 #[event]
@@ -387,8 +388,8 @@ pub struct DisputeCancelled {
 
 /// Emitted when a dispute is resolved
 ///
-/// The `outcome` field reflects the assigned resolver's binary ruling (P6.3 — the
-/// arbiter vote/quorum model is retired):
+/// The `outcome` field reflects the authorized resolver's binary ruling (P6.3 — the
+/// per-case arbiter vote/quorum model is retired):
 /// - 0 = Rejected (the resolver passed `approve = false` — creator refunded)
 /// - 1 = Approved (the resolver passed `approve = true` — initiator's resolution upheld)
 ///
@@ -407,13 +408,14 @@ pub struct DisputeResolved {
     pub votes_against: u64,
     pub timestamp: i64,
     /// P6.4 accountable rulings: the wallet that decided this dispute (the protocol
-    /// authority OR the assigned resolver who signed `resolve_dispute`).
+    /// authority with M-of-N approval OR the threshold-seated assigned resolver).
     pub resolved_by: Pubkey,
     /// P6.4: 32-byte content hash of the off-chain ruling rationale.
     pub rationale_hash: [u8; 32],
 }
 
-/// Emitted when the protocol authority assigns a wallet to the dispute-resolver roster.
+/// Emitted after an authority-proposed resolver assignment receives configured M-of-N
+/// approval.
 #[event]
 pub struct DisputeResolverAssigned {
     pub resolver: Pubkey,
@@ -421,7 +423,8 @@ pub struct DisputeResolverAssigned {
     pub timestamp: i64,
 }
 
-/// Emitted when the protocol authority revokes a wallet from the dispute-resolver roster.
+/// Emitted after an authority-proposed resolver revocation receives configured M-of-N
+/// approval.
 #[event]
 pub struct DisputeResolverRevoked {
     pub resolver: Pubkey,

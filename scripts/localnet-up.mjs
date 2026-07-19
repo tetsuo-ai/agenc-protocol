@@ -26,10 +26,25 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { openSync, closeSync } from "node:fs";
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  assertRecordedProcessIdentity,
+  captureAndPublishSpawnedProcess,
+  ensurePrivateStateDirectory,
+  observeLinuxProcess,
+  readProcessIdentityFile,
+} from "./localnet-process-identity.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -39,13 +54,20 @@ const KEYS_DIR = path.join(STATE_DIR, "keys");
 const LOGS_DIR = path.join(STATE_DIR, "logs");
 const PID_FILE = path.join(STATE_DIR, "validator.pid");
 const VALIDATOR_LOG = path.join(LOGS_DIR, "validator.log");
+const UNSAFE_PROTOCOL_FIXTURE = path.join(
+  STATE_DIR,
+  "protocol-config.unpaused.fixture.json",
+);
 const DEFAULT_ENV_FILE = path.join(STATE_DIR, "env.json");
 const FIXTURES_PATH = path.join(STATE_DIR, "fixtures.json");
 const SO_PATH = path.join(
   ROOT,
   "programs/agenc-coordination/target/deploy/agenc_coordination.so",
 );
-const IDL_PATH = path.join(ROOT, "artifacts/anchor/idl/agenc_coordination.json");
+const IDL_PATH = path.join(
+  ROOT,
+  "artifacts/anchor/idl/agenc_coordination.json",
+);
 const SDK_DIST = path.join(ROOT, "packages/sdk-ts/dist/index.js");
 const BPF_LOADER_UPGRADEABLE = "BPFLoaderUpgradeab1e11111111111111111111111";
 
@@ -75,23 +97,38 @@ function usage() {
     "USAGE",
     "  node scripts/localnet-up.mjs [--port 8899] [--keep-ledger] [--env-file <path>]",
     "",
+    "TEST-ONLY",
+    "  --unsafe-unpaused-fixture  Genesis-inject an unpaused current-surface",
+    "                              ProtocolConfig for browser fixtures. This",
+    "                              bypasses the production release-stamp ceremony",
+    "                              and requires a fresh, disposable ledger.",
+    "",
     "See docs/LOCALNET.md for the full local-stack runbook.",
   ].join("\n");
 }
 
 function parseArgs(argv) {
-  const args = { port: 8899, keepLedger: false, envFile: DEFAULT_ENV_FILE };
+  const args = {
+    port: 8899,
+    keepLedger: false,
+    envFile: DEFAULT_ENV_FILE,
+    unsafeUnpausedFixture: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--port") {
       const value = Number(argv[i + 1]);
-      if (!Number.isInteger(value) || value < 1 || value > 65534) {
-        throw new Error(`--port must be an integer in 1..65534, got: ${argv[i + 1]}`);
+      if (!Number.isInteger(value) || value < 1 || value > 65432) {
+        throw new Error(
+          `--port must be an integer in 1..65432, got: ${argv[i + 1]}`,
+        );
       }
       args.port = value;
       i += 1;
     } else if (arg === "--keep-ledger") {
       args.keepLedger = true;
+    } else if (arg === "--unsafe-unpaused-fixture") {
+      args.unsafeUnpausedFixture = true;
     } else if (arg === "--env-file") {
       if (!argv[i + 1]) throw new Error("--env-file requires a path");
       args.envFile = path.resolve(argv[i + 1]);
@@ -102,6 +139,11 @@ function parseArgs(argv) {
     } else {
       throw new Error(`Unknown argument: ${arg}\n\n${usage()}`);
     }
+  }
+  if (args.keepLedger && args.unsafeUnpausedFixture) {
+    throw new Error(
+      "--unsafe-unpaused-fixture requires a fresh genesis and cannot be combined with --keep-ledger",
+    );
   }
   return args;
 }
@@ -148,30 +190,59 @@ function pidAlive(pid) {
 }
 
 async function readPidFile() {
-  try {
-    const raw = JSON.parse(await readFile(PID_FILE, "utf8"));
-    return Number.isInteger(raw.pid) ? raw : null;
-  } catch {
-    return null;
-  }
+  return readProcessIdentityFile(PID_FILE, "validator");
 }
 
 async function hashFile(p) {
-  return createHash("sha256").update(await readFile(p)).digest("hex");
+  return createHash("sha256")
+    .update(await readFile(p))
+    .digest("hex");
 }
 
-async function stopPid(label, pid) {
-  if (!pidAlive(pid)) return;
-  process.kill(pid, "SIGTERM");
+function assertValidatorArgv(record, argv, programId) {
+  const argument = (name) => {
+    const index = argv.indexOf(name);
+    return index >= 0 ? argv[index + 1] : undefined;
+  };
+  const upgrade = argv.indexOf("--upgradeable-program");
+  if (
+    path.resolve(argument("--ledger") ?? "") !== path.resolve(LEDGER_DIR) ||
+    argument("--rpc-port") !== String(record.rpcPort) ||
+    upgrade < 0 ||
+    argv[upgrade + 1] !== programId ||
+    path.resolve(argv[upgrade + 2] ?? "") !== path.resolve(SO_PATH)
+  ) {
+    throw new Error(
+      "validator stop refused: command line does not bind this repo ledger/program",
+    );
+  }
+}
+
+async function assertValidatorIdentity(record, programId) {
+  return assertRecordedProcessIdentity(
+    record,
+    await observeLinuxProcess(record.pid),
+    {
+      executableBasename: "solana-test-validator",
+      cwd: STATE_DIR,
+      assertArgv: (argv) => assertValidatorArgv(record, argv, programId),
+    },
+  );
+}
+
+async function stopPid(label, record, programId) {
+  if (!(await assertValidatorIdentity(record, programId))) return;
+  process.kill(record.pid, "SIGTERM");
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    if (!pidAlive(pid)) return;
+    if (!(await assertValidatorIdentity(record, programId))) return;
     await new Promise((r) => setTimeout(r, 200));
   }
-  process.kill(pid, "SIGKILL");
+  await assertValidatorIdentity(record, programId);
+  process.kill(record.pid, "SIGKILL");
   await new Promise((r) => setTimeout(r, 500));
-  if (pidAlive(pid)) {
-    fail(`${label} pid ${pid} is still alive after SIGKILL`);
+  if (await assertValidatorIdentity(record, programId)) {
+    fail(`${label} pid ${record.pid} is still alive after SIGKILL`);
   }
 }
 
@@ -198,7 +269,11 @@ async function rpcHealthy(rpcUrl) {
 async function portOccupied(port) {
   const net = await import("node:net");
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host: "127.0.0.1", port, timeout: 1500 });
+    const socket = net.createConnection({
+      host: "127.0.0.1",
+      port,
+      timeout: 1500,
+    });
     socket.once("connect", () => {
       socket.destroy();
       resolve(true);
@@ -209,6 +284,22 @@ async function portOccupied(port) {
     });
     socket.once("error", () => resolve(false));
   });
+}
+
+async function occupiedPorts(ports) {
+  const results = await Promise.all(ports.map((port) => portOccupied(port)));
+  return ports.filter((_, index) => results[index]);
+}
+
+/** A just-stopped validator can release its sockets a fraction after /proc exits. */
+async function waitForPortsFree(ports, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  let occupied = await occupiedPorts(ports);
+  while (occupied.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    occupied = await occupiedPorts(ports);
+  }
+  return occupied;
 }
 
 async function tailLog(lines = 25) {
@@ -245,13 +336,93 @@ async function loadSigner(kit, keyPath) {
 }
 
 function describeDiffs(diffs) {
-  return diffs.map((d) => `  - ${d.field}: on-chain=${d.actual} expected=${d.expected}`).join("\n");
+  return diffs
+    .map((d) => `  - ${d.field}: on-chain=${d.actual} expected=${d.expected}`)
+    .join("\n");
+}
+
+/**
+ * Write a solana-test-validator genesis account for the browser fixture only.
+ *
+ * A fresh production build correctly initializes paused at surface revision 0
+ * and can become live only through the reviewed atomic stamp ceremony. The
+ * React browser fixture is not a release rehearsal and does not have the IDL,
+ * custody, and bid-config accounts that ceremony deliberately requires. This
+ * explicit unsafe flag uses the same generated encoder as clients to inject a
+ * current, unpaused ProtocolConfig into a disposable validator genesis. Normal
+ * localnet and every deployed environment continue through initialize_protocol.
+ */
+async function writeUnsafeUnpausedProtocolFixture({
+  kit,
+  sdk,
+  programId,
+  signers,
+}) {
+  const [protocolPda, bump] = await sdk.findProtocolConfigPda();
+  const defaultAddress = kit.address("11111111111111111111111111111111");
+  const data = sdk.getProtocolConfigEncoder().encode({
+    authority: signers.authority.address,
+    treasury: signers.authority.address,
+    disputeThreshold: PROTOCOL_PARAMS.disputeThreshold,
+    protocolFeeBps: PROTOCOL_PARAMS.protocolFeeBps,
+    minArbiterStake: PROTOCOL_PARAMS.minStake,
+    minAgentStake: PROTOCOL_PARAMS.minStake,
+    maxClaimDuration: 604_800n,
+    maxDisputeDuration: 604_800n,
+    totalAgents: 0n,
+    totalTasks: 0n,
+    completedTasks: 0n,
+    totalValueDistributed: 0n,
+    bump,
+    multisigThreshold: PROTOCOL_PARAMS.multisigThreshold,
+    multisigOwnersLen: 3,
+    taskCreationCooldown: 60n,
+    maxTasksPer24h: 50,
+    disputeInitiationCooldown: 300n,
+    maxDisputesPer24h: 10,
+    minStakeForDispute: PROTOCOL_PARAMS.minStakeForDispute,
+    slashPercentage: 25,
+    stateUpdateCooldown: 60n,
+    votingPeriod: 86_400n,
+    protocolVersion: 1,
+    minSupportedVersion: 1,
+    protocolPaused: false,
+    disabledTaskTypeMask: 0,
+    multisigOwners: [
+      signers.authority.address,
+      signers.moderator.address,
+      signers.seeder.address,
+      defaultAddress,
+      defaultAddress,
+    ],
+    surfaceRevision: sdk.SURFACE_REVISION_CURRENT,
+  });
+
+  const dump = {
+    pubkey: String(protocolPda),
+    account: {
+      lamports: 10_000_000,
+      data: [Buffer.from(data).toString("base64"), "base64"],
+      owner: programId,
+      executable: false,
+      rentEpoch: 0,
+      space: data.length,
+    },
+  };
+  await writeFile(
+    UNSAFE_PROTOCOL_FIXTURE,
+    `${JSON.stringify(dump, null, 2)}\n`,
+  );
+  return { address: String(protocolPda), path: UNSAFE_PROTOCOL_FIXTURE };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const rpcUrl = `http://127.0.0.1:${args.port}`;
   const wsPort = args.port + 1;
+  const faucetPort = args.port + 2;
+  const gossipPort = args.port + 3;
+  const dynamicPortRange = `${args.port + 4}-${args.port + 103}`;
   const rpcSubscriptionsUrl = `ws://127.0.0.1:${wsPort}`;
 
   console.log(`localnet-up: repo ${ROOT}`);
@@ -260,10 +431,14 @@ async function main() {
   step("preflight (binaries, .so, SDK dist)");
   const validatorVersion = binaryOnPath("solana-test-validator");
   if (!validatorVersion) {
-    fail("solana-test-validator not found on PATH (install the Solana/Agave CLI tools).");
+    fail(
+      "solana-test-validator not found on PATH (install the Solana/Agave CLI tools).",
+    );
   }
   if (!binaryOnPath("solana-keygen")) {
-    fail("solana-keygen not found on PATH (install the Solana/Agave CLI tools).");
+    fail(
+      "solana-keygen not found on PATH (install the Solana/Agave CLI tools).",
+    );
   }
   if (!(await fileExists(SO_PATH))) {
     fail(
@@ -284,7 +459,9 @@ async function main() {
     );
   }
   if (!(await fileExists(IDL_PATH))) {
-    fail(`IDL missing: ${IDL_PATH} (run \`anchor build && npm run artifacts:refresh\`).`);
+    fail(
+      `IDL missing: ${IDL_PATH} (run \`anchor build && npm run artifacts:refresh\`).`,
+    );
   }
   const soSha256 = await hashFile(SO_PATH);
   const programId = JSON.parse(await readFile(IDL_PATH, "utf8")).address;
@@ -295,6 +472,7 @@ async function main() {
 
   // ------------------------------------------------------- state dir + keys
   step("state dir + keypairs (.localnet/)");
+  await ensurePrivateStateDirectory(STATE_DIR);
   await mkdir(LEDGER_DIR, { recursive: true });
   await mkdir(KEYS_DIR, { recursive: true });
   await mkdir(LOGS_DIR, { recursive: true });
@@ -305,9 +483,12 @@ async function main() {
   for (const name of KEY_NAMES) {
     if (await ensureKeypair(keyPaths[name], name)) generated.push(name);
   }
-  stepDone(generated.length ? `generated: ${generated.join(", ")}` : "all present");
+  stepDone(
+    generated.length ? `generated: ${generated.join(", ")}` : "all present",
+  );
 
   const kit = await import("@solana/kit");
+  const sdk = await import(pathToFileURL(SDK_DIST).href);
   const signers = {};
   for (const name of KEY_NAMES) {
     signers[name] = await loadSigner(kit, keyPaths[name]);
@@ -316,10 +497,24 @@ async function main() {
   console.log(`   moderator ${signers.moderator.address}`);
   console.log(`   seeder    ${signers.seeder.address}`);
 
+  let unsafeProtocolFixture = null;
+  if (args.unsafeUnpausedFixture) {
+    unsafeProtocolFixture = await writeUnsafeUnpausedProtocolFixture({
+      kit,
+      sdk,
+      programId,
+      signers,
+    });
+    console.warn(
+      `   TEST-ONLY: genesis-injecting unpaused ProtocolConfig ${unsafeProtocolFixture.address}`,
+    );
+  }
+
   // ------------------------------------------------------------- run check
   step(`validator on port ${args.port}`);
   let pidInfo = await readPidFile();
-  let ourValidatorAlive = pidInfo !== null && pidAlive(pidInfo.pid);
+  let ourValidatorAlive =
+    pidInfo !== null && (await assertValidatorIdentity(pidInfo, programId));
   let booted = false;
 
   if (
@@ -331,7 +526,7 @@ async function main() {
     const previous = pidInfo.programSha256
       ? pidInfo.programSha256.slice(0, 16)
       : "missing";
-    await stopPid("validator", stalePid);
+    await stopPid("validator", pidInfo, programId);
     await rm(PID_FILE, { force: true });
     pidInfo = null;
     ourValidatorAlive = false;
@@ -339,6 +534,13 @@ async function main() {
       `stopped stale pid ${stalePid} (program sha ${previous} -> ${soSha256.slice(0, 16)})`,
     );
     step(`validator on port ${args.port}`);
+  }
+
+  if (args.unsafeUnpausedFixture && ourValidatorAlive) {
+    fail(
+      "--unsafe-unpaused-fixture only applies at genesis, but this validator is already running.\n" +
+        "  Stop and purge the disposable ledger first: node scripts/localnet-down.mjs --purge",
+    );
   }
 
   if (ourValidatorAlive) {
@@ -371,9 +573,15 @@ async function main() {
     if (pidInfo !== null) {
       await rm(PID_FILE, { force: true }); // stale pid file
     }
-    if ((await portOccupied(args.port)) || (await portOccupied(wsPort))) {
+    const stillOccupied = await waitForPortsFree([
+      args.port,
+      wsPort,
+      faucetPort,
+      gossipPort,
+    ]);
+    if (stillOccupied.length > 0) {
       fail(
-        `port ${args.port} (rpc) or ${wsPort} (websocket) is already bound by a process that is NOT our validator.\n` +
+        `port(s) ${stillOccupied.join(", ")} remain bound by a process that is NOT our validator.\n` +
           `  Stop it, or pass a different --port.`,
       );
     }
@@ -384,6 +592,12 @@ async function main() {
       LEDGER_DIR,
       "--rpc-port",
       String(args.port),
+      "--faucet-port",
+      String(faucetPort),
+      "--gossip-port",
+      String(gossipPort),
+      "--dynamic-port-range",
+      dynamicPortRange,
       "--quiet",
       // Genesis-load the program at the REAL program id as an UPGRADEABLE
       // program with a real ProgramData account and our authority as upgrade
@@ -394,6 +608,13 @@ async function main() {
       SO_PATH,
       signers.authority.address,
     ];
+    if (unsafeProtocolFixture !== null) {
+      validatorArgs.push(
+        "--account",
+        unsafeProtocolFixture.address,
+        unsafeProtocolFixture.path,
+      );
+    }
     if (!args.keepLedger) validatorArgs.unshift("--reset");
 
     const logFd = openSync(VALIDATOR_LOG, "a");
@@ -402,22 +623,13 @@ async function main() {
       detached: true,
       stdio: ["ignore", logFd, logFd],
     });
-    child.unref();
     closeSync(logFd);
-    await writeFile(
-      PID_FILE,
-      `${JSON.stringify(
-        {
-          pid: child.pid,
-          rpcPort: args.port,
-          startedAt: new Date().toISOString(),
-          programSha256: soSha256,
-          programSize: soBytes,
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    await captureAndPublishSpawnedProcess(child, "validator", PID_FILE, {
+      rpcPort: args.port,
+      programSha256: soSha256,
+      programSize: soBytes,
+    });
+    child.unref();
 
     const deadline = Date.now() + 90_000;
     let healthy = false;
@@ -441,7 +653,9 @@ async function main() {
       );
     }
     booted = true;
-    stepDone(`booted pid ${child.pid}${args.keepLedger ? " (kept ledger)" : " (reset)"}`);
+    stepDone(
+      `booted pid ${child.pid}${args.keepLedger ? " (kept ledger)" : " (reset)"}`,
+    );
   }
 
   const rpc = kit.createSolanaRpc(rpcUrl);
@@ -466,7 +680,9 @@ async function main() {
       await new Promise((r) => setTimeout(r, 300));
     }
     if (final < AIRDROP_FLOOR) {
-      fail(`airdrop to ${name} (${address}) did not land within 30s (balance ${final}).`);
+      fail(
+        `airdrop to ${name} (${address}) did not land within 30s (balance ${final}).`,
+      );
     }
     funded.push(`${name}=${final / LAMPORTS_PER_SOL}SOL`);
   }
@@ -474,7 +690,6 @@ async function main() {
 
   // ---------------------------------------------------------- SDK + program
   step("program account check");
-  const sdk = await import(pathToFileURL(SDK_DIST).href);
   if (sdk.AGENC_COORDINATION_PROGRAM_ADDRESS !== programId) {
     fail(
       `SDK program address ${sdk.AGENC_COORDINATION_PROGRAM_ADDRESS} != IDL address ${programId}.\n` +
@@ -507,7 +722,10 @@ async function main() {
 
   // ------------------------------------------------- initialize_protocol
   step("protocol config (initialize_protocol)");
-  const client = sdk.createMarketplaceClient({ rpcUrl, signer: signers.authority });
+  const client = sdk.createMarketplaceClient({
+    rpcUrl,
+    signer: signers.authority,
+  });
   const expectedOwners = [
     signers.authority.address,
     signers.moderator.address,
@@ -515,7 +733,9 @@ async function main() {
   ];
   const [protocolPda] = await sdk.findProtocolConfigPda();
   let protocol = await sdk.fetchMaybeProtocolConfig(rpc, protocolPda);
-  let protocolAction = "verified existing";
+  let protocolAction = args.unsafeUnpausedFixture
+    ? "verified TEST-ONLY genesis fixture"
+    : "verified existing";
   if (!protocol.exists) {
     const ix = await sdk.facade.initializeProtocol({
       authority: signers.authority,
@@ -531,28 +751,49 @@ async function main() {
     // initialize_protocol validates remaining_accounts[0] == ProgramData PDA.
     const ixWithProgramData = {
       ...ix,
-      accounts: [...ix.accounts, { address: programDataPda, role: kit.AccountRole.READONLY }],
+      accounts: [
+        ...ix.accounts,
+        { address: programDataPda, role: kit.AccountRole.READONLY },
+      ],
     };
     const { signature } = await client.send([ixWithProgramData]);
     protocolAction = `initialized (${signature})`;
     protocol = await sdk.fetchMaybeProtocolConfig(rpc, protocolPda);
-    if (!protocol.exists) fail("ProtocolConfig still missing after initialize_protocol");
+    if (!protocol.exists)
+      fail("ProtocolConfig still missing after initialize_protocol");
   }
   {
     const d = protocol.data;
     const actualOwners = d.multisigOwners.slice(0, d.multisigOwnersLen);
     const diffs = [];
     const check = (field, actual, expected) => {
-      if (`${actual}` !== `${expected}`) diffs.push({ field, actual, expected });
+      if (`${actual}` !== `${expected}`)
+        diffs.push({ field, actual, expected });
     };
     check("authority", d.authority, signers.authority.address);
     check("treasury", d.treasury, signers.authority.address);
-    check("disputeThreshold", d.disputeThreshold, PROTOCOL_PARAMS.disputeThreshold);
+    check(
+      "disputeThreshold",
+      d.disputeThreshold,
+      PROTOCOL_PARAMS.disputeThreshold,
+    );
     check("protocolFeeBps", d.protocolFeeBps, PROTOCOL_PARAMS.protocolFeeBps);
     check("minAgentStake", d.minAgentStake, PROTOCOL_PARAMS.minStake);
-    check("minStakeForDispute", d.minStakeForDispute, PROTOCOL_PARAMS.minStakeForDispute);
-    check("multisigThreshold", d.multisigThreshold, PROTOCOL_PARAMS.multisigThreshold);
+    check(
+      "minStakeForDispute",
+      d.minStakeForDispute,
+      PROTOCOL_PARAMS.minStakeForDispute,
+    );
+    check(
+      "multisigThreshold",
+      d.multisigThreshold,
+      PROTOCOL_PARAMS.multisigThreshold,
+    );
     check("multisigOwners", actualOwners.join("|"), expectedOwners.join("|"));
+    if (args.unsafeUnpausedFixture) {
+      check("protocolPaused", d.protocolPaused, false);
+      check("surfaceRevision", d.surfaceRevision, sdk.SURFACE_REVISION_CURRENT);
+    }
     if (diffs.length > 0) {
       fail(
         `ProtocolConfig ${protocolPda} EXISTS WITH DIFFERENT VALUES — refusing to converge:\n` +
@@ -583,7 +824,8 @@ async function main() {
     const { signature } = await client.send([ix]);
     moderationAction = `initialized (${signature})`;
     moderation = await sdk.fetchMaybeModerationConfig(rpc, moderationPda);
-    if (!moderation.exists) fail("ModerationConfig still missing after configure_task_moderation");
+    if (!moderation.exists)
+      fail("ModerationConfig still missing after configure_task_moderation");
   }
   {
     const d = moderation.data;
@@ -618,7 +860,10 @@ async function main() {
   let attestorUrl = null;
   try {
     const previous = JSON.parse(await readFile(args.envFile, "utf8"));
-    if (typeof previous.attestorUrl === "string" && previous.attestorUrl.length > 0) {
+    if (
+      typeof previous.attestorUrl === "string" &&
+      previous.attestorUrl.length > 0
+    ) {
       attestorUrl = previous.attestorUrl;
     }
   } catch {
@@ -647,14 +892,22 @@ async function main() {
 
   // ------------------------------------------------------------- summary
   const totalSecs = ((Date.now() - startedAt) / 1000).toFixed(1);
-  console.log(`\nlocalnet is up (${totalSecs}s total)${booted ? "" : " — was already running"}.`);
+  console.log(
+    `\nlocalnet is up (${totalSecs}s total)${booted ? "" : " — was already running"}.`,
+  );
   console.log(`  rpc:        ${rpcUrl}`);
   console.log(`  ws:         ${rpcSubscriptionsUrl}`);
-  console.log(`  program:    ${programId} (upgradeable, authority=${signers.authority.address})`);
+  console.log(
+    `  program:    ${programId} (upgradeable, authority=${signers.authority.address})`,
+  );
   console.log(`  env file:   ${args.envFile}`);
-  console.log(`  attestor:   ${attestorUrl ?? "not running (attestorUrl=null)"}`);
+  console.log(
+    `  attestor:   ${attestorUrl ?? "not running (attestorUrl=null)"}`,
+  );
   console.log("\nNext commands:");
-  console.log("  node scripts/localnet-status.mjs                      # health + decoded configs");
+  console.log(
+    "  node scripts/localnet-status.mjs                      # health + decoded configs",
+  );
   console.log(
     "  node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs \\\n" +
       `      --rpc ${rpcUrl} \\\n` +
@@ -666,7 +919,9 @@ async function main() {
       `  #   SANDBOX_ATTESTOR_RPC_URL=${rpcUrl} SANDBOX_ATTESTOR_ALLOW_CUSTOM_RPC=true,\n` +
       "  #   then record its URL in the env file's attestorUrl.",
   );
-  console.log("  node scripts/localnet-down.mjs [--purge]              # stop (and wipe ledger)");
+  console.log(
+    "  node scripts/localnet-down.mjs [--purge]              # stop (and wipe ledger)",
+  );
 }
 
 main().catch((error) => {

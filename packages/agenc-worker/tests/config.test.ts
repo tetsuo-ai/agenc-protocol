@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
   assertActiveWorkerConfig,
   ConfigError,
   configFromEnv,
+  defaultStateDir,
   DEFAULT_CAPABILITIES,
   DEFAULT_ENDPOINT,
   DEFAULT_EXECUTOR,
@@ -18,6 +19,13 @@ import {
 } from "../src/config.js";
 
 const REQUIRED = { rpcUrl: "http://localhost:8899", walletPath: "/tmp/w.json" };
+const CREATOR_A = "11111111111111111111111111111111";
+const CREATOR_B = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK";
+
+function writePrivate(file: string, body: string): void {
+  writeFileSync(file, body, { mode: 0o600 });
+  chmodSync(file, 0o600);
+}
 
 describe("resolveWorkerConfig", () => {
   it("applies defaults when only the required fields are given", () => {
@@ -40,7 +48,23 @@ describe("resolveWorkerConfig", () => {
     expect(config.taskThreadBaseUrl).toBe(DEFAULT_TASK_THREAD_BASE_URL);
     expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
     expect(config.executorTimeoutMs).toBe(DEFAULT_EXECUTOR_TIMEOUT_MS);
-    expect(config.stateDir).toContain("agenc-worker");
+    expect(config.stateDir).toBe(defaultStateDir(REQUIRED));
+    expect(path.basename(config.stateDir)).toMatch(/^[0-9a-f]{24}$/u);
+  });
+
+  it("namespaces default state by canonical RPC and wallet identity", () => {
+    const first = defaultStateDir(REQUIRED);
+    expect(defaultStateDir({ ...REQUIRED })).toBe(first);
+    expect(
+      defaultStateDir({ ...REQUIRED, walletPath: "/tmp/other-wallet.json" }),
+    ).not.toBe(first);
+    expect(
+      defaultStateDir({ ...REQUIRED, rpcUrl: "http://localhost:9999" }),
+    ).not.toBe(first);
+    expect(
+      resolveWorkerConfig({ ...REQUIRED, stateDir: "/tmp/explicit-state" })
+        .stateDir,
+    ).toBe("/tmp/explicit-state");
   });
 
   it("enforces precedence: flags > env > file", () => {
@@ -159,7 +183,7 @@ describe("resolveWorkerConfig", () => {
       const config = resolveWorkerConfig({
         ...REQUIRED,
         maxRewardLamports: "1000",
-        creatorAllowlist: ["trusted"],
+        creatorAllowlist: [CREATOR_A],
       });
       expect(() => assertActiveWorkerConfig(config)).toThrow(
         /ANTHROPIC_API_KEY.*refusing/s,
@@ -184,7 +208,7 @@ describe("resolveWorkerConfig", () => {
     const restricted = resolveWorkerConfig({
       ...REQUIRED,
       maxRewardLamports: "1000",
-      creatorAllowlist: ["trusted"],
+      creatorAllowlist: [CREATOR_A],
       executor: [process.execPath, "-e", "void 0", "{prompt}"],
       executorMode: "sandboxed",
       executorEnvAllowlist: [],
@@ -272,9 +296,51 @@ describe("resolveWorkerConfig", () => {
   it("parses creator allowlists from comma-separated env strings", () => {
     const config = resolveWorkerConfig({
       ...REQUIRED,
-      creatorAllowlist: "addr1, addr2 ,addr3",
+      creatorAllowlist: `${CREATOR_A}, ${CREATOR_B}`,
     });
-    expect(config.creatorAllowlist).toEqual(["addr1", "addr2", "addr3"]);
+    expect(config.creatorAllowlist).toEqual([CREATOR_A, CREATOR_B]);
+  });
+
+  it("enforces the runtime schema across env and programmatic sources", () => {
+    const invalidInputs: Array<Record<string, unknown>> = [
+      { rpcUrl: 7 },
+      { rpcUrl: "https://user:secret@rpc.example" },
+      { walletPath: "bad\npath" },
+      { stateDir: "\u0000state" },
+      { capabilities: "01" },
+      { capabilities: -1n },
+      { minRewardLamports: 18_446_744_073_709_551_616n },
+      { maxRewardLamports: "18446744073709551616" },
+      { pollIntervalMs: " 10" },
+      { pollIntervalMs: 1.5 },
+      { executorTimeoutMs: 2_147_483_648 },
+      { creatorAllowlist: ["not-a-solana-address"] },
+      { resultUploader: "https://user:secret@up.example" },
+      { endpoint: "https://user:secret@worker.example" },
+      { taskThreadBaseUrl: "https://threads.example#fragment" },
+      { typo: true },
+    ];
+    for (const invalid of invalidInputs) {
+      expect(() =>
+        resolveWorkerConfig({
+          ...REQUIRED,
+          ...invalid,
+        } as never),
+      ).toThrow(ConfigError);
+    }
+
+    expect(() =>
+      resolveWorkerConfig(
+        REQUIRED,
+        configFromEnv({ AGENC_WORKER_CAPABILITIES: "01" }),
+      ),
+    ).toThrow(/capabilities/);
+    expect(() =>
+      resolveWorkerConfig(
+        REQUIRED,
+        configFromEnv({ AGENC_WORKER_CREATOR_ALLOWLIST: "not-an-address" }),
+      ),
+    ).toThrow(/creatorAllowlist/);
   });
 });
 
@@ -290,13 +356,99 @@ describe("loadConfigFile", () => {
   it("parses a JSON object and rejects non-objects", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "agenc-worker-config-"));
     const good = path.join(dir, "config.json");
-    writeFileSync(good, JSON.stringify({ rpcUrl: "http://file" }));
+    writePrivate(good, JSON.stringify({ rpcUrl: "http://file" }));
     expect(loadConfigFile(good)).toEqual({ rpcUrl: "http://file" });
     const bad = path.join(dir, "bad.json");
-    writeFileSync(bad, "[1,2,3]");
+    writePrivate(bad, "[1,2,3]");
     expect(() => loadConfigFile(bad)).toThrow(/JSON object/);
     const invalid = path.join(dir, "invalid.json");
-    writeFileSync(invalid, "{nope");
+    writePrivate(invalid, "{nope");
     expect(() => loadConfigFile(invalid)).toThrow(/invalid JSON/);
+  });
+
+  it("refuses symlinks and group/world-readable config files", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agenc-worker-config-"));
+    const target = path.join(dir, "target.json");
+    const link = path.join(dir, "link.json");
+    writePrivate(
+      target,
+      JSON.stringify({ rpcUrl: "https://rpc.example?api-key=secret" }),
+    );
+    symlinkSync(target, link);
+    expect(() => loadConfigFile(link, { explicit: true })).toThrow(
+      /symbolic link/u,
+    );
+
+    chmodSync(target, 0o644);
+    expect(() => loadConfigFile(target, { explicit: true })).toThrow(
+      /chmod 600/u,
+    );
+  });
+
+  it("rejects unknown properties with the config path", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agenc-worker-config-"));
+    const file = path.join(dir, "unknown.json");
+    writePrivate(
+      file,
+      JSON.stringify({ rpcUrl: "http://file", rpcURL: "typo" }),
+    );
+    expect(() => loadConfigFile(file)).toThrow(
+      new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}.*rpcURL`),
+    );
+  });
+
+  it.each([
+    ["rpcUrl", null],
+    ["walletPath", false],
+    ["capabilities", 1],
+    ["minRewardLamports", 1],
+    ["maxRewardLamports", true],
+    ["allowUnboundedReward", "true"],
+    ["executor", '["claude"]'],
+    ["executorMode", null],
+    ["executorEnvAllowlist", "ANTHROPIC_API_KEY"],
+    ["resultUploader", 7],
+    ["stateDir", []],
+    ["creatorAllowlist", "creator"],
+    ["allowAnyCreator", 0],
+    ["endpoint", {}],
+    ["taskThreadBaseUrl", false],
+    ["pollIntervalMs", "15000"],
+    ["executorTimeoutMs", null],
+  ])("rejects an invalid JSON type at %s", (field, value) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agenc-worker-config-"));
+    const file = path.join(dir, `${field}.json`);
+    writePrivate(file, JSON.stringify({ [field]: value }));
+    expect(() => loadConfigFile(file)).toThrow(ConfigError);
+    expect(() => loadConfigFile(file)).toThrow(new RegExp(`"${field}"`));
+  });
+
+  it.each([
+    ["rpcUrl", "not a URL"],
+    ["walletPath", "   "],
+    ["capabilities", "0"],
+    ["capabilities", "01"],
+    ["minRewardLamports", "-1"],
+    ["maxRewardLamports", "18446744073709551616"],
+    ["executor", []],
+    ["executor", ["claude", ""]],
+    ["executorMode", "root"],
+    ["executorEnvAllowlist", ["BAD-NAME"]],
+    ["resultUploader", "http://uploader.example"],
+    ["resultUploader", "https://user:secret@uploader.example"],
+    ["stateDir", ""],
+    ["creatorAllowlist", [""]],
+    ["creatorAllowlist", ["not-a-solana-address"]],
+    ["endpoint", "ftp://worker.example"],
+    ["taskThreadBaseUrl", "https://threads.example?token=secret"],
+    ["pollIntervalMs", 0],
+    ["pollIntervalMs", 1.5],
+    ["executorTimeoutMs", 2_147_483_648],
+  ])("rejects an invalid JSON value at %s", (field, value) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "agenc-worker-config-"));
+    const file = path.join(dir, `${field}-value.json`);
+    writePrivate(file, JSON.stringify({ [field]: value }));
+    expect(() => loadConfigFile(file)).toThrow(ConfigError);
+    expect(() => loadConfigFile(file)).toThrow(new RegExp(`"${field}`));
   });
 });

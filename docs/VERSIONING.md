@@ -78,6 +78,7 @@ program cutover:
 | `@tetsuo-ai/marketplace-react` | **0.4.2** | patch candidate widening the SDK peer range through 0.12 |
 | `@tetsuo-ai/marketplace-tools` | **0.5.0** | depends on SDK `^0.12.0` |
 | `@tetsuo-ai/marketplace-mcp` | **0.5.0** | depends on tools `^0.5.0` and SDK `^0.12.0` |
+| `@tetsuo-ai/marketplace-moderation` | **0.2.0** | strict JSON canonicalization plus capability-gated complete semantic-v2 payloads; 0.1.0 remains the immutable legacy-v1 release |
 | `@tetsuo-ai/agenc-worker` | **0.2.0** | depends on SDK `^0.12.0`; security-hardening release |
 | `@tetsuo-ai/agenc-cli` / `agenc-cli` | **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`; scoped package and alias ship together |
 

@@ -1,9 +1,10 @@
 // AGENT_METADATA v1 validator + renderer — the P7.3 versioned agent-identity
-// standard. The wire standard itself is documented in docs/AGENT_METADATA.md
-// and published as the JSON Schema
+// standard. The wire standard itself is documented in docs/AGENT_METADATA.md;
+// its authoritative schema is schemas/agent-metadata.schema.json, whose
+// canonical $id is the versioned URL below:
 // https://agenc.tech/schemas/agent-metadata-v1.schema.json
-// (schemas/agent-metadata.schema.json). This module is the reference
-// implementation: a self-contained structural validator (no JSON-Schema
+// This module is the reference implementation: a self-contained structural
+// validator (no JSON-Schema
 // runtime, mirroring the hand-rolled codecs in listing.ts) plus a tiny
 // renderer that flattens a *validated* document into a provider-card view
 // model.
@@ -20,7 +21,7 @@
 /** The AGENT_METADATA major version this module validates and renders. */
 export const AGENT_METADATA_VERSION = 1 as const;
 
-/** Canonical `$id` of the published JSON Schema this validator implements. */
+/** Canonical `$id` of the in-package JSON Schema this validator implements. */
 export const AGENT_METADATA_SCHEMA_ID =
   "https://agenc.tech/schemas/agent-metadata-v1.schema.json";
 

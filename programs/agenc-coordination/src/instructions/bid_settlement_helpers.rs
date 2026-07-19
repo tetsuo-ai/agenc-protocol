@@ -217,11 +217,11 @@ fn decrement_bidder_active_bid_count(bidder_market_state: &mut BidderMarketState
     Ok(())
 }
 
-pub(crate) fn load_bid_task_completion_meta<'info>(
+pub(crate) fn load_bid_task_completion_meta(
     task: &Task,
     task_key: &Pubkey,
     claim: &TaskClaim,
-    remaining_accounts: &[AccountInfo<'info>],
+    remaining_accounts: &[AccountInfo<'_>],
 ) -> Result<Option<BidTaskCompletionMeta>> {
     if task.task_type != TaskType::BidExclusive {
         return Ok(None);
@@ -281,8 +281,8 @@ pub(crate) fn load_bid_task_completion_meta<'info>(
     }))
 }
 
-pub(crate) fn finalize_bid_task_completion<'info>(
-    remaining_accounts: &[AccountInfo<'info>],
+pub(crate) fn finalize_bid_task_completion(
+    remaining_accounts: &[AccountInfo<'_>],
     task_key: &Pubkey,
     claim: &TaskClaim,
     meta: &BidTaskCompletionMeta,
@@ -337,9 +337,9 @@ pub(crate) fn finalize_bid_task_completion<'info>(
     Ok(())
 }
 
-pub(crate) fn close_bid_book_without_accepted_bid<'info>(
+pub(crate) fn close_bid_book_without_accepted_bid(
     task_key: &Pubkey,
-    bid_book_info: &AccountInfo<'info>,
+    bid_book_info: &AccountInfo<'_>,
     now: i64,
 ) -> Result<()> {
     let (expected_bid_book, _) =

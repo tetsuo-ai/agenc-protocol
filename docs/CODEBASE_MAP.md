@@ -39,7 +39,7 @@ agenc-protocol/
 - `programs/agenc-coordination/src/errors.rs` - protocol error codes
 - `programs/agenc-coordination/src/instructions/` - instruction handlers and helpers
 - `programs/agenc-coordination/src/utils/` - shared utilities
-- `programs/agenc-coordination/fuzz/` - active model/property regression harness (76 tests)
+- `programs/agenc-coordination/fuzz/` - active model/property regression harness (77 tests)
 
 ### Canonical artifacts
 

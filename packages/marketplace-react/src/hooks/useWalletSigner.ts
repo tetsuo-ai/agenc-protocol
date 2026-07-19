@@ -2,16 +2,13 @@
  * `useWalletSigner()` — bridges a browser wallet into the kit `TransactionSigner`
  * the SDK write client expects.
  *
- * ## Adapter seam (the signer-adapters package is not built yet)
+ * ## Adapter seam
  *
- * The dedicated `@tetsuo-ai/signer-adapters` package (the signers agent, PLAN.md
- * P4.1) — which wraps `@solana/react`'s
- * `useWalletAccountTransactionSendingSigner` (Wallet Standard) and the legacy
- * `@solana/wallet-adapter` shim into a kit `TransactionSigner` — does not exist
- * at this hook's build time. So this hook is defined against a **documented
- * adapter interface** ({@link WalletSignerAdapter}) rather than importing that
- * package. A caller passes an adapter (today: a thin wrapper they write, or the
- * signer-adapters hook once it ships) and this hook normalizes it to the
+ * The package's Wallet Standard and legacy wallet-adapter bridges produce kit
+ * `TransactionSigner`s, while this hook stays defined against a small
+ * **documented adapter interface** ({@link WalletSignerAdapter}) so it does not
+ * own any wallet library's connection lifecycle. A caller passes its adapter
+ * state and this hook normalizes it to the
  * `{ signer, connected, connect() }` contract every other hook expects.
  *
  * With NO adapter passed, the hook falls back to the provider's configured
@@ -29,10 +26,9 @@ import { useAgencContext } from "../provider/context.js";
 import type { TransactionSigner } from "../types.js";
 
 /**
- * The minimal adapter shape this hook bridges. The forthcoming
- * `@tetsuo-ai/signer-adapters` hook is expected to return exactly this shape
- * (its `signerFromWalletAccount(...)` resolves the `signer`); until it ships,
- * any object matching this interface works.
+ * The minimal adapter shape this hook bridges. Any wallet connection hook can
+ * return this shape after resolving its signer with `signerFromWalletAccount`
+ * or `signerFromWalletAdapter`.
  */
 export interface WalletSignerAdapter {
   /** The resolved kit signer, or null when no wallet is connected. */
@@ -70,8 +66,7 @@ export interface UseWalletSignerResult {
  *
  * @example
  * ```tsx
- * // Once @tetsuo-ai/signer-adapters ships:
- * const adapter = useWalletStandardSigner(); // returns WalletSignerAdapter
+ * const adapter = useMyWalletConnection(); // returns WalletSignerAdapter
  * const { signer, connected, connect } = useWalletSigner({ adapter });
  * ```
  */
@@ -83,7 +78,7 @@ export function useWalletSigner(
 
   // Adapter wins when present; otherwise the provider's configured signer.
   const signer: TransactionSigner | null =
-    adapter?.signer ?? ctx.signer ?? null;
+    adapter !== undefined ? adapter.signer : (ctx.signer ?? null);
   const connected =
     adapter !== undefined
       ? (adapter.connected ?? adapter.signer !== null)

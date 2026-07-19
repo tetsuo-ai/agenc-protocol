@@ -4,7 +4,10 @@
 // tampered-body rejection.
 import { describe, it, expect } from "vitest";
 import { createHmac } from "node:crypto";
-import { verifyAgencWebhookSignature } from "../src/index.js";
+import {
+  MAX_WEBHOOK_TOLERANCE_MS,
+  verifyAgencWebhookSignature,
+} from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // Known vectors (precomputed with node:crypto, hardcoded so a WebCrypto
@@ -140,6 +143,39 @@ describe("verifyAgencWebhookSignature", () => {
         verifyAgencWebhookSignature({ ...input, now: () => T + 1_001 }),
       ).resolves.toBe(false);
     });
+
+    it.each([
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      -1,
+      1.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      MAX_WEBHOOK_TOLERANCE_MS + 1,
+    ])("rejects an unsafe tolerance %s", async (toleranceMs) => {
+      await expect(
+        verifyAgencWebhookSignature({
+          rawBody: RAW_BODY,
+          signatureHeader: `t=${T},v1=${V1}`,
+          secret: SECRET,
+          toleranceMs,
+          now: atT,
+        }),
+      ).resolves.toBe(false);
+    });
+
+    it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5])(
+      "rejects an unsafe clock value %s",
+      async (now) => {
+        await expect(
+          verifyAgencWebhookSignature({
+            rawBody: RAW_BODY,
+            signatureHeader: `t=${T},v1=${V1}`,
+            secret: SECRET,
+            now: () => now,
+          }),
+        ).resolves.toBe(false);
+      },
+    );
   });
 
   describe("malformed headers (return false, never throw)", () => {

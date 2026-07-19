@@ -61,7 +61,8 @@ function makeAccountRpc(data: Uint8Array | null) {
                   data: [Buffer.from(data).toString("base64"), "base64"],
                   executable: false,
                   lamports: 1n,
-                  owner: "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK" as Address,
+                  owner:
+                    "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK" as Address,
                   rentEpoch: 0n,
                   space: BigInt(data.length),
                 },
@@ -132,10 +133,14 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     // Revision 4 turns goods on; higher revisions keep it on (monotonic).
     expect(capabilitiesForRevision(4).goods).toBe(true);
     expect(capabilitiesForRevision(4).fullSurface).toBe(true);
-    expect(capabilitiesForRevision(7).goods).toBe(true);
+    expect(capabilitiesForRevision(SURFACE_REVISION_CURRENT).goods).toBe(true);
     // assertCapability throws below 4 and passes at/above.
-    expect(() => assertCapability(capabilitiesForRevision(3), "goods")).toThrow();
-    expect(() => assertCapability(capabilitiesForRevision(4), "goods")).not.toThrow();
+    expect(() =>
+      assertCapability(capabilitiesForRevision(3), "goods"),
+    ).toThrow();
+    expect(() =>
+      assertCapability(capabilitiesForRevision(4), "goods"),
+    ).not.toThrow();
   });
 
   it("maps the audit-hardening/current revision as a monotonic full surface", () => {
@@ -145,6 +150,17 @@ describe("capabilitiesForRevision (typed mapping)", () => {
     expect(caps.fullSurface).toBe(true);
     expect(caps.goods).toBe(true);
     expect(caps.surfaceRevision).toBe(5);
+  });
+
+  it("fails closed for a future revision this SDK does not understand", () => {
+    const caps = capabilitiesForRevision(SURFACE_REVISION_CURRENT + 1);
+    expect(caps.surfaceRevision).toBe(SURFACE_REVISION_CURRENT + 1);
+    expect(caps.fullSurface).toBe(false);
+    expect(caps.listings).toBe(false);
+    expect(caps.goods).toBe(false);
+    expect(() => assertCapability(caps, "listings")).toThrow(
+      SurfaceNotDeployedError,
+    );
   });
 });
 

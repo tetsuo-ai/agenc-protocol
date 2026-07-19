@@ -4,7 +4,7 @@
 > with current state: the deploys and config inits this audit gated are done, the
 > live surface has since grown to 99 instructions (since 2026-07-09,
 > `surface_revision = 4`), and a later adversarial audit (2026-07-16/17) found
-> additional issues this pass missed — see `TODO.MD` (open hardening queue
+> additional issues this pass missed — see `TODO.MD` (completed hardening record
 > F-1..F-19), `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
 
 > **Post-deploy status (2026-06-11):** the full-surface upgrade this audit gated has since

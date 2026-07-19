@@ -174,8 +174,10 @@ mapping.
 
 ### Authority, trust, anti-abuse
 
-10. **Disputes are accountable, single-resolver (no voting).** The protocol authority OR
-    an assigned `DisputeResolver` resolves directly; a reasoned ruling
+10. **Disputes are accountable, single-resolver (no per-case voting).** The protocol
+    authority resolves only with configured M-of-N approval; an assigned
+    `DisputeResolver` was appointed through that threshold and then resolves directly.
+    A reasoned ruling
     (`rationale_hash: [u8;32]` mandatory + bounded `rationale_uri`) is **required** and
     persisted/emitted. `vote_dispute` is retired (advisory-only legacy field unused).
 11. **Moderation is fail-closed, entry-only.** `hire`/`accept_bid`/`set_task_job_spec`

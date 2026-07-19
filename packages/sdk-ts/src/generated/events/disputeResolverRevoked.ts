@@ -18,7 +18,10 @@ export const DISPUTE_RESOLVER_REVOKED_EVENT_DISCRIMINATOR: ReadonlyUint8Array = 
   200, 244, 224, 246, 19, 222, 1, 100,
 ]);
 
-/** Emitted when the protocol authority revokes a wallet from the dispute-resolver roster. */
+/**
+ * Emitted after an authority-proposed resolver revocation receives configured M-of-N
+ * approval.
+ */
 export type DisputeResolverRevokedEventData = {
   resolver: Address;
   revokedBy: Address;

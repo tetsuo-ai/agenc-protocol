@@ -22,6 +22,7 @@ import {
   TASK_JOB_SPEC_DISCRIMINATOR,
   ListingState,
   TaskStatus,
+  TaskType,
   getCompletionBondDecoder,
   getHireRecordDecoder,
   getServiceListingDecoder,
@@ -35,6 +36,7 @@ import {
   type Task,
   type TaskBid,
   type TaskClaim,
+  type TaskJobSpec,
 } from "../generated/index.js";
 import {
   COMPLETION_BOND_TASK_OFFSET,
@@ -213,7 +215,7 @@ export async function listActiveListings(
 /** Options for {@link listOpenTasks}. */
 export type ListOpenTasksOptions = {
   /**
-   * A worker capability bitmask. Keeps only tasks the worker can claim, i.e.
+   * A worker capability bitmask. Keeps capability-compatible candidates, i.e.
    * `(task.requiredCapabilities & capabilities) === task.requiredCapabilities`.
    * CLIENT-SIDE filter — bitmask-superset matching cannot be expressed as a
    * memcmp byte comparison.
@@ -227,6 +229,189 @@ export type ListOpenTasksOptions = {
   /** Task creator wallet (`Task.creator`). Server-side memcmp filter. */
   creator?: Address;
 };
+
+/** Options for {@link listDirectClaimableTasks}. */
+export type ListDirectClaimableTasksOptions = ListOpenTasksOptions & {
+  /**
+   * Unix timestamp used for the strict deadline gate. When omitted, local wall
+   * time is sampled after all status reads, immediately before filtering.
+   * Supply a chain-derived timestamp with `deadlineSafetySeconds: 0n` for the
+   * exact on-chain Task deadline predicate.
+   */
+  nowUnixTimestamp?: bigint;
+  /**
+   * Safety added to the wall-clock deadline check (default 30 seconds). The
+   * gPA/indexer transport cannot read Solana's Clock sysvar atomically with the
+   * task snapshot, so near-deadline tasks are conservatively withheld. Set to
+   * `0n` only when `nowUnixTimestamp` came from a chain clock.
+   */
+  deadlineSafetySeconds?: bigint;
+};
+
+/** The monolithic dispute unwind supports at most four simultaneous workers. */
+const DISPUTE_SAFE_MAX_WORKERS = 4;
+
+/** Bound ordinary client/validator clock skew without surfacing doomed work. */
+export const DEFAULT_DIRECT_CLAIM_DEADLINE_SAFETY_SECONDS = 30n;
+
+/** Exact 32-byte sentinel written for Task Validation V2 review tasks. */
+const MANUAL_VALIDATION_SENTINEL = "agenc-manual-validation-v2-seed!";
+
+function isManualValidationTask(task: Pick<Task, "constraintHash">): boolean {
+  if (task.constraintHash.length !== MANUAL_VALIDATION_SENTINEL.length) {
+    return false;
+  }
+  for (let index = 0; index < MANUAL_VALIDATION_SENTINEL.length; index += 1) {
+    if (
+      task.constraintHash[index] !==
+      MANUAL_VALIDATION_SENTINEL.charCodeAt(index)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Evaluate every direct-claim gate derivable from the `Task` account at the
+ * caller-supplied timestamp.
+ *
+ * This is deliberately narrower than "this worker's transaction will land":
+ * job-spec/moderation/dependency/hire/config accounts and worker identity,
+ * stake, reputation, active-task count, and prior-claim state require other
+ * accounts. Callers still need those checks (the watcher separately requires a
+ * pinned job spec).
+ */
+export function isTaskStateDirectlyClaimable(
+  task: Task,
+  nowUnixTimestamp: bigint,
+): boolean {
+  if (task.taskType === TaskType.BidExclusive) return false;
+
+  const contest =
+    (task.reserved[0] ?? 0) >= 1 && task.taskType === TaskType.Competitive;
+  const claimableDuringPendingValidation =
+    task.status === TaskStatus.PendingValidation &&
+    (task.taskType === TaskType.Collaborative || contest) &&
+    isManualValidationTask(task);
+  const statusAllowsDirectClaim =
+    task.status === TaskStatus.Open ||
+    task.status === TaskStatus.InProgress ||
+    claimableDuringPendingValidation;
+  if (!statusAllowsDirectClaim) return false;
+
+  if (task.deadline > 0n && nowUnixTimestamp >= task.deadline) return false;
+
+  const effectiveMaxWorkers = Math.min(
+    task.maxWorkers,
+    DISPUTE_SAFE_MAX_WORKERS,
+  );
+  return task.currentWorkers < effectiveMaxWorkers;
+}
+
+/**
+ * List tasks whose decoded task-state is eligible for the ordinary
+ * `claim_task_with_job_spec` path.
+ *
+ * The program accepts capacity-bearing `Open` and `InProgress` tasks, plus
+ * manual-review collaborative tasks and schema-1 contests during
+ * `PendingValidation`. It rejects bid-exclusive tasks, expired tasks, and
+ * tasks at `min(maxWorkers, 4)` live claims. Three status-filtered gPA reads
+ * keep terminal accounts out of the response; the remaining gates and the
+ * capability/reward refinements are applied client-side.
+ *
+ * By default this helper is conservative: it samples local time after the
+ * serialized reads and adds a 30-second safety margin. Pass a chain-derived
+ * `nowUnixTimestamp` with `deadlineSafetySeconds: 0n` to evaluate the exact
+ * task-account portion of `process_claim`. It still does not prove that a job
+ * spec is pinned or evaluate worker/config/related-account gates; see
+ * {@link isTaskStateDirectlyClaimable}.
+ */
+export async function listDirectClaimableTasks(
+  source: ProgramAccountsSource,
+  options: ListDirectClaimableTasksOptions = {},
+): Promise<Array<DecodedProgramAccount<Task>>> {
+  const deadlineSafetySeconds =
+    options.deadlineSafetySeconds ??
+    DEFAULT_DIRECT_CLAIM_DEADLINE_SAFETY_SECONDS;
+  if (typeof deadlineSafetySeconds !== "bigint" || deadlineSafetySeconds < 0n) {
+    throw new RangeError("deadlineSafetySeconds must be non-negative");
+  }
+  if (
+    options.nowUnixTimestamp !== undefined &&
+    typeof options.nowUnixTimestamp !== "bigint"
+  ) {
+    throw new TypeError("nowUnixTimestamp must be a bigint");
+  }
+
+  const baseFilters: GpaFilter[] = [discriminatorFilter(TASK_DISCRIMINATOR)];
+  if (options.creator !== undefined) {
+    baseFilters.push({
+      memcmp: {
+        offset: TASK_CREATOR_OFFSET,
+        bytes: addressBytes(options.creator),
+      },
+    });
+  }
+
+  const decoder = getTaskDecoder();
+  const statuses = [
+    TaskStatus.Open,
+    TaskStatus.InProgress,
+    TaskStatus.PendingValidation,
+  ] as const;
+  // ProgramAccountsTransport does not promise reentrancy. Keep the three
+  // status scans serialized so custom indexer/embedded transports remain safe.
+  const groups: Array<Array<DecodedProgramAccount<Task>>> = [];
+  for (const status of statuses) {
+    groups.push(
+      await fetchDecoded(
+        source,
+        [
+          ...baseFilters,
+          {
+            memcmp: {
+              offset: TASK_STATUS_OFFSET,
+              bytes: Uint8Array.of(status),
+            },
+          },
+        ],
+        (data) => decoder.decode(data),
+      ),
+    );
+  }
+
+  // A default wall-clock value captured before slow reads can be expired by
+  // the time results arrive. Explicit timestamps remain fixed by design.
+  const nowUnixTimestamp =
+    options.nowUnixTimestamp ?? BigInt(Math.floor(Date.now() / 1000));
+  const conservativeNow = nowUnixTimestamp + deadlineSafetySeconds;
+
+  // Non-atomic status scans can straddle Open -> InProgress and return the
+  // same PDA twice. Statuses are queried in lifecycle order, so later snapshots
+  // replace earlier ones and the public result contains each address once.
+  const latestByAddress = new Map<Address, DecodedProgramAccount<Task>>();
+  for (const group of groups) {
+    for (const task of group) latestByAddress.set(task.address, task);
+  }
+
+  let tasks = [...latestByAddress.values()].filter(({ account }) =>
+    isTaskStateDirectlyClaimable(account, conservativeNow),
+  );
+  if (options.capabilities !== undefined) {
+    const capabilities = options.capabilities;
+    tasks = tasks.filter(
+      ({ account }) =>
+        (account.requiredCapabilities & capabilities) ===
+        account.requiredCapabilities,
+    );
+  }
+  if (options.minReward !== undefined) {
+    const minReward = options.minReward;
+    tasks = tasks.filter(({ account }) => account.rewardAmount >= minReward);
+  }
+  return tasks;
+}
 
 /**
  * List Open tasks (status filtered server-side via memcmp at the fixed
@@ -246,7 +431,7 @@ export type ListOpenTasksOptions = {
  *
  * @example
  * ```ts
- * // Tasks a capability-0b11 worker could claim, paying at least 0.01 SOL:
+ * // Open discovery candidates compatible with capability 0b11 and paying at least 0.01 SOL:
  * const open = await listOpenTasks(rpc, { capabilities: 0b11n, minReward: 10_000_000n });
  * ```
  */
@@ -288,7 +473,10 @@ export async function listOpenTasks(
 }
 
 /** True iff a job-spec hash has at least one non-zero byte. */
-function isNonZeroHash(hash: { length: number; [index: number]: number }): boolean {
+function isNonZeroHash(hash: {
+  length: number;
+  [index: number]: number;
+}): boolean {
   for (let i = 0; i < hash.length; i += 1) {
     if (hash[i] !== 0) return true;
   }
@@ -296,22 +484,50 @@ function isNonZeroHash(hash: { length: number; [index: number]: number }): boole
 }
 
 /**
- * List the `TaskJobSpec` pointers that are genuinely PINNED — i.e. the exact
- * on-chain precondition `claim_task_with_job_spec` enforces.
+ * Unicode White_Space code points used by Rust `str::trim()` / `char::is_whitespace`.
  *
- * The program gates a claim on TWO things (see
- * `programs/agenc-coordination/src/instructions/claim_task.rs`): (1) the
+ * JavaScript `String.prototype.trim()` is deliberately not used here: JS trims
+ * U+FEFF but not U+0085, while the on-chain Rust predicate does the opposite.
+ */
+const RUST_WHITESPACE_ONLY_PATTERN =
+  /^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u;
+
+function isNonBlankJobSpecUri(uri: string): boolean {
+  return !RUST_WHITESPACE_ONLY_PATTERN.test(uri);
+}
+
+async function fetchTaskJobSpecsForPinValidation(
+  source: ProgramAccountsSource,
+  filters: GpaFilter[],
+): Promise<TaskJobSpec[]> {
+  const transport = resolveProgramAccountsTransport(source);
+  const decoder = getTaskJobSpecDecoder();
+  const rows = await transport.getProgramAccounts({ filters });
+  return rows.map(({ data }) => decoder.decode(data));
+}
+
+/**
+ * List `TaskJobSpec` pointers whose value fields pass the pin checks this read
+ * helper can evaluate.
+ *
+ * The pointer-value checks cover three things (see
+ * `programs/agenc-coordination/src/instructions/claim_task.rs`): (1) a
  * `["task_job_spec", task]` PDA must EXIST (it is taken as a plain
  * `Account<TaskJobSpec>`; absent ⇒ Anchor `AccountNotInitialized` / 3012), and
  * (2) `validate_job_spec_pointer` requires `job_spec_hash` to have at least one
- * non-zero byte. This helper mirrors both: it gPA-fetches every `TaskJobSpec`
- * account (discriminator filter) and keeps only those whose `jobSpecHash` is
- * non-zero, returning the set of `task` PDAs that are actually claimable.
+ * non-zero byte, and (3) Rust `job_spec_uri.trim()` must be non-empty. This
+ * helper mirrors those three (including Rust's exact Unicode-whitespace set): it
+ * gPA-fetches every `TaskJobSpec` account (discriminator filter) and keeps only
+ * valid pointer values, returning their declared task PDAs. The claim
+ * transaction additionally enforces the canonical `["task_job_spec", task]`
+ * address and binds `TaskJobSpec.task`/`creator` to the supplied Task; this
+ * account scan cannot establish those cross-account constraints by itself.
  *
  * A task being `TaskStatus.Open` is NOT sufficient for a claim to land — a task
  * is minted Open by `create_task` BEFORE any job spec exists (`set_task_job_spec`
  * is a separate, later, moderation-gated tx). Use this set to intersect with
- * {@link listOpenTasks} so you only surface tasks a worker can actually claim.
+ * {@link listDirectClaimableTasks} so you only surface task-state candidates
+ * with valid immutable job-spec pointers.
  *
  * @param source - A kit `Rpc<GetProgramAccountsApi>` or a
  * {@link ProgramAccountsTransport} (e.g. the Phase-3 hosted indexer client).
@@ -320,53 +536,56 @@ function isNonZeroHash(hash: { length: number; [index: number]: number }): boole
 export async function listPinnedJobSpecTasks(
   source: ProgramAccountsSource,
 ): Promise<Set<Address>> {
-  const decoder = getTaskJobSpecDecoder();
-  const specs = await fetchDecoded(
-    source,
-    [discriminatorFilter(TASK_JOB_SPEC_DISCRIMINATOR)],
-    (d) => decoder.decode(d),
-  );
+  const specs = await fetchTaskJobSpecsForPinValidation(source, [
+    discriminatorFilter(TASK_JOB_SPEC_DISCRIMINATOR),
+  ]);
   const pinned = new Set<Address>();
-  for (const { account } of specs) {
-    if (isNonZeroHash(account.jobSpecHash)) pinned.add(account.task);
+  for (const account of specs) {
+    if (
+      isNonZeroHash(account.jobSpecHash) &&
+      isNonBlankJobSpecUri(account.jobSpecUri)
+    ) {
+      pinned.add(account.task);
+    }
   }
   return pinned;
 }
 
 /**
- * Check whether a SINGLE task has a pinned job spec — the exact on-chain
- * precondition `claim_task_with_job_spec` enforces (see
- * {@link listPinnedJobSpecTasks} for the full rationale).
+ * Check whether a SINGLE task has a job-spec pointer whose value fields pass
+ * the pin checks this read helper evaluates (see {@link listPinnedJobSpecTasks}
+ * for the full rationale).
  *
  * Server-side memcmp on `TaskJobSpec.task` narrows the fetch to the one PDA, so
  * this is a cheap targeted lookup (used by the event path, where only a single
- * task is in hand). Returns `true` iff the pointer exists AND its `jobSpecHash`
- * is non-zero.
+ * task is in hand). Returns `true` iff the pointer exists, its `jobSpecHash` is
+ * non-zero, and its URI is non-empty after Rust-compatible trimming.
  *
  * @param source - A kit `Rpc<GetProgramAccountsApi>` or a
  * {@link ProgramAccountsTransport}.
  * @param task - The Task PDA to check.
- * @returns `true` iff the task's job spec is pinned (claimable).
+ * @returns `true` iff the task's job-spec pointer passes pin validation. This
+ * does not establish the canonical task/creator account constraints or that a
+ * claim will pass the remaining task/worker gates.
  */
 export async function isTaskJobSpecPinned(
   source: ProgramAccountsSource,
   task: Address,
 ): Promise<boolean> {
-  const decoder = getTaskJobSpecDecoder();
-  const specs = await fetchDecoded(
-    source,
-    [
-      discriminatorFilter(TASK_JOB_SPEC_DISCRIMINATOR),
-      {
-        memcmp: {
-          offset: TASK_JOB_SPEC_TASK_OFFSET,
-          bytes: addressBytes(task),
-        },
+  const specs = await fetchTaskJobSpecsForPinValidation(source, [
+    discriminatorFilter(TASK_JOB_SPEC_DISCRIMINATOR),
+    {
+      memcmp: {
+        offset: TASK_JOB_SPEC_TASK_OFFSET,
+        bytes: addressBytes(task),
       },
-    ],
-    (d) => decoder.decode(d),
+    },
+  ]);
+  return specs.some(
+    (account) =>
+      isNonZeroHash(account.jobSpecHash) &&
+      isNonBlankJobSpecUri(account.jobSpecUri),
   );
-  return specs.some(({ account }) => isNonZeroHash(account.jobSpecHash));
 }
 
 /**
@@ -521,9 +740,8 @@ export async function fetchTaskGuarantee(
     (d) => decoder.decode(d),
   );
   const workerBond =
-    bonds.find(
-      ({ account }) => account.role === COMPLETION_BOND_ROLE_WORKER,
-    ) ?? null;
+    bonds.find(({ account }) => account.role === COMPLETION_BOND_ROLE_WORKER) ??
+    null;
   const creatorBond =
     bonds.find(
       ({ account }) => account.role === COMPLETION_BOND_ROLE_CREATOR,

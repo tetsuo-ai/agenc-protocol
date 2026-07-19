@@ -22,8 +22,6 @@ import {
   getU32Encoder,
   getU64Decoder,
   getU64Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -44,6 +42,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getNonNullResolvedInstructionInput,
@@ -114,11 +117,14 @@ export function getRegisterAgentInstructionDataEncoder(): Encoder<RegisterAgentI
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["agentId", fixEncoderSize(getBytesEncoder(), 32)],
       ["capabilities", getU64Encoder()],
-      ["endpoint", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "endpoint",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       [
         "metadataUri",
         getOptionEncoder(
-          addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder()),
+          addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
         ),
       ],
       ["stakeAmount", getU64Encoder()],
@@ -132,10 +138,15 @@ export function getRegisterAgentInstructionDataDecoder(): Decoder<RegisterAgentI
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["agentId", fixDecoderSize(getBytesDecoder(), 32)],
     ["capabilities", getU64Decoder()],
-    ["endpoint", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "endpoint",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     [
       "metadataUri",
-      getOptionDecoder(addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())),
+      getOptionDecoder(
+        addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+      ),
     ],
     ["stakeAmount", getU64Decoder()],
   ]);

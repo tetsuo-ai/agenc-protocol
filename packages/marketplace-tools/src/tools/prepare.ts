@@ -21,7 +21,11 @@ import {
   some,
   type Address,
 } from "@solana/kit";
-import { facade, findCreatorCompletionBondPda, values } from "@tetsuo-ai/marketplace-sdk";
+import {
+  facade,
+  findCreatorCompletionBondPda,
+  values,
+} from "@tetsuo-ai/marketplace-sdk";
 import {
   MarketplaceToolError,
   defineTool,
@@ -32,6 +36,18 @@ import {
   type BuiltInstructionLike,
   type UnsignedInstructionView,
 } from "../project.js";
+import {
+  MAX_DEADLINE_SECONDS,
+  MAX_REVIEW_WINDOW_SECONDS,
+  MIN_LISTING_PRICE,
+  contentUri,
+  hex32 as hex32Schema,
+  hex64 as hex64Schema,
+  httpUrl,
+  int64,
+  solanaAddress,
+  uint64,
+} from "./schema.js";
 
 /** Parse a 64-hex-char string into a 32-byte `Uint8Array`. */
 function hex32(value: string, field: string, tool: string): Uint8Array {
@@ -66,7 +82,45 @@ function accountAddress(value: string, field: string, tool: string): Address {
 const MAX_FEE_BPS = 2_000;
 const MAX_U16 = 65_535;
 
-function assertFeeBps(value: number | undefined, field: string, tool: string): void {
+function assertBigIntRange(
+  value: bigint,
+  minimum: bigint,
+  maximum: bigint | undefined,
+  field: string,
+  tool: string,
+): void {
+  if (value < minimum || (maximum !== undefined && value > maximum)) {
+    const upper = maximum === undefined ? "" : ` and at most ${maximum}`;
+    throw new MarketplaceToolError(
+      "BAD_PROTOCOL_BOUND",
+      `${tool}: ${field} must be at least ${minimum}${upper}`,
+      tool,
+    );
+  }
+}
+
+function assertListingMetadata(
+  name: string,
+  tags: readonly string[],
+  tool: string,
+): void {
+  try {
+    values.encodeListingName(name);
+    values.encodeListingTags(tags);
+  } catch (error) {
+    throw new MarketplaceToolError(
+      "BAD_LISTING_METADATA",
+      `${tool}: invalid LISTING_METADATA v1 name/tags: ${error instanceof Error ? error.message : String(error)}`,
+      tool,
+    );
+  }
+}
+
+function assertFeeBps(
+  value: number | undefined,
+  field: string,
+  tool: string,
+): void {
   if (value === undefined) return;
   if (!Number.isInteger(value) || value < 0 || value > MAX_FEE_BPS) {
     throw new MarketplaceToolError(
@@ -154,42 +208,66 @@ const prepareCreateServiceListing = defineTool<
       "maxOpenJobs",
     ],
     properties: {
-      providerAgent: { type: "string", description: "Provider AgentRegistration PDA." },
-      authority: { type: "string", description: "Provider wallet that signs listing creation." },
-      listingId: { type: "string", description: "32-byte listing id as 64 hex chars." },
-      name: { type: "string", description: "Listing display name, encoded by LISTING_METADATA v1." },
+      providerAgent: solanaAddress("Provider AgentRegistration PDA."),
+      authority: solanaAddress("Provider wallet that signs listing creation."),
+      listingId: hex32Schema(
+        "Non-zero 32-byte listing id as 64 hex chars.",
+        true,
+      ),
+      name: {
+        type: "string",
+        format: "listing-name",
+        minLength: 1,
+        maxLength: 32,
+        description:
+          "Non-empty listing display name, encoded by LISTING_METADATA v1 (32 UTF-8 bytes maximum).",
+      },
       category: {
         type: "string",
+        format: "kebab-token",
+        minLength: 1,
+        maxLength: 32,
         description: "Canonical LISTING_METADATA v1 category.",
         enum: values.LISTING_CATEGORIES,
       },
       tags: {
         type: "array",
+        minItems: 0,
+        maxItems: 32,
         description: "Lowercase-kebab LISTING_METADATA v1 tag tokens.",
-        items: { type: "string", description: "One lowercase-kebab tag." },
+        items: {
+          type: "string",
+          format: "kebab-token",
+          minLength: 1,
+          maxLength: 64,
+          description: "One lowercase-kebab tag.",
+        },
       },
-      specHash: { type: "string", description: "Listing spec hash as 64 hex chars." },
-      specUri: { type: "string", description: "Hosted listing spec URI." },
-      price: { type: "string", description: "Listing price in lamports as a decimal u64 string." },
-      priceMint: {
-        type: "string",
-        description: "Optional SPL token mint. Omit for SOL listings.",
-      },
-      requiredCapabilities: {
-        type: "string",
-        description: "Capability bitmask as a decimal u64 string.",
-      },
-      defaultDeadlineSecs: {
-        type: "string",
-        description: "Default deadline in seconds as a decimal i64 string.",
-      },
+      specHash: hex32Schema(
+        "Non-zero listing spec hash as 64 hex chars.",
+        true,
+      ),
+      specUri: contentUri("Hosted listing spec URI."),
+      price: uint64(
+        "Listing price in lamports as a decimal u64 string (minimum 1000).",
+      ),
+      priceMint: solanaAddress(
+        "Reserved optional SPL token mint. Token-priced listings are currently unsupported by the on-chain hire flows; omit this field for SOL listings.",
+      ),
+      requiredCapabilities: uint64(
+        "Non-zero capability bitmask as a decimal u64 string.",
+        true,
+      ),
+      defaultDeadlineSecs: int64(
+        "Default deadline in seconds, from 0 through 31536000, as a decimal i64 string.",
+      ),
       maxOpenJobs: {
         type: "integer",
         description: "Maximum concurrent open hired jobs. Use 0 for uncapped.",
         minimum: 0,
         maximum: MAX_U16,
       },
-      operator: { type: "string", description: "Optional operator payout wallet." },
+      operator: solanaAddress("Optional operator payout wallet."),
       operatorFeeBps: {
         type: "integer",
         description: "Optional operator fee bps. Non-zero requires operator.",
@@ -200,6 +278,13 @@ const prepareCreateServiceListing = defineTool<
     },
   },
   async handler(args) {
+    if (args.priceMint !== undefined) {
+      throw new MarketplaceToolError(
+        "UNSUPPORTED_TOKEN_PRICING",
+        "prepare_create_service_listing: priceMint is reserved but currently unsupported; service-listing creation and both hire flows are SOL-only",
+        "prepare_create_service_listing",
+      );
+    }
     if (!values.isListingCategory(args.category)) {
       throw new MarketplaceToolError(
         "BAD_CATEGORY",
@@ -207,7 +292,32 @@ const prepareCreateServiceListing = defineTool<
         "prepare_create_service_listing",
       );
     }
-    assertU16(args.maxOpenJobs, "maxOpenJobs", "prepare_create_service_listing");
+    assertListingMetadata(
+      args.name,
+      args.tags,
+      "prepare_create_service_listing",
+    );
+    const price = BigInt(args.price);
+    assertBigIntRange(
+      price,
+      MIN_LISTING_PRICE,
+      undefined,
+      "price",
+      "prepare_create_service_listing",
+    );
+    const defaultDeadlineSecs = BigInt(args.defaultDeadlineSecs);
+    assertBigIntRange(
+      defaultDeadlineSecs,
+      0n,
+      MAX_DEADLINE_SECONDS,
+      "defaultDeadlineSecs",
+      "prepare_create_service_listing",
+    );
+    assertU16(
+      args.maxOpenJobs,
+      "maxOpenJobs",
+      "prepare_create_service_listing",
+    );
     assertPayeeForFee(
       args.operator,
       args.operatorFeeBps,
@@ -218,16 +328,24 @@ const prepareCreateServiceListing = defineTool<
     const ix = await facade.createServiceListing({
       providerAgent: args.providerAgent as Address,
       authority: createNoopSigner(args.authority as Address),
-      listingId: hex32(args.listingId, "listingId", "prepare_create_service_listing"),
+      listingId: hex32(
+        args.listingId,
+        "listingId",
+        "prepare_create_service_listing",
+      ),
       name: args.name,
       category: args.category,
       tags: args.tags,
-      specHash: hex32(args.specHash, "specHash", "prepare_create_service_listing"),
+      specHash: hex32(
+        args.specHash,
+        "specHash",
+        "prepare_create_service_listing",
+      ),
       specUri: args.specUri,
-      price: BigInt(args.price),
-      priceMint: args.priceMint ? (args.priceMint as Address) : null,
+      price,
+      priceMint: null,
       requiredCapabilities: BigInt(args.requiredCapabilities),
-      defaultDeadlineSecs: BigInt(args.defaultDeadlineSecs),
+      defaultDeadlineSecs,
       maxOpenJobs: args.maxOpenJobs,
       operator: args.operator ? (args.operator as Address) : null,
       operatorFeeBps: args.operatorFeeBps ?? 0,
@@ -280,64 +398,54 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       "listingSpecHash",
     ],
     properties: {
-      listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
-      providerAgent: {
-        type: "string",
-        description: "Provider AgentRegistration PDA pinned by the listing (base58).",
-      },
-      buyer: {
-        type: "string",
-        description:
-          "Buyer wallet (base58) — fee payer + authority + creator of the hired task.",
-      },
-      creatorAgent: {
-        type: "string",
-        description: "The buyer's creator AgentRegistration PDA (base58).",
-      },
-      taskId: {
-        type: "string",
-        description: "32-byte task id as 64 hex chars (caller-chosen, unique).",
-      },
-      expectedPrice: {
-        type: "string",
-        description: "Expected listing price in lamports (decimal u64 string) — CAS guard.",
-      },
-      expectedVersion: {
-        type: "string",
-        description: "Expected listing version (decimal u64 string) — CAS guard.",
-      },
-      moderator: {
-        type: "string",
-        description:
-          "Pubkey (base58) whose listing-moderation attestation this hire consumes " +
+      listing: solanaAddress("ServiceListing PDA to hire from (base58)."),
+      providerAgent: solanaAddress(
+        "Provider AgentRegistration PDA pinned by the listing (base58).",
+      ),
+      buyer: solanaAddress(
+        "Buyer wallet (base58) — fee payer + authority + creator of the hired task.",
+      ),
+      creatorAgent: solanaAddress(
+        "The buyer's creator AgentRegistration PDA (base58).",
+      ),
+      taskId: hex32Schema(
+        "Non-zero 32-byte task id as 64 hex chars (caller-chosen, unique).",
+        true,
+      ),
+      expectedPrice: uint64(
+        "Expected listing price in lamports (decimal u64 string) — CAS guard.",
+      ),
+      expectedVersion: uint64(
+        "Expected non-zero listing version (decimal u64 string) — CAS guard.",
+        true,
+      ),
+      moderator: solanaAddress(
+        "Pubkey (base58) whose listing-moderation attestation this hire consumes " +
           "(the P1.2 moderator instruction arg). Get it from your attestation " +
           "service's signer pubkey — e.g. the `moderator` field of attest.agenc.ag " +
           "GET /v1/info.",
-      },
-      listingSpecHash: {
-        type: "string",
-        description:
-          "Listing's pinned spec hash as 64 hex chars. The facade derives the " +
+      ),
+      listingSpecHash: hex32Schema(
+        "Listing's pinned spec hash as 64 hex chars. The facade derives the " +
           "REQUIRED moderation-block (BLOCK-floor) PDA from it, plus the v2 " +
           "moderator-keyed moderation record PDA unless listingModeration is passed.",
-      },
+        true,
+      ),
       moderatorIsAttestor: {
         type: "boolean",
         description:
           "Set true when moderator is a REGISTERED roster attestor: the facade " +
-          "derives and attaches the [\"moderation_attestor\", moderator] roster PDA " +
+          'derives and attaches the ["moderation_attestor", moderator] roster PDA ' +
           "the hire gate requires. Omit/false for the global-moderation-authority " +
           "path — the roster slot is then the None placeholder.",
       },
-      listingModeration: {
-        type: "string",
-        description:
-          "Explicit listing-moderation record PDA (base58) override. Legacy " +
+      listingModeration: solanaAddress(
+        "Explicit listing-moderation record PDA (base58) override. Legacy " +
           "grace-window escape hatch for pre-upgrade records at the old seeds " +
           "(derive via facade.findLegacyListingModerationPda); defaults to the v2 " +
           "moderator-keyed PDA derived from listingSpecHash.",
-      },
-      referrer: { type: "string", description: "Optional referrer wallet." },
+      ),
+      referrer: solanaAddress("Optional referrer wallet."),
       referrerFeeBps: {
         type: "integer",
         description: "Optional referrer fee bps. Non-zero requires referrer.",
@@ -347,7 +455,21 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
     },
   },
   async handler(args) {
-    assertPayeeForFee(args.referrer, args.referrerFeeBps, "referrer", "referrerFeeBps", "prepare_hire");
+    assertPayeeForFee(
+      args.referrer,
+      args.referrerFeeBps,
+      "referrer",
+      "referrerFeeBps",
+      "prepare_hire",
+    );
+    const expectedPrice = BigInt(args.expectedPrice);
+    assertBigIntRange(
+      expectedPrice,
+      MIN_LISTING_PRICE,
+      undefined,
+      "expectedPrice",
+      "prepare_hire",
+    );
     const buyer = createNoopSigner(args.buyer as Address);
     const input: Parameters<typeof facade.hireFromListing>[0] = {
       listing: args.listing as Address,
@@ -356,10 +478,14 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       authority: buyer,
       creator: buyer,
       taskId: hex32(args.taskId, "taskId", "prepare_hire"),
-      expectedPrice: BigInt(args.expectedPrice),
+      expectedPrice,
       expectedVersion: BigInt(args.expectedVersion),
       moderator: args.moderator as Address,
-      listingSpecHash: hex32(args.listingSpecHash, "listingSpecHash", "prepare_hire"),
+      listingSpecHash: hex32(
+        args.listingSpecHash,
+        "listingSpecHash",
+        "prepare_hire",
+      ),
     };
     if (args.moderatorIsAttestor !== undefined) {
       input.moderatorIsAttestor = args.moderatorIsAttestor;
@@ -368,7 +494,8 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       input.listingModeration = args.listingModeration as Address;
     }
     if (args.referrer !== undefined) input.referrer = args.referrer as Address;
-    if (args.referrerFeeBps !== undefined) input.referrerFeeBps = args.referrerFeeBps;
+    if (args.referrerFeeBps !== undefined)
+      input.referrerFeeBps = args.referrerFeeBps;
     const ix = await facade.hireFromListing(input);
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },
@@ -394,13 +521,17 @@ interface PrepareHireHumanlessArgs {
   referrerFeeBps?: number;
 }
 
-const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstructionView>({
+const prepareHireHumanless = defineTool<
+  PrepareHireHumanlessArgs,
+  UnsignedInstructionView
+>({
   name: "prepare_hire_humanless",
   kind: "prepare",
   description:
     "Build an UNSIGNED hire_from_listing_humanless instruction for a plain-wallet buyer. " +
     "This is the storefront visitor checkout path: it funds escrow and creates a task " +
-    "that still requires set_task_job_spec activation before a worker can claim. The " +
+    "that still requires set_task_job_spec activation before a claim attempt can pass " +
+    "the job-spec gate. The " +
     "returned instruction is NOT signed and NOT sent.",
   inputSchema: {
     type: "object",
@@ -416,44 +547,40 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
       "listingSpecHash",
     ],
     properties: {
-      listing: { type: "string", description: "ServiceListing PDA to hire from (base58)." },
-      providerAgent: {
-        type: "string",
-        description: "Provider AgentRegistration PDA pinned by the listing (base58).",
-      },
-      buyer: { type: "string", description: "Plain buyer wallet that signs and funds escrow." },
-      taskId: { type: "string", description: "32-byte task id as 64 hex chars." },
-      expectedPrice: { type: "string", description: "Expected listing price in lamports." },
-      expectedVersion: { type: "string", description: "Expected listing version." },
-      moderator: {
-        type: "string",
-        description:
-          "Pubkey (base58) whose listing-moderation attestation this hire consumes " +
+      listing: solanaAddress("ServiceListing PDA to hire from (base58)."),
+      providerAgent: solanaAddress(
+        "Provider AgentRegistration PDA pinned by the listing (base58).",
+      ),
+      buyer: solanaAddress("Plain buyer wallet that signs and funds escrow."),
+      taskId: hex32Schema("Non-zero 32-byte task id as 64 hex chars.", true),
+      expectedPrice: uint64("Expected listing price in lamports."),
+      expectedVersion: uint64("Expected non-zero listing version.", true),
+      moderator: solanaAddress(
+        "Pubkey (base58) whose listing-moderation attestation this hire consumes " +
           "(the P1.2 moderator instruction arg). Get it from your attestation " +
           "service's signer pubkey — e.g. the `moderator` field of attest.agenc.ag " +
           "GET /v1/info.",
-      },
-      listingSpecHash: {
-        type: "string",
-        description:
-          "Listing spec hash as 64 hex chars. Derives the REQUIRED moderation-block " +
+      ),
+      listingSpecHash: hex32Schema(
+        "Listing spec hash as 64 hex chars. Derives the REQUIRED moderation-block " +
           "PDA plus the v2 moderation record PDA unless listingModeration is passed.",
-      },
+        true,
+      ),
       moderatorIsAttestor: {
         type: "boolean",
         description:
           "Set true when moderator is a REGISTERED roster attestor: the facade " +
-          "derives and attaches its [\"moderation_attestor\", moderator] roster PDA. " +
+          'derives and attaches its ["moderation_attestor", moderator] roster PDA. ' +
           "Omit/false for the global-moderation-authority path (None placeholder).",
       },
-      listingModeration: {
-        type: "string",
-        description:
-          "Explicit listing-moderation record PDA (base58) override — the legacy " +
+      listingModeration: solanaAddress(
+        "Explicit listing-moderation record PDA (base58) override — the legacy " +
           "grace-window escape hatch (facade.findLegacyListingModerationPda).",
-      },
-      reviewWindowSecs: { type: "string", description: "CreatorReview window in seconds." },
-      referrer: { type: "string", description: "Optional referrer wallet." },
+      ),
+      reviewWindowSecs: int64(
+        "CreatorReview window in seconds, from 1 through 604800.",
+      ),
+      referrer: solanaAddress("Optional referrer wallet."),
       referrerFeeBps: {
         type: "integer",
         description: "Optional referrer fee bps. Non-zero requires referrer.",
@@ -470,15 +597,31 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
       "referrerFeeBps",
       "prepare_hire_humanless",
     );
+    const expectedPrice = BigInt(args.expectedPrice);
+    assertBigIntRange(
+      expectedPrice,
+      MIN_LISTING_PRICE,
+      undefined,
+      "expectedPrice",
+      "prepare_hire_humanless",
+    );
+    const reviewWindowSecs = BigInt(args.reviewWindowSecs ?? "86400");
+    assertBigIntRange(
+      reviewWindowSecs,
+      1n,
+      MAX_REVIEW_WINDOW_SECONDS,
+      "reviewWindowSecs",
+      "prepare_hire_humanless",
+    );
     const buyer = createNoopSigner(args.buyer as Address);
     const input: Parameters<typeof facade.hireFromListingHumanless>[0] = {
       listing: args.listing as Address,
       providerAgent: args.providerAgent as Address,
       creator: buyer,
       taskId: hex32(args.taskId, "taskId", "prepare_hire_humanless"),
-      expectedPrice: BigInt(args.expectedPrice),
+      expectedPrice,
       expectedVersion: BigInt(args.expectedVersion),
-      reviewWindowSecs: args.reviewWindowSecs ? BigInt(args.reviewWindowSecs) : 86_400n,
+      reviewWindowSecs,
       moderator: args.moderator as Address,
       listingSpecHash: hex32(
         args.listingSpecHash,
@@ -493,7 +636,8 @@ const prepareHireHumanless = defineTool<PrepareHireHumanlessArgs, UnsignedInstru
       input.listingModeration = args.listingModeration as Address;
     }
     if (args.referrer !== undefined) input.referrer = args.referrer as Address;
-    if (args.referrerFeeBps !== undefined) input.referrerFeeBps = args.referrerFeeBps;
+    if (args.referrerFeeBps !== undefined)
+      input.referrerFeeBps = args.referrerFeeBps;
     const ix = await facade.hireFromListingHumanless(input);
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },
@@ -513,52 +657,59 @@ interface PrepareSetTaskJobSpecArgs {
   taskModeration?: string;
 }
 
-const prepareSetTaskJobSpec = defineTool<PrepareSetTaskJobSpecArgs, UnsignedInstructionView>({
+const prepareSetTaskJobSpec = defineTool<
+  PrepareSetTaskJobSpecArgs,
+  UnsignedInstructionView
+>({
   name: "prepare_set_task_job_spec",
   kind: "prepare",
   description:
     "Build an UNSIGNED set_task_job_spec instruction. This is the activation step after " +
-    "humanless hire: the buyer pins a moderated job spec so the task becomes claimable.",
+    "humanless hire: the buyer pins a moderated job spec, enabling discovery and claim " +
+    "attempts. Current task, worker, and protocol gates remain authoritative at execution.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     required: ["task", "creator", "jobSpecHash", "jobSpecUri", "moderator"],
     properties: {
-      task: { type: "string", description: "Task PDA to activate." },
-      creator: { type: "string", description: "Task creator/buyer wallet that signs." },
-      jobSpecHash: { type: "string", description: "Moderated job spec hash as 64 hex chars." },
-      jobSpecUri: { type: "string", description: "Hosted job spec URI." },
-      moderator: {
-        type: "string",
-        description:
-          "Pubkey (base58) whose moderation attestation the publish gate consumes " +
+      task: solanaAddress("Task PDA to activate."),
+      creator: solanaAddress("Task creator/buyer wallet that signs."),
+      jobSpecHash: hex32Schema(
+        "Non-zero moderated job spec hash as 64 hex chars.",
+        true,
+      ),
+      jobSpecUri: contentUri("Hosted job spec URI."),
+      moderator: solanaAddress(
+        "Pubkey (base58) whose moderation attestation the publish gate consumes " +
           "(the P1.2 moderator instruction arg). Get it from your attestation " +
           "service's signer pubkey — e.g. the `moderator` field of attest.agenc.ag " +
           "GET /v1/info.",
-      },
+      ),
       moderatorIsAttestor: {
         type: "boolean",
         description:
           "Set true when moderator is a REGISTERED roster attestor: the facade " +
-          "derives and attaches its [\"moderation_attestor\", moderator] roster PDA. " +
+          'derives and attaches its ["moderation_attestor", moderator] roster PDA. ' +
           "Omit/false for the global-moderation-authority path — the roster slot is " +
           "then the None placeholder.",
       },
-      taskModeration: {
-        type: "string",
-        description:
-          "Explicit task-moderation record PDA (base58) override. Legacy " +
+      taskModeration: solanaAddress(
+        "Explicit task-moderation record PDA (base58) override. Legacy " +
           "grace-window escape hatch for pre-upgrade records at the old seeds " +
           "(derive via facade.findLegacyTaskModerationPda); defaults to the v2 " +
           "moderator-keyed PDA derived from task + jobSpecHash + moderator.",
-      },
+      ),
     },
   },
   async handler(args) {
     const input: Parameters<typeof facade.setTaskJobSpec>[0] = {
       task: args.task as Address,
       creator: createNoopSigner(args.creator as Address),
-      jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_set_task_job_spec"),
+      jobSpecHash: hex32(
+        args.jobSpecHash,
+        "jobSpecHash",
+        "prepare_set_task_job_spec",
+      ),
       jobSpecUri: args.jobSpecUri,
       moderator: args.moderator as Address,
     };
@@ -590,7 +741,7 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
   kind: "prepare",
   description:
     "Build an UNSIGNED claim_task_with_job_spec instruction (a worker agent claims an " +
-    "Open task, pinning its job-spec pointer). Returns the unsigned instruction — NOT " +
+    "eligible task against its pre-existing pinned job-spec pointer). Returns the unsigned instruction — NOT " +
     "signed, NOT sent. The caller signs with the worker's authority wallet behind their " +
     "own policy gate and broadcasts it.",
   inputSchema: {
@@ -598,24 +749,18 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
     additionalProperties: false,
     required: ["task", "worker", "workerAuthority", "jobSpecHash"],
     properties: {
-      task: { type: "string", description: "The Task PDA to claim (base58)." },
-      worker: {
-        type: "string",
-        description: "The worker's AgentRegistration PDA (base58).",
-      },
-      workerAuthority: {
-        type: "string",
-        description: "The wallet authority that owns the worker agent (signs the claim).",
-      },
-      jobSpecHash: {
-        type: "string",
-        description: "The task's pinned job-spec hash as 64 hex chars (BLOCK-gate binding).",
-      },
-      parentTask: {
-        type: "string",
-        description:
-          "Canonical parent Task PDA for a dependent task. Omit only for an independent task; when present it is appended as remaining_accounts[0].",
-      },
+      task: solanaAddress("The Task PDA to claim (base58)."),
+      worker: solanaAddress("The worker's AgentRegistration PDA (base58)."),
+      workerAuthority: solanaAddress(
+        "The wallet authority that owns the worker agent (signs the claim).",
+      ),
+      jobSpecHash: hex32Schema(
+        "The task's non-zero pinned job-spec hash as 64 hex chars (BLOCK-gate binding).",
+        true,
+      ),
+      parentTask: solanaAddress(
+        "Canonical parent Task PDA for a dependent task. Omit only for an independent task; when present it is appended as remaining_accounts[0].",
+      ),
     },
   },
   async handler(args) {
@@ -666,27 +811,21 @@ const prepareSubmit = defineTool<PrepareSubmitArgs, UnsignedInstructionView>({
     additionalProperties: false,
     required: ["task", "worker", "workerAuthority", "proofHash"],
     properties: {
-      task: { type: "string", description: "The claimed Task PDA (base58)." },
-      worker: {
-        type: "string",
-        description: "The worker's AgentRegistration PDA (base58).",
-      },
-      workerAuthority: {
-        type: "string",
-        description: "The wallet authority that owns the worker agent (signs the submission).",
-      },
-      proofHash: {
-        type: "string",
-        description: "32-byte result/proof hash as exactly 64 hex chars.",
-      },
-      resultData: {
-        type: "string",
-        description:
-          "Optional inline result data/commitment as exactly 128 hex chars (the " +
+      task: solanaAddress("The claimed Task PDA (base58)."),
+      worker: solanaAddress("The worker's AgentRegistration PDA (base58)."),
+      workerAuthority: solanaAddress(
+        "The wallet authority that owns the worker agent (signs the submission).",
+      ),
+      proofHash: hex32Schema(
+        "Non-zero 32-byte result/proof hash as exactly 64 hex chars.",
+        true,
+      ),
+      resultData: hex64Schema(
+        "Optional inline result data/commitment as exactly 128 hex chars (the " +
           "protocol's fixed 64-byte resultData field). Pre-hash/pad to the full 64 " +
           "bytes yourself — the tool does NOT silently truncate or zero-pad, so the " +
           "committed bytes always equal what you supply. Omit for none.",
-      },
+      ),
     },
   },
   async handler(args) {
@@ -731,19 +870,20 @@ interface PrepareAcceptArgs {
 const prepareAccept = defineTool<PrepareAcceptArgs, UnsignedInstructionView>({
   name: "prepare_accept_task_result",
   kind: "prepare",
-  description: "Build an UNSIGNED accept_task_result instruction for CreatorReview settlement.",
+  description:
+    "Build an UNSIGNED accept_task_result instruction for CreatorReview settlement.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     required: ["task", "worker", "workerAuthority", "treasury", "creator"],
     properties: {
-      task: { type: "string", description: "Task PDA in creator review." },
-      worker: { type: "string", description: "Worker agent PDA." },
-      workerAuthority: { type: "string", description: "Worker payout authority wallet." },
-      treasury: { type: "string", description: "Protocol treasury account." },
-      creator: { type: "string", description: "Task creator wallet that signs." },
-      operator: { type: "string", description: "Optional operator payee." },
-      referrer: { type: "string", description: "Optional referrer payee." },
+      task: solanaAddress("Task PDA in creator review."),
+      worker: solanaAddress("Worker agent PDA."),
+      workerAuthority: solanaAddress("Worker payout authority wallet."),
+      treasury: solanaAddress("Protocol treasury account."),
+      creator: solanaAddress("Task creator wallet that signs."),
+      operator: solanaAddress("Optional operator payee."),
+      referrer: solanaAddress("Optional referrer payee."),
     },
   },
   async handler(args) {
@@ -772,18 +912,29 @@ interface PrepareRejectArgs {
 const prepareReject = defineTool<PrepareRejectArgs, UnsignedInstructionView>({
   name: "prepare_reject_task_result",
   kind: "prepare",
-  description: "Build an UNSIGNED reject_task_result instruction for CreatorReview rejection.",
+  description:
+    "Build an UNSIGNED reject_task_result instruction for CreatorReview rejection.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["task", "claim", "worker", "workerAuthority", "creator", "rejectionHash"],
+    required: [
+      "task",
+      "claim",
+      "worker",
+      "workerAuthority",
+      "creator",
+      "rejectionHash",
+    ],
     properties: {
-      task: { type: "string", description: "Task PDA in creator review." },
-      claim: { type: "string", description: "TaskClaim PDA for this task/worker." },
-      worker: { type: "string", description: "Worker agent PDA." },
-      workerAuthority: { type: "string", description: "Worker authority wallet." },
-      creator: { type: "string", description: "Task creator wallet that signs." },
-      rejectionHash: { type: "string", description: "32-byte rejection reason hash." },
+      task: solanaAddress("Task PDA in creator review."),
+      claim: solanaAddress("TaskClaim PDA for this task/worker."),
+      worker: solanaAddress("Worker agent PDA."),
+      workerAuthority: solanaAddress("Worker authority wallet."),
+      creator: solanaAddress("Task creator wallet that signs."),
+      rejectionHash: hex32Schema(
+        "Non-zero 32-byte rejection reason hash.",
+        true,
+      ),
     },
   },
   async handler(args) {
@@ -793,7 +944,11 @@ const prepareReject = defineTool<PrepareRejectArgs, UnsignedInstructionView>({
       worker: args.worker as Address,
       workerAuthority: args.workerAuthority as Address,
       creator: createNoopSigner(args.creator as Address),
-      rejectionHash: hex32(args.rejectionHash, "rejectionHash", "prepare_reject_task_result"),
+      rejectionHash: hex32(
+        args.rejectionHash,
+        "rejectionHash",
+        "prepare_reject_task_result",
+      ),
     });
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },
@@ -806,7 +961,10 @@ interface PrepareAutoAcceptArgs extends Omit<PrepareAcceptArgs, "creator"> {
   referrer?: string;
 }
 
-const prepareAutoAccept = defineTool<PrepareAutoAcceptArgs, UnsignedInstructionView>({
+const prepareAutoAccept = defineTool<
+  PrepareAutoAcceptArgs,
+  UnsignedInstructionView
+>({
   name: "prepare_auto_accept_task_result",
   kind: "prepare",
   description:
@@ -814,16 +972,23 @@ const prepareAutoAccept = defineTool<PrepareAutoAcceptArgs, UnsignedInstructionV
   inputSchema: {
     type: "object",
     additionalProperties: false,
-    required: ["task", "worker", "workerAuthority", "treasury", "creator", "authority"],
+    required: [
+      "task",
+      "worker",
+      "workerAuthority",
+      "treasury",
+      "creator",
+      "authority",
+    ],
     properties: {
-      task: { type: "string", description: "Task PDA in creator review." },
-      worker: { type: "string", description: "Worker agent PDA." },
-      workerAuthority: { type: "string", description: "Worker payout authority wallet." },
-      treasury: { type: "string", description: "Protocol treasury account." },
-      creator: { type: "string", description: "Task creator wallet." },
-      authority: { type: "string", description: "Permissionless caller wallet that signs." },
-      operator: { type: "string", description: "Optional operator payee." },
-      referrer: { type: "string", description: "Optional referrer payee." },
+      task: solanaAddress("Task PDA in creator review."),
+      worker: solanaAddress("Worker agent PDA."),
+      workerAuthority: solanaAddress("Worker payout authority wallet."),
+      treasury: solanaAddress("Protocol treasury account."),
+      creator: solanaAddress("Task creator wallet."),
+      authority: solanaAddress("Permissionless caller wallet that signs."),
+      operator: solanaAddress("Optional operator payee."),
+      referrer: solanaAddress("Optional referrer payee."),
     },
   },
   async handler(args) {
@@ -850,19 +1015,18 @@ interface PrepareCancelArgs {
 const prepareCancel = defineTool<PrepareCancelArgs, UnsignedInstructionView>({
   name: "prepare_cancel_task",
   kind: "prepare",
-  description: "Build an UNSIGNED cancel_task instruction to refund an open/unclaimed task.",
+  description:
+    "Build an UNSIGNED cancel_task instruction to refund an open/unclaimed task.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     required: ["task", "authority"],
     properties: {
-      task: { type: "string", description: "Task PDA to cancel." },
-      authority: { type: "string", description: "Task creator wallet that signs." },
-      workerBondAuthority: {
-        type: "string",
-        description:
-          "Wallet whose worker completion bond PDA is settled (refunded, or forfeited on a no-show cancel — must then be a live claim worker, audit F-1). Defaults to the task PDA, which can never be a bond poster (empty no-op PDA).",
-      },
+      task: solanaAddress("Task PDA to cancel."),
+      authority: solanaAddress("Task creator wallet that signs."),
+      workerBondAuthority: solanaAddress(
+        "Wallet whose worker completion bond PDA is settled (refunded, or forfeited on a no-show cancel — must then be a live claim worker, audit F-1). Defaults to the task PDA, which can never be a bond poster (empty no-op PDA).",
+      ),
     },
   },
   async handler(args) {
@@ -894,10 +1058,10 @@ const prepareClose = defineTool<PrepareCloseArgs, UnsignedInstructionView>({
     additionalProperties: false,
     required: ["task", "authority"],
     properties: {
-      task: { type: "string", description: "Terminal task PDA to close." },
-      authority: { type: "string", description: "Task creator wallet that signs." },
-      hireRecord: { type: "string", description: "Optional HireRecord PDA for hired tasks." },
-      listing: { type: "string", description: "Optional source listing PDA for hired tasks." },
+      task: solanaAddress("Terminal task PDA to close."),
+      authority: solanaAddress("Task creator wallet that signs."),
+      hireRecord: solanaAddress("Optional HireRecord PDA for hired tasks."),
+      listing: solanaAddress("Optional source listing PDA for hired tasks."),
     },
   },
   async handler(args) {
@@ -927,21 +1091,30 @@ interface PrepareRateHireArgs {
   reviewUri?: string;
 }
 
-const prepareRateHire = defineTool<PrepareRateHireArgs, UnsignedInstructionView>({
+const prepareRateHire = defineTool<
+  PrepareRateHireArgs,
+  UnsignedInstructionView
+>({
   name: "prepare_rate_hire",
   kind: "prepare",
-  description: "Build an UNSIGNED rate_hire instruction for a completed listing hire.",
+  description:
+    "Build an UNSIGNED rate_hire instruction for a completed listing hire.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
     required: ["task", "listing", "buyer", "score"],
     properties: {
-      task: { type: "string", description: "Completed task PDA." },
-      listing: { type: "string", description: "Source listing PDA from the HireRecord." },
-      buyer: { type: "string", description: "Task creator/buyer wallet that signs." },
-      score: { type: "integer", description: "Rating score, 1 through 5." },
-      reviewHash: { type: "string", description: "Optional 32-byte review hash." },
-      reviewUri: { type: "string", description: "Optional written review URI." },
+      task: solanaAddress("Completed task PDA."),
+      listing: solanaAddress("Source listing PDA from the HireRecord."),
+      buyer: solanaAddress("Task creator/buyer wallet that signs."),
+      score: {
+        type: "integer",
+        minimum: 1,
+        maximum: 5,
+        description: "Rating score, 1 through 5.",
+      },
+      reviewHash: hex32Schema("Optional 32-byte review hash."),
+      reviewUri: contentUri("Optional written review URI."),
     },
   },
   async handler(args) {
@@ -951,7 +1124,13 @@ const prepareRateHire = defineTool<PrepareRateHireArgs, UnsignedInstructionView>
       buyer: createNoopSigner(args.buyer as Address),
       score: args.score,
       ...(args.reviewHash
-        ? { reviewHash: hex32(args.reviewHash, "reviewHash", "prepare_rate_hire") }
+        ? {
+            reviewHash: hex32(
+              args.reviewHash,
+              "reviewHash",
+              "prepare_rate_hire",
+            ),
+          }
         : {}),
       ...(args.reviewUri ? { reviewUri: args.reviewUri } : {}),
     });
@@ -989,41 +1168,34 @@ const prepareRegisterAgent = defineTool<
     additionalProperties: false,
     required: ["authority", "agentId", "capabilities", "endpoint"],
     properties: {
-      authority: {
-        type: "string",
-        description:
-          "Agent authority wallet (base58) — fee payer + signer + owner of the new AgentRegistration.",
-      },
-      agentId: {
-        type: "string",
-        description:
-          "32-byte agent id as 64 hex chars (caller-chosen, unique per authority). The AgentRegistration PDA is derived from it.",
-      },
-      capabilities: {
-        type: "string",
-        description:
-          "Capability bitmask this agent advertises, as a NON-ZERO decimal u64 string. " +
+      authority: solanaAddress(
+        "Agent authority wallet (base58) — fee payer + signer + owner of the new AgentRegistration.",
+      ),
+      agentId: hex32Schema(
+        "32-byte agent id as 64 hex chars (caller-chosen, unique per authority). The AgentRegistration PDA is derived from it.",
+        true,
+      ),
+      capabilities: uint64(
+        "Capability bitmask this agent advertises, as a NON-ZERO decimal u64 string. " +
           "register_agent rejects 0 on-chain (CoordinationError::InvalidCapabilities), so this " +
           "tool rejects it up-front rather than returning a doomed instruction.",
-      },
-      endpoint: {
-        type: "string",
-        description: "Agent endpoint URI (e.g. an A2A / agent-card URL) recorded on-chain.",
-      },
-      metadataUri: {
-        type: "string",
-        description: "Optional hosted agent metadata URI. Omit for none.",
-      },
-      stakeAmount: {
-        type: "string",
-        description:
-          "Optional stake in lamports as a decimal u64 string. Omit (defaults to 0) for no stake. " +
+        true,
+      ),
+      endpoint: httpUrl(
+        "Agent HTTP(S) endpoint URI (e.g. an A2A / agent-card URL) recorded on-chain.",
+      ),
+      metadataUri: contentUri(
+        "Optional hosted agent metadata URI. Omit for none.",
+        128,
+      ),
+      stakeAmount: uint64(
+        "Optional stake in lamports as a decimal u64 string. Omit (defaults to 0) for no stake. " +
           "NOTE: register_agent requires stakeAmount >= the on-chain config.min_agent_stake " +
           "(mainnet default 1_000_000 lamports = 0.001 SOL); the default 0 is rejected at " +
           "broadcast whenever a non-zero minimum stake is configured. This tool cannot read the " +
           "live minimum (keyless prepare-only builder), so it does not guard it — supply a stake " +
           "that meets the deployment's minimum.",
-      },
+      ),
     },
   },
   async handler(args) {

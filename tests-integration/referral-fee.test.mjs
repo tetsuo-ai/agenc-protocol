@@ -15,7 +15,7 @@ import {
   MINT_SIZE, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
   createInitializeMintInstruction, createAssociatedTokenAccountInstruction,
   createMintToInstruction, getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
+} from "./spl-token-legacy.mjs";
 import {
   PID, enc, arr, pda, id32,
   makeProgram, send, sendMany, expectOk, expectFail, decode, BN, Keypair, PublicKey,

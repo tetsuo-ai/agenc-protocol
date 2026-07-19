@@ -1,68 +1,8 @@
-//! Compute unit profiling and budget utilities (issue #40).
+//! Volume- and reputation-based fee calculations.
 //!
-//! Provides helpers for tracking compute unit consumption within instructions,
-//! recommended CU budgets for each instruction type, and fee tier calculations
-//! based on task volume.
-//!
-//! # Usage
-//!
-//! For SDK/client-side: use the `RECOMMENDED_CU_*` constants when building
-//! transactions with `ComputeBudgetInstruction::set_compute_unit_limit()`.
-//!
-
-// ============================================================================
-// Recommended Compute Unit Budgets per Instruction
-// ============================================================================
-//
-// These are conservative upper bounds profiled on solana-test-validator.
-// Transactions should request these CU limits via ComputeBudgetInstruction
-// to avoid paying for the default 200k CU allocation on mainnet.
-//
-// Methodology: Each value was measured by running the instruction under
-// test-validator with sol_log_compute_units() calls, then rounded up
-// to the nearest 10k for safety margin.
-
-/// Register agent: PDA derivation + account init + state write (~25k measured)
-pub const RECOMMENDED_CU_REGISTER_AGENT: u32 = 40_000;
-
-/// Update agent: state read + conditional writes (~10k measured)
-pub const RECOMMENDED_CU_UPDATE_AGENT: u32 = 20_000;
-
-/// Create task: PDA derivation + escrow init + CPI transfer + state writes (~35k measured)
-pub const RECOMMENDED_CU_CREATE_TASK: u32 = 50_000;
-
-/// Create dependent task: same as create_task + parent validation (~40k measured)
-pub const RECOMMENDED_CU_CREATE_DEPENDENT_TASK: u32 = 60_000;
-
-/// Claim task: PDA derivation + capability check + state writes (~20k measured)
-pub const RECOMMENDED_CU_CLAIM_TASK: u32 = 30_000;
-
-/// Complete task (public): reward calc + lamport transfers + state updates (~40k measured)
-pub const RECOMMENDED_CU_COMPLETE_TASK: u32 = 60_000;
-
-/// Complete task (private/ZK): router-based proof verification is the heaviest operation.
-/// Budget includes seal/journal validation, router CPI verification, and state updates.
-pub const RECOMMENDED_CU_COMPLETE_TASK_PRIVATE: u32 = 200_000;
-
-/// Cancel task: escrow refund + state cleanup (~25k measured)
-pub const RECOMMENDED_CU_CANCEL_TASK: u32 = 40_000;
-
-/// Initiate dispute: PDA init + stake check + rate limit check (~30k measured)
-pub const RECOMMENDED_CU_INITIATE_DISPUTE: u32 = 50_000;
-
-/// DEPRECATED (P6.3): `vote_dispute` retired (arbiter vote/quorum model removed).
-/// Unreferenced; retained only for API stability.
-pub const RECOMMENDED_CU_VOTE_DISPUTE: u32 = 30_000;
-
-/// Resolve dispute: ruling validation + reward transfer + state updates (~45k measured)
-pub const RECOMMENDED_CU_RESOLVE_DISPUTE: u32 = 60_000;
-
-// Compile-time ordering invariants for recommended CU budgets.
-const _: () = {
-    assert!(RECOMMENDED_CU_COMPLETE_TASK_PRIVATE > RECOMMENDED_CU_COMPLETE_TASK);
-    assert!(RECOMMENDED_CU_COMPLETE_TASK_PRIVATE > RECOMMENDED_CU_CREATE_TASK);
-    assert!(RECOMMENDED_CU_COMPLETE_TASK_PRIVATE > RECOMMENDED_CU_RESOLVE_DISPUTE);
-};
+//! This module intentionally does not publish static compute-unit recommendations.
+//! Such limits become unsafe when instruction shape changes unless they are generated
+//! from repeatable compiled-program measurements with reviewed headroom.
 
 // ============================================================================
 // Fee Tier Structure
@@ -207,18 +147,6 @@ mod tests {
         // 1000 bps (10%) is used here as an example fee input, not the cap.
         assert_eq!(calculate_tiered_fee(1000, 0), 1000);
         assert_eq!(calculate_tiered_fee(1000, 1000), 960);
-    }
-
-    #[test]
-    fn test_cu_budgets_are_reasonable() {
-        // Verify all CU budgets are within Solana's 1.4M CU limit
-        let max_cu: u32 = 1_400_000;
-        assert!(RECOMMENDED_CU_REGISTER_AGENT <= max_cu);
-        assert!(RECOMMENDED_CU_CREATE_TASK <= max_cu);
-        assert!(RECOMMENDED_CU_COMPLETE_TASK <= max_cu);
-        assert!(RECOMMENDED_CU_COMPLETE_TASK_PRIVATE <= max_cu);
-        assert!(RECOMMENDED_CU_INITIATE_DISPUTE <= max_cu);
-        assert!(RECOMMENDED_CU_RESOLVE_DISPUTE <= max_cu);
     }
 
     #[test]

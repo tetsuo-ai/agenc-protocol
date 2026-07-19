@@ -1,10 +1,11 @@
 # Test-app dependencies + build outputs (the apps are file:-linked fixtures;
-# lockfiles are ignored by default, and node_modules/build dirs are local).
+# fixture lockfiles are ignored by default, and node_modules/build dirs are local).
 */node_modules/
 */package-lock.json
-# The SDK workflow runs `npm ci` for checkout, so its lockfile is part of the
-# reproducible CI input. Other fixture locks remain disposable local artifacts.
+# CI runs `npm ci` for checkout and Next SSR, so both locks are reproducible
+# inputs. Any ad-hoc fixture lock remains a disposable local artifact.
 !checkout/package-lock.json
+!next-ssr/package-lock.json
 */.next/
 */dist/
 */.vite/

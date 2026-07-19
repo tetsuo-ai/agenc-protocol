@@ -16,7 +16,7 @@
 //    accept settles to the worker.
 // Plus a forced deterministic on-chain failure asserting AgencError hydration.
 import { describe, it, expect } from "vitest";
-import type { Address } from "@solana/kit";
+import type { Address, ReadonlyUint8Array } from "@solana/kit";
 import {
   facade,
   findAgentPda,
@@ -77,6 +77,14 @@ function expectLamportDelta(
   expect(balance(svm, account) - before).toBe(expected);
 }
 
+function taskClaimGeneration(reserved: ReadonlyUint8Array): bigint {
+  let generation = 0n;
+  for (let index = 10; index >= 3; index -= 1) {
+    generation = (generation << 8n) | BigInt(reserved[index] ?? 0);
+  }
+  return generation;
+}
+
 function advanceClockPast(
   svm: ReturnType<typeof freshSvm>,
   unixTimestamp: bigint,
@@ -118,9 +126,15 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     // ONE transport (one chain), one client per actor — each instruction's
     // authority signer is that client's fee payer, mirroring the existing suite.
     const transport = createLiteSvmTransport(svm);
-    const providerClient = createMarketplaceClient({ transport, signer: provider });
+    const providerClient = createMarketplaceClient({
+      transport,
+      signer: provider,
+    });
     const buyerClient = createMarketplaceClient({ transport, signer: buyer });
-    const moderatorClient = createMarketplaceClient({ transport, signer: moderator });
+    const moderatorClient = createMarketplaceClient({
+      transport,
+      signer: moderator,
+    });
 
     // 1) register provider + buyer agents (named convenience methods).
     const providerAgentId = new Uint8Array(32).fill(11);
@@ -446,16 +460,15 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         task,
         worker: providerAgent,
         authority: provider,
-        moderationBlock: await moderationBlockFor(
-          new Uint8Array(32).fill(57),
-        ),
+        moderationBlock: await moderationBlockFor(new Uint8Array(32).fill(57)),
         jobSpecHash: new Uint8Array(32).fill(57),
       })
       .catch((error: unknown) => error);
     expect(prematureClaim).toBeInstanceOf(AgencError);
     if (prematureClaim instanceof AgencError) {
       const isMissingJobSpecPointer =
-        prematureClaim.code === AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED ||
+        prematureClaim.code ===
+          AGENC_COORDINATION_ERROR__TASK_JOB_SPEC_REQUIRED ||
         prematureClaim.logs.join("\n").includes("AccountNotInitialized");
       expect(isMissingJobSpecPointer).toBe(true);
     }
@@ -779,9 +792,9 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       TaskStatus.Open,
     );
     expect(accountData(svm, taskJobSpec)).toBeNull();
-    expect(getTaskEscrowDecoder().decode(accountData(svm, escrow)!).amount).toBe(
-      price,
-    );
+    expect(
+      getTaskEscrowDecoder().decode(accountData(svm, escrow)!).amount,
+    ).toBe(price);
     let decodedListing = getServiceListingDecoder().decode(
       accountData(svm, listing)!,
     );
@@ -869,7 +882,10 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     await seedModerationConfig(svm, admin.address, modAuth.address, true);
 
     const transport = createLiteSvmTransport(svm);
-    const creatorClient = createMarketplaceClient({ transport, signer: creator });
+    const creatorClient = createMarketplaceClient({
+      transport,
+      signer: creator,
+    });
     const workerClient = createMarketplaceClient({ transport, signer: worker });
     const modClient = createMarketplaceClient({ transport, signer: modAuth });
 
@@ -962,6 +978,11 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       moderationBlock: await moderationBlockFor(jobSpecHash),
       jobSpecHash,
     });
+    expect(
+      taskClaimGeneration(
+        getTaskDecoder().decode(accountData(svm, task)!).reserved,
+      ),
+    ).toBe(1n);
 
     // submit (worker) -> PendingValidation, submission Submitted
     await workerClient.submitTaskResult({
@@ -1010,7 +1031,10 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     await seedModerationConfig(svm, admin.address, modAuth.address, true);
 
     const transport = createLiteSvmTransport(svm);
-    const creatorClient = createMarketplaceClient({ transport, signer: creator });
+    const creatorClient = createMarketplaceClient({
+      transport,
+      signer: creator,
+    });
     const workerClient = createMarketplaceClient({ transport, signer: worker });
     const modClient = createMarketplaceClient({ transport, signer: modAuth });
 
@@ -1140,11 +1164,14 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const rejectedTask = getTaskDecoder().decode(accountData(svm, task)!);
     expect(rejectedTask.status).toBe(TaskStatus.Open);
     expect(rejectedTask.currentWorkers).toBe(0);
+    expect(taskClaimGeneration(rejectedTask.reserved)).toBe(1n);
     // Batch 3 WS-CONTEST §1: a creator reject closes the submission (with the
     // claim) and returns BOTH rents to the worker — no straggler, no rent sink.
     expect(accountData(svm, submission)).toBeNull();
     expect(accountData(svm, claim)).toBeNull();
-    const escrowAfter = getTaskEscrowDecoder().decode(accountData(svm, escrow)!);
+    const escrowAfter = getTaskEscrowDecoder().decode(
+      accountData(svm, escrow)!,
+    );
     expect(escrowAfter.amount).toBe(escrowBefore.amount);
     expect(escrowAfter.distributed).toBe(escrowBefore.distributed);
     expect(escrowAfter.isClosed).toBe(false);
@@ -1430,7 +1457,9 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
 
     expect(failure).toBeInstanceOf(AgencError);
     const agencError = failure as AgencError;
-    expect(agencError.code).toBe(AGENC_COORDINATION_ERROR__INVALID_CAPABILITIES);
+    expect(agencError.code).toBe(
+      AGENC_COORDINATION_ERROR__INVALID_CAPABILITIES,
+    );
     expect(agencError.errorName).toBe(
       "AGENC_COORDINATION_ERROR__INVALID_CAPABILITIES",
     );

@@ -2,7 +2,7 @@
   "name": "@tetsuo-ai/marketplace-tools",
   "version": "0.5.0",
   "description": "Framework-neutral AgenC marketplace tool definitions (JSON-Schema) for AI agents — discovery, inspection, and unsigned mutation-prepare tools, with OpenAI / LangChain / CrewAI adapters",
-  "packageManager": "npm@11.7.0",
+  "packageManager": "npm@11.18.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

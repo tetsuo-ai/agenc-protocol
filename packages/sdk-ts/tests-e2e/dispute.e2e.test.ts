@@ -30,9 +30,10 @@ async function moderationBlockFor(contentHash: Uint8Array) {
 // instructions.
 //
 // P6.3: the arbiter vote/quorum model is RETIRED. `vote_dispute` no longer exists; a
-// dispute is decided by an ASSIGNED RESOLVER on the dispute-resolver roster (or the
-// protocol authority) calling `resolve_dispute` directly — no arbiter registration, no
-// votes, no voting-period wait, and NO (vote, arbiter) remaining accounts. P6.4 also
+// dispute is decided by an ASSIGNED RESOLVER on the threshold-approved roster (or by
+// the protocol authority with configured M-of-N approval) calling `resolve_dispute`
+// directly — no per-case arbiter registration, votes, or voting-period wait, and NO
+// (vote, arbiter) remaining accounts. P6.4 also
 // makes a reasoned ruling (`rationaleHash` + `rationaleUri`) REQUIRED on resolve.
 //
 //   reach a submitted CreatorReview task (hire -> claim -> submit)
@@ -50,9 +51,19 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
   it("drives initiate -> assign resolver -> resolve (Complete) end-to-end on-chain, no votes", async () => {
     const svm = freshSvm();
 
-    // Admin owns ProtocolConfig (treasury) and ModerationConfig authority.
+    // Admin owns ProtocolConfig (treasury) and ModerationConfig authority. Resolver
+    // roster changes require a real 2-of-3 owner threshold, even in the VM fixture.
     const admin = await fundedSigner(svm);
-    await seedProtocolConfig(svm, admin.address);
+    const multisigApproverA = await fundedSigner(svm);
+    const multisigApproverB = await fundedSigner(svm);
+    await seedProtocolConfig(svm, admin.address, {
+      multisigOwners: [
+        admin.address,
+        multisigApproverA.address,
+        multisigApproverB.address,
+      ],
+      multisigThreshold: 2,
+    });
 
     // Real, funded signers for each actor (these MUST sign their own instructions).
     const provider = await fundedSigner(svm); // worker wallet
@@ -233,6 +244,7 @@ describe("e2e: dispute -> roster resolve settles the task on the real program", 
       await facade.assignDisputeResolver({
         authority: admin,
         resolver: resolver.address,
+        multisigSigners: [multisigApproverA, multisigApproverB],
       }),
     ]);
     const [resolverAssignment] = await facade.findDisputeResolverPda({

@@ -43,7 +43,7 @@ proposals. Everything else listed here is a living doc.
 - [../programs/agenc-coordination/README.md](../programs/agenc-coordination/README.md) - program-specific entrypoint
 - [../packages/protocol/README.md](../packages/protocol/README.md) - npm package consumer view
 - [../migrations/README.md](../migrations/README.md) - migration authority and current-state guidance
-- [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - core protocol security invariants/assumptions; its active 76-test model/property companion is `programs/agenc-coordination/fuzz/` (the retired `vote_dispute` target has been removed)
+- [./audit/THREAT_MODEL.md](./audit/THREAT_MODEL.md) - core protocol security invariants/assumptions; its active 77-test model/property companion is `programs/agenc-coordination/fuzz/` (the retired `vote_dispute` target has been removed)
 - [./audit/AUDITOR_HANDOFF.md](./audit/AUDITOR_HANDOFF.md) - **HISTORICAL** revision-4 external-auditor handoff: 99-instruction scope, invariants, prior internal audits, test inventory, and migration choreography; use `THREAT_MODEL.md`, `PROGRAM_SURFACE.md`, and `VALIDATION.md` for the pending revision-5 candidate
 - [./BATCH_1_3_AUDIT_PREP.md](./BATCH_1_3_AUDIT_PREP.md) - **HISTORICAL** — Batch 1–4 (Phase 6) change inventory, per-invariant test map, and internal adversarial-audit results (the deploy it prepped completed 2026-06-11; later 2026-07-16/17 remediation is recorded in [../TODO.MD](../TODO.MD))
 - [./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md](./audit/ADVERSARIAL_VERIFY_VERDICTS_20260611.md) - **HISTORICAL** — the 2026-06-11 multi-agent adversarial-verification verdicts (94 findings × 3 lens-skeptics + adjudicator) that gated the full-surface deploy

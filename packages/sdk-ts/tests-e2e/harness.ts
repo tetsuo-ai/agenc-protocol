@@ -56,8 +56,24 @@ export async function fundedSigner(svm: LiteSVM): Promise<KeyPairSigner> {
 export async function seedProtocolConfig(
   svm: LiteSVM,
   admin: Address,
-  opts: { minArbiterStake?: bigint } = {},
+  opts: {
+    minArbiterStake?: bigint;
+    multisigOwners?: readonly Address[];
+    multisigThreshold?: number;
+  } = {},
 ): Promise<Address> {
+  const multisigOwners = [...(opts.multisigOwners ?? [])];
+  const multisigThreshold = opts.multisigThreshold ?? 0;
+  if (multisigOwners.length > 5) {
+    throw new Error("seedProtocolConfig supports at most five multisig owners");
+  }
+  if (
+    (multisigOwners.length === 0 && multisigThreshold !== 0) ||
+    (multisigOwners.length > 0 &&
+      (multisigThreshold < 2 || multisigThreshold > multisigOwners.length))
+  ) {
+    throw new Error("seedProtocolConfig received an invalid multisig threshold");
+  }
   const [pda, bump] = await findProtocolConfigPda();
   const data = getProtocolConfigEncoder().encode({
     authority: admin,
@@ -73,8 +89,8 @@ export async function seedProtocolConfig(
     completedTasks: 0n,
     totalValueDistributed: 0n,
     bump,
-    multisigThreshold: 0,
-    multisigOwnersLen: 0,
+    multisigThreshold,
+    multisigOwnersLen: multisigOwners.length,
     taskCreationCooldown: 0n,
     maxTasksPer24h: 0,
     disputeInitiationCooldown: 0n,
@@ -90,7 +106,10 @@ export async function seedProtocolConfig(
     // P6.5: the e2e suite runs the FULL-surface .so, so the injected config must
     // read as full-surface (SURFACE_REVISION_FULL = 1), not the canary 0.
     surfaceRevision: 1,
-    multisigOwners: [DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR],
+    multisigOwners: [
+      ...multisigOwners,
+      ...Array.from({ length: 5 - multisigOwners.length }, () => DEFAULT_ADDR),
+    ],
   });
   svm.setAccount({
     address: pda,

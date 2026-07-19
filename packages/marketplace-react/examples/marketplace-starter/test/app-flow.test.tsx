@@ -4,7 +4,12 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Simulate } from "react-dom/test-utils";
-import { address, createNoopSigner, type Address, type TransactionSigner } from "@solana/kit";
+import {
+  address,
+  createNoopSigner,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   findTaskPda,
   values,
@@ -19,12 +24,24 @@ import type {
   MarketplaceBackendAdapter,
 } from "../src/backend.js";
 
-const LISTING = address("Stake11111111111111111111111111111111111111") as Address;
-const PROVIDER_AGENT = address("So11111111111111111111111111111111111111112") as Address;
-const BUYER = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK") as Address;
-const WORKER_AGENT = address("4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB") as Address;
-const WORKER_AUTHORITY = address("9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA") as Address;
-const TREASURY = address("SysvarRent111111111111111111111111111111111") as Address;
+const LISTING = address(
+  "Stake11111111111111111111111111111111111111",
+) as Address;
+const PROVIDER_AGENT = address(
+  "So11111111111111111111111111111111111111112",
+) as Address;
+const BUYER = address(
+  "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+) as Address;
+const WORKER_AGENT = address(
+  "4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB",
+) as Address;
+const WORKER_AUTHORITY = address(
+  "9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA",
+) as Address;
+const TREASURY = address(
+  "SysvarRent111111111111111111111111111111111",
+) as Address;
 const JOB_SPEC_HASH = new Uint8Array(32).fill(7);
 
 interface RecordedCall {
@@ -158,9 +175,12 @@ async function renderStarter({
   client: MarketplaceClient;
   signer: TransactionSigner;
 }): Promise<RenderedApp> {
-  const dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>", {
-    url: "https://starter.example/",
-  });
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="root"></div></body></html>',
+    {
+      url: "https://starter.example/",
+    },
+  );
   const previous = installDomGlobals(dom);
   const container = dom.window.document.getElementById("root");
   assert.ok(container);
@@ -178,7 +198,12 @@ async function renderStarter({
         }}
       />,
     );
-    await settleReact();
+  });
+  // TanStack Query publishes through its notify manager. Cross at least one
+  // task boundary inside `act` before each assertion so the initial result is
+  // committed without holding one long-running act scope open.
+  await waitFor(() => {
+    assert.match(container.textContent ?? "", /Translation service/);
   });
 
   return {
@@ -195,7 +220,9 @@ async function renderStarter({
   };
 }
 
-function installDomGlobals(dom: JSDOM): Map<string, PropertyDescriptor | undefined> {
+function installDomGlobals(
+  dom: JSDOM,
+): Map<string, PropertyDescriptor | undefined> {
   const win = dom.window;
   const previous = new Map<string, PropertyDescriptor | undefined>();
   const globals: Record<string, unknown> = {
@@ -235,7 +262,10 @@ function restoreDomGlobals(
   }
 }
 
-async function clickButton(container: HTMLElement, label: string | RegExp): Promise<void> {
+async function clickButton(
+  container: HTMLElement,
+  label: string | RegExp,
+): Promise<void> {
   const button = findButton(container, label);
   await act(async () => {
     button.dispatchEvent(
@@ -245,7 +275,10 @@ async function clickButton(container: HTMLElement, label: string | RegExp): Prom
   });
 }
 
-function findButton(container: HTMLElement, label: string | RegExp): HTMLButtonElement {
+function findButton(
+  container: HTMLElement,
+  label: string | RegExp,
+): HTMLButtonElement {
   const buttons = Array.from(container.querySelectorAll("button"));
   const button = buttons.find((candidate) => {
     const text = normalize(candidate.textContent);
@@ -260,7 +293,11 @@ function findButton(container: HTMLElement, label: string | RegExp): HTMLButtonE
   return button;
 }
 
-async function setInput(container: HTMLElement, labelText: string, value: string): Promise<void> {
+async function setInput(
+  container: HTMLElement,
+  labelText: string,
+  value: string,
+): Promise<void> {
   const labels = Array.from(container.querySelectorAll("label"));
   const label = labels.find((candidate) =>
     normalize(candidate.textContent).startsWith(labelText),
@@ -281,19 +318,24 @@ async function setInput(container: HTMLElement, labelText: string, value: string
   });
 }
 
-async function waitFor(assertion: () => void, timeoutMs = 2_000): Promise<void> {
+async function waitFor(
+  assertion: () => void,
+  timeoutMs = 2_000,
+): Promise<void> {
   const started = Date.now();
   let lastError: unknown;
   while (Date.now() - started < timeoutMs) {
+    // Always cross one task boundary before asserting. Mutations record their
+    // SDK call before React Query publishes the settled mutation state.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     try {
       assertion();
       return;
     } catch (error) {
       lastError = error;
     }
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
   }
   throw lastError;
 }
@@ -304,10 +346,7 @@ async function settleReact(): Promise<void> {
   }
 }
 
-function call(
-  calls: RecordedCall[],
-  name: string,
-): RecordedCall {
+function call(calls: RecordedCall[], name: string): RecordedCall {
   const found = calls.find((entry) => entry.name === name);
   assert.ok(found, `Expected recorded call ${name}`);
   return found;
@@ -335,7 +374,8 @@ test("starter UI drives the public humanless marketplace lifecycle with injected
       call(recorder.calls, "hireFromListingHumanless");
     });
 
-    const hireInput = call(recorder.calls, "hireFromListingHumanless").input as {
+    const hireInput = call(recorder.calls, "hireFromListingHumanless")
+      .input as {
       creator: TransactionSigner;
       taskId: Uint8Array;
       listing: Address;
@@ -378,7 +418,11 @@ test("starter UI drives the public humanless marketplace lifecycle with injected
     await waitFor(() => {
       assert.match(rendered.container.textContent ?? "", /Result proof hash/);
     });
-    await setInput(rendered.container, "Worker agent PDA", String(WORKER_AGENT));
+    await setInput(
+      rendered.container,
+      "Worker agent PDA",
+      String(WORKER_AGENT),
+    );
     await waitFor(() => {
       assert.equal(findButton(rendered.container, "Claim").disabled, false);
     });
@@ -395,8 +439,16 @@ test("starter UI drives the public humanless marketplace lifecycle with injected
     await waitFor(() => {
       assert.match(rendered.container.textContent ?? "", /Protocol treasury/);
     });
-    await setInput(rendered.container, "Worker agent PDA", String(WORKER_AGENT));
-    await setInput(rendered.container, "Worker wallet", String(WORKER_AUTHORITY));
+    await setInput(
+      rendered.container,
+      "Worker agent PDA",
+      String(WORKER_AGENT),
+    );
+    await setInput(
+      rendered.container,
+      "Worker wallet",
+      String(WORKER_AUTHORITY),
+    );
     await setInput(rendered.container, "Protocol treasury", String(TREASURY));
     await clickButton(rendered.container, "Accept and release escrow");
     await waitFor(() => {
@@ -424,7 +476,10 @@ test("starter UI drives the public humanless marketplace lifecycle with injected
       );
     }
     assert.equal(
-      String((call(recorder.calls, "closeTask").input as { listing: Address }).listing),
+      String(
+        (call(recorder.calls, "closeTask").input as { listing: Address })
+          .listing,
+      ),
       String(LISTING),
     );
 

@@ -1,9 +1,11 @@
 //! Revoke a wallet from the moderation-attestor roster (P6.8 — registry MECHANISM only).
 //!
-//! Mirrors `revoke_dispute_resolver`. Closes the `["moderation_attestor", attestor]` PDA,
-//! refunding its rent to the moderation authority. Once closed, that wallet can no longer
-//! record moderation attestations via the registered-attestor path (the closed account
-//! fails to load when passed to `record_*_moderation`).
+//! Mirrors only the PDA-roster mechanics of `revoke_dispute_resolver`; moderation keeps
+//! its separate authority-managed trust model rather than inheriting resolver M-of-N.
+//! Closes the `["moderation_attestor", attestor]` PDA, refunding its rent to the
+//! moderation authority. Once closed, that wallet can no longer record moderation
+//! attestations via the registered-attestor path (the closed account fails to load when
+//! passed to `record_*_moderation`).
 //!
 //! P1.2 §4.7 (non-confiscatory revoke): scoped to `assigned_by == authority` — the
 //! authority may remove ONLY entries it itself deputized. A self-registered attestor

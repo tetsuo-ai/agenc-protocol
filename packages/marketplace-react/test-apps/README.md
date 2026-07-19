@@ -3,7 +3,7 @@
 The committed fixtures that prove the PLAN_2 Part A Done-whens against the
 **localnet** stack (localnet-first: no devnet/deploy required). Two apps plus a
 Playwright suite, all driven by one local validator booted from the repo-built
-program `.so` + injected ProtocolConfig/ModerationConfig.
+program `.so` + local ProtocolConfig/ModerationConfig.
 
 ## Layout
 
@@ -18,7 +18,7 @@ program `.so` + injected ProtocolConfig/ModerationConfig.
 
 ```bash
 # from packages/marketplace-react/
-node test/sandbox-up.mjs up        # boot + init + seed (idempotent; converges)
+node test/sandbox-up.mjs up --unsafe-unpaused-fixture  # fresh browser ledger + seed
 node test/sandbox-up.mjs env       # print the resolved sandbox env JSON
 node test/sandbox-up.mjs down      # stop the validator
 node test/sandbox-up.mjs down --purge   # stop + wipe the ledger
@@ -28,6 +28,13 @@ Prerequisites (same as `scripts/localnet-up.mjs`):
 - `solana-test-validator` + `solana-keygen` on PATH,
 - `anchor build` output at `programs/agenc-coordination/target/deploy/agenc_coordination.so` (full surface),
 - the built SDK at `packages/sdk-ts/dist` (`cd packages/sdk-ts && npm run build`).
+
+The full Playwright harness starts from a disposable ledger and passes
+`--unsafe-unpaused-fixture`: this genesis-injects a current, unpaused
+`ProtocolConfig` using the generated SDK encoder. It is deliberately test-only.
+A fresh production binary correctly starts paused and must use the full atomic
+release-stamp ceremony; the React browser fixture neither weakens nor simulates
+that deployment boundary.
 
 After `up`, browser apps read the RPC + program id from `.localnet/env.json` and
 the seeded listing addresses from `.localnet/fixtures.json`. There is no local
@@ -67,6 +74,6 @@ The SSR app renders committed real listing bytes. After re-seeding the sandbox
 (addresses change), refresh them:
 
 ```bash
-node test/sandbox-up.mjs up
+node test/sandbox-up.mjs up --unsafe-unpaused-fixture
 cd test-apps/next-ssr && node scripts/capture-fixtures.mjs
 ```

@@ -53,21 +53,27 @@ export {
   resultDataFromHashHex,
   resultPlaceholderUri,
   ResultUploadError,
+  DEFAULT_MAX_RESULT_UPLOAD_RESPONSE_BYTES,
+  MAX_RESULT_URI_BYTES,
   sha256,
   sha256Hex,
   uploadResult,
+  validateResultUri,
 } from "./result.js";
 export {
   AGENT_ACCOUNT_RENT_LAMPORTS,
   buildPrompt,
   checkSettlements,
   CLAIM_ACCOUNT_RENT_LAMPORTS,
+  claimFundingRequirement,
+  CONTEST_ENTRY_DEPOSIT_LAMPORTS,
   decodeTaskDescription,
   ensureRegistered,
   FEE_HEADROOM_LAMPORTS,
   lamportsToSol,
   listClaimCandidates,
   processCandidate,
+  readClaimAccountRentMinimums,
   readMinAgentStake,
   registrationFundingRequirement,
   resumeOpenClaim,
@@ -76,6 +82,7 @@ export {
   SUBMISSION_ACCOUNT_RENT_LAMPORTS,
   workerStatus,
   type ClaimCandidate,
+  type ClaimAccountRentMinimums,
   type ProcessOutcome,
   type SettlementReport,
   type TickResult,
@@ -88,6 +95,7 @@ export {
 } from "./runtime.js";
 export {
   acquireStateLock,
+  readProcessIdentity,
   bytesToHex,
   emptyState,
   hexToBytes,
@@ -103,3 +111,14 @@ export {
   type WorkerState,
 } from "./state.js";
 export { formatDiagnosticError, redactSensitiveText } from "./redact.js";
+export {
+  AGENC_PROGRAM_ID,
+  DEFAULT_SETTLEMENT_SIGNATURE_SCAN_LIMIT,
+  findVerifiedSettlementSignature,
+  isVerifiedSettlementTransaction,
+} from "./settlement.js";
+export {
+  loadSolanaKeypairFile,
+  parseSolanaKeypairJson,
+  WalletFileError,
+} from "./wallet.js";

@@ -8,6 +8,12 @@ devnet, and hosted. Pointing at devnet later is a one-file change, never a refac
 
 ## Quick start
 
+The process-identity safety rail currently requires **Linux with procfs mounted
+at `/proc`**. `localnet-up`, `localnet-status`, `localnet-down`, and
+`localnet-record-attestor` fail closed on other platforms because they cannot
+prove executable, argv, cwd, boot, and process-start identity strongly enough
+to signal a recorded PID safely.
+
 ```bash
 # prerequisites (once): anchor build  +  cd packages/sdk-ts && npm install && npm run build
 node scripts/localnet-up.mjs        # boot + deploy + initialize (~18s fresh, ~0.2s converge)
@@ -107,7 +113,7 @@ its step 4 initializers ↔ our step 5; its seeding hook ↔ the same seeder scr
 | Validator + program + configs | `node scripts/localnet-up.mjs` | flags: `--port <n>` (ws is always rpc+1), `--keep-ledger`, `--env-file <p>` |
 | Status | `node scripts/localnet-status.mjs [--env-file <p>]` | exit 0 = healthy; decodes both config PDAs via SDK decoders |
 | Seeder | `node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs --rpc http://127.0.0.1:8899 --keypair .localnet/keys/seeder.json --moderator-keypair .localnet/keys/moderator.json` | registers ~10 providers + listings, records CLEAN moderation with the moderator key (no attestor needed locally) |
-| Attestor (optional) | storefront `server/sandboxAttestor.ts` (see its `SANDBOX_ATTESTOR.md`) | env-driven: `SANDBOX_ATTESTOR_ENABLED=true`, `SANDBOX_ATTESTOR_KEYPAIR_PATH=.localnet/keys/moderator.json`, `SANDBOX_ATTESTOR_RPC_URL=http://127.0.0.1:8899`, **`SANDBOX_ATTESTOR_ALLOW_CUSTOM_RPC=true`** (the attestor is devnet-or-allowlisted fail-closed). Record its URL in `env.json.attestorUrl`; write `.localnet/attestor.pid` so `localnet-down` stops it. |
+| Attestor (optional) | storefront `server/sandboxAttestor.ts` (see its `SANDBOX_ATTESTOR.md`) | env-driven: `SANDBOX_ATTESTOR_ENABLED=true`, `SANDBOX_ATTESTOR_KEYPAIR_PATH=.localnet/keys/moderator.json`, `SANDBOX_ATTESTOR_RPC_URL=http://127.0.0.1:8899`, **`SANDBOX_ATTESTOR_ALLOW_CUSTOM_RPC=true`** (the attestor is devnet-or-allowlisted fail-closed). Record its URL in `env.json.attestorUrl`; run `node scripts/localnet-record-attestor.mjs <pid>` so `localnet-down` can verify the exact process before stopping it. |
 | Stop / wipe | `node scripts/localnet-down.mjs [--purge]` | `--purge` removes only the ledger; keys + `env.json` survive |
 
 ## Gotchas (read before debugging)
@@ -163,7 +169,8 @@ wrote /home/tetsuo/git/AgenC/agenc-protocol/.localnet/fixtures.json (seeded: tru
 $ SANDBOX_ATTESTOR_ENABLED=true SANDBOX_ATTESTOR_ALLOW_CUSTOM_RPC=true \
   SANDBOX_ATTESTOR_RPC_URL=http://127.0.0.1:8899 \
   SANDBOX_ATTESTOR_KEYPAIR_PATH=<repo>/.localnet/keys/moderator.json \
-  PORT=4174 node --import tsx server/index.ts &        # then write .localnet/attestor.pid
+  PORT=4174 node --import tsx server/index.ts &
+  node <protocol-repo>/scripts/localnet-record-attestor.mjs $! # exact process identity
 AgenC Services storefront listening on http://localhost:4174
 # and set env.json attestorUrl = "http://127.0.0.1:4174/api/sandbox/attest"
 
@@ -236,6 +243,7 @@ $ PORT=4185 STOREFRONT_DATA_DIR=$(mktemp -d) SOLANA_RPC_URL=http://127.0.0.1:889
   MODERATION_AUTHORITY_KEYPAIR_PATH=<repo>/.localnet/keys/moderator.json \
   MODERATION_ALLOW_CUSTOM_RPC=true \
   nohup node --import tsx server/index.ts > <repo>/.localnet/logs/storefront.log &
+$ node <repo>/scripts/localnet-record-attestor.mjs "$!"
 AgenC Services storefront listening on http://localhost:4185
 
 # 3. ingest — all 10 seeded listings indexed within ~14s of boot:
@@ -277,6 +285,6 @@ gPA returns 12 listings vs indexer 11 — the indexer's documented default
 exclusion of metadataValid:false listings (contract behavior, not drift).
 
 # 8. teardown
-$ kill $(cat .localnet/storefront.pid) && node scripts/localnet-down.mjs
+$ node scripts/localnet-down.mjs
 storefront stopped / validator stopped (SIGTERM)
 ```

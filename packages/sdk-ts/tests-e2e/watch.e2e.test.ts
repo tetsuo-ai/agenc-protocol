@@ -1,7 +1,7 @@
 // REAL on-chain watch: boot startLocalMarketplace (the compiled
-// agenc-coordination program in litesvm), createTask, and assert
-// watchClaimableTasks surfaces the freshly-created Open task through its
-// catch-up (gPA) read path — with no hand-tuned poll loop.
+// agenc-coordination program in litesvm), createTask, attest+pin its job spec,
+// and assert watchClaimableTasks surfaces the task-state candidate through its
+// catch-up (gPA) read path — proving discovery, not claim success.
 //
 // litesvm exposes no logsNotifications WebSocket, so the LIVE event path is
 // covered by the structural suite (tests/watch.test.ts, fabricated
@@ -19,9 +19,26 @@ import { watchClaimableTasks, type ClaimableTask } from "../src/watch/index.js";
 import { startLocalMarketplace } from "../src/testing/index.js";
 import { GpaSimulator } from "./gpa-sim.js";
 
-describe("e2e: watchClaimableTasks surfaces a real on-chain task via catch-up", () => {
-  it("createTask -> watch surfaces the Open task within the first sweep", async () => {
+/**
+ * The watcher deliberately compares deadlines with the caller's wall clock
+ * because a gPA/indexer transport cannot atomically read Solana's Clock sysvar.
+ * LiteSVM starts at a fixed historical timestamp, so align this fixture before
+ * creating deadline-bearing tasks; otherwise every task is expired from the
+ * watcher's production point of view and the capability/pin assertions become
+ * vacuous.
+ */
+function alignSvmClockWithWallTime(
+  market: Awaited<ReturnType<typeof startLocalMarketplace>>,
+): void {
+  const clock = market.svm.getClock();
+  clock.unixTimestamp = BigInt(Math.floor(Date.now() / 1_000));
+  market.svm.setClock(clock);
+}
+
+describe("e2e: watchClaimableTasks surfaces a real on-chain candidate via catch-up", () => {
+  it("createTask -> attest+pin -> watch surfaces the candidate within the first sweep", async () => {
     const market = await startLocalMarketplace();
+    alignSvmClockWithWallTime(market);
     const creator = await market.fundedSigner();
     const creatorClient = market.clientFor(creator);
 
@@ -64,8 +81,8 @@ describe("e2e: watchClaimableTasks surfaces a real on-chain task via catch-up", 
     const acct = market.svm.getAccount(taskPda);
     expect(acct?.exists).toBe(true);
 
-    // PIN the job spec — claim_task_with_job_spec (and now the watch's
-    // "Open AND pinned" predicate) require it. Attest, then set the pointer.
+    // PIN the job spec — claim_task_with_job_spec requires it, and the watcher
+    // uses it as one necessary candidate-discovery signal. Attest, then set the pointer.
     const jobSpecHash = new Uint8Array(32).fill(55);
     await market.moderator.attestTask(taskPda, jobSpecHash);
     await creatorClient.send([
@@ -119,6 +136,7 @@ describe("e2e: watchClaimableTasks surfaces a real on-chain task via catch-up", 
 
   it("excludes a task whose required capabilities exceed the worker's", async () => {
     const market = await startLocalMarketplace();
+    alignSvmClockWithWallTime(market);
     const creator = await market.fundedSigner();
     const creatorClient = market.clientFor(creator);
 
@@ -182,6 +200,7 @@ describe("e2e: watchClaimableTasks surfaces a real on-chain task via catch-up", 
   // surfaced. Here we leave set_task_job_spec OUT, so the task stays unpinned.
   it("does NOT surface a real Open-but-unpinned task (claim would fail 3012)", async () => {
     const market = await startLocalMarketplace();
+    alignSvmClockWithWallTime(market);
     const creator = await market.fundedSigner();
     const creatorClient = market.clientFor(creator);
 

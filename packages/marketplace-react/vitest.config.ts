@@ -5,5 +5,10 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     include: ["test/**/*.test.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
+    exclude: [
+      "test/playwright/ssr-smoke.test.ts",
+      "**/node_modules/**",
+      "dist/**",
+    ],
   },
 });

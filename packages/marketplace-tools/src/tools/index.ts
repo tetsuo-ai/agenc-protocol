@@ -4,7 +4,11 @@
  *
  * @module tools
  */
-import type { MarketplaceTool, MarketplaceToolRegistry } from "../types.js";
+import {
+  ensureValidatedMarketplaceTool,
+  type MarketplaceTool,
+  type MarketplaceToolRegistry,
+} from "../types.js";
 import { readonlyTools } from "./readonly.js";
 import { prepareTools } from "./prepare.js";
 
@@ -25,7 +29,8 @@ export function createToolRegistry(
   tools: ReadonlyArray<MarketplaceTool> = marketplaceTools,
 ): MarketplaceToolRegistry {
   const map = new Map<string, MarketplaceTool>();
-  for (const tool of tools) {
+  for (const candidate of tools) {
+    const tool = ensureValidatedMarketplaceTool(candidate);
     if (map.has(tool.name)) {
       throw new Error(`Duplicate marketplace tool name: ${tool.name}`);
     }

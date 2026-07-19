@@ -152,10 +152,13 @@ export function HireCheckoutModal({
       return;
     }
     if (result && typeof (result as Promise<void>).then === "function") {
-      void (result as Promise<void>).finally(() => {
+      const releaseLatch = () => {
         submittingRef.current = false;
         setSubmitting(false);
-      });
+      };
+      // `finally()` creates a second rejected promise when onConfirm rejects.
+      // Both handlers below return void, so this discarded chain fulfills.
+      void Promise.resolve(result).then(releaseLatch, releaseLatch);
     }
     // For a synchronous (void) onConfirm the parent drives `status`; the effect
     // above clears the latch when it reaches a terminal/closed state.

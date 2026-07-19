@@ -11,6 +11,7 @@ import type { Address } from "@solana/kit";
 import type { ContentTransport, UploadTicket } from "./transport.js";
 import {
   assertTaskThreadEnvelope,
+  assertTaskThreadTaskPda,
   envelopeHash,
   type TaskThreadEnvelope,
 } from "./envelope.js";
@@ -59,19 +60,27 @@ export async function postTaskMessage(
   envelope: TaskThreadEnvelope,
   ticket?: UploadTicket,
 ): Promise<PostTaskMessageResult> {
-  const { hex } = await envelopeHash(envelope);
+  const outbound = assertTaskThreadEnvelope(envelope);
+  const { hex } = await envelopeHash(outbound);
   const body = await transport.post(
-    `/api/task-threads/${envelope.taskPda}`,
-    { envelope, hash: hex },
+    `/api/task-threads/${encodeURIComponent(outbound.taskPda)}`,
+    { envelope: outbound, hash: hex },
     ticket,
   );
   // The publish path echoes the stored envelope; trust the locally-computed
   // hash (we hashed the bytes we sent), and re-narrow the echoed envelope.
-  const echoed =
-    body !== null && typeof body === "object" && "envelope" in body
-      ? assertTaskThreadEnvelope((body as { envelope: unknown }).envelope)
-      : envelope;
-  return { hash: hex, envelope: echoed };
+  if (body !== null && typeof body === "object" && "envelope" in body) {
+    const echoed = assertTaskThreadEnvelope(
+      (body as { envelope: unknown }).envelope,
+    );
+    const echoedHash = await envelopeHash(echoed);
+    if (echoedHash.hex !== hex) {
+      // A host echo is informational only. Never pair changed content with the
+      // commitment calculated over the outbound envelope.
+      return { hash: hex, envelope: outbound };
+    }
+  }
+  return { hash: hex, envelope: outbound };
 }
 
 /**
@@ -90,14 +99,16 @@ export async function fetchTaskThread(
   taskPda: Address | string,
   options: FetchTaskThreadOptions = {},
 ): Promise<TaskThread> {
-  const maxMessages =
-    options.maxMessages ?? DEFAULT_MAX_TASK_THREAD_MESSAGES;
+  const maxMessages = options.maxMessages ?? DEFAULT_MAX_TASK_THREAD_MESSAGES;
   if (!Number.isSafeInteger(maxMessages) || maxMessages <= 0) {
     throw new TypeError(
       "fetchTaskThread: maxMessages must be a positive safe integer",
     );
   }
-  const body = await transport.get(`/api/task-threads/${taskPda}`);
+  const task = assertTaskThreadTaskPda(String(taskPda));
+  const body = await transport.get(
+    `/api/task-threads/${encodeURIComponent(task)}`,
+  );
   if (body === null || typeof body !== "object" || !("messages" in body)) {
     throw new TypeError(
       "fetchTaskThread: content host did not return { messages: Envelope[] }",
@@ -113,7 +124,16 @@ export async function fetchTaskThread(
         `exceeding the limit of ${maxMessages}`,
     );
   }
-  return { messages: raw.map((m) => assertTaskThreadEnvelope(m)) };
+  const messages = raw.map((message, index) => {
+    const envelope = assertTaskThreadEnvelope(message);
+    if (envelope.taskPda !== task) {
+      throw new TypeError(
+        `fetchTaskThread: message[${index}] belongs to ${envelope.taskPda}, not requested task ${task}`,
+      );
+    }
+    return envelope;
+  });
+  return { messages };
 }
 
 /**
@@ -152,8 +172,19 @@ export async function resolveChangesRequest(
 /** Normalize an on-chain hash (bytes or hex, any case, optional 0x) to lowercase hex. */
 function normalizeHash(hash: Uint8Array | string): string {
   if (typeof hash === "string") {
-    const clean = hash.startsWith("0x") || hash.startsWith("0X") ? hash.slice(2) : hash;
+    const clean =
+      hash.startsWith("0x") || hash.startsWith("0X") ? hash.slice(2) : hash;
+    if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
+      throw new TypeError(
+        "resolveChangesRequest: onChainHash must be exactly 32 bytes / 64 hex characters",
+      );
+    }
     return clean.toLowerCase();
+  }
+  if (hash.length !== 32) {
+    throw new TypeError(
+      "resolveChangesRequest: onChainHash must be exactly 32 bytes / 64 hex characters",
+    );
   }
   let hex = "";
   for (const byte of hash) hex += byte.toString(16).padStart(2, "0");

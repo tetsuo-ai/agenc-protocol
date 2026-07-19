@@ -4,6 +4,15 @@
   "private": true,
   "description": "Checkout test fixture for @tetsuo-ai/marketplace-react (PLAN_2 A3 Done-when: the checkout flow completes a real hire funded->accepted against the sandbox-up validator). Driven in a real browser by Playwright, and headlessly (jsdom) as the no-browser fallback.",
   "type": "module",
+  "packageManager": "npm@11.18.0",
+  "engines": {
+    "node": ">=20.18.0",
+    "npm": "11.18.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "fsevents@2.3.3": true
+  },
   "scripts": {
     "dev": "vite --port 3200",
     "build": "vite build",

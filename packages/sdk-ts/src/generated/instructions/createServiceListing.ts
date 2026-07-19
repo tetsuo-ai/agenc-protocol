@@ -28,8 +28,6 @@ import {
   getU32Encoder,
   getU64Decoder,
   getU64Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -50,6 +48,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -143,7 +146,10 @@ export function getCreateServiceListingInstructionDataEncoder(): Encoder<CreateS
       ["category", fixEncoderSize(getBytesEncoder(), 32)],
       ["tags", fixEncoderSize(getBytesEncoder(), 64)],
       ["specHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["specUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "specUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
       ["requiredCapabilities", getU64Encoder()],
@@ -167,7 +173,7 @@ export function getCreateServiceListingInstructionDataDecoder(): Decoder<CreateS
     ["category", fixDecoderSize(getBytesDecoder(), 32)],
     ["tags", fixDecoderSize(getBytesDecoder(), 64)],
     ["specHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["specUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["specUri", addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder())],
     ["price", getU64Decoder()],
     ["priceMint", getOptionDecoder(getAddressDecoder())],
     ["requiredCapabilities", getU64Decoder()],

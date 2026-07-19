@@ -108,7 +108,10 @@ export function useReferrerEarnings(
 
   const query = useQuery<{ totalLamports: bigint; hires: ReferrerHire[] }, Error>(
     {
-      queryKey: queryKeys.referrerEarnings(wallet ? pdaKey(wallet) : ""),
+      queryKey: queryKeys.referrerEarnings(
+        wallet ? pdaKey(wallet) : "",
+        ctx.cacheNamespace,
+      ),
       enabled,
       queryFn: async () => {
         const url = `${earningsBase}/api/explorer/referrers/${encodeURIComponent(

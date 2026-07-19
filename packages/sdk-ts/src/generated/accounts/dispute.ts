@@ -33,8 +33,6 @@ import {
   getU64Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type Account,
   type Address,
@@ -48,6 +46,11 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getDisputeStatusDecoder,
   getDisputeStatusEncoder,
@@ -109,8 +112,10 @@ export type Dispute = {
   totalVoters: number;
   /**
    * Legacy voting deadline, now reused as the first liveness deadline: an
-   * assigned resolver may rule immediately, but permissionless expiry opens
-   * after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`.
+   * authorized resolver may rule immediately, but permissionless expiry opens
+   * after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`. Here authorized
+   * means a threshold-seated assigned resolver or the protocol authority with
+   * configured M-of-N approval.
    */
   votingDeadline: bigint;
   /**
@@ -162,8 +167,9 @@ export type Dispute = {
    */
   rationaleUri: string;
   /**
-   * The wallet that decided this dispute (the protocol authority OR the assigned
-   * resolver who signed `resolve_dispute`). Default pubkey until resolved.
+   * The wallet that decided this dispute: either the threshold-approved protocol
+   * authority or a threshold-seated assigned resolver who signed
+   * `resolve_dispute`. Default pubkey until resolved.
    */
   resolvedBy: Address;
 };
@@ -209,8 +215,10 @@ export type DisputeArgs = {
   totalVoters: number;
   /**
    * Legacy voting deadline, now reused as the first liveness deadline: an
-   * assigned resolver may rule immediately, but permissionless expiry opens
-   * after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`.
+   * authorized resolver may rule immediately, but permissionless expiry opens
+   * after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`. Here authorized
+   * means a threshold-seated assigned resolver or the protocol authority with
+   * configured M-of-N approval.
    */
   votingDeadline: number | bigint;
   /**
@@ -262,8 +270,9 @@ export type DisputeArgs = {
    */
   rationaleUri: string;
   /**
-   * The wallet that decided this dispute (the protocol authority OR the assigned
-   * resolver who signed `resolve_dispute`). Default pubkey until resolved.
+   * The wallet that decided this dispute: either the threshold-approved protocol
+   * authority or a threshold-seated assigned resolver who signed
+   * `resolve_dispute`. Default pubkey until resolved.
    */
   resolvedBy: Address;
 };
@@ -294,7 +303,10 @@ export function getDisputeEncoder(): Encoder<DisputeArgs> {
       ["bump", getU8Encoder()],
       ["defendant", getAddressEncoder()],
       ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["rationaleUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "rationaleUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["resolvedBy", getAddressEncoder()],
     ]),
     (value) => ({ ...value, discriminator: DISPUTE_DISCRIMINATOR }),
@@ -326,7 +338,10 @@ export function getDisputeDecoder(): Decoder<Dispute> {
     ["bump", getU8Decoder()],
     ["defendant", getAddressDecoder()],
     ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["rationaleUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "rationaleUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["resolvedBy", getAddressDecoder()],
   ]);
 }

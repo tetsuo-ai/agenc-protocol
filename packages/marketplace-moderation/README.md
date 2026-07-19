@@ -3,6 +3,14 @@
 Open, **MIT-licensed** reference of the AgenC task-moderation **payload
 canonicalization** — canonicalization version **`agenc-task-moderation-c14n-v1`**.
 
+> **Structured job specs:** `job_spec_semantic_v1` is a legacy interoperability
+> format and does not include the complete `constraints` and `execution` trees.
+> New safety-sensitive integrations should use
+> `normalizeTaskModerationInputStrict`, advertise the backend's supported input
+> kinds, and enable `job_spec_semantic_v2` only after the backend explicitly
+> supports it. Until then, recognized structured specs fail closed instead of
+> silently dropping worker-visible instructions.
+
 When a marketplace asks the AgenC moderation attestation service to policy-check
 and attest a task, it sends a `text` blob together with a
 `moderationPayloadHash`. **The backend re-derives that hash from the `text` it
@@ -37,7 +45,8 @@ Zero runtime dependencies (only Node's built-in `node:crypto`). Requires Node
 ```ts
 import { normalizeTaskModerationInput } from "@tetsuo-ai/marketplace-moderation";
 
-const { text, inputKind, payloadHash } = normalizeTaskModerationInput(jobSpecText);
+const { text, inputKind, payloadHash } =
+  normalizeTaskModerationInput(jobSpecText);
 
 // POST to the moderation attestation service:
 //   {
@@ -46,6 +55,19 @@ const { text, inputKind, payloadHash } = normalizeTaskModerationInput(jobSpecTex
 //     moderationPayloadHash: payloadHash,   // the backend re-derives + compares this
 //     ...task/jobSpec binding fields
 //   }
+```
+
+The call above is the byte-compatible legacy v1 path. The complete structured
+path is capability-gated:
+
+```ts
+import { normalizeTaskModerationInputStrict } from "@tetsuo-ai/marketplace-moderation";
+
+const normalized = normalizeTaskModerationInputStrict(jobSpecText, {
+  // Populate this from the backend's advertised capabilities. Omitting v2
+  // makes recognized structured specs throw before any request is sent.
+  supportedInputKinds: ["plain_text", "job_spec_semantic_v2"],
+});
 ```
 
 `normalizeTaskModerationInput` is **idempotent**: normalizing the returned `text`
@@ -72,6 +94,7 @@ Given the input job-spec string:
    trimmed one) and `inputKind = "plain_text"`.
 
 The `text` you transmit is:
+
 - the raw input string, for `plain_text`; or
 - `JSON.stringify(payload)` (the reduced semantic object), for
   `job_spec_semantic_v1`.
@@ -84,36 +107,40 @@ object's `kind` is not `agenc.marketplace.jobSpec`, extraction fails (returns
 nothing). Otherwise build an object with these fields, then **drop every entry
 that is `undefined` or `null`**:
 
-| Output field         | Source field(s) (first defined wins)              | Kept when                     |
-| -------------------- | ------------------------------------------------- | ----------------------------- |
-| `kind`               | literal `agenc.marketplace.jobSpecSemanticModerationPayload` | always            |
-| `schemaVersion`      | literal `1`                                       | always                        |
-| `title`              | `title`                                           | defined                       |
-| `shortDescription`   | `shortDescription`, `short_description`           | defined                       |
-| `fullDescription`    | `fullDescription`, `full_description`             | defined                       |
-| `acceptanceCriteria` | `acceptanceCriteria`, `acceptance_criteria`       | non-empty array of strings    |
-| `deliverables`       | `deliverables`                                    | non-empty array of strings    |
-| `attachments`        | `attachments`                                     | defined                       |
-| `context`            | `context`                                         | defined                       |
-| `custom`             | `custom`                                          | defined                       |
+| Output field         | Source field(s) (first defined wins)                         | Kept when                  |
+| -------------------- | ------------------------------------------------------------ | -------------------------- |
+| `kind`               | literal `agenc.marketplace.jobSpecSemanticModerationPayload` | always                     |
+| `schemaVersion`      | literal `1`                                                  | always                     |
+| `title`              | `title`                                                      | defined                    |
+| `shortDescription`   | `shortDescription`, `short_description`                      | defined                    |
+| `fullDescription`    | `fullDescription`, `full_description`                        | defined                    |
+| `acceptanceCriteria` | `acceptanceCriteria`, `acceptance_criteria`                  | non-empty array of strings |
+| `deliverables`       | `deliverables`                                               | non-empty array of strings |
+| `attachments`        | `attachments`                                                | defined                    |
+| `context`            | `context`                                                    | defined                    |
+| `custom`             | `custom`                                                     | defined                    |
 
 Array fields (`acceptanceCriteria`, `deliverables`) keep only the string members
 and are omitted entirely if none remain. Anything not listed above (e.g.
-`creator`, `integrity`, secrets) is **dropped** — moderation only sees
-creator-controlled semantic content.
+`creator`, `integrity`, `constraints`, or `execution`) is dropped. This exact
+reduction remains published for v1 wire compatibility, but it is not a complete
+safety preimage for current structured job specs.
 
 ### 3. Canonical JSON (`canonicalJson`)
 
 Deterministic encoding of the hash preimage:
 
-- `undefined` → the literal `null`.
 - `null`, string, number, boolean → `JSON.stringify(value)`.
-- `bigint` → `JSON.stringify(value.toString())` (decimal string).
-- `Uint8Array` → encoded as a plain array of its byte values.
-- array → `[` + comma-joined `canonicalJson` of each element + `]`.
-- object → `{` + comma-joined `"key":value` pairs + `}`, where keys are **sorted
-  lexicographically** and any key whose value is `undefined` or a function is
-  omitted. Keys are emitted with `JSON.stringify(key)`.
+- non-finite numbers (`NaN`, infinities) → rejected (they are not valid JSON and
+  must not collide with `null`).
+- dense JSON arrays → `[` + comma-joined `canonicalJson` of each element + `]`.
+- plain objects → `{` + comma-joined `"key":value` pairs + `}`, with keys
+  **sorted lexicographically** and emitted with `JSON.stringify(key)`.
+- every non-JSON value is rejected, including `undefined`, `bigint`, functions,
+  symbols, typed arrays, dates, maps, sparse/extended arrays, exotic objects,
+  accessors, cycles, and structures deeper than 256 levels. Values are never
+  silently omitted or coerced, preventing distinct programmatic inputs from
+  colliding with valid JSON.
 
 ### 4. Hash
 
@@ -125,13 +152,27 @@ moderationPayloadHash = sha256(preimage) as lowercase hex
 Note the preimage object has exactly two keys, and canonical sorting emits
 `canonicalizationVersion` before `payload`.
 
+## Complete structured v2 and fail-closed negotiation
+
+`moderationPayloadFromJobSpecLikeV2` wraps the entire recognized job-spec
+payload under `agenc.marketplace.jobSpecSemanticModerationPayloadV2`. It
+therefore retains every field the worker receives, including unknown future
+extensions; only an outer envelope's integrity/bookkeeping block is excluded.
+Its hash preimage is versioned with `agenc-task-moderation-c14n-v2`.
+
+`normalizeTaskModerationInputStrict(input, { supportedInputKinds })` requires
+explicit backend capability negotiation. A recognized job spec is emitted only
+when `job_spec_semantic_v2` is advertised. Unknown JSON objects and already
+reduced v1 objects are rejected because the complete worker-visible source
+cannot be proven. Plain text remains compatible with c14n-v1.
+
 ## Pinned test vector
 
 The single canonical vector, asserted in this package's tests **and** in
 agenc.ag's `apps/web/lib/__tests__/moderation-canon.test.ts`:
 
-| input `text` (plain_text)   | `moderationPayloadHash`                                            |
-| --------------------------- | ----------------------------------------------------------------- |
+| input `text` (plain_text)     | `moderationPayloadHash`                                            |
+| ----------------------------- | ------------------------------------------------------------------ |
 | `{"title":"x","summary":"y"}` | `83d7572f8239823a30dc57a4f6bb3451d14312ff69a8a3647a4efa734fa05fb4` |
 
 Its exact preimage is:
@@ -146,7 +187,12 @@ with the AgenC moderation backend.
 ## API
 
 - `normalizeTaskModerationInput(input: string): NormalizedModerationInput` —
-  returns `{ text, inputKind, payloadHash }`.
+  returns the legacy-compatible `{ text, inputKind, payloadHash }`.
+- `normalizeTaskModerationInputStrict(input, options)` — capability-gated,
+  fail-closed v2 structured normalization.
+- `moderationPayloadFromJobSpecLikeV2`,
+  `canonicalizeTaskModerationPayloadV2`, and
+  `computeTaskModerationPayloadHashV2` — complete structured v2 surfaces.
 - `computeTaskModerationPayloadHash(payload: unknown): string` — the lowercase
   hex hash.
 - `canonicalizeTaskModerationPayload(payload: unknown): string` — the exact
@@ -155,14 +201,14 @@ with the AgenC moderation backend.
   — semantic extraction (step 2).
 - `isJobSpecSemanticModerationPayload(value: unknown): boolean`.
 - `canonicalJson(value: unknown): string` — the deterministic encoder (step 3).
-- `CANONICALIZATION_VERSION` — the pinned `"agenc-task-moderation-c14n-v1"`
-  string.
+- `CANONICALIZATION_VERSION` / `CANONICALIZATION_VERSION_V2` — pinned v1 and
+  v2 preimage versions.
 
 ## Versioning
 
-If the backend ever bumps the canonicalization version, this package bumps in
-lockstep and the pinned vectors change with it. Depend on a compatible major and
-watch the `CANONICALIZATION_VERSION` constant.
+The v1 constant and vectors remain pinned for wire compatibility. Structured v2
+must be enabled only after a backend advertises `job_spec_semantic_v2`; depend on
+a compatible package major and negotiate the input kind before sending it.
 
 ## License
 

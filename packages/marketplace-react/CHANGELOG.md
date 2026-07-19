@@ -4,6 +4,10 @@
 
 ### Patch Changes
 
+- The optional `./tailwind-preset` export is now a dependency-free Tailwind v3
+  plugin descriptor. Importing the React package's advertised preset no longer
+  fails in clean consumers that do not otherwise install Tailwind; pinned
+  Tailwind compilation coverage verifies the descriptor and emitted utilities.
 - Widen the SDK peer range through `^0.12.0` for the coordinated revision-5
   client candidate. No React API changes; published 0.4.1 remains current until
   the coordinated package cutover.

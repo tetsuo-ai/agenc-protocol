@@ -19,7 +19,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as kit from "@solana/kit";
-import { getTaskDecoder, TaskStatus, type Task } from "@tetsuo-ai/marketplace-sdk";
+import {
+  getTaskDecoder,
+  TaskStatus,
+  type Task,
+} from "@tetsuo-ai/marketplace-sdk";
 import { completeWorkerSide } from "./worker-harness.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -66,12 +70,16 @@ test("checkout completes a real hire funded -> accepted in the browser", async (
   );
 
   // Surface page errors to make failures legible.
-  page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
+  page.on("pageerror", (e) =>
+    console.error("PAGE ERROR:", e.stack ?? e.message),
+  );
 
   await page.goto("/");
 
   // The fixture boots the buyer wallet from sandbox-config.json.
-  await expect(page.getByTestId("checkout-flow")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("checkout-flow")).toBeVisible({
+    timeout: 30_000,
+  });
   await expect(page.getByTestId("buyer-address")).toHaveText(
     String(buyer.address),
     { timeout: 30_000 },

@@ -18,7 +18,7 @@
  * @module hooks/useSubmissionReview
  */
 import { useMutation } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { facade, type facade as facadeNs } from "@tetsuo-ai/marketplace-sdk";
 import { useAgencContext } from "../provider/context.js";
 import { requireClient } from "./internal.js";
@@ -95,6 +95,9 @@ export function useSubmissionReview(
   taskPda: Parameters<typeof facadeNs.acceptTaskResult>[0]["task"],
 ): UseSubmissionReviewResult {
   const ctx = useAgencContext();
+  const lastAction = useRef<"accept" | "reject" | "requestChanges" | null>(
+    null,
+  );
 
   const acceptMut = useMutation<string, Error, AcceptInput>({
     mutationFn: async (input) => {
@@ -135,33 +138,39 @@ export function useSubmissionReview(
   });
 
   const accept = useCallback<ReviewAction<AcceptInput>>(
-    (input) => acceptMut.mutateAsync(input),
+    (input) => {
+      lastAction.current = "accept";
+      return acceptMut.mutateAsync(input);
+    },
     [acceptMut],
   );
   const reject = useCallback<ReviewAction<RejectInput>>(
-    (input) => rejectMut.mutateAsync(input),
+    (input) => {
+      lastAction.current = "reject";
+      return rejectMut.mutateAsync(input);
+    },
     [rejectMut],
   );
   const requestChanges = useCallback<ReviewAction<RequestChangesInput>>(
-    (input) => requestChangesMut.mutateAsync(input),
+    (input) => {
+      lastAction.current = "requestChanges";
+      return requestChangesMut.mutateAsync(input);
+    },
     [requestChangesMut],
   );
 
   const anyPending =
     acceptMut.isPending || rejectMut.isPending || requestChangesMut.isPending;
-  const status: ReviewStatus = anyPending
-    ? "pending"
-    : statusOf(
-        // Surface the most recently-touched verb's terminal state.
-        [acceptMut, rejectMut, requestChangesMut].find(
-          (m) => m.isError || m.isSuccess,
-        ) ?? acceptMut,
-      );
+  const latest =
+    lastAction.current === "reject"
+      ? rejectMut
+      : lastAction.current === "requestChanges"
+        ? requestChangesMut
+        : acceptMut;
+  const status: ReviewStatus = anyPending ? "pending" : statusOf(latest);
 
-  const error =
-    acceptMut.error ?? rejectMut.error ?? requestChangesMut.error ?? null;
-  const signature =
-    acceptMut.data ?? rejectMut.data ?? requestChangesMut.data ?? null;
+  const error = latest.error ?? null;
+  const signature = latest.data ?? null;
 
   return {
     accept,
@@ -171,6 +180,7 @@ export function useSubmissionReview(
     error,
     signature,
     reset: () => {
+      lastAction.current = null;
       acceptMut.reset();
       rejectMut.reset();
       requestChangesMut.reset();

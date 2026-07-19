@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shape. Tool count and the readonly-by-default, keyless mutation posture are
   unchanged.
 
+### Fixed
+
+- Validate every `tools/call` argument against the same compiled schema exposed
+  by `tools/list`. Malformed model input now returns a sanitized
+  `INVALID_TOOL_INPUT` result without invoking the registered handler, and
+  custom tool schemas are validated when the server is created.
+
 ## 0.4.0
 
 ### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)

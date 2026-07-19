@@ -13,17 +13,16 @@ import {
   getOptionDecoder,
   getStructDecoder,
   getU32Decoder,
-  getUtf8Decoder,
   type Address,
   type Decoder,
   type Option,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+import { getBorshStringDecoder } from "../codecs/borshString";
 
 /** 8-byte Anchor event discriminator for `TaskJobSpecSet` (sha256("event:TaskJobSpecSet")[0..8]). */
-export const TASK_JOB_SPEC_SET_EVENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
-  155, 2, 153, 121, 179, 90, 208, 183,
-]);
+export const TASK_JOB_SPEC_SET_EVENT_DISCRIMINATOR: ReadonlyUint8Array =
+  new Uint8Array([155, 2, 153, 121, 179, 90, 208, 183]);
 
 /** Emitted when a task's full off-chain job specification pointer is set. */
 export type TaskJobSpecSetEventData = {
@@ -49,7 +48,10 @@ export function getTaskJobSpecSetEventDecoder(): Decoder<TaskJobSpecSetEventData
     ["task", getAddressDecoder()],
     ["creator", getAddressDecoder()],
     ["jobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["jobSpecUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "jobSpecUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["moderationAttestor", getOptionDecoder(getAddressDecoder())],
     ["timestamp", getI64Decoder()],
   ]);

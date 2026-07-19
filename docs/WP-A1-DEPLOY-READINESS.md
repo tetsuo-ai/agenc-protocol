@@ -7,7 +7,7 @@
 > multisig on 2026-07-03 (the "single-key / FD4 not set up" precondition below is
 > stale), and the OtterSec verified-build badge is live. Where the body says
 > "NOT DEPLOYED", that is the doc-date state. See `docs/MAINNET_MAINLINE.md`
-> (deploy record), `TODO.MD` (open hardening queue, 2026-07 audit), and
+> (deploy record), `TODO.MD` (completed 2026-07 hardening record), and
 > `README.md`.
 
 **Status: BUILT · REVIEWED · TESTED · MERGED to `main` · NOT DEPLOYED.**

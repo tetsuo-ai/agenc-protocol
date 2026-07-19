@@ -15,7 +15,19 @@ export const EN_SIGNER_STRINGS = {
   "signer.walletNoSignFeature":
     "Wallet account {address} does not expose a solana:signTransaction feature. Pass options.signTransaction explicitly, or use a Wallet Standard account that supports transaction signing.",
   "signer.walletNoSignature":
-    "The wallet returned no signature for account {address}. The wallet may have rejected or modified the transaction so the fee-payer signature is absent.",
+    "The wallet returned no signature for account {address}. The wallet may have rejected the signing request.",
+  "signer.walletResponseCount":
+    "Wallet returned {got} signed transactions; expected {expected} ordered outputs, one per input.",
+  "signer.walletModifiedTransaction":
+    "Wallet modified the transaction message for account {address}. AgenC cannot attach a signature over different bytes to the original transaction.",
+  "signer.walletInvalidSignature":
+    "Wallet returned an invalid signature for account {address} over the requested transaction message.",
+  "signer.walletChainRequired":
+    "Wallet account {address} exposes {count} Solana chains. Select exactly one with options.chain or options.network.",
+  "signer.walletChainUnsupported":
+    "Wallet account {address} does not support requested chain {chain}.",
+  "signer.walletChainNetworkMismatch":
+    "Requested chain {chain} does not match options.network {network} ({expected}).",
   "signer.embeddedSignatureCount":
     "Embedded wallet returned {got} signatures for {expected} transactions; expected one per transaction.",
   "signer.walletAdapterDisconnected":

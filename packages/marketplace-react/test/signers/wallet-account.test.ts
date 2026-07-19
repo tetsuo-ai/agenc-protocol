@@ -44,11 +44,17 @@ const FAKE_BLOCKHASH = {
 } as const;
 
 /** Build a real, compiled kit Transaction whose fee payer is `signer`. */
-async function buildTransaction(signer: KeyPairSigner): Promise<Transaction> {
+async function buildTransaction(
+  signer: KeyPairSigner,
+  recentBlockhash: {
+    readonly blockhash: ReturnType<typeof blockhash>;
+    readonly lastValidBlockHeight: bigint;
+  } = FAKE_BLOCKHASH,
+): Promise<Transaction> {
   const message = pipe(
     createTransactionMessage({ version: 0 }),
     (m) => setTransactionMessageFeePayerSigner(signer, m),
-    (m) => setTransactionMessageLifetimeUsingBlockhash(FAKE_BLOCKHASH, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(recentBlockhash, m),
     (m) => appendTransactionMessageInstructions([], m),
   );
   return compileTransaction(message);
@@ -101,7 +107,7 @@ describe("signerFromWalletAccount", () => {
     expect(expectedSignature).toBeDefined();
 
     const signer = signerFromWalletAccount(
-      { address: backing.address },
+      { address: backing.address, chains: ["solana:devnet"] },
       { signTransaction: fakeSignTransaction(backing.keyPair) },
     ) as TransactionPartialSigner;
 
@@ -128,16 +134,46 @@ describe("signerFromWalletAccount", () => {
     expect(chainSpy).toHaveBeenCalledWith("solana:mainnet");
   });
 
-  it("defaults the chain to the account's first solana:* chain", async () => {
+  it("binds options.network to signer metadata and wallet input", async () => {
     const backing = await generateKeyPairSigner();
     const tx = await buildTransaction(backing);
     const chainSpy = vi.fn();
     const signer = signerFromWalletAccount(
-      { address: backing.address, chains: ["solana:testnet", "solana:devnet"] },
-      { signTransaction: fakeSignTransaction(backing.keyPair, chainSpy) },
-    ) as TransactionPartialSigner;
+      { address: backing.address, chains: ["solana:devnet"] },
+      {
+        network: "devnet",
+        signTransaction: fakeSignTransaction(backing.keyPair, chainSpy),
+      },
+    ) as TransactionPartialSigner & { readonly chain: string };
     await signer.signTransactions([tx as never]);
-    expect(chainSpy).toHaveBeenCalledWith("solana:testnet");
+    expect(signer.chain).toBe("solana:devnet");
+    expect(chainSpy).toHaveBeenCalledWith("solana:devnet");
+  });
+
+  it("fails closed for multiple Solana chains without a selection", async () => {
+    const backing = await generateKeyPairSigner();
+    expect(() =>
+      signerFromWalletAccount(
+        {
+          address: backing.address,
+          chains: ["solana:testnet", "solana:devnet"],
+        },
+        { signTransaction: fakeSignTransaction(backing.keyPair) },
+      ),
+    ).toThrowError(/chains|select/i);
+  });
+
+  it("fails closed when the selected chain is unsupported", async () => {
+    const backing = await generateKeyPairSigner();
+    expect(() =>
+      signerFromWalletAccount(
+        { address: backing.address, chains: ["solana:mainnet"] },
+        {
+          chain: "solana:devnet",
+          signTransaction: fakeSignTransaction(backing.keyPair),
+        },
+      ),
+    ).toThrowError(/does not support.*solana:devnet/i);
   });
 
   it("resolves the feature off account.features when no override is passed", async () => {
@@ -145,6 +181,7 @@ describe("signerFromWalletAccount", () => {
     const tx = await buildTransaction(backing);
     const signer = signerFromWalletAccount({
       address: backing.address,
+      chains: ["solana:devnet"],
       features: {
         "solana:signTransaction": {
           signTransaction: fakeSignTransaction(backing.keyPair),
@@ -176,11 +213,112 @@ describe("signerFromWalletAccount", () => {
         ),
       }));
     const signer = signerFromWalletAccount(
-      { address: backing.address },
+      { address: backing.address, chains: ["solana:devnet"] },
       { signTransaction: declineToSign },
     ) as TransactionPartialSigner;
     await expect(
       signer.signTransactions([tx as never]),
     ).rejects.toThrowError(/no signature/i);
+  });
+
+  it("uses one variadic request and preserves transaction order", async () => {
+    const backing = await generateKeyPairSigner();
+    const transactions = [
+      await buildTransaction(backing),
+      await buildTransaction(backing, {
+        blockhash: blockhash("So11111111111111111111111111111111111111112"),
+        lastValidBlockHeight: 101n,
+      }),
+    ];
+    const signTransaction = vi.fn(
+      fakeSignTransaction(backing.keyPair),
+    ) as unknown as WalletStandardSignTransaction;
+    const signer = signerFromWalletAccount(
+      { address: backing.address, chains: ["solana:devnet"] },
+      { signTransaction },
+    ) as TransactionPartialSigner;
+
+    const dictionaries = await signer.signTransactions(
+      transactions.map((transaction) => transaction as never),
+    );
+    const expected = await Promise.all(
+      transactions.map((transaction) =>
+        partiallySignTransaction([backing.keyPair], transaction),
+      ),
+    );
+
+    expect(signTransaction).toHaveBeenCalledTimes(1);
+    expect(signTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ transaction: expect.any(Uint8Array) }),
+      expect.objectContaining({ transaction: expect.any(Uint8Array) }),
+    );
+    expect(Array.from(dictionaries[0]![backing.address]!)).toEqual(
+      Array.from(expected[0]!.signatures[backing.address]!),
+    );
+    expect(Array.from(dictionaries[1]![backing.address]!)).toEqual(
+      Array.from(expected[1]!.signatures[backing.address]!),
+    );
+  });
+
+  it("rejects a returned transaction whose message differs", async () => {
+    const backing = await generateKeyPairSigner();
+    const original = await buildTransaction(backing);
+    const changed = await buildTransaction(backing, {
+      blockhash: blockhash("So11111111111111111111111111111111111111112"),
+      lastValidBlockHeight: 101n,
+    });
+    const signedChanged = await partiallySignTransaction(
+      [backing.keyPair],
+      changed,
+    );
+    const encoder = getTransactionEncoder();
+    const mutatingWallet: WalletStandardSignTransaction = async (...inputs) =>
+      inputs.map(() => ({
+        signedTransaction: new Uint8Array(encoder.encode(signedChanged)),
+      }));
+    const signer = signerFromWalletAccount(
+      { address: backing.address, chains: ["solana:devnet"] },
+      { signTransaction: mutatingWallet },
+    ) as TransactionPartialSigner;
+
+    await expect(
+      signer.signTransactions([original as never]),
+    ).rejects.toThrowError(/modified.*transaction|message.*differ/i);
+  });
+
+  it("rejects a response count that does not match the request", async () => {
+    const backing = await generateKeyPairSigner();
+    const tx = await buildTransaction(backing);
+    const signer = signerFromWalletAccount(
+      { address: backing.address, chains: ["solana:devnet"] },
+      { signTransaction: async () => [] },
+    ) as TransactionPartialSigner;
+    await expect(
+      signer.signTransactions([tx as never]),
+    ).rejects.toThrowError(/returned 0.*expected 1/i);
+  });
+
+  it("rejects a forged signature over an unchanged message", async () => {
+    const backing = await generateKeyPairSigner();
+    const tx = await buildTransaction(backing);
+    const forged = {
+      ...tx,
+      signatures: {
+        ...tx.signatures,
+        [backing.address]: new Uint8Array(64).fill(1),
+      },
+    } as unknown as Transaction;
+    const encoder = getTransactionEncoder();
+    const forgedWallet: WalletStandardSignTransaction = async (...inputs) =>
+      inputs.map(() => ({
+        signedTransaction: new Uint8Array(encoder.encode(forged)),
+      }));
+    const signer = signerFromWalletAccount(
+      { address: backing.address, chains: ["solana:devnet"] },
+      { signTransaction: forgedWallet },
+    ) as TransactionPartialSigner;
+    await expect(
+      signer.signTransactions([tx as never]),
+    ).rejects.toThrowError(/invalid signature/i);
   });
 });

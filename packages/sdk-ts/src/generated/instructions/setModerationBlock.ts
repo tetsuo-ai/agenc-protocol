@@ -18,8 +18,6 @@ import {
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -38,6 +36,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getNonNullResolvedInstructionInput,
@@ -103,7 +106,10 @@ export function getSetModerationBlockInstructionDataEncoder(): Encoder<SetModera
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
       ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["rationaleUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "rationaleUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
     ]),
     (value) => ({
       ...value,
@@ -117,7 +123,10 @@ export function getSetModerationBlockInstructionDataDecoder(): Decoder<SetModera
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["contentHash", fixDecoderSize(getBytesDecoder(), 32)],
     ["rationaleHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["rationaleUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "rationaleUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
   ]);
 }
 

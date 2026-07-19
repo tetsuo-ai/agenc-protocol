@@ -127,8 +127,9 @@ export type AssignModerationAttestorAsyncInput<
   /** Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. */
   moderationAttestor?: Address<TAccountModerationAttestor>;
   /**
-   * Must be the moderation authority that owns the moderation config (the roster is
-   * authority-managed, exactly like the dispute-resolver roster).
+   * Must be the moderation authority that owns the moderation config. Unlike the
+   * threshold-approved dispute-resolver roster, this moderation roster remains
+   * authority-managed under its separate trust model.
    */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -228,8 +229,9 @@ export type AssignModerationAttestorInput<
   /** Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. */
   moderationAttestor: Address<TAccountModerationAttestor>;
   /**
-   * Must be the moderation authority that owns the moderation config (the roster is
-   * authority-managed, exactly like the dispute-resolver roster).
+   * Must be the moderation authority that owns the moderation config. Unlike the
+   * threshold-approved dispute-resolver roster, this moderation roster remains
+   * authority-managed under its separate trust model.
    */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -319,8 +321,9 @@ export type ParsedAssignModerationAttestorInstruction<
     /** Roster entry for `attestor`. `init` ⇒ assigning an already-assigned wallet fails. */
     moderationAttestor: TAccountMetas[1];
     /**
-     * Must be the moderation authority that owns the moderation config (the roster is
-     * authority-managed, exactly like the dispute-resolver roster).
+     * Must be the moderation authority that owns the moderation config. Unlike the
+     * threshold-approved dispute-resolver roster, this moderation roster remains
+     * authority-managed under its separate trust model.
      */
     authority: TAccountMetas[2];
     systemProgram: TAccountMetas[3];

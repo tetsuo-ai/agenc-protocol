@@ -43,7 +43,7 @@ import { Buffer } from "node:buffer";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode,
-  freshWorld, hireIx, injectAgentStake, setProtocolPaused,
+  freshWorld, hireIx, injectAgentStake, setProtocolPaused, configureTestMultisig,
   taskModV2Pda, listingModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
@@ -53,6 +53,7 @@ const resolverPda = (resolver) => pda([enc("dispute_resolver"), resolver.toBuffe
 
 // Assign `resolver` to the dispute-resolver roster, signed by the protocol authority.
 async function assignResolver(w, resolver) {
+  const approvals = await configureTestMultisig(w);
   const [entry] = resolverPda(resolver.publicKey);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .assignDisputeResolver(resolver.publicKey)
@@ -60,7 +61,8 @@ async function assignResolver(w, resolver) {
       protocolConfig: w.protocolPda, disputeResolver: entry,
       authority: w.admin.publicKey, systemProgram: SystemProgram.programId,
     })
-    .instruction(), [w.admin]), "p63:assign_dispute_resolver");
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction(), approvals.approvers), "p63:assign_dispute_resolver");
   return entry;
 }
 

@@ -495,15 +495,17 @@ async function main() {
   log("");
 
   // ============================================================= STEP 6b
-  // (b) Confirm the task is claimable purely from gPA reads — listOpenTasks +
-  // listPinnedJobSpecTasks, the exact set a worker would discover with no
-  // hosted indexer.
-  log("STEP 6b verify task is claimable via gPA (listOpenTasks ∩ pinned specs)");
+  // (b) Confirm the task is discoverable from task-local gPA reads —
+  // listOpenTasks + listPinnedJobSpecTasks, the candidate set a worker would
+  // discover with no hosted indexer. The STEP 7 transaction remains
+  // authoritative for the other on-chain claim gates.
+  log("STEP 6b verify task is discoverable as an open+pinned candidate via gPA");
   const openTasks = await sdk.listOpenTasks(rpc, { creator: buyer.address });
   const pinned = await sdk.listPinnedJobSpecTasks(rpc);
-  const claimable = openTasks.some(({ address }) => address === task) && pinned.has(task);
-  if (!claimable) fail(`task ${task} not discoverable as claimable via gPA`);
+  const discoverable = openTasks.some(({ address }) => address === task) && pinned.has(task);
+  if (!discoverable) fail(`task ${task} not discoverable as an open+pinned candidate via gPA`);
   log(`   listOpenTasks(rpc) sees the task AND listPinnedJobSpecTasks(rpc) confirms a pinned spec`);
+  log(`   STEP 7's claim transaction proves final on-chain eligibility`);
   log("");
 
   // ============================================================= STEP 7

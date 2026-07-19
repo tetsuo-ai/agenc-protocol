@@ -6,6 +6,7 @@ import {
   AgentStatus,
   AgencError,
   DependencyType,
+  findAgentPda,
   findClaimPda,
   findTaskJobSpecPda,
   findTaskSubmissionPda,
@@ -27,16 +28,26 @@ import {
 } from "@tetsuo-ai/marketplace-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CLAIM_ACCOUNT_SIZE,
+  CONTEST_ENTRY_DEPOSIT_LAMPORTS,
+  FEE_HEADROOM_LAMPORTS,
   checkSettlements,
   listClaimCandidates,
   processCandidate,
   resumeOpenClaim,
+  runTickOnce,
+  SUBMISSION_ACCOUNT_SIZE,
   type WorkerAgent,
   type WorkerContext,
   type WorkerLogEvent,
 } from "../src/runtime.js";
 import { resultDataFromHashHex, sha256Hex } from "../src/result.js";
-import { emptyState, loadState, saveState } from "../src/state.js";
+import {
+  bytesToHex,
+  emptyState,
+  loadState,
+  saveState,
+} from "../src/state.js";
 
 const TASK = address("F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc");
 const CREATOR = address("7Y9dRMi8ZtyDjLdSpzUCsxDgHooZTfp3RyYs2eZWmL39");
@@ -87,17 +98,15 @@ function taskData(
   status: TaskStatus,
   overrides: Partial<TaskArgs> = {},
 ): Uint8Array {
-  return new Uint8Array(
-    getTaskEncoder().encode(taskArgs(status, overrides)),
-  );
+  return new Uint8Array(getTaskEncoder().encode(taskArgs(status, overrides)));
 }
 
-function claimData(claimPda: Address): Uint8Array {
+function claimData(claimPda: Address, worker: Address = WORKER): Uint8Array {
   void claimPda;
   return new Uint8Array(
     getTaskClaimEncoder().encode({
       task: TASK,
-      worker: WORKER,
+      worker,
       claimedAt: 1_700_000_000n,
       expiresAt: 4_000_000_000n,
       completedAt: 0n,
@@ -206,6 +215,14 @@ function context(
     readAccount: async (account) => accounts.get(account) ?? null,
     stateDir,
     log: (event) => events.push(event),
+    // Every fresh-claim path is live-funded. Individual tests override these
+    // seams when exercising insufficient funds or recovery ordering.
+    getBalance: async () => 1_000_000_000n,
+    getMinimumBalanceForRentExemption: async (space) => {
+      if (space === CLAIM_ACCOUNT_SIZE) return 2_000_000n;
+      if (space === SUBMISSION_ACCOUNT_SIZE) return 3_000_000n;
+      throw new Error(`unexpected fresh-claim account size ${space}`);
+    },
   };
 }
 
@@ -288,12 +305,7 @@ describe("transaction-boundary recovery", () => {
         signature: null,
       });
     });
-    const ctx = context(
-      stateDir,
-      accounts,
-      { claimTaskWithJobSpec },
-      [],
-    );
+    const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
     const fetchUri = vi.fn(async () => body);
     ctx.fetchUri = fetchUri;
 
@@ -315,6 +327,203 @@ describe("transaction-boundary recovery", () => {
     expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
   });
 
+  it("requires a live recurring-task funding gate and blocks an underfunded registered worker", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-recurring-funding-"),
+    );
+    const payload = {
+      title: "recurring worker funding",
+      summary: "fund the complete claim lifecycle",
+    };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Open)],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+    ]);
+    const claimTaskWithJobSpec = vi.fn(async () => ({
+      signature: "must-not-claim",
+    }));
+    const ctx = context(
+      stateDir,
+      accounts,
+      { claimTaskWithJobSpec },
+      [],
+    );
+    ctx.fetchUri = async () => body;
+    const claimRent = 2_000_000n;
+    const submissionRent = 3_000_000n;
+    const required =
+      claimRent +
+      submissionRent +
+      CONTEST_ENTRY_DEPOSIT_LAMPORTS +
+      FEE_HEADROOM_LAMPORTS;
+    const getBalance = vi.fn(async () => required - 1n);
+    const getMinimumBalanceForRentExemption = vi.fn(async (space: number) => {
+      if (space === CLAIM_ACCOUNT_SIZE) return claimRent;
+      if (space === SUBMISSION_ACCOUNT_SIZE) return submissionRent;
+      throw new Error(`unexpected recurring-worker account size ${space}`);
+    });
+    ctx.getBalance = getBalance;
+    ctx.getMinimumBalanceForRentExemption =
+      getMinimumBalanceForRentExemption;
+
+    const candidate = {
+      task: TASK,
+      creator: CREATOR,
+      rewardAmount: REWARD,
+      rewardMint: null,
+      requiredCapabilities: 1n,
+      parentTask: PARENT,
+    };
+    await expect(processCandidate(ctx, agent, candidate)).rejects.toThrow(
+      new RegExp(
+        `working another task needs at least ${required} lamports.*1 more lamport`,
+        "s",
+      ),
+    );
+    expect(getBalance).toHaveBeenCalledExactlyOnceWith(WALLET);
+    expect(getMinimumBalanceForRentExemption.mock.calls).toEqual([
+      [CLAIM_ACCOUNT_SIZE],
+      [SUBMISSION_ACCOUNT_SIZE],
+    ]);
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(stateDir).openClaim).toBeNull();
+
+    delete ctx.getMinimumBalanceForRentExemption;
+    await expect(processCandidate(ctx, agent, candidate)).rejects.toThrow(
+      /fresh-claim funding gate requires live getBalance.*refusing to claim without both/s,
+    );
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(stateDir).openClaim).toBeNull();
+
+    delete ctx.getBalance;
+    await expect(processCandidate(ctx, agent, candidate)).rejects.toThrow(
+      /fresh-claim funding gate requires live getBalance.*refusing to claim without both/s,
+    );
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(stateDir).openClaim).toBeNull();
+
+    ctx.getBalance = async () => required;
+    ctx.getMinimumBalanceForRentExemption =
+      getMinimumBalanceForRentExemption;
+    claimTaskWithJobSpec.mockRejectedValueOnce(
+      new AgencError("expected post-gate claim stop", { signature: null }),
+    );
+    await expect(processCandidate(ctx, agent, candidate)).resolves.toMatchObject(
+      { status: "claim-failed", task: TASK },
+    );
+    expect(claimTaskWithJobSpec).toHaveBeenCalledTimes(1);
+    expect(loadState(stateDir).openClaim).toBeNull();
+  });
+
+  it("recovers an already-landed claim before consulting the fresh-claim funding gate", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-funded-recovery-order-"),
+    );
+    const agentId = new Uint8Array(32).fill(9);
+    const [agentPda] = await findAgentPda({ agentId });
+    const [claimPda] = await findClaimPda({ task: TASK, bidder: agentPda });
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const payload = {
+      title: "landed claim recovery",
+      summary: "resume before checking fresh-claim funds",
+    };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const state = emptyState();
+    state.agentIdHex = bytesToHex(agentId);
+    state.openClaim = {
+      task: TASK,
+      claimedAt: "2026-07-19T00:00:00.000Z",
+      phase: "claiming",
+    };
+    saveState(stateDir, state);
+    const accounts = new Map<Address, Uint8Array>([
+      [agentPda, agentRegistrationData(0n)],
+      [TASK, taskData(TaskStatus.InProgress)],
+      [claimPda, claimData(claimPda, agentPda)],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+    ]);
+    const claimTaskWithJobSpec = vi.fn();
+    const submitTaskResult = vi.fn(async () => ({
+      signature: "recovered-submit-signature",
+    }));
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(
+      stateDir,
+      accounts,
+      { claimTaskWithJobSpec, submitTaskResult },
+      events,
+    );
+    ctx.fetchUri = async () => body;
+    const getBalance = vi.fn(async () => 0n);
+    const getMinimumBalanceForRentExemption = vi.fn(async () => {
+      throw new Error("fresh-claim rent gate must not run during recovery");
+    });
+    ctx.getBalance = getBalance;
+    ctx.getMinimumBalanceForRentExemption =
+      getMinimumBalanceForRentExemption;
+
+    const result = await runTickOnce(ctx);
+
+    expect(result.outcome?.status).toBe("submitted");
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(submitTaskResult).toHaveBeenCalledTimes(1);
+    expect(getBalance).not.toHaveBeenCalled();
+    expect(getMinimumBalanceForRentExemption).not.toHaveBeenCalled();
+    expect(events.map(({ event }) => event)).toContain(
+      "task.resuming-open-claim",
+    );
+  });
+
   it("migrates the legacy claim-only state marker to the claimed phase", () => {
     const stateDir = mkdtempSync(
       path.join(tmpdir(), "agenc-worker-legacy-state-"),
@@ -330,6 +539,7 @@ describe("transaction-boundary recovery", () => {
         totalEarnedBaseline: "0",
         submissions: [],
       }),
+      { mode: 0o600 },
     );
     expect(loadState(stateDir).openClaim).toMatchObject({
       task: TASK,
@@ -1116,7 +1326,9 @@ describe("transaction-boundary recovery", () => {
         ),
       ],
     ]);
-    const submitTaskResult = vi.fn(async () => ({ signature: "must-not-send" }));
+    const submitTaskResult = vi.fn(async () => ({
+      signature: "must-not-send",
+    }));
     const ctx = context(stateDir, accounts, { submitTaskResult }, []);
 
     expect((await resumeOpenClaim(ctx, agent))?.status).toBe(
@@ -1246,8 +1458,8 @@ describe("transaction-boundary recovery", () => {
       uploadAttempt += 1;
       if (uploadAttempt === 1) throw new Error("ambiguous upload failure");
       return new Response(
-        JSON.stringify({ uri: "custom+result://[2001:db8::1]/private/token" }),
-        { status: 200 },
+        JSON.stringify({ uri: "https://results.example/private/token" }),
+        { status: 200, headers: { "content-type": "application/json" } },
       );
     });
     const submitTaskResult = vi.fn(async () => ({ signature: "sig-uploaded" }));
@@ -1345,10 +1557,7 @@ describe("settlement evidence coherence", () => {
     const stateDir = mkdtempSync(
       path.join(tmpdir(), "agenc-worker-settlement-straggler-"),
     );
-    const resultHashHex = pendingState(
-      stateDir,
-      "2000-01-01T00:00:00.000Z",
-    );
+    const resultHashHex = pendingState(stateDir, "2000-01-01T00:00:00.000Z");
     const [claimPda] = await findClaimPda({ task: TASK, bidder: WORKER });
     const [submissionPda] = await findTaskSubmissionPda({ claim: claimPda });
     const accounts = new Map<Address, Uint8Array>([

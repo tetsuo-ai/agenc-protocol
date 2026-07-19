@@ -96,7 +96,8 @@ pub const REPUTATION_DECAY_MIN: u16 = 1000;
 // Dispute Resolution Constants
 // ============================================================================
 
-/// Minimum number of voters required for dispute resolution
+/// DEPRECATED (P6.3): compatibility-retained constant from the retired per-case
+/// arbiter vote/quorum model. No current instruction reads this value.
 pub const MIN_VOTERS_FOR_RESOLUTION: usize = 3;
 
 /// DEPRECATED (P6.3): the arbiter vote/quorum model is retired — `vote_dispute` no

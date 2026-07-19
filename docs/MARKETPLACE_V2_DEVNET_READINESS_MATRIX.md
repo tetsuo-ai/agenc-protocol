@@ -1,12 +1,13 @@
 # Marketplace V2 Devnet Readiness Matrix
 
-> **Historical readiness record (banner added 2026-07-17).** The matrix status below is dated (2026-03-27); the release-1 gate it tracks has since shipped — mainnet has run the full 99-instruction surface since 2026-07-09. See `./MAINNET_MAINLINE.md` for current state and `../TODO.MD` for remaining work.
+> **Historical readiness record (banner added 2026-07-17).** The matrix status below is dated (2026-03-27); the release-1 gate it tracks has since shipped — mainnet has run the full 99-instruction surface since 2026-07-09. See `./MAINNET_MAINLINE.md` for current state and `../TODO.MD` for the completed remediation record.
 
 Status: In progress for the full matrix (`17` pass, `0` fail, `1` remaining)
 
 Issue: [agenc-protocol#17](https://github.com/tetsuo-ai/agenc-protocol/issues/17)
 
 Related docs:
+
 - [./MARKETPLACE_V2_BID_PROTOCOL.md](./MARKETPLACE_V2_BID_PROTOCOL.md)
 - [./PROGRAM_SURFACE.md](./PROGRAM_SURFACE.md)
 - [./VALIDATION.md](./VALIDATION.md)
@@ -95,20 +96,20 @@ This registry is the source of truth for the harness. If live devnet execution d
 entry below, treat that as a protocol-readiness failure and update the matrix with the observed
 constraint.
 
-| Path | `remaining_accounts` layout | Book disposition | Bond disposition | Notes |
-| --- | --- | --- | --- | --- |
-| `complete_task` | `[bid_book, accepted_bid, bidder_market_state, bidder_authority]` | `Closed` | `Refund` | Canonical success suffix. |
-| `complete_task` with `DependencyType::Proof` | `[parent_task, bid_book, accepted_bid, bidder_market_state, bidder_authority]` | `Closed` | `Refund` | `bid_settlement_offset()` shifts the suffix by one parent-task account. |
-| `accept_task_result` | same as `complete_task` | `Closed` | `Refund` | Uses `finalize_bid_task_completion()`. |
-| `auto_accept_task_result` | same as `complete_task` | `Closed` | `Refund` | Creator-review timeout path uses the same settlement helper. |
-| `validate_task_result(approved)` | same as `complete_task` | `Closed` | `Refund` | Uses `finalize_bid_task_completion()`. |
-| `complete_task_private` | same as `complete_task` | `Closed` | `Refund` | Same offset rules as public completion. |
-| `reject_task_result` | `[bid_book, accepted_bid, bidder_market_state]` | `Open` | `Refund` | Bidder authority is not appended; the instruction uses `worker_authority`. |
-| `validate_task_result(rejected)` | `[bid_book, accepted_bid, bidder_market_state]` | `Open` | `Refund` | Same reopen semantics as direct rejection. |
-| `expire_claim` | `[bid_marketplace, bid_book, accepted_bid, bidder_market_state, creator]` | `Open` | `SlashByBpsToCreator(accepted_no_show_slash_bps)` | Bidder authority comes from `rent_recipient`, not from the suffix. |
-| `cancel_task` with accepted bid | `[(claim, worker, rent_recipient) x current_workers] + [bid_book, accepted_bid, bidder_market_state]` | `Closed` | `FullSlashToCreator` | Harness must verify the accepted-bid suffix is taken from the tail after worker triples. |
-| `resolve_dispute` | `[(vote, arbiter) x total_voters] + [(claim, worker) x (current_workers - 1)] + [bid_book, accepted_bid, bidder_market_state]` | `Closed` | `Refund` or `FullSlashToCreator` | Bidder authority comes from `worker_wallet`. |
-| `expire_dispute` | same prefix and suffix as `resolve_dispute` | `Closed` | `Refund` if `no_votes && worker_completed`, else `FullSlashToCreator` | Harness must verify the final 3 accounts are the settlement suffix. |
+| Path                                         | `remaining_accounts` layout                                                                                                                                   | Book disposition | Bond disposition                                  | Notes                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `complete_task`                              | `[bid_book, accepted_bid, bidder_market_state, bidder_authority]`                                                                                             | `Closed`         | `Refund`                                          | Canonical success suffix.                                                                                                                                                                                                                                                                                  |
+| `complete_task` with `DependencyType::Proof` | `[parent_task, bid_book, accepted_bid, bidder_market_state, bidder_authority]`                                                                                | `Closed`         | `Refund`                                          | `bid_settlement_offset()` shifts the suffix by one parent-task account.                                                                                                                                                                                                                                    |
+| `accept_task_result`                         | same as `complete_task`                                                                                                                                       | `Closed`         | `Refund`                                          | Uses `finalize_bid_task_completion()`.                                                                                                                                                                                                                                                                     |
+| `auto_accept_task_result`                    | same as `complete_task`                                                                                                                                       | `Closed`         | `Refund`                                          | Creator-review timeout path uses the same settlement helper.                                                                                                                                                                                                                                               |
+| `validate_task_result(approved)`             | same as `complete_task`                                                                                                                                       | `Closed`         | `Refund`                                          | Uses `finalize_bid_task_completion()`.                                                                                                                                                                                                                                                                     |
+| `complete_task_private`                      | same as `complete_task`                                                                                                                                       | `Closed`         | `Refund`                                          | Same offset rules as public completion.                                                                                                                                                                                                                                                                    |
+| `reject_task_result`                         | `[bid_book, accepted_bid, bidder_market_state]`                                                                                                               | `Open`           | `Refund`                                          | Bidder authority is not appended; the instruction uses `worker_authority`.                                                                                                                                                                                                                                 |
+| `validate_task_result(rejected)`             | `[bid_book, accepted_bid, bidder_market_state]`                                                                                                               | `Open`           | `Refund`                                          | Same reopen semantics as direct rejection.                                                                                                                                                                                                                                                                 |
+| `expire_claim`                               | `[bid_marketplace, bid_book, accepted_bid, bidder_market_state, creator]`                                                                                     | `Open`           | `SlashByBpsToCreator(accepted_no_show_slash_bps)` | Bidder authority comes from `rent_recipient`, not from the suffix.                                                                                                                                                                                                                                         |
+| `cancel_task` with accepted bid              | `[(claim, worker, rent_recipient) x current_workers] + [bid_book, accepted_bid, bidder_market_state]`                                                         | `Closed`         | `FullSlashToCreator`                              | Harness must verify the accepted-bid suffix is taken from the tail after worker triples.                                                                                                                                                                                                                   |
+| `resolve_dispute`                            | `[dependency_parent?] + [(claim, worker, task_submission) x (current_workers - 1)] + [bid_book, accepted_bid, bidder_market_state] + [M-of-N owner signers?]` | `Closed`         | `Refund` or `FullSlashToCreator`                  | No retired vote/arbiter prefix. The bid suffix is required only for `BidExclusive`; the dependency parent is outcome/type-dependent. Direct-authority owner signers are stripped before economic parsing; a threshold-seated assigned resolver supplies none. Bidder authority comes from `worker_wallet`. |
+| `expire_dispute`                             | `[dependency_parent?] + [(claim, worker, task_submission) x (current_workers - 1)] + [bid_book, accepted_bid, bidder_market_state]`                           | `Closed`         | `Refund` or evidence-bound `SlashByBpsToCreator`  | No resolver approvals or retired vote/arbiter prefix. The bid suffix is required only for `BidExclusive`; objective no-show evidence controls the slash.                                                                                                                                                   |
 
 ## Scenario Matrix
 
@@ -268,9 +269,11 @@ Verify:
 
 Ordering to validate:
 
-- `[(vote, arbiter) x total_voters]`
-- then `[(claim, worker) x (current_workers - 1)]`
-- final settlement suffix `[bid_book, accepted_bid, bidder_market_state]`
+- optional dependency parent for a dependent worker-payout outcome
+- then `[(claim, worker, task_submission) x (current_workers - 1)]`
+- final economic suffix `[bid_book, accepted_bid, bidder_market_state]`
+- optional direct-authority M-of-N signer metas (the handler strips configured
+  owner signers before parsing the economic layout); assigned resolvers omit them
 
 ### DV-08: Expired dispute settles accepted bid correctly
 
@@ -280,8 +283,10 @@ Path:
 
 Verify:
 
-- if `no_votes && worker_completed`, bond is refunded
-- otherwise bond is fully slashed to creator
+- the creator always recovers remaining task principal
+- the accepted-bid bond is slashed by the configured no-show BPS only when
+  objective evidence proves an incomplete, expired claim with no live submission
+  and no unmet/closed dependency; otherwise it is refunded
 - accepted bid closes
 - bid book closes
 - worker counters decrement
@@ -289,8 +294,9 @@ Verify:
 
 Ordering to validate:
 
-- same prefix split as `resolve_dispute`
+- optional dependency parent, then peer `(claim, worker, task_submission)` triples
 - final settlement suffix `[bid_book, accepted_bid, bidder_market_state]`
+- no resolver-approval or retired vote/arbiter accounts
 
 ### DV-09: Residual non-accepted bids can be cleaned up after book close
 

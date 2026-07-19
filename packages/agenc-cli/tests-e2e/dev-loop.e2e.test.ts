@@ -66,6 +66,8 @@ describe("e2e: the agenc dev bot loop settles a genuinely 4-way split", () => {
       referrer: referrer.address,
       readAccount: async (address: Address) => accountData(svm, address),
       getBalance: async (address: Address) => svm.getBalance(address) ?? 0n,
+      getMinimumBalanceForRentExemption: async (space: number) =>
+        svm.minimumBalanceForRentExemption(BigInt(space)),
       gpa,
       stateDir: mkdtempSync(path.join(tmpdir(), "agenc-cli-e2e-")),
       log: (line) => logs.push(line),
@@ -74,6 +76,8 @@ describe("e2e: the agenc dev bot loop settles a genuinely 4-way split", () => {
         priceLamports: REWARD,
         operatorFeeBps: OPERATOR_FEE_BPS,
         referrerFeeBps: REFERRER_FEE_BPS,
+        category: "other",
+        tags: ["agenc"],
       },
       registerGpaAddress: (...addresses) => gpa.register(...addresses),
       pollIntervalMs: 10, // litesvm state is synchronous — no real waiting

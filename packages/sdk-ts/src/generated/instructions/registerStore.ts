@@ -22,8 +22,6 @@ import {
   getU16Encoder,
   getU32Decoder,
   getU32Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -42,6 +40,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -112,11 +115,17 @@ export function getRegisterStoreInstructionDataEncoder(): Encoder<RegisterStoreI
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["handle", fixEncoderSize(getBytesEncoder(), 32)],
       ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataUri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "metadataUri",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
       ["referrerFeeBps", getU16Encoder()],
       ["operator", getAddressEncoder()],
       ["operatorFeeBps", getU16Encoder()],
-      ["domain", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
+      [
+        "domain",
+        addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
+      ],
     ]),
     (value) => ({ ...value, discriminator: REGISTER_STORE_DISCRIMINATOR }),
   );
@@ -127,11 +136,14 @@ export function getRegisterStoreInstructionDataDecoder(): Decoder<RegisterStoreI
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["handle", fixDecoderSize(getBytesDecoder(), 32)],
     ["metadataHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["metadataUri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    [
+      "metadataUri",
+      addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+    ],
     ["referrerFeeBps", getU16Decoder()],
     ["operator", getAddressDecoder()],
     ["operatorFeeBps", getU16Decoder()],
-    ["domain", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
+    ["domain", addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder())],
   ]);
 }
 

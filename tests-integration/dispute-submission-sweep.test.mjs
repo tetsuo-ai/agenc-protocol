@@ -14,18 +14,20 @@ import crypto from "node:crypto";
 import {
   enc, arr, pda, id32,
   makeProgram, send, expectOk, expectFail, decode, isClosed,
-  freshWorld, injectAgentStake,
+  freshWorld, injectAgentStake, configureTestMultisig,
   taskModV2Pda, moderationBlockPda,
   BN, Keypair, SystemProgram,
 } from "./harness.mjs";
 import { Buffer } from "node:buffer";
 
 async function assignResolver(w, resolver) {
+  const approvals = await configureTestMultisig(w);
   const [entry] = pda([enc("dispute_resolver"), resolver.publicKey.toBuffer()]);
   expectOk(send(w.svm, await makeProgram(w.admin).methods
     .assignDisputeResolver(resolver.publicKey)
     .accounts({ protocolConfig: w.protocolPda, disputeResolver: entry, authority: w.admin.publicKey, systemProgram: SystemProgram.programId })
-    .instruction(), [w.admin]), "assign_dispute_resolver");
+    .remainingAccounts(approvals.remainingAccounts)
+    .instruction(), approvals.approvers), "assign_dispute_resolver");
   return entry;
 }
 

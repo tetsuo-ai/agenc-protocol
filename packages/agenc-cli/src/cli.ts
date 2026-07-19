@@ -1,6 +1,5 @@
-#!/usr/bin/env node
 /**
- * `npx @tetsuo-ai/agenc-cli <init|dev|promote>` — the Stripe-4242 moment:
+ * Side-effect-free command API for the `agenc` executable.
  *
  * - `init`     wire the CURRENT repo into an AgenC node (Next.js checkout
  *              surface or a worker loop; framework-detected, idempotent).
@@ -13,6 +12,9 @@
  * `agenc` — invoke this one as `npx @tetsuo-ai/agenc-cli <cmd>` when both
  * are installed.)
  *
+ * Importing this module never reads argv, writes output, or changes the process
+ * exit code. Executable wrappers must call `runCliProcess()` explicitly.
+ *
  * @module cli
  */
 import { parseArgs } from "node:util";
@@ -20,7 +22,7 @@ import { AgencConfigError } from "./config.js";
 import { runInit } from "./init.js";
 import { runDev } from "./dev.js";
 import { LocalnetError } from "./localnet.js";
-import { gatherPromoteInput, runPromoteChecks } from "./promote.js";
+import { gatherPromoteInputAsync, runPromoteChecks } from "./promote.js";
 
 const USAGE = `agenc — init/dev/promote for the AgenC marketplace
 
@@ -39,6 +41,7 @@ SUBCOMMANDS
 FLAGS
   init:
     --kind <checkout|worker>   override framework detection
+    --router <app|pages>       override Next router (for reviewed migrations)
     --force                    overwrite files whose content differs
   dev:
     --env-file <path>          explicit .localnet/env.json (beats discovery; implies --localnet)
@@ -52,12 +55,15 @@ FLAGS
 
 `;
 
-async function main(): Promise<number> {
+export async function runCli(
+  args: readonly string[] = process.argv.slice(2),
+): Promise<number> {
   const { values, positionals } = parseArgs({
-    args: process.argv.slice(2),
+    args,
     allowPositionals: true,
     options: {
       kind: { type: "string" },
+      router: { type: "string" },
       force: { type: "boolean" },
       "env-file": { type: "string" },
       purge: { type: "boolean" },
@@ -78,13 +84,23 @@ async function main(): Promise<number> {
 
   if (subcommand === "init") {
     const kind = values.kind;
+    const router = values.router;
     if (kind !== undefined && kind !== "checkout" && kind !== "worker") {
-      process.stderr.write(`--kind must be "checkout" or "worker" (got ${kind})\n`);
+      process.stderr.write(
+        `--kind must be "checkout" or "worker" (got ${kind})\n`,
+      );
+      return 2;
+    }
+    if (router !== undefined && router !== "app" && router !== "pages") {
+      process.stderr.write(
+        `--router must be "app" or "pages" (got ${router})\n`,
+      );
       return 2;
     }
     const result = runInit(dir, {
       ...(kind !== undefined ? { kind } : {}),
       ...(values.force === true ? { force: true } : {}),
+      ...(router !== undefined ? { router } : {}),
     });
     const lines = [
       `agenc init — ${result.projectName} (${result.kind})`,
@@ -93,9 +109,11 @@ async function main(): Promise<number> {
         const badge =
           file.status === "written"
             ? "wrote    "
-            : file.status === "unchanged"
-              ? "unchanged"
-              : "REFUSED  ";
+            : file.status === "removed"
+              ? "removed  "
+              : file.status === "unchanged"
+                ? "unchanged"
+                : "REFUSED  ";
         return `  ${badge} ${file.path}`;
       }),
       "",
@@ -108,7 +126,9 @@ async function main(): Promise<number> {
 
   if (subcommand === "dev") {
     await runDev(dir, {
-      ...(values["env-file"] !== undefined ? { envFile: values["env-file"] } : {}),
+      ...(values["env-file"] !== undefined
+        ? { envFile: values["env-file"] }
+        : {}),
       ...(values.purge === true ? { purge: true } : {}),
       ...(values.sandbox === true ? { sandbox: true } : {}),
       ...(values.localnet === true ? { localnet: true } : {}),
@@ -117,13 +137,16 @@ async function main(): Promise<number> {
   }
 
   if (subcommand === "promote") {
-    const report = runPromoteChecks(gatherPromoteInput(dir));
+    const report = runPromoteChecks(await gatherPromoteInputAsync(dir));
     if (values.json === true) {
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       return report.ready ? 0 : 1;
     }
     const badge = { pass: "PASS", fail: "FAIL", warn: "WARN" } as const;
-    const lines = [`agenc promote — go-live checklist (readonly; nothing was changed)`, ""];
+    const lines = [
+      `agenc promote — go-live checklist (readonly; nothing was changed)`,
+      "",
+    ];
     for (const check of report.checks) {
       lines.push(`  [${badge[check.status]}] ${check.label}: ${check.detail}`);
       if (check.action !== undefined) lines.push(`         -> ${check.action}`);
@@ -143,11 +166,13 @@ async function main(): Promise<number> {
   return 2;
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error) => {
+/** Run the CLI against the current process and translate its result into an exit code. */
+export async function runCliProcess(
+  args: readonly string[] = process.argv.slice(2),
+): Promise<void> {
+  try {
+    process.exitCode = await runCli(args);
+  } catch (error) {
     if (error instanceof AgencConfigError || error instanceof LocalnetError) {
       process.stderr.write(`${error.message}\n`);
     } else {
@@ -156,5 +181,5 @@ main().then(
       );
     }
     process.exitCode = 1;
-  },
-);
+  }
+}

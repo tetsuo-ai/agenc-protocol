@@ -98,14 +98,16 @@ export function App({
             <p className="eyebrow">AgenC marketplace starter</p>
             <h1>Launch an agent marketplace with the public SDK.</h1>
             <p>
-              Browse listings, hire through the humanless checkout path, activate
-              the task with a moderated job spec, then claim, submit, review,
-              rate, and close from public React hooks.
+              Browse listings, hire through the humanless checkout path,
+              activate the task with a moderated job spec, then claim, submit,
+              review, rate, and close from public React hooks.
             </p>
           </div>
           <div className="wallet">
             <button type="button" onClick={() => void connectWallet()}>
-              {signer ? `Connected ${shortAddress(signer.address)}` : "Connect wallet"}
+              {signer
+                ? `Connected ${shortAddress(signer.address)}`
+                : "Connect wallet"}
             </button>
             {walletError ? <p className="error">{walletError}</p> : null}
           </div>
@@ -211,7 +213,9 @@ function HireStep({
     try {
       if (!signer) throw new Error("Connect a wallet before hiring.");
       if (!moderator) {
-        throw new Error("Set VITE_AGENC_MODERATOR to the listing attestor's wallet.");
+        throw new Error(
+          "Set VITE_AGENC_MODERATOR to the listing attestor's wallet.",
+        );
       }
       const result = await hire.hire({
         humanless: true,
@@ -234,8 +238,9 @@ function HireStep({
   return (
     <div className="stack">
       <p>
-        Hiring funds escrow and creates the task. It is not claimable until the
-        activation step pins a moderated job spec.
+        Hiring funds escrow and creates the task. Activation must pin a
+        moderated job spec before discovery and claim attempts; transaction-time
+        gates still decide each claim.
       </p>
       <button
         type="button"
@@ -244,7 +249,11 @@ function HireStep({
       >
         {hire.isPending ? "Hiring..." : "Hire with humanless checkout"}
       </button>
-      <StatusLine status={hire.status} error={localError ?? hire.error} signature={hire.signature} />
+      <StatusLine
+        status={hire.status}
+        error={localError ?? hire.error}
+        signature={hire.signature}
+      />
     </div>
   );
 }
@@ -333,10 +342,14 @@ function ActivationStep({
     try {
       const next = await backend.hostAndModerateJobSpec({ taskPda, spec });
       if (!next.moderationAttested) {
-        throw new Error("Backend hosted the spec but did not attest moderation.");
+        throw new Error(
+          "Backend hosted the spec but did not attest moderation.",
+        );
       }
       if (!moderator) {
-        throw new Error("Set VITE_AGENC_MODERATOR to the task attestor's wallet.");
+        throw new Error(
+          "Set VITE_AGENC_MODERATOR to the task attestor's wallet.",
+        );
       }
       await activation.activate({
         jobSpecHash: next.jobSpecHash,
@@ -372,7 +385,9 @@ function ActivationStep({
         disabled={activation.isPending}
         onClick={() => void hostAndActivate()}
       >
-        {activation.isPending ? "Activating..." : "Host, moderate, and activate"}
+        {activation.isPending
+          ? "Activating..."
+          : "Host, moderate, and activate"}
       </button>
       <button
         type="button"
@@ -408,8 +423,10 @@ function WorkerStep({
   async function claim() {
     setLocalError(null);
     try {
-      if (!signer) throw new Error("Connect the worker wallet before claiming.");
-      if (!jobSpecHash) throw new Error("Activate and pin the job spec before claiming.");
+      if (!signer)
+        throw new Error("Connect the worker wallet before claiming.");
+      if (!jobSpecHash)
+        throw new Error("Activate and pin the job spec before claiming.");
       await work.claim({
         worker: address(workerAgent),
         authority: signer,
@@ -423,7 +440,8 @@ function WorkerStep({
   async function submit() {
     setLocalError(null);
     try {
-      if (!signer) throw new Error("Connect the worker wallet before submitting.");
+      if (!signer)
+        throw new Error("Connect the worker wallet before submitting.");
       await work.submit({
         worker: address(workerAgent),
         authority: signer,
@@ -439,11 +457,17 @@ function WorkerStep({
     <div className="stack">
       <label>
         Worker agent PDA
-        <input value={workerAgent} onChange={(event) => setWorkerAgent(event.target.value)} />
+        <input
+          value={workerAgent}
+          onChange={(event) => setWorkerAgent(event.target.value)}
+        />
       </label>
       <label>
         Result proof hash
-        <input value={proofHashHex} onChange={(event) => setProofHashHex(event.target.value)} />
+        <input
+          value={proofHashHex}
+          onChange={(event) => setProofHashHex(event.target.value)}
+        />
       </label>
       <div className="row">
         <button
@@ -453,11 +477,19 @@ function WorkerStep({
         >
           Claim
         </button>
-        <button type="button" disabled={!signer || !workerAgent} onClick={() => void submit()}>
+        <button
+          type="button"
+          disabled={!signer || !workerAgent}
+          onClick={() => void submit()}
+        >
           Submit result
         </button>
       </div>
-      <StatusLine status={work.status} error={localError ?? work.error} signature={work.signature} />
+      <StatusLine
+        status={work.status}
+        error={localError ?? work.error}
+        signature={work.signature}
+      />
     </div>
   );
 }
@@ -482,7 +514,8 @@ function ReviewStep({
   async function accept() {
     setLocalError(null);
     try {
-      if (!signer) throw new Error("Connect the buyer wallet before accepting.");
+      if (!signer)
+        throw new Error("Connect the buyer wallet before accepting.");
       await review.accept({
         worker: address(workerAgent),
         workerAuthority: address(workerAuthority),
@@ -497,7 +530,8 @@ function ReviewStep({
   async function reject() {
     setLocalError(null);
     try {
-      if (!signer) throw new Error("Connect the buyer wallet before rejecting.");
+      if (!signer)
+        throw new Error("Connect the buyer wallet before rejecting.");
       const worker = address(workerAgent);
       const [claim] = await findClaimPda({
         task: taskPda,
@@ -558,15 +592,24 @@ function ReviewStep({
       />
       <label>
         Worker agent PDA
-        <input value={workerAgent} onChange={(event) => setWorkerAgent(event.target.value)} />
+        <input
+          value={workerAgent}
+          onChange={(event) => setWorkerAgent(event.target.value)}
+        />
       </label>
       <label>
         Worker wallet
-        <input value={workerAuthority} onChange={(event) => setWorkerAuthority(event.target.value)} />
+        <input
+          value={workerAuthority}
+          onChange={(event) => setWorkerAuthority(event.target.value)}
+        />
       </label>
       <label>
         Protocol treasury
-        <input value={treasury} onChange={(event) => setTreasury(event.target.value)} />
+        <input
+          value={treasury}
+          onChange={(event) => setTreasury(event.target.value)}
+        />
       </label>
       <div className="row">
         <button type="button" disabled={!signer} onClick={() => void close()}>
@@ -595,12 +638,15 @@ function StatusLine({
   signature: string | null;
 }) {
   if (error) return <p className="error">{error.message}</p>;
-  if (signature) return <p className="success">Confirmed: {shortAddress(signature)}</p>;
+  if (signature)
+    return <p className="success">Confirmed: {shortAddress(signature)}</p>;
   return <p className="muted">Status: {status}</p>;
 }
 
 function shortAddress(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-6)}` : value;
+  return value.length > 12
+    ? `${value.slice(0, 6)}...${value.slice(-6)}`
+    : value;
 }
 
 function toError(cause: unknown): Error {

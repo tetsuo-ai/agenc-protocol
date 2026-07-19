@@ -31,6 +31,11 @@ this section and activate `.well-known/security.txt`. The checked-in
 it must not be deployed as if it exposed a working contact. For the same reason,
 the current program candidate intentionally embeds no explorer-visible security
 contact record; add one only after its private endpoint has been verified.
+After activation, run `node scripts/enterprise-readiness.mjs`: the read-only gate
+requires PVR to be enabled and both public `security.txt` endpoints to advertise
+the configured contacts correctly. Mailbox delivery still requires a separate
+operator-run end-to-end test. See `docs/ENTERPRISE_READINESS.md`; a green mocked
+regression test does not replace live evidence.
 
 - **What to include:** affected component (program instruction / SDK / hosted
   rail), program ID + cluster, a description of the impact (fund loss, fund
@@ -128,13 +133,13 @@ adversarial work and green gates are evidence, not a substitute. The inactive
 intake described in §1 must be fixed before these targets are operationally
 credible.
 
-| Stage | Target |
-|-------|--------|
-| **Acknowledge** receipt of your report | **2 business days** |
-| **Triage** — confirm/deny, assign severity | **5 business days** |
+| Stage                                                                   | Target                                                                                                                                                               |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Acknowledge** receipt of your report                                  | **2 business days**                                                                                                                                                  |
+| **Triage** — confirm/deny, assign severity                              | **5 business days**                                                                                                                                                  |
 | **Fix** developed for a confirmed **Critical/High** (fund loss or lock) | **target 14 days**; coordinated if a deploy + a task-layout migration choreography is required (the live Task corpus was 169 at the 2026-06-11 full-surface upgrade) |
-| **Fix** for Medium/Low | next release window |
-| **Public disclosure** | coordinated, after a fix is deployed; default embargo up to **90 days**, extendable by mutual agreement for an on-chain fix that needs a gated upgrade |
+| **Fix** for Medium/Low                                                  | next release window                                                                                                                                                  |
+| **Public disclosure**                                                   | coordinated, after a fix is deployed; default embargo up to **90 days**, extendable by mutual agreement for an on-chain fix that needs a gated upgrade               |
 
 We will keep you updated through triage and remediation, and we credit reporters
 who want credit (opt-out available).
@@ -186,7 +191,7 @@ disable specific task types via `update_launch_controls`
 **Pause is an ENTRY control, not a fund trap.** `check_version_compatible`
 (entry paths) rejects when paused; `check_version_compatible_for_exit`
 (`programs/agenc-coordination/src/utils/version.rs`) deliberately does **not**
-consider `protocol_paused`. So a pause stops *new* work (task creation, claims,
+consider `protocol_paused`. So a pause stops _new_ work (task creation, claims,
 bids) but **never** blocks the exit/settlement paths in §5.2. This is the
 encoded "money never locks" invariant (spec §7, Decision #4), and it is
 revert-sensitively unit-tested in `version.rs`. Tests establish intended
@@ -242,8 +247,9 @@ Money-safety substrate, also verified: **checked arithmetic** on all money paths
 (`checked_add/sub/mul`, `ArithmeticOverflow`) **plus** `overflow-checks = true`
 in the release profile (`programs/agenc-coordination/Cargo.toml`) as a second
 layer; **fee caps in bytecode** (combined ≤ 4000 bps, worker keeps ≥ 60%);
-**fail-closed moderation**; and an **assignable single dispute resolver** model
-(no quorum/voting dependency to settle).
+**fail-closed moderation**; and dispute rulings by either the protocol authority
+with configured M-of-N approval or a threshold-seated assigned resolver, with no
+per-case arbiter vote/quorum.
 
 ### 5.3 Upgrade-authority custody
 
@@ -263,7 +269,7 @@ Multisig:     7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY   (program SQDS4ep65T
 No individual key can now unilaterally push an upgrade — the escrow-custodying
 program requires 2-of-3 signatures for any bytecode change. The migration runbook
 and full record are in `docs/UPGRADE_AUTHORITY.md`. Revision 5 is also blocked
-on a separately reviewed 93,384-byte `ExtendProgramChecked` action through
+on a separately reviewed 97,152-byte `ExtendProgramChecked` action through
 Squads CPI; extension and upgrade must execute in different slots, and the
 deployment rail refuses implicit auto-extension. **Residual (tracked, not yet
 done):** the three member keys are currently co-located on one operator host;
@@ -271,8 +277,10 @@ distributing at least one onto separate hardware (a Ledger) is the remaining
 hardening — a Squads config change, no program-authority re-transfer required.
 
 > The **protocol/config authority** (which pauses via `update_launch_controls`,
-> updates fees, and manages the dispute-resolver roster) is governed by the
-> on-chain multisig in `ProtocolConfig` and is a distinct concept from the
+> updates fees, proposes dispute-resolver roster changes, and may propose a
+> direct ruling) is governed by the on-chain multisig in `ProtocolConfig`; each
+> such resolver change or direct ruling requires configured M-of-N approval. It
+> is a distinct concept from the
 > **program upgrade authority** above. Both are trusted roles; bugs requiring a
 > malicious trusted role are out of scope (§2).
 
@@ -310,9 +318,11 @@ with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
 - Local full-surface validator for reproduction: `scripts/localnet-up.mjs` (`docs/LOCALNET.md`)
 - Machine-readable contact template: `.well-known/security.txt` (**inactive and
   intentionally invalid until a working private channel is configured**)
+- Read-only GitHub, intake, and hosted-schema readiness gate:
+  `docs/ENTERPRISE_READINESS.md`
 
 ---
 
-*Licensing note: the repository is GPL-3.0 (root `LICENSE`); the published npm
+_Licensing note: the repository is GPL-3.0 (root `LICENSE`); the published npm
 packages `@tetsuo-ai/protocol` and `@tetsuo-ai/marketplace-sdk` are MIT.
-Licensing does not change the security commitments above.*
+Licensing does not change the security commitments above._

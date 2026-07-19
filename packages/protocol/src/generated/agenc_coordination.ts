@@ -948,8 +948,9 @@ export type AgencCoordination = {
     {
       "name": "assignDisputeResolver",
       "docs": [
-        "Assign a wallet to the dispute-resolver roster (authority-only). The assigned",
-        "wallet may then call `resolve_dispute` directly — no vote tally, no quorum."
+        "Assign a wallet to the dispute-resolver roster. The protocol authority proposes",
+        "the change and the configured M-of-N owners approve it. The assigned wallet may",
+        "then call `resolve_dispute` directly — no per-case vote tally or quorum."
       ],
       "discriminator": [
         64,
@@ -1021,7 +1022,8 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Must be the protocol authority (the roster is authority-managed)."
+            "Must be the protocol authority (the roster proposal is authority-bound;",
+            "configured M-of-N approval arrives through remaining accounts)."
           ],
           "writable": true,
           "signer": true
@@ -1129,8 +1131,9 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Must be the moderation authority that owns the moderation config (the roster is",
-            "authority-managed, exactly like the dispute-resolver roster)."
+            "Must be the moderation authority that owns the moderation config. Unlike the",
+            "threshold-approved dispute-resolver roster, this moderation roster remains",
+            "authority-managed under its separate trust model."
           ],
           "writable": true,
           "signer": true
@@ -11877,9 +11880,11 @@ export type AgencCoordination = {
     {
       "name": "resolveDispute",
       "docs": [
-        "Resolve a dispute. The signer must be the protocol authority OR an assigned",
-        "dispute resolver. `approve` upholds the initiator's requested resolution_type;",
-        "`!approve` refunds the creator. No vote tally or quorum is consulted.",
+        "Resolve a dispute. A direct protocol-authority ruling requires configured",
+        "M-of-N owner approval; an assigned resolver must have been seated through",
+        "that same threshold-controlled roster. `approve` upholds the initiator's",
+        "requested resolution_type; `!approve` refunds the creator. No per-case",
+        "arbiter vote tally or quorum is consulted.",
         "",
         "P6.4 accountable rulings: a reasoned ruling is REQUIRED — `rationale_hash` (a",
         "32-byte content hash of the off-chain rationale) and a bounded `rationale_uri`.",
@@ -11996,9 +12001,10 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "The resolver: EITHER the protocol authority OR a wallet on the dispute-resolver",
-            "roster. The OR is enforced in the handler against `resolver_assignment` below — a",
-            "plain account constraint cannot express \"this key OR that account exists\".",
+            "The resolver: EITHER the protocol authority with configured M-of-N approval in",
+            "remaining accounts OR a wallet on the dispute-resolver roster. The OR is enforced",
+            "in the handler against `resolver_assignment` below — a plain account constraint",
+            "cannot express \"this key OR that account exists\".",
             "`mut` so it can pay rent for the optional `agent_stats` init (P6.6)."
           ],
           "writable": true,
@@ -12010,13 +12016,15 @@ export type AgencCoordination = {
             "Optional roster entry proving `authority` is an assigned dispute resolver. A plain",
             "optional account (NOT seeds-derived) so the client can pass `None` when resolving as",
             "the protocol authority; when present it must be a program-owned `DisputeResolver`",
-            "whose `resolver` equals the signer (enforced in the handler). Only the authority-",
-            "gated `assign_dispute_resolver` can mint one, and the handler binds it to this signer,",
-            "so the canonical [\"dispute_resolver\", signer] PDA is enforced transitively.",
+            "whose `resolver` equals the signer (enforced in the handler). Only an",
+            "authority-proposed, configured M-of-N-approved `assign_dispute_resolver` can mint",
+            "one, and the handler binds it to this signer, so the canonical",
+            "[\"dispute_resolver\", signer] PDA is enforced transitively.",
             "",
             "`mut` (P6.4): when an assigned resolver decides the dispute, their case counters",
             "(`resolved_count`, `last_resolved_at`) are bumped on this account. The protocol",
-            "authority resolving directly passes `None` (no per-resolver counter to bump)."
+            "authority resolving directly passes `None` plus M-of-N owner signers in remaining",
+            "accounts (no per-resolver counter to bump)."
           ],
           "writable": true,
           "optional": true
@@ -12783,8 +12791,8 @@ export type AgencCoordination = {
     {
       "name": "revokeDisputeResolver",
       "docs": [
-        "Remove a wallet from the dispute-resolver roster (authority-only), closing its",
-        "assignment PDA."
+        "Remove a wallet from the dispute-resolver roster after a protocol-authority",
+        "proposal receives configured M-of-N approval, closing its assignment PDA."
       ],
       "discriminator": [
         155,
@@ -12858,7 +12866,8 @@ export type AgencCoordination = {
         {
           "name": "authority",
           "docs": [
-            "Must be the protocol authority (the roster is authority-managed)."
+            "Must be the protocol authority; configured M-of-N approval arrives through",
+            "remaining accounts."
           ],
           "writable": true,
           "signer": true
@@ -18745,7 +18754,7 @@ export type AgencCoordination = {
     {
       "code": 6104,
       "name": "unauthorizedResolver",
-      "msg": "Only the protocol authority or an assigned dispute resolver can resolve disputes, and never the dispute initiator"
+      "msg": "Only the protocol authority with configured M-of-N approval or an assigned dispute resolver can resolve disputes, and never the dispute initiator"
     },
     {
       "code": 6105,
@@ -21999,8 +22008,10 @@ export type AgencCoordination = {
             "name": "votingDeadline",
             "docs": [
               "Legacy voting deadline, now reused as the first liveness deadline: an",
-              "assigned resolver may rule immediately, but permissionless expiry opens",
-              "after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`."
+              "authorized resolver may rule immediately, but permissionless expiry opens",
+              "after this deadline plus `Dispute::VOTING_DEADLINE_GRACE`. Here authorized",
+              "means a threshold-seated assigned resolver or the protocol authority with",
+              "configured M-of-N approval."
             ],
             "type": "i64"
           },
@@ -22093,8 +22104,9 @@ export type AgencCoordination = {
           {
             "name": "resolvedBy",
             "docs": [
-              "The wallet that decided this dispute (the protocol authority OR the assigned",
-              "resolver who signed `resolve_dispute`). Default pubkey until resolved."
+              "The wallet that decided this dispute: either the threshold-approved protocol",
+              "authority or a threshold-seated assigned resolver who signed",
+              "`resolve_dispute`. Default pubkey until resolved."
             ],
             "type": "pubkey"
           }
@@ -22242,8 +22254,8 @@ export type AgencCoordination = {
       "docs": [
         "Emitted when a dispute is resolved",
         "",
-        "The `outcome` field reflects the assigned resolver's binary ruling (P6.3 — the",
-        "arbiter vote/quorum model is retired):",
+        "The `outcome` field reflects the authorized resolver's binary ruling (P6.3 — the",
+        "per-case arbiter vote/quorum model is retired):",
         "- 0 = Rejected (the resolver passed `approve = false` — creator refunded)",
         "- 1 = Approved (the resolver passed `approve = true` — initiator's resolution upheld)",
         "",
@@ -22296,7 +22308,7 @@ export type AgencCoordination = {
             "name": "resolvedBy",
             "docs": [
               "P6.4 accountable rulings: the wallet that decided this dispute (the protocol",
-              "authority OR the assigned resolver who signed `resolve_dispute`)."
+              "authority with M-of-N approval OR the threshold-seated assigned resolver)."
             ],
             "type": "pubkey"
           },
@@ -22319,11 +22331,12 @@ export type AgencCoordination = {
       "name": "disputeResolver",
       "docs": [
         "Roster entry authorizing a specific wallet to resolve disputes (the assignable",
-        "arbiter model). The protocol authority manages the roster via",
-        "`assign_dispute_resolver` / `revoke_dispute_resolver`. The mere existence of this",
-        "PDA authorizes its `resolver` to call `resolve_dispute`; closing it (revoke) removes",
-        "the authorization. A single assigned resolver decides a dispute directly — there is",
-        "NO vote tally or quorum on this path (that is the whole point of the model).",
+        "arbiter model). The protocol authority proposes roster changes via",
+        "`assign_dispute_resolver` / `revoke_dispute_resolver`, and the configured M-of-N",
+        "owners approve each change. The mere existence of this PDA authorizes its `resolver`",
+        "to call `resolve_dispute`; closing it (revoke) removes the authorization. A single",
+        "threshold-seated assigned resolver decides a dispute directly — there is no per-case",
+        "arbiter vote tally or quorum on this path (that is the whole point of the model).",
         "PDA seeds: [\"dispute_resolver\", resolver]"
       ],
       "type": {
@@ -22400,7 +22413,8 @@ export type AgencCoordination = {
     {
       "name": "disputeResolverAssigned",
       "docs": [
-        "Emitted when the protocol authority assigns a wallet to the dispute-resolver roster."
+        "Emitted after an authority-proposed resolver assignment receives configured M-of-N",
+        "approval."
       ],
       "type": {
         "kind": "struct",
@@ -22423,7 +22437,8 @@ export type AgencCoordination = {
     {
       "name": "disputeResolverRevoked",
       "docs": [
-        "Emitted when the protocol authority revokes a wallet from the dispute-resolver roster."
+        "Emitted after an authority-proposed resolver revocation receives configured M-of-N",
+        "approval."
       ],
       "type": {
         "kind": "struct",
@@ -27292,7 +27307,12 @@ export type AgencCoordination = {
               "status `Submitted`; maintained ONLY for schema-1 tasks).",
               "* `_reserved[2]` = `worker_slash_pending` (0 = no deferred worker",
               "slash, 1 = the defendant claim is reserved for apply_dispute_slash).",
-              "Bytes `[3..16]` MUST stay zeroed (validate_reserved_fields)."
+              "* `_reserved[3..11]` = little-endian monotonic `claim_generation`",
+              "(`u64`; 0 is the legacy/no-claim sentinel). Every instruction that",
+              "creates a canonical `TaskClaim` increments it atomically, allowing",
+              "watchers to distinguish Open 0:0 -> claim/expire -> Open 0:0 without",
+              "having observed the intermediate state.",
+              "Bytes `[11..16]` MUST stay zeroed (validate_reserved_fields)."
             ],
             "type": {
               "array": [

@@ -4,8 +4,8 @@
 > with current state: mainnet has since moved to the full 99-instruction surface
 > (live since 2026-07-09, slot 431918664, `surface_revision = 4`), and a later
 > adversarial audit (2026-07-16/17, branch `fix/audit-findings-2026-07-16`) found
-> additional issues these verdicts missed — see `TODO.MD` (open hardening queue
-> F-1..F-19), `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
+> additional issues these verdicts missed — see `TODO.MD` (completed hardening
+> record F-1..F-19), `docs/MAINNET_MAINLINE.md` (deploy record), and `README.md`.
 
 > **Post-deploy note (2026-06-11):** the full-surface upgrade has since been executed —
 > mainnet now runs the full 84-instruction surface (`surface_revision = FULL`), with the 169

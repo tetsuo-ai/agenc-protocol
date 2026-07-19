@@ -66,7 +66,8 @@ programs/agenc-coordination/
 
 ## Prerequisites
 
-- Rust 1.79
+- Rust 1.85.0 for reproducible host builds (the declared and CI-tested crate
+  MSRV is 1.82.0)
 - Solana CLI 3.0.13
 - Anchor 0.32.1
 

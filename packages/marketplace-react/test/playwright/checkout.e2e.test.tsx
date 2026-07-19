@@ -12,9 +12,9 @@
  *   useHire().hire(humanless)  ->  [worker: moderate/jobspec/claim/submit]  ->
  *   useSubmissionReview().accept()  ->  Task Completed + escrow paid to worker.
  *
- * Requires a running sandbox. `beforeAll` boots it (idempotent: converges if a
- * validator is already up) and skips the suite with a clear message if the
- * validator/.so prerequisites are missing.
+ * This local-validator integration is intentionally excluded from the default
+ * unit suite. Run it with `AGENC_REACT_LOCALNET_E2E=1`; an enabled run fails
+ * hard when its validator/.so prerequisites or bootstrap fail.
  */
 import * as kit from "@solana/kit";
 import {
@@ -36,7 +36,7 @@ import {
 } from "@testing-library/react";
 import { readFile } from "node:fs/promises";
 import type { ReactNode } from "react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useCallback, useState } from "react";
 import {
   AgencProvider,
@@ -49,7 +49,16 @@ import {
 import { createMockEmbeddedWallet } from "../../src/testing/index.js";
 import { useHire, useSubmissionReview } from "../../src/hooks/index.js";
 import type { CheckoutConfig } from "../../test-apps/checkout/src/CheckoutFlow.js";
-import { start, readSandboxEnv } from "../sandbox-up.mjs";
+import {
+  start,
+  stop,
+  readSandboxEnv,
+  recordedValidatorMayBeLive,
+} from "../sandbox-up.mjs";
+import {
+  registerLocalnetLifecycle,
+  sandboxDisposition,
+} from "../localnet-e2e-gate.js";
 import { completeWorkerSide, fetchListing } from "./worker-harness.mjs";
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
@@ -67,17 +76,22 @@ interface Ready {
 }
 
 let ready: Ready | null = null;
-let skipReason: string | null = null;
+let ownsSandbox = false;
 
-async function airdrop(rpc: ReturnType<typeof kit.createSolanaRpc>, addr: string) {
+async function airdrop(
+  rpc: ReturnType<typeof kit.createSolanaRpc>,
+  addr: string,
+) {
   // requestAirdrop is a test-cluster RPC method not on the default all-clusters
   // type; the localnet validator implements it, so call it through a cast.
-  await (rpc as unknown as {
-    requestAirdrop: (
-      a: ReturnType<typeof kit.address>,
-      l: ReturnType<typeof kit.lamports>,
-    ) => { send: () => Promise<unknown> };
-  })
+  await (
+    rpc as unknown as {
+      requestAirdrop: (
+        a: ReturnType<typeof kit.address>,
+        l: ReturnType<typeof kit.lamports>,
+      ) => { send: () => Promise<unknown> };
+    }
+  )
     .requestAirdrop(kit.address(addr), kit.lamports(2n * LAMPORTS_PER_SOL))
     .send();
   const deadline = Date.now() + 30_000;
@@ -104,17 +118,39 @@ async function rpcHealthy(rpcUrl: string): Promise<boolean> {
   }
 }
 
-beforeAll(async () => {
+async function setupCheckoutSandbox() {
   try {
     // Reuse a running sandbox only when it is healthy, seeded, and loaded with
     // the current repo-built program binary.
     let env = await readSandboxEnv();
     const healthy = env !== null && (await rpcHealthy(env.rpcUrl));
-    if (env === null || env.fixtures === null || !healthy || !env.programCurrent) {
-      env = await start({ quiet: true });
+    const usable =
+      env !== null &&
+      env.fixtures !== null &&
+      env.keypairs !== null &&
+      env.programCurrent;
+    const disposition = sandboxDisposition({
+      healthy,
+      usable,
+      recordedProcessMayBeLive: await recordedValidatorMayBeLive(),
+    });
+    if (disposition === "create") {
+      // An explicitly enabled integration run owns a fresh disposable ledger.
+      // Production binaries correctly begin paused; the browser fixture uses
+      // the narrow test-only genesis override rather than trying to seed the
+      // production-paused configuration.
+      await stop({ purge: true, removeState: true, quiet: true });
+      ownsSandbox = true;
+      env = await start({
+        quiet: true,
+        unsafeUnpausedFixture: true,
+        disposable: true,
+      });
     }
     if (env.fixtures === null || env.keypairs === null) {
-      throw new Error("sandbox is up but not seeded (fixtures/keypairs missing)");
+      throw new Error(
+        "sandbox is up but not seeded (fixtures/keypairs missing)",
+      );
     }
     const { fixtures, keypairs } = env;
     const rpcUrl = env.rpcUrl;
@@ -165,12 +201,19 @@ beforeAll(async () => {
       workerKeys: { seeder: keypairs.seeder, moderator: keypairs.moderator },
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    skipReason = `sandbox unavailable: ${message}`;
+    if (ownsSandbox) {
+      await stop({ purge: true, removeState: true, quiet: true });
+      ownsSandbox = false;
+    }
+    throw error;
   }
-}, 240_000);
+}
 
-afterEach(() => cleanup());
+async function teardownCheckoutSandbox() {
+  if (!ownsSandbox) return;
+  await stop({ purge: true, removeState: true, quiet: true });
+  ownsSandbox = false;
+}
 
 function wrap(children: ReactNode, config: AgencProviderConfig) {
   const queryClient = new QueryClient({
@@ -248,118 +291,153 @@ function CheckoutFlow({
       <p data-testid="checkout-phase">{phase}</p>
       <p data-testid="hire-status">{hire.status}</p>
       {hire.error ? <p data-testid="hire-error">{hire.error.message}</p> : null}
-      <button data-testid="hire-button" onClick={onHire} disabled={hire.isPending || taskPda !== null}>
+      <button
+        data-testid="hire-button"
+        onClick={onHire}
+        disabled={hire.isPending || taskPda !== null}
+      >
         Hire
       </button>
       {taskPda ? <p data-testid="task-pda">{taskPda}</p> : null}
-      <button data-testid="accept-button" onClick={onAccept} disabled={!workerReady || review.status === "pending"}>
+      <button
+        data-testid="accept-button"
+        onClick={onAccept}
+        disabled={!workerReady || review.status === "pending"}
+      >
         Accept
       </button>
       <p data-testid="review-status">{review.status}</p>
-      {review.signature ? <p data-testid="accept-signature">{review.signature}</p> : null}
-      {review.error ? <p data-testid="review-error">{review.error.message}</p> : null}
+      {review.signature ? (
+        <p data-testid="accept-signature">{review.signature}</p>
+      ) : null}
+      {review.error ? (
+        <p data-testid="review-error">{review.error.message}</p>
+      ) : null}
     </div>
   );
 }
 
-describe("A3 checkout (jsdom): CheckoutFlow completes a real hire funded -> accepted", () => {
-  it("hires, the worker submits, the buyer accepts, and the task settles Completed", async () => {
-    if (skipReason !== null || ready === null) {
-      console.warn(`SKIP: ${skipReason}`);
-      return;
-    }
-    const { rpcUrl, rpc, config, workerKeys, buyerSigner } = ready;
+describe.skipIf(process.env.AGENC_REACT_LOCALNET_E2E !== "1")(
+  "A3 checkout (jsdom): CheckoutFlow completes a real hire funded -> accepted",
+  () => {
+    registerLocalnetLifecycle(
+      process.env.AGENC_REACT_LOCALNET_E2E === "1",
+      { beforeAll, afterAll },
+      { setup: setupCheckoutSandbox, teardown: teardownCheckoutSandbox },
+    );
+    afterEach(() => cleanup());
 
-    // Build the buyer write client WITHOUT rpcSubscriptions so the SDK confirms
-    // via getSignatureStatuses POLLING, not a ws:// channel — jsdom's WebSocket
-    // is not the EventTarget the kit subscriptions channel needs. (The real
-    // browser, driven by Playwright, has a native WebSocket and uses the
-    // provider's default rpcUrl+signer path with WS confirmation.) The client
-    // override slot is the same public seam startLocalMarketplace().client uses.
-    const buyerClient = createMarketplaceClient({
-      rpc: kit.createSolanaRpc(rpcUrl),
-      signer: buyerSigner,
-    });
-    const providerConfig: AgencProviderConfig = {
-      network: "localnet",
-      client: buyerClient,
-      queryTransport: createReadTransport({ rpc: kit.createSolanaRpc(rpcUrl) }),
-    };
+    it("hires, the worker submits, the buyer accepts, and the task settles Completed", async () => {
+      if (ready === null)
+        throw new Error("sandbox beforeAll did not initialize");
+      const { rpcUrl, rpc, config, workerKeys, buyerSigner } = ready;
 
-    // The inline worker side: run the Node harness between hire and accept, and
-    // backfill the worker authority into the config so accept settles correctly.
-    let workerAuthority = "";
-    const onHired = async (taskPda: string) => {
-      const res = await completeWorkerSide({
-        kit,
-        rpcUrl,
-        taskPda,
-        workerAgentPda: config.workerAgent,
-        seederKeyPath: workerKeys.seeder,
-        moderatorKeyPath: workerKeys.moderator,
-        buyerSigner,
+      // Build the buyer write client WITHOUT rpcSubscriptions so the SDK confirms
+      // via getSignatureStatuses POLLING, not a ws:// channel — jsdom's WebSocket
+      // is not the EventTarget the kit subscriptions channel needs. (The real
+      // browser, driven by Playwright, has a native WebSocket and uses the
+      // provider's default rpcUrl+signer path with WS confirmation.) The client
+      // override slot is the same public seam startLocalMarketplace().client uses.
+      const buyerClient = createMarketplaceClient({
+        rpc: kit.createSolanaRpc(rpcUrl),
+        signer: buyerSigner,
       });
-      workerAuthority = res.workerAuthority;
-    };
+      const providerConfig: AgencProviderConfig = {
+        network: "localnet",
+        client: buyerClient,
+        queryTransport: createReadTransport({
+          rpc: kit.createSolanaRpc(rpcUrl),
+        }),
+      };
 
-    // The component needs workerAuthority before the buyer accepts; resolve it
-    // from the seeder key up front (it is deterministic for the seeded provider).
-    const seederBytes = Uint8Array.from(
-      JSON.parse(await readFile(workerKeys.seeder, "utf8")),
-    );
-    const seeder = await kit.createKeyPairSignerFromBytes(seederBytes);
-    const runConfig: CheckoutConfig = {
-      ...config,
-      workerAuthority: String(seeder.address),
-    };
+      // The inline worker side: run the Node harness between hire and accept, and
+      // backfill the worker authority into the config so accept settles correctly.
+      let workerAuthority = "";
+      const onHired = async (taskPda: string) => {
+        const res = await completeWorkerSide({
+          kit,
+          rpcUrl,
+          taskPda,
+          workerAgentPda: config.workerAgent,
+          seederKeyPath: workerKeys.seeder,
+          moderatorKeyPath: workerKeys.moderator,
+          buyerSigner,
+        });
+        workerAuthority = res.workerAuthority;
+      };
 
-    render(wrap(<CheckoutFlow config={runConfig} onHired={onHired} />, providerConfig));
+      // The component needs workerAuthority before the buyer accepts; resolve it
+      // from the seeder key up front (it is deterministic for the seeded provider).
+      const seederBytes = Uint8Array.from(
+        JSON.parse(await readFile(workerKeys.seeder, "utf8")),
+      );
+      const seeder = await kit.createKeyPairSignerFromBytes(seederBytes);
+      const runConfig: CheckoutConfig = {
+        ...config,
+        workerAuthority: String(seeder.address),
+      };
 
-    // ---- BUYER: click Hire ----
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("hire-button"));
-    });
+      render(
+        wrap(
+          <CheckoutFlow config={runConfig} onHired={onHired} />,
+          providerConfig,
+        ),
+      );
 
-    // Hire succeeds, worker harness runs, phase reaches "hired" (workerReady).
-    await waitFor(
-      () => expect(screen.getByTestId("checkout-phase").textContent).toBe("hired"),
-      { timeout: 60_000 },
-    );
-    const taskPda = screen.getByTestId("task-pda").textContent!;
-    expect(taskPda.length).toBeGreaterThan(30);
-    expect(workerAuthority).toBe(String(seeder.address));
+      // ---- BUYER: click Hire ----
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("hire-button"));
+      });
 
-    // The task is PendingValidation on-chain (worker submitted).
-    const decode = async (pda: string): Promise<Task | null> => {
-      const info = await rpc
-        .getAccountInfo(kit.address(pda), { encoding: "base64" })
-        .send();
-      if (!info.value) return null;
-      return getTaskDecoder().decode(
-        Uint8Array.from(Buffer.from(info.value.data[0], "base64")),
-      ) as Task;
-    };
-    const pending = await decode(taskPda);
-    expect(pending?.status).toBe(TaskStatus.PendingValidation);
+      // Hire succeeds, worker harness runs, phase reaches "hired" (workerReady).
+      await waitFor(
+        () =>
+          expect(screen.getByTestId("checkout-phase").textContent).toBe(
+            "hired",
+          ),
+        { timeout: 60_000 },
+      );
+      const taskPda = screen.getByTestId("task-pda").textContent!;
+      expect(taskPda.length).toBeGreaterThan(30);
+      expect(workerAuthority).toBe(String(seeder.address));
 
-    const workerBalBefore = (await rpc.getBalance(seeder.address).send()).value;
+      // The task is PendingValidation on-chain (worker submitted).
+      const decode = async (pda: string): Promise<Task | null> => {
+        const info = await rpc
+          .getAccountInfo(kit.address(pda), { encoding: "base64" })
+          .send();
+        if (!info.value) return null;
+        return getTaskDecoder().decode(
+          Uint8Array.from(Buffer.from(info.value.data[0], "base64")),
+        ) as Task;
+      };
+      const pending = await decode(taskPda);
+      expect(pending?.status).toBe(TaskStatus.PendingValidation);
 
-    // ---- BUYER: click Accept ----
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("accept-button"));
-    });
-    await waitFor(
-      () => expect(screen.getByTestId("review-status").textContent).toBe("success"),
-      { timeout: 30_000 },
-    );
-    expect(screen.getByTestId("accept-signature").textContent!.length).toBeGreaterThan(
-      30,
-    );
+      const workerBalBefore = (await rpc.getBalance(seeder.address).send())
+        .value;
 
-    // ---- REAL on-chain assertions: task Completed + worker paid ----
-    const completed = await decode(taskPda);
-    expect(completed?.status).toBe(TaskStatus.Completed);
-    const workerBalAfter = (await rpc.getBalance(seeder.address).send()).value;
-    expect(BigInt(workerBalAfter)).toBeGreaterThan(BigInt(workerBalBefore));
-  }, 180_000);
-});
+      // ---- BUYER: click Accept ----
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("accept-button"));
+      });
+      await waitFor(
+        () =>
+          expect(screen.getByTestId("review-status").textContent).toBe(
+            "success",
+          ),
+        { timeout: 30_000 },
+      );
+      expect(
+        screen.getByTestId("accept-signature").textContent!.length,
+      ).toBeGreaterThan(30);
+
+      // ---- REAL on-chain assertions: task Completed + worker paid ----
+      const completed = await decode(taskPda);
+      expect(completed?.status).toBe(TaskStatus.Completed);
+      const workerBalAfter = (await rpc.getBalance(seeder.address).send())
+        .value;
+      expect(BigInt(workerBalAfter)).toBeGreaterThan(BigInt(workerBalBefore));
+    }, 180_000);
+  },
+);

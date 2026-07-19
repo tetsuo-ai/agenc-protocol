@@ -11,6 +11,10 @@
   set; its install hint now points at SDK 0.12.0.
 - The unscoped `agenc-cli` alias advances to 0.3.0 with the scoped package. The
   published 0.2.0 pair remains current until the coordinated cutover.
+- Make `@tetsuo-ai/agenc-cli/cli` a side-effect-free command API. The `agenc`
+  executable now uses a dedicated non-exported bin wrapper, and the unscoped
+  alias calls `runCliProcess()` explicitly, so importing an advertised module
+  can never print usage or set an exit code.
 
 ## 0.2.0
 

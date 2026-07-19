@@ -38,11 +38,17 @@ const FAKE_BLOCKHASH = {
   lastValidBlockHeight: 100n,
 } as const;
 
-async function buildTransaction(signer: KeyPairSigner): Promise<Transaction> {
+async function buildTransaction(
+  signer: KeyPairSigner,
+  recentBlockhash: {
+    readonly blockhash: ReturnType<typeof blockhash>;
+    readonly lastValidBlockHeight: bigint;
+  } = FAKE_BLOCKHASH,
+): Promise<Transaction> {
   const message = pipe(
     createTransactionMessage({ version: 0 }),
     (m) => setTransactionMessageFeePayerSigner(signer, m),
-    (m) => setTransactionMessageLifetimeUsingBlockhash(FAKE_BLOCKHASH, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(recentBlockhash, m),
     (m) => appendTransactionMessageInstructions([], m),
   );
   return compileTransaction(message);
@@ -128,5 +134,108 @@ describe("signerFromWalletAdapter", () => {
         { VersionedTransaction },
       ),
     ).toThrowError(/signTransaction/);
+  });
+
+  it("serializes wallet prompts and preserves result order", async () => {
+    const backing = await generateKeyPairSigner();
+    const delegate = fakeAdapter(backing).signTransaction!;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const adapter: WalletAdapterLike = {
+      publicKey: backing.address,
+      async signTransaction<T extends VersionedTransactionLike>(
+        transaction: T,
+      ): Promise<T> {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await Promise.resolve();
+        try {
+          return await delegate(transaction);
+        } finally {
+          inFlight -= 1;
+        }
+      },
+    };
+    const transactions = [
+      await buildTransaction(backing),
+      await buildTransaction(backing, {
+        blockhash: blockhash("So11111111111111111111111111111111111111112"),
+        lastValidBlockHeight: 101n,
+      }),
+    ];
+    const expected = await Promise.all(
+      transactions.map((transaction) =>
+        partiallySignTransaction([backing.keyPair], transaction),
+      ),
+    );
+    const signer = signerFromWalletAdapter(adapter, {
+      VersionedTransaction,
+    }) as TransactionPartialSigner;
+
+    const dictionaries = await signer.signTransactions(
+      transactions.map((transaction) => transaction as never),
+    );
+    expect(maxInFlight).toBe(1);
+    expect(Array.from(dictionaries[0]![backing.address]!)).toEqual(
+      Array.from(expected[0]!.signatures[backing.address]!),
+    );
+    expect(Array.from(dictionaries[1]![backing.address]!)).toEqual(
+      Array.from(expected[1]!.signatures[backing.address]!),
+    );
+  });
+
+  it("rejects an adapter-returned transaction whose message differs", async () => {
+    const backing = await generateKeyPairSigner();
+    const original = await buildTransaction(backing);
+    const changed = await buildTransaction(backing, {
+      blockhash: blockhash("So11111111111111111111111111111111111111112"),
+      lastValidBlockHeight: 101n,
+    });
+    const signedChanged = await partiallySignTransaction(
+      [backing.keyPair],
+      changed,
+    );
+    const encoder = getTransactionEncoder();
+    const adapter: WalletAdapterLike = {
+      publicKey: backing.address,
+      async signTransaction<T extends VersionedTransactionLike>(): Promise<T> {
+        return new FakeVersionedTransaction(
+          new Uint8Array(encoder.encode(signedChanged)),
+        ) as unknown as T;
+      },
+    };
+    const signer = signerFromWalletAdapter(adapter, {
+      VersionedTransaction,
+    }) as TransactionPartialSigner;
+    await expect(
+      signer.signTransactions([original as never]),
+    ).rejects.toThrowError(/modified.*transaction|message.*differ/i);
+  });
+
+  it("rejects a forged signature over an unchanged message", async () => {
+    const backing = await generateKeyPairSigner();
+    const tx = await buildTransaction(backing);
+    const forged = {
+      ...tx,
+      signatures: {
+        ...tx.signatures,
+        [backing.address]: new Uint8Array(64).fill(1),
+      },
+    } as unknown as Transaction;
+    const encoder = getTransactionEncoder();
+    const adapter: WalletAdapterLike = {
+      publicKey: backing.address,
+      async signTransaction<T extends VersionedTransactionLike>(): Promise<T> {
+        return new FakeVersionedTransaction(
+          new Uint8Array(encoder.encode(forged)),
+        ) as unknown as T;
+      },
+    };
+    const signer = signerFromWalletAdapter(adapter, {
+      VersionedTransaction,
+    }) as TransactionPartialSigner;
+    await expect(
+      signer.signTransactions([tx as never]),
+    ).rejects.toThrowError(/invalid signature/i);
   });
 });

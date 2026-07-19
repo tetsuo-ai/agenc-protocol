@@ -15,7 +15,7 @@ interface JsonSchema {
     /** Property name → property schema. */
     properties: Record<string, JsonSchemaProperty>;
     /** Names of required properties. */
-    required?: string[];
+    required?: readonly string[];
     /** Whether properties beyond `properties` are allowed (default: false). */
     additionalProperties?: boolean;
     /** Optional human description of the whole object. */
@@ -25,8 +25,16 @@ interface JsonSchema {
 interface JsonSchemaProperty {
     type: "string" | "number" | "integer" | "boolean" | "array" | "object";
     description?: string;
+    /** Minimum Unicode code-point length for strings. */
+    minLength?: number;
+    /** Maximum Unicode code-point length for strings. */
+    maxLength?: number;
     /** For `type: "array"`. */
     items?: JsonSchemaProperty;
+    /** Minimum number of array entries. */
+    minItems?: number;
+    /** Maximum number of array entries. */
+    maxItems?: number;
     /** Enumerated allowed values. */
     enum?: readonly (string | number)[];
     /** Minimum (numeric). */
@@ -38,10 +46,16 @@ interface JsonSchemaProperty {
     /** Nested object properties (for `type: "object"`). */
     properties?: Record<string, JsonSchemaProperty>;
     /** Required nested props (for `type: "object"`). */
-    required?: string[];
+    required?: readonly string[];
+    /** Whether undeclared nested properties are accepted (default: false). */
+    additionalProperties?: boolean;
+    /** A supported runtime-validated string format. */
+    format?: JsonSchemaFormat;
     /** Example value. */
     examples?: readonly unknown[];
 }
+/** Runtime-validated string formats supported by the tool schema subset. */
+type JsonSchemaFormat = "solana-address" | "hex-32" | "nonzero-hex-32" | "hex-64" | "uint64" | "nonzero-uint64" | "int64" | "uri" | "http-url" | "kebab-token" | "listing-name";
 /**
  * The runtime context every tool handler receives.
  *
@@ -114,8 +128,9 @@ interface MarketplaceTool<TArgs = Record<string, unknown>, TResult = unknown> {
      */
     readonly kind: "readonly" | "prepare";
     /**
-     * Execute the tool. `args` is the parsed input (callers SHOULD validate
-     * against `inputSchema` first; handlers also defend their own invariants).
+     * Execute the tool. Definitions and registries compile `inputSchema` and
+     * validate `args` before this implementation runs; handlers additionally
+     * defend protocol-specific invariants that JSON Schema cannot express.
      */
     handler(args: TArgs, ctx: MarketplaceToolContext): Promise<TResult>;
 }
@@ -209,17 +224,18 @@ interface TaskView {
      */
     description: string;
     /**
-     * Whether this Open task's job spec is PINNED — i.e. a `TaskJobSpec` account
-     * exists at PDA `["task_job_spec", task]`. A task is only actually claimable
-     * (`claim_task_with_job_spec` succeeds) when it is BOTH Open AND pinned; an
-     * Open-but-unpinned task fails on-chain (AccountNotInitialized).
+     * Whether this Open task has a `TaskJobSpec` account at PDA
+     * `["task_job_spec", task]`. Pin existence is a necessary discovery signal,
+     * not proof that `claim_task_with_job_spec` will succeed: the program also
+     * validates the pointer fields and all current task, worker, capacity,
+     * deadline, capability, stake, cooldown, and protocol gates at execution.
      *
-     * - `true`  — pinned and confirmed claim-ready (a single-account read path).
+     * - `true`  — the pin account exists; treat the task as a claim candidate.
      * - `false` — confirmed Open but NOT pinned (do not prepare a claim yet).
      * - `null`  — UNKNOWN on this read path. The bulk `list_open_tasks` gPA sweep
      *   returns every Open task in one call and does NOT pay the per-task extra
      *   read to confirm pinning, so it leaves this `null`. Confirm with `get_task`
-     *   (single fetch) before preparing a claim.
+     *   (single fetch) before preparing a claim attempt.
      */
     jobSpecPinned: boolean | null;
 }
@@ -804,4 +820,4 @@ interface BuildAgentCardManifestOptions {
  */
 declare function buildAgentCardManifest(listings: ReadonlyArray<DecodedProgramAccount<ServiceListing>>, options?: BuildAgentCardManifestOptions): AgentCardManifest;
 
-export { A2A_AGENC_EXTENSION_URI, A2A_AGENC_PROTOCOL_BINDING, A2A_SCHEMA_VERSION, AGENT_CARD_SCHEMA_VERSION, type AgentCard, type AgentCardA2A, type AgentCardA2ACapabilities, type AgentCardA2AExtension, type AgentCardA2AInterface, type AgentCardA2ASkill, type AgentCardCapabilities, type AgentCardHire, type AgentCardManifest, type AgentCardPrice, type AgentCardTrust, type BuildAgentCardManifestOptions, type BuiltInstructionLike, type CrewAIToolDescriptor, type JsonSchema, type JsonSchemaProperty, type KitRpcLike, type LangChainToolDescriptor, type ListingToAgentCardOptions, type ListingView, type MarketplaceTool, type MarketplaceToolContext, MarketplaceToolError, type MarketplaceToolRegistry, type OpenAITool, type TaskView, type UnsignedInstructionView, buildAgentCardManifest, createToolRegistry, getTool, indexerListingToAgentCard, listingToAgentCard, marketplaceToolRegistry, marketplaceTools, prepareTools, projectInstruction, projectListing, projectTask, readonlyTools, toCrewAITools, toHex, toLangChainTools, toOpenAITools };
+export { A2A_AGENC_EXTENSION_URI, A2A_AGENC_PROTOCOL_BINDING, A2A_SCHEMA_VERSION, AGENT_CARD_SCHEMA_VERSION, type AgentCard, type AgentCardA2A, type AgentCardA2ACapabilities, type AgentCardA2AExtension, type AgentCardA2AInterface, type AgentCardA2ASkill, type AgentCardCapabilities, type AgentCardHire, type AgentCardManifest, type AgentCardPrice, type AgentCardTrust, type BuildAgentCardManifestOptions, type BuiltInstructionLike, type CrewAIToolDescriptor, type JsonSchema, type JsonSchemaFormat, type JsonSchemaProperty, type KitRpcLike, type LangChainToolDescriptor, type ListingToAgentCardOptions, type ListingView, type MarketplaceTool, type MarketplaceToolContext, MarketplaceToolError, type MarketplaceToolRegistry, type OpenAITool, type TaskView, type UnsignedInstructionView, buildAgentCardManifest, createToolRegistry, getTool, indexerListingToAgentCard, listingToAgentCard, marketplaceToolRegistry, marketplaceTools, prepareTools, projectInstruction, projectListing, projectTask, readonlyTools, toCrewAITools, toHex, toLangChainTools, toOpenAITools };

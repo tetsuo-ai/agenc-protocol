@@ -126,7 +126,10 @@ export type AssignDisputeResolverAsyncInput<
   protocolConfig?: Address<TAccountProtocolConfig>;
   /** Roster entry for `resolver`. `init` ⇒ assigning an already-assigned wallet fails. */
   disputeResolver?: Address<TAccountDisputeResolver>;
-  /** Must be the protocol authority (the roster is authority-managed). */
+  /**
+   * Must be the protocol authority (the roster proposal is authority-bound;
+   * configured M-of-N approval arrives through remaining accounts).
+   */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
   resolver: AssignDisputeResolverInstructionDataArgs["resolver"];
@@ -218,7 +221,10 @@ export type AssignDisputeResolverInput<
   protocolConfig: Address<TAccountProtocolConfig>;
   /** Roster entry for `resolver`. `init` ⇒ assigning an already-assigned wallet fails. */
   disputeResolver: Address<TAccountDisputeResolver>;
-  /** Must be the protocol authority (the roster is authority-managed). */
+  /**
+   * Must be the protocol authority (the roster proposal is authority-bound;
+   * configured M-of-N approval arrives through remaining accounts).
+   */
   authority: TransactionSigner<TAccountAuthority>;
   systemProgram?: Address<TAccountSystemProgram>;
   resolver: AssignDisputeResolverInstructionDataArgs["resolver"];
@@ -300,7 +306,10 @@ export type ParsedAssignDisputeResolverInstruction<
     protocolConfig: TAccountMetas[0];
     /** Roster entry for `resolver`. `init` ⇒ assigning an already-assigned wallet fails. */
     disputeResolver: TAccountMetas[1];
-    /** Must be the protocol authority (the roster is authority-managed). */
+    /**
+     * Must be the protocol authority (the roster proposal is authority-bound;
+     * configured M-of-N approval arrives through remaining accounts).
+     */
     authority: TAccountMetas[2];
     systemProgram: TAccountMetas[3];
   };

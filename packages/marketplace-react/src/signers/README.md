@@ -37,13 +37,19 @@ const signer = signerFromWalletAccount(account, {
 // -> <AgencProvider config={{ signer, rpcUrl }}>
 ```
 
-`signerFromWalletAccount` serializes each transaction, hands it to the wallet's
-`solana:signTransaction` feature, and decodes the returned (possibly modified)
-signed transaction to recover **this** account's signature.
+`signerFromWalletAccount` sends one variadic `solana:signTransaction` request,
+requires one ordered response per input, and recovers **this** account's
+signature only after checking that the returned message is byte-identical and
+the signature verifies over it. A wallet that rewrites a transaction is
+rejected because the SDK submits the original message.
 
-> The forthcoming `useWalletSigner()` hook (A2) is expected to own the
-> connect/selection lifecycle and call `signerFromWalletAccount` internally —
-> these functions are its building blocks.
+Pass `network` or `chain` explicitly when an account supports more than one
+Solana chain. The returned signer carries that chain identity, and
+`AgencProvider` rejects a mismatch with its configured network.
+
+`useWalletSigner()` normalizes an application's connection state after it has
+resolved one of these signers; the application still owns wallet selection and
+connect/disconnect lifecycle.
 
 ## 2. Legacy `@solana/wallet-adapter` — `signerFromWalletAdapter`
 

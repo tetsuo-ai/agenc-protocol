@@ -161,6 +161,15 @@ export interface ReferrerCapability {
 export interface AgencProviderConfig {
   /** Target cluster; drives default RPC/indexer endpoint resolution. */
   network?: AgencNetwork;
+  /**
+   * Stable identity for an opaque/custom deployment. It is folded into every
+   * TanStack Query key in addition to the resolved network and endpoints.
+   * Supply this when `client`, `queryTransport`, or hook-level readers point at
+   * a deployment whose identity cannot be derived from public URLs. Use the
+   * same value during SSR/hydration and across reloads that share persisted
+   * query state; never place credentials in it.
+   */
+  cacheNamespace?: string;
   /** HTTP RPC endpoint. Overrides the network default. */
   rpcUrl?: string;
   /** WebSocket RPC endpoint (for subscriptions). Overrides the network default. */
@@ -191,6 +200,8 @@ export interface AgencProviderConfig {
 export interface AgencContextValue {
   /** Resolved target network. */
   network: AgencNetwork;
+  /** Stable deployment identity included in every query key and invalidation. */
+  cacheNamespace: string;
   /** The unified read transport (indexer-first, gPA fallback). */
   read: ReadTransport;
   /**

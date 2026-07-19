@@ -51,6 +51,104 @@ export class ResultUploadError extends Error {
   override name = "ResultUploadError";
 }
 
+export const DEFAULT_MAX_RESULT_UPLOAD_RESPONSE_BYTES = 64 * 1024;
+export const MAX_RESULT_URI_BYTES = 256;
+
+async function readBoundedResponse(
+  response: Response,
+  maxBytes: number,
+): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new ResultUploadError("result uploader response limit is invalid");
+  }
+  const declared = response.headers.get("content-length");
+  if (declared !== null) {
+    const length = Number(declared);
+    if (!Number.isSafeInteger(length) || length < 0) {
+      throw new ResultUploadError("result uploader returned an invalid content-length");
+    }
+    if (length > maxBytes) {
+      throw new ResultUploadError(
+        `result uploader response exceeds ${maxBytes} bytes`,
+      );
+    }
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new ResultUploadError(
+          `result uploader response exceeds ${maxBytes} bytes`,
+        );
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof ResultUploadError) throw error;
+    throw new ResultUploadError(
+      `could not read result uploader response: ${(error as Error).message}`,
+    );
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+export function validateResultUri(value: unknown): string {
+  if (typeof value !== "string" || value === "") {
+    throw new ResultUploadError(
+      'result uploader response must be JSON `{ "uri": "<string>" }`',
+    );
+  }
+  if (
+    value !== value.trim() ||
+    /[\u0000-\u001f\u007f]/u.test(value) ||
+    new TextEncoder().encode(value).byteLength > MAX_RESULT_URI_BYTES
+  ) {
+    throw new ResultUploadError("result uploader returned an unsafe result URI");
+  }
+  if (/^agenc:\/\/result\/sha256\/[0-9a-f]{64}$/.test(value)) return value;
+  if (/^ar:\/\/[A-Za-z0-9_-]{43}$/.test(value)) return value;
+  if (
+    /^ipfs:\/(?:\/)(?:Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58})(?:\/[A-Za-z0-9._~-]+)*\/?$/.test(
+      value,
+    ) &&
+    !value.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    return value;
+  }
+  let uri: URL;
+  try {
+    uri = new URL(value);
+  } catch {
+    throw new ResultUploadError("result uploader returned an invalid result URI");
+  }
+  if (
+    uri.protocol !== "https:" ||
+    uri.username !== "" ||
+    uri.password !== "" ||
+    uri.hostname === "" ||
+    uri.hash !== "" ||
+    uri.href !== value
+  ) {
+    throw new ResultUploadError(
+      "result uploader returned a non-canonical URI or unsupported content address",
+    );
+  }
+  return value;
+}
+
 /**
  * POST the result body to the HTTPS uploader; the response must be JSON
  * `{ "uri": "<string>" }`. Fails closed on any non-2xx status or bad shape —
@@ -61,12 +159,25 @@ export async function uploadResult(options: {
   body: Uint8Array;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  maxResponseBytes?: number;
 }): Promise<string> {
   const { uploaderUrl, body } = options;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const url = new URL(uploaderUrl);
-  if (url.protocol !== "https:") {
-    throw new ResultUploadError("resultUploader must be an https: URL");
+  let url: URL;
+  try {
+    url = new URL(uploaderUrl);
+  } catch {
+    throw new ResultUploadError("resultUploader must be an absolute https: URL");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hostname === ""
+  ) {
+    throw new ResultUploadError(
+      "resultUploader must be a credential-free https: URL",
+    );
   }
   let response: Response;
   try {
@@ -81,6 +192,10 @@ export async function uploadResult(options: {
         "content-type": "application/octet-stream",
         "idempotency-key": sha256Hex(body),
       },
+      // A POST redirect can replay the result bytes to an attacker-controlled
+      // destination (and can downgrade HTTPS to plaintext). Never delegate
+      // redirect handling to fetch; uploaders must answer directly.
+      redirect: "manual",
       signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
     });
   } catch (error) {
@@ -88,22 +203,45 @@ export async function uploadResult(options: {
       `result upload failed: ${(error as Error).message}`,
     );
   }
+  if (
+    response.type === "opaqueredirect" ||
+    (response.status >= 300 && response.status < 400)
+  ) {
+    throw new ResultUploadError("result uploader redirects are not permitted");
+  }
   if (!response.ok) {
     throw new ResultUploadError(
       `result uploader answered ${response.status} ${response.statusText}`,
     );
   }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!/^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|\s*$)/iu.test(contentType)) {
+    throw new ResultUploadError(
+      "result uploader response must have an application/json content type",
+    );
+  }
   let parsed: unknown;
   try {
-    parsed = await response.json();
-  } catch {
+    parsed = JSON.parse(
+      await readBoundedResponse(
+        response,
+        options.maxResponseBytes ?? DEFAULT_MAX_RESULT_UPLOAD_RESPONSE_BYTES,
+      ),
+    );
+  } catch (error) {
+    if (error instanceof ResultUploadError) throw error;
     throw new ResultUploadError("result uploader response was not JSON");
   }
-  const uri = (parsed as { uri?: unknown }).uri;
-  if (typeof uri !== "string" || uri.length === 0) {
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    Object.keys(parsed).length !== 1 ||
+    !("uri" in parsed)
+  ) {
     throw new ResultUploadError(
       'result uploader response must be JSON `{ "uri": "<string>" }`',
     );
   }
-  return uri;
+  return validateResultUri((parsed as { uri: unknown }).uri);
 }

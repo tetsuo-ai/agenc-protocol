@@ -10,7 +10,7 @@ import {
   type KeyPairSigner,
   type TransactionSigner,
 } from "@solana/kit";
-import { LiteSVM } from "litesvm";
+import type { LiteSVM } from "litesvm";
 import {
   createMarketplaceClient,
   type MarketplaceClient,
@@ -23,6 +23,7 @@ import {
 } from "../facade/moderation.js";
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../generated/index.js";
 import { createLiteSvmTransport } from "./litesvm-transport.js";
+import { loadLiteSvmPeer } from "./litesvm-peer.js";
 import { resolveTestingProgramSo } from "./program-asset.js";
 import { seedModerationConfig, seedProtocolConfig } from "./seed.js";
 
@@ -202,10 +203,10 @@ export async function startLocalMarketplace(
       `marketplace-sdk/testing: programPath does not exist: ${options.programPath}`,
     );
   }
-  const fundingLamports =
-    options.fundingLamports ?? DEFAULT_FUNDING_LAMPORTS;
+  const fundingLamports = options.fundingLamports ?? DEFAULT_FUNDING_LAMPORTS;
 
-  const svm = new LiteSVM();
+  const { LiteSVM: LiteSvmRuntime } = await loadLiteSvmPeer();
+  const svm = new LiteSvmRuntime();
   svm.addProgramFromFile(AGENC_COORDINATION_PROGRAM_ADDRESS, programPath);
   const clock = svm.getClock();
   clock.unixTimestamp = options.unixTimestamp ?? DEFAULT_UNIX_TIMESTAMP;

@@ -24,8 +24,6 @@ import {
   getU64Encoder,
   getU8Decoder,
   getU8Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -45,6 +43,11 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import {
+  getBorshStringDecoder,
+  getBorshStringEncoder,
+} from "../codecs/borshString";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -104,13 +107,13 @@ export function getUpdateAgentInstructionDataEncoder(): Encoder<UpdateAgentInstr
       [
         "endpoint",
         getOptionEncoder(
-          addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder()),
+          addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
         ),
       ],
       [
         "metadataUri",
         getOptionEncoder(
-          addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder()),
+          addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
         ),
       ],
       ["status", getOptionEncoder(getU8Encoder())],
@@ -125,11 +128,15 @@ export function getUpdateAgentInstructionDataDecoder(): Decoder<UpdateAgentInstr
     ["capabilities", getOptionDecoder(getU64Decoder())],
     [
       "endpoint",
-      getOptionDecoder(addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())),
+      getOptionDecoder(
+        addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+      ),
     ],
     [
       "metadataUri",
-      getOptionDecoder(addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())),
+      getOptionDecoder(
+        addDecoderSizePrefix(getBorshStringDecoder(), getU32Decoder()),
+      ),
     ],
     ["status", getOptionDecoder(getU8Decoder())],
   ]);

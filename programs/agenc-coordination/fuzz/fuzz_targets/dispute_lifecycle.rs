@@ -1,8 +1,9 @@
 //! Stateful fuzzing for the direct-resolver dispute lifecycle.
 //!
 //! The sequence model covers opening, accountable direct resolution, initiator
-//! cancellation, and permissionless expiry. It deliberately contains no voter,
-//! quorum, arbiter-capability, or arbiter-stake state.
+//! cancellation, and permissionless expiry. It deliberately contains no retired
+//! per-case arbiter vote/quorum, arbiter-capability, or arbiter-stake state; the
+//! direct protocol-authority path retains its configured-threshold approval bit.
 
 use crate::*;
 use proptest::prelude::*;
@@ -73,11 +74,12 @@ fn simulate_expiry_refund(
     SimulationResult::Success
 }
 
-fn role_can_resolve(role: ResolverRole) -> bool {
-    matches!(
-        role,
-        ResolverRole::ProtocolAuthority | ResolverRole::AssignedResolver
-    )
+fn role_can_resolve(role: ResolverRole, has_configured_threshold_approval: bool) -> bool {
+    match role {
+        ResolverRole::ProtocolAuthority => has_configured_threshold_approval,
+        ResolverRole::AssignedResolver => true,
+        _ => false,
+    }
 }
 
 proptest! {
@@ -127,13 +129,17 @@ proptest! {
                     DisputeAction::Resolve {
                         resolver_role,
                         has_rationale,
+                        has_configured_threshold_approval,
                         timestamp,
                         ..
                     } => {
                         dispute.status == dispute_status::ACTIVE
                             && task.status == task_status::DISPUTED
                             && dispute_resolution_window_open(&dispute, *timestamp)
-                            && role_can_resolve(*resolver_role)
+                            && role_can_resolve(
+                                *resolver_role,
+                                *has_configured_threshold_approval,
+                            )
                             && *has_rationale
                     }
                     DisputeAction::Cancel { by_initiator } => {
@@ -150,9 +156,15 @@ proptest! {
                         resolver_role,
                         approve,
                         has_rationale,
+                        has_configured_threshold_approval,
                         timestamp,
                     } => {
-                        let ruling = direct_ruling(*resolver_role, *approve, *has_rationale);
+                        let ruling = direct_ruling_with_threshold_approval(
+                            *resolver_role,
+                            *approve,
+                            *has_rationale,
+                            *has_configured_threshold_approval,
+                        );
                         simulate_resolve_dispute(
                             &mut dispute,
                             &mut task,

@@ -55,10 +55,12 @@ unsettled. Revisit only if the canary surface is ever expanded.
 ## D5 — No-deadline underfilled Collaborative tasks have no creator refund path (F-17)
 
 C-1's widened cancel requires a PAST deadline. A `deadline == 0` Collaborative
-task with `completions > 0 && current_workers == 0` keeps its escrow claimable
-by future workers forever — not a lock, by design: any worker may still claim
-and complete the remaining slots. A deadline-free task is a standing offer;
-the creator chose not to bound it. Creators who want an exit set a deadline.
+task with `completions > 0 && current_workers == 0` keeps its escrow funded and
+leaves remaining slots available indefinitely for eligible claim attempts — not
+a lock, by design. Each attempt must still pass every current task, worker,
+config, protocol, dependency/hire, moderation, stake/reputation, prior-claim,
+capacity, and funding gate. A deadline-free task is a standing offer; the creator
+chose not to bound it. Creators who want an exit set a deadline.
 
 ## D6 — F-12 preflight result: zero legacy disputes on mainnet
 

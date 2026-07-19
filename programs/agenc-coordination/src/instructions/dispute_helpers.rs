@@ -171,16 +171,16 @@ pub(crate) fn pay_dispute_marketplace_legs<'info>(
         .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
 }
 
-/// Validate the retired-voter/provenance invariant and exact peer-bundle
+/// Validate the legacy `total_voters` provenance byte and exact peer-bundle
 /// cardinality before any cleanup mutation. The accepted account count for 1–4
 /// total workers is therefore exactly 0, 3, 6, or 9.
 fn validate_dispute_peer_bundle_cardinality(
     current_workers: u8,
-    total_voters: u8,
+    dispute_provenance: u8,
     account_count: usize,
 ) -> Result<usize> {
     require!(
-        total_voters == 0 || total_voters == Dispute::INITIATOR_OUTCOME_COUNTER_MARKER,
+        dispute_provenance == 0 || dispute_provenance == Dispute::INITIATOR_OUTCOME_COUNTER_MARKER,
         CoordinationError::CorruptedData
     );
     require!(
@@ -376,7 +376,7 @@ fn settle_validated_worker_claim_bundle<'info>(
 /// implementation used by both dispute resolution and expiry.
 ///
 /// Validation is deliberately front-loaded for the whole account vector: the
-/// retired voter count, exact bundle stride, expected 1–4 worker cardinality,
+/// legacy provenance byte, exact bundle stride, expected 1–4 worker cardinality,
 /// and duplicate-worker set are checked before any claim or submission mutation.
 /// Each bundle then enforces canonical claim/submission PDAs and preserves both
 /// task-level and validation-config submission counters.
@@ -384,14 +384,14 @@ pub(crate) fn process_dispute_peer_bundles<'info>(
     task: &mut Task,
     task_key: &Pubkey,
     peer_accounts: &[AccountInfo<'info>],
-    total_voters: u8,
+    dispute_provenance: u8,
     primary_worker: Pubkey,
     mut validation_config: Option<&mut Account<'info, TaskValidationConfig>>,
     program_id: &Pubkey,
 ) -> Result<()> {
     validate_dispute_peer_bundle_cardinality(
         task.current_workers,
-        total_voters,
+        dispute_provenance,
         peer_accounts.len(),
     )?;
     check_duplicate_peer_workers(peer_accounts, primary_worker)?;
@@ -832,7 +832,7 @@ mod tests {
             .is_err());
         }
 
-        // Retired voter accounts can never be reinterpreted as peer bundles.
+        // A legacy nonzero voter-count encoding can never authorize peer-bundle parsing.
         assert!(validate_dispute_peer_bundle_cardinality(1, 1, 0).is_err());
     }
 
