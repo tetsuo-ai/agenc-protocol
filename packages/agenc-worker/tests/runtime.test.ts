@@ -27,7 +27,12 @@ import {
   type WorkerContext,
   type WorkerLogEvent,
 } from "../src/runtime.js";
-import { bytesToHex, saveState, emptyState } from "../src/state.js";
+import {
+  acquireStateLock,
+  bytesToHex,
+  saveState,
+  emptyState,
+} from "../src/state.js";
 
 const WALLET = address("7Y9dRMi8ZtyDjLdSpzUCsxDgHooZTfp3RyYs2eZWmL39");
 const OTHER = address("F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc");
@@ -67,12 +72,21 @@ function protocolConfigData(minAgentStake: bigint): Uint8Array {
       protocolPaused: false,
       disabledTaskTypeMask: 0,
       surfaceRevision: 2,
-      multisigOwners: [DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR, DEFAULT_ADDR],
+      multisigOwners: [
+        DEFAULT_ADDR,
+        DEFAULT_ADDR,
+        DEFAULT_ADDR,
+        DEFAULT_ADDR,
+        DEFAULT_ADDR,
+      ],
     }),
   );
 }
 
-function agentRegistrationData(authority: Address, agentId: Uint8Array): Uint8Array {
+function agentRegistrationData(
+  authority: Address,
+  agentId: Uint8Array,
+): Uint8Array {
   return new Uint8Array(
     getAgentRegistrationEncoder().encode({
       agentId,
@@ -155,7 +169,8 @@ async function registrationHarness(options: {
     client: { registerAgent } as unknown as MarketplaceClient,
     signer: { address: WALLET } as TransactionSigner,
     gpa: { getProgramAccounts: async () => [] } as never,
-    readAccount: async (addr: Address) => (addr === configPda ? configData : null),
+    readAccount: async (addr: Address) =>
+      addr === configPda ? configData : null,
     stateDir,
     log: (event) => events.push(event),
     ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
@@ -193,6 +208,19 @@ describe("active worker policy preflight", () => {
   });
 });
 
+describe("runtime state lock", () => {
+  it("runTickOnce refuses a second active owner before any transaction", async () => {
+    const { ctx, registerAgent } = await registrationHarness({});
+    const release = acquireStateLock(ctx.stateDir);
+    try {
+      await expect(runTickOnce(ctx)).rejects.toThrow(/already active/);
+      expect(registerAgent).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+});
+
 describe("registrationFundingRequirement", () => {
   it("sums stake + agent/claim/submission rents + fee headroom (~0.021 SOL on mainnet)", () => {
     const required = registrationFundingRequirement(MAINNET_MIN_STAKE);
@@ -223,7 +251,9 @@ describe("ensureRegistered (fresh agent)", () => {
   });
 
   it("fails registration when the ProtocolConfig cannot be read — no transaction is sent", async () => {
-    const { ctx, registerAgent } = await registrationHarness({ configData: null });
+    const { ctx, registerAgent } = await registrationHarness({
+      configData: null,
+    });
     await expect(ensureRegistered(ctx)).rejects.toThrow(/refusing to guess/);
     expect(registerAgent).not.toHaveBeenCalled();
   });

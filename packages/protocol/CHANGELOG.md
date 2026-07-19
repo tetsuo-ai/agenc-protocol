@@ -1,5 +1,17 @@
 # @tetsuo-ai/protocol
 
+## 0.4.0 (unreleased candidate)
+
+### Release coordination
+
+- Regenerate the public artifacts for the 98-instruction revision-5 production
+  candidate. The surface adds the atomic `stamp_release_surface` release boundary
+  and orphan-child recovery while keeping the three private-ZK instructions out
+  of the production IDL.
+- This package describes a pending program artifact, not the revision-4 binary
+  currently on mainnet. Publish 0.4.0 only with the coordinated revision-5 program
+  and SDK 0.12.0 cutover; published protocol 0.3.0 remains the live-wire artifact.
+
 ## 0.3.0
 
 ### Minor Changes

@@ -38,6 +38,8 @@ export class AgencConfigError extends Error {
 export const DEFAULT_PRICE_LAMPORTS = "1000000"; // 0.001 SOL
 export const DEFAULT_OPERATOR_FEE_BPS = 1000; // 10% — MAX_OPERATOR_FEE_BPS is 2000
 export const DEFAULT_REFERRER_FEE_BPS = 500; // 5% — MAX_REFERRER_FEE_BPS is 2000
+const U64_MAX = 18_446_744_073_709_551_615n;
+const MIN_LISTING_PRICE_LAMPORTS = 1_000n;
 
 export function defaultConfig(
   name: string,
@@ -97,9 +99,13 @@ export function parseConfig(body: string, filePath: string): AgencConfig {
   const listing = parsed.listing;
   if (isRecord(listing)) {
     if (typeof listing.priceLamports === "string") {
-      if (!/^\d+$/u.test(listing.priceLamports)) {
+      if (
+        !/^(0|[1-9]\d*)$/u.test(listing.priceLamports) ||
+        BigInt(listing.priceLamports) < MIN_LISTING_PRICE_LAMPORTS ||
+        BigInt(listing.priceLamports) > U64_MAX
+      ) {
         throw new AgencConfigError(
-          `${filePath}: "listing.priceLamports" must be a decimal lamport string`,
+          `${filePath}: "listing.priceLamports" must be a canonical decimal string (${MIN_LISTING_PRICE_LAMPORTS}..${U64_MAX})`,
         );
       }
       base.listing.priceLamports = listing.priceLamports;

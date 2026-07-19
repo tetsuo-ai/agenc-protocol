@@ -21,9 +21,9 @@ changes. Last reconciled with the deployed revision and candidate artifacts on
   accounts / 104 events / 354 errors.
   The 25-instruction `mainnet-canary` build is a restricted rehearsal/fallback
   build, CI-frozen, NOT live — do not threat-model it as the production surface.
-- Pending revision-5 candidate: the default production artifact contains 97
-  instructions / 43 accounts / 98 events / 388 errors. Explicit development
-  `private-zk` has 100 instructions and the frozen canary has 25. The candidate
+- Pending revision-5 candidate: the default production artifact contains 98
+  instructions / 43 accounts / 99 events / 393 errors. Explicit development
+  `private-zk` has 101 instructions and the frozen canary has 25. The candidate
   is not live until a separately reviewed Squads upgrade and revision stamp.
 - Singletons: `BidMarketplaceConfig`, `ModerationConfig`, and `GovernanceConfig`
   INITIALIZED (sane params); `ZkConfig` NOT initialized — ZK private completion
@@ -33,7 +33,7 @@ changes. Last reconciled with the deployed revision and candidate artifacts on
   (`rationale_hash` + bounded `rationale_uri`). Arbiter voting / `vote_dispute`
   is retired (P6.3) and absent from the IDL — no quorum/vote path exists to
   attack.
-- Errors are append-only by policy: 354 variants in deployed revision 4 and 388
+- Errors are append-only by policy: 354 variants in deployed revision 4 and 393
   in the candidate artifact. Existing numeric codes are not reordered.
 - Legacy state: the 169 pre-upgrade Task accounts were migrated 2026-06-11
   (schema-0 vs schema-1); migrations are done, not pending.

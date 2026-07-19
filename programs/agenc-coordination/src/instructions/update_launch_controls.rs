@@ -29,12 +29,41 @@ pub const KEEP_DISABLED_TASK_TYPE_MASK: u8 = 0xFF;
 /// Audit F-18: `surface_revision` sentinel meaning "keep the live value".
 pub const KEEP_SURFACE_REVISION: u16 = u16::MAX;
 
-/// Update launch controls AND stamp the deployed surface revision (P6.5).
+fn legacy_surface_revision_write_allowed(surface_revision: u16) -> bool {
+    #[cfg(feature = "mainnet-canary")]
+    {
+        surface_revision == 0
+            && crate::instructions::migrate::is_valid_surface_revision(surface_revision)
+    }
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        crate::instructions::migrate::is_valid_surface_revision(surface_revision)
+            && surface_revision != ProtocolConfig::SURFACE_REVISION_CURRENT
+    }
+}
+
+fn release_unpause_allowed(protocol_paused: bool, surface_revision: u16) -> bool {
+    #[cfg(feature = "mainnet-canary")]
+    {
+        // The restricted canary intentionally has no production stamp path and
+        // remains on the conservative revision 0 surface.
+        let _ = protocol_paused;
+        let _ = surface_revision;
+        true
+    }
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        protocol_paused || surface_revision == ProtocolConfig::SURFACE_REVISION_CURRENT
+    }
+}
+
+/// Update launch controls and historical/conservative surface revisions (P6.5).
 ///
 /// `surface_revision` is the operator-declared instruction-surface stamp the SDK's
 /// `getDeployedSurface` reads to advertise capabilities. It is gated on the existing
-/// multisig config-update authority — the same gate as the pause/disable controls —
-/// so stamping the live surface needs no new instruction and no new authority path.
+/// multisig config-update authority — the same gate as the pause/disable controls.
+/// The current production revision is established only by
+/// `stamp_release_surface`, which atomically binds the reviewed release accounts.
 ///
 /// NOTE: this instruction takes a typed `Account<ProtocolConfig>`, so the live
 /// mainnet config MUST already have been reallocated to the P6.5 layout by
@@ -43,8 +72,15 @@ pub const KEEP_SURFACE_REVISION: u16 = u16::MAX;
 ///
 /// Allowed `surface_revision` values: `0` (unstamped / conservative),
 /// `SURFACE_REVISION_FULL`, `SURFACE_REVISION_BATCH2`, `SURFACE_REVISION_BATCH3`,
-/// `SURFACE_REVISION_BATCH4`, or `SURFACE_REVISION_AUDIT_HARDENING`. Unknown values are
-/// rejected so an operator cannot stamp a surface the SDK does not understand.
+/// `SURFACE_REVISION_BATCH4`. The current revision is rejected here so this legacy
+/// path cannot bypass the atomic release boundary. In the restricted canary build,
+/// explicit writes are limited to `0`; `KEEP_SURFACE_REVISION` remains available
+/// for pause/mask-only changes.
+///
+/// The full production build may only transition to `protocol_paused = false`
+/// when the resulting stored revision is CURRENT. Operators can still pause and
+/// roll back to a conservative historical revision, but must complete a new
+/// atomic release stamp before they can unpause again.
 ///
 /// BATCH-4 NOTE: stamping `SURFACE_REVISION_BATCH4` is ENFORCING, not advisory —
 /// it turns the goods market on (`require_goods_enabled` gates every goods
@@ -69,6 +105,20 @@ pub fn handler(
     require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
 
     let config = &mut ctx.accounts.protocol_config;
+    let next_surface_revision = if surface_revision == KEEP_SURFACE_REVISION {
+        config.surface_revision
+    } else {
+        require!(
+            legacy_surface_revision_write_allowed(surface_revision),
+            CoordinationError::InvalidSurfaceRevision
+        );
+        surface_revision
+    };
+    require!(
+        release_unpause_allowed(protocol_paused, next_surface_revision),
+        CoordinationError::ReleaseUnpauseRequiresCurrentSurface
+    );
+
     config.protocol_paused = protocol_paused;
     // Audit F-18: KEEP sentinels leave the field untouched (stale-read hazard);
     // explicit values validate + apply exactly as before.
@@ -76,13 +126,7 @@ pub fn handler(
         validate_disabled_task_type_mask(disabled_task_type_mask)?;
         config.disabled_task_type_mask = disabled_task_type_mask;
     }
-    if surface_revision != KEEP_SURFACE_REVISION {
-        require!(
-            crate::instructions::migrate::is_valid_surface_revision(surface_revision),
-            CoordinationError::InvalidSurfaceRevision
-        );
-        config.surface_revision = surface_revision;
-    }
+    config.surface_revision = next_surface_revision;
 
     emit!(LaunchControlsUpdated {
         authority: ctx.accounts.authority.key(),
@@ -92,4 +136,49 @@ pub fn handler(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_path_cannot_establish_the_current_release_revision() {
+        assert!(!legacy_surface_revision_write_allowed(
+            ProtocolConfig::SURFACE_REVISION_CURRENT
+        ));
+        assert!(legacy_surface_revision_write_allowed(0));
+
+        #[cfg(feature = "mainnet-canary")]
+        for revision in 1..ProtocolConfig::SURFACE_REVISION_CURRENT {
+            assert!(!legacy_surface_revision_write_allowed(revision));
+        }
+
+        #[cfg(not(feature = "mainnet-canary"))]
+        for revision in 1..ProtocolConfig::SURFACE_REVISION_CURRENT {
+            assert!(legacy_surface_revision_write_allowed(revision));
+        }
+    }
+
+    #[test]
+    fn full_build_cannot_unpause_before_the_atomic_release_stamp() {
+        #[cfg(feature = "mainnet-canary")]
+        {
+            assert!(release_unpause_allowed(false, 0));
+        }
+
+        #[cfg(not(feature = "mainnet-canary"))]
+        {
+            assert!(release_unpause_allowed(true, 0));
+            assert!(!release_unpause_allowed(false, 0));
+            assert!(!release_unpause_allowed(
+                false,
+                ProtocolConfig::SURFACE_REVISION_BATCH4
+            ));
+            assert!(release_unpause_allowed(
+                false,
+                ProtocolConfig::SURFACE_REVISION_CURRENT
+            ));
+        }
+    }
 }

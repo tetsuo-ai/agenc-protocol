@@ -14,7 +14,13 @@
  *
  * @module tools/prepare
  */
-import { createNoopSigner, none, some, type Address } from "@solana/kit";
+import {
+  address,
+  createNoopSigner,
+  none,
+  some,
+  type Address,
+} from "@solana/kit";
 import { facade, findCreatorCompletionBondPda, values } from "@tetsuo-ai/marketplace-sdk";
 import {
   MarketplaceToolError,
@@ -42,6 +48,19 @@ function hex32(value: string, field: string, tool: string): Uint8Array {
     out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
   }
   return out;
+}
+
+/** Validate a user-supplied base58 account before handing it to an SDK facade. */
+function accountAddress(value: string, field: string, tool: string): Address {
+  try {
+    return address(value);
+  } catch {
+    throw new MarketplaceToolError(
+      "BAD_ADDRESS",
+      `${tool}: ${field} must be a valid base58 Solana address`,
+      tool,
+    );
+  }
 }
 
 const MAX_FEE_BPS = 2_000;
@@ -563,6 +582,7 @@ interface PrepareClaimArgs {
   worker: string;
   workerAuthority: string;
   jobSpecHash: string;
+  parentTask?: string;
 }
 
 const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
@@ -591,6 +611,11 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
         type: "string",
         description: "The task's pinned job-spec hash as 64 hex chars (BLOCK-gate binding).",
       },
+      parentTask: {
+        type: "string",
+        description:
+          "Canonical parent Task PDA for a dependent task. Omit only for an independent task; when present it is appended as remaining_accounts[0].",
+      },
     },
   },
   async handler(args) {
@@ -600,6 +625,15 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
       worker: args.worker as Address,
       authority,
       jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_claim"),
+      ...(args.parentTask !== undefined
+        ? {
+            parentTask: accountAddress(
+              args.parentTask,
+              "parentTask",
+              "prepare_claim",
+            ),
+          }
+        : {}),
     });
     return projectInstruction(ix as unknown as BuiltInstructionLike);
   },

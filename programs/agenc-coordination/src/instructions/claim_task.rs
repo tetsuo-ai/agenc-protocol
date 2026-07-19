@@ -182,13 +182,14 @@ pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
 
     // FIX 4 (anti-slop contest entry deposit): a contest-configured claim carries
     // a refundable CONTEST_ENTRY_DEPOSIT_LAMPORTS as SURPLUS LAMPORTS on the claim
-    // PDA (no TaskClaim layout change). Refunded in full on every exit where the
-    // worker submitted (accept/reject/ghost-split close the claim with all its
-    // lamports to the worker — losers lose nothing); forfeited to the protocol
-    // treasury on no-show exits (expire_claim / reclaim_terminal_claim). Prices
-    // the slot-squat DoS that fully-refundable claim rent made free. Only contest
-    // claims pay; every other task type (and schema-0) is unchanged. (Canary
-    // builds are contest-incapable by construction, so this branch is dead there.)
+    // PDA (no TaskClaim layout change). Normal accept/reject/ghost-split
+    // settlement refunds it in full, as does terminal cleanup of a still-Submitted
+    // Collaborative straggler. Proven no-show expiry and terminal cleanup of an
+    // empty or Rejected abandoned claim forfeit the surplus to the protocol
+    // treasury. This prices the slot-squat DoS that fully-refundable claim rent
+    // made free. Only contest claims pay; every other task type (and schema-0) is
+    // unchanged. (Canary builds are contest-incapable by construction, so this
+    // branch is dead there.)
     if is_contest_configured_task(&ctx.accounts.task) {
         anchor_lang::system_program::transfer(
             CpiContext::new(

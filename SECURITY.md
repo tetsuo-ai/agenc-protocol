@@ -47,8 +47,8 @@ by the bug bounty (`docs/BUG_BOUNTY.md`).
 
 Scope must distinguish the deployed and candidate contracts. Mainnet currently
 runs revision 4 (99 instructions, deployed commit `097ded1`); current production
-source is an undeployed revision-5 candidate (97 instructions). The explicit
-100-instruction `private-zk` build is development-only and is rejected by the
+source is an undeployed revision-5 candidate (98 instructions). The explicit
+101-instruction `private-zk` build is development-only and is rejected by the
 production deployment rail.
 
 ### In scope — TIER 1: program money paths (highest priority)
@@ -263,7 +263,7 @@ Multisig:     7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY   (program SQDS4ep65T
 No individual key can now unilaterally push an upgrade — the escrow-custodying
 program requires 2-of-3 signatures for any bytecode change. The migration runbook
 and full record are in `docs/UPGRADE_AUTHORITY.md`. Revision 5 is also blocked
-on a separately reviewed 73,880-byte `ExtendProgramChecked` action through
+on a separately reviewed 93,384-byte `ExtendProgramChecked` action through
 Squads CPI; extension and upgrade must execute in different slots, and the
 deployment rail refuses implicit auto-extension. **Residual (tracked, not yet
 done):** the three member keys are currently co-located on one operator host;

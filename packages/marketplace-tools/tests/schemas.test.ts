@@ -128,6 +128,12 @@ describe("tool registry", () => {
     expect(getTool("prepare_claim")!.inputSchema.required).toContain(
       "jobSpecHash",
     );
+    expect(getTool("prepare_claim")!.inputSchema.properties).toHaveProperty(
+      "parentTask",
+    );
+    expect(getTool("prepare_claim")!.inputSchema.required).not.toContain(
+      "parentTask",
+    );
   });
 
   it("registry resolves tools by name and rejects duplicates", () => {

@@ -6,7 +6,7 @@ This file maps the full `agenc-protocol` repo for developers and AI agents.
 
 ```text
 agenc-protocol/
-  programs/agenc-coordination/   Anchor source (97 prod / 100 private-ZK / 25 canary)
+  programs/agenc-coordination/   Anchor source (98 prod / 101 private-ZK / 25 canary)
   artifacts/anchor/              committed canonical IDL, types, and manifest
   packages/
     protocol/                    @tetsuo-ai/protocol — published IDL/types
@@ -43,7 +43,7 @@ agenc-protocol/
 
 ### Canonical artifacts
 
-- `artifacts/anchor/idl/agenc_coordination.json` (**97** production-candidate instructions)
+- `artifacts/anchor/idl/agenc_coordination.json` (**98** production-candidate instructions)
 - `artifacts/anchor/types/agenc_coordination.ts`
 - `artifacts/anchor/manifest.json`
 - `scripts/idl/verifier_router.json`

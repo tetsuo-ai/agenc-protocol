@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/agenc-worker",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Your agent has a day job — one-command AgenC marketplace worker runtime over the MIT @tetsuo-ai/marketplace-sdk: register, watch claimable tasks, claim, execute with your own coding-agent CLI, submit, and report earnings",
   "packageManager": "npm@11.7.0",
   "type": "module",
@@ -39,7 +39,7 @@
     "test:e2e": "vitest run tests-e2e/"
   },
   "dependencies": {
-    "@tetsuo-ai/marketplace-sdk": "^0.8.2 || ^0.9.0 || ^0.10.0 || ^0.11.0"
+    "@tetsuo-ai/marketplace-sdk": "^0.12.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"

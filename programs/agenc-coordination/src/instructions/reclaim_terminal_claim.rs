@@ -1,22 +1,24 @@
-//! Batch 3 WS-CONTEST fix round (FIX 1b): reclaim a no-show claim stranded on
+//! Batch 3 WS-CONTEST fix round (FIX 1b): reclaim an unsettled claim stranded on
 //! an already-terminal task.
 //!
 //! A worker who claims but never submits can normally be `expire_claim`-ed, but
 //! that path requires a NON-terminal task (it touches the escrow, which every
 //! terminal path closes). A contest that settles via accept or ghost-split — or
-//! any multi-worker task that completes/cancels — can therefore leave a
-//! claimed-but-never-submitted claim behind FOREVER: `current_workers > 0`
-//! bricks `close_task` (Task PDA rent + child configs strand), and the no-show
-//! worker's `active_tasks` slot leaks (10 leaks brick the agent).
+//! any multi-worker task that completes/cancels — can therefore leave an
+//! unsettled claim behind FOREVER: `current_workers > 0` bricks `close_task`
+//! (Task PDA rent + child configs strand), and the worker's `active_tasks` slot
+//! leaks (10 leaks brick the agent). Completing Collaborative accepts can also
+//! leave Rejected or still-Submitted peer records that no non-terminal path can
+//! settle.
 //!
 //! `reclaim_terminal_claim` is the permissionless un-bricker:
 //! - requires a TERMINAL task (`Completed`/`Cancelled`), a non-completed claim,
-//!   and PROOF there is no live submission: the seeds-derived
-//!   `["task_submission", claim]` address must be system-owned + zero-data
-//!   (unfakeable — same evidence rule as `expire_claim`);
-//! - closes the claim: its rent-exempt minimum to the WORKER, any surplus (the
-//!   contest entry deposit — FIX 4) FORFEITED to the protocol treasury (a
-//!   no-show exit; never the creator);
+//!   and a canonical submission PDA proving an empty/no-submission record, a
+//!   Rejected submission, or a still-Submitted Collaborative straggler after
+//!   completion;
+//! - closes the claim and any eligible live submission to the worker. Empty and
+//!   Rejected forms forfeit claim surplus to the treasury; Submitted
+//!   Collaborative stragglers receive the full claim balance;
 //! - decrements `task.current_workers` and the worker's `active_tasks`;
 //! - takes NO escrow account (closed by then) and pays NO cleanup reward.
 //!
@@ -75,9 +77,11 @@ pub struct ReclaimTerminalClaim<'info> {
     /// made for this claim, or it was already closed together with the claim by
     /// a settlement path — in which case THIS claim would not exist) OR hold a
     /// REJECTED submission (audit F-3 — then its rent is returned to the worker
-    /// and it is tombstoned here, hence `mut`). A live program-owned submission
-    /// in any other state means the claim is still settleable by the normal
-    /// paths and must not be short-circuited.
+    /// and it is tombstoned here, hence `mut`), OR hold a still-SUBMITTED
+    /// Collaborative straggler after the task completed (its validation debt is
+    /// settled here). A live program-owned submission in any other shape means
+    /// the claim is still settleable by the normal paths and must not be
+    /// short-circuited.
     /// CHECK: address pinned by seeds; owner/data inspected in the handler.
     #[account(
         mut,
@@ -118,8 +122,10 @@ pub struct ReclaimTerminalClaim<'info> {
     )]
     pub treasury: UncheckedAccount<'info>,
 
-    /// CHECK: receives the claim's rent-exempt minimum — validated to be the
-    /// worker authority (stored pubkey; no caller-supplied-account trust).
+    /// Receives the eligible claim refund (rent minimum for an empty or Rejected
+    /// record; full balance for a Submitted Collaborative straggler) and any
+    /// closed submission balance. No caller-supplied-account trust.
+    /// CHECK: validated against `worker.authority`; used only as a close/refund recipient.
     #[account(
         mut,
         constraint = rent_recipient.key() == worker.authority @ CoordinationError::InvalidRentRecipient
@@ -253,7 +259,7 @@ pub fn handler(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         timestamp: clock.unix_timestamp,
     });
 
-    // Close the claim: remaining lamports (the rent) to the worker authority.
+    // Close the claim: its remaining eligible balance to the worker authority.
     ctx.accounts
         .claim
         .close(ctx.accounts.rent_recipient.to_account_info())?;

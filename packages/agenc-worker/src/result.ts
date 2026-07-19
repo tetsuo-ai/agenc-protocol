@@ -24,7 +24,9 @@ export function sha256Hex(data: Uint8Array): string {
  */
 export function resultPlaceholderUri(hashHex: string): string {
   if (!/^[0-9a-f]{64}$/.test(hashHex)) {
-    throw new Error("resultPlaceholderUri requires a 64-char lowercase sha256 hex");
+    throw new Error(
+      "resultPlaceholderUri requires a 64-char lowercase sha256 hex",
+    );
   }
   return `agenc://result/sha256/${hashHex}`;
 }
@@ -37,7 +39,9 @@ export function resultPlaceholderUri(hashHex: string): string {
 export function resultDataFromHashHex(hashHex: string): Uint8Array {
   const bytes = new TextEncoder().encode(hashHex);
   if (bytes.length !== 64) {
-    throw new Error(`resultData must be exactly 64 bytes (got ${bytes.length})`);
+    throw new Error(
+      `resultData must be exactly 64 bytes (got ${bytes.length})`,
+    );
   }
   return bytes;
 }
@@ -70,7 +74,13 @@ export async function uploadResult(options: {
       method: "POST",
       // Uint8Array is a valid fetch body; the cast keeps DOM lib types out.
       body: body as unknown as NonNullable<RequestInit["body"]>,
-      headers: { "content-type": "application/octet-stream" },
+      // A crash after the uploader commits but before the response is persisted
+      // retries these exact bytes. Uploaders should key this standard header to
+      // the content hash and return the same URI for duplicate requests.
+      headers: {
+        "content-type": "application/octet-stream",
+        "idempotency-key": sha256Hex(body),
+      },
       signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
     });
   } catch (error) {

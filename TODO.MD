@@ -40,17 +40,20 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 
 ---
 
-## P0 — Blockers for any full-surface (99-ix) deploy
+## P0 — Blockers for the revision-5 production (98-ix) deploy
 
 > **ALL P0 ITEMS DONE (2026-07-18)** — F-1 `4b70630`, F-2 `aa6aae5`, F-3
-> `cc8870e`, F-5 `b3eb824` (F-6 closed by on-chain verification). Gates: 409
-> Rust unit, 290 litesvm, 520 SDK tests, clippy default+canary, artifacts +
-> canary freeze + IDL reference all green. Deploy choreography for this upgrade
+> `cc8870e`, F-5 `b3eb824` (F-6 closed by on-chain verification). The current
+> repository gates (Rust profiles, compiled-program integration, SDK/workspace,
+> deployment rails, artifacts, canary freeze, and IDL reference drift) must all
+> be green at the release commit. Deploy choreography for this upgrade
 > package: wire changes are `apply_initiator_slash` (task account removed),
 > `cancel_task` / `expire_reject_frozen` (bond accounts optional → required),
 > `reclaim_terminal_claim` / `apply_dispute_slash` (writable flags) — all
-> non-canary. Deploy = multisig binary upgrade → `surface_revision` 5 stamp →
-> coordinated SDK/package minor releases.
+> non-canary. Deploy = multisig binary upgrade → account sweep/config init →
+> publish + fetch-verify the reviewed compact on-chain IDL → final atomic
+> `stamp_release_surface` revision-5 boundary → coordinated SDK/package minor
+> releases.
 
 ### [x] F-1 — `cancel_task` no-show bond forfeit must be bound to the live no-show claimant (HIGH, full-surface)
 
@@ -107,11 +110,12 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
   (4) `reclaim_terminal_claim` refuses a slash-pending deferred claim when the
   bound dispute is supplied (new error 6357 `ClaimSlashPending`).
   litesvm: `slash-finalizer-close-race.test.mjs`.
-  **Disclosed residual (unchanged)**: the reclaim guard is not omission-proof —
-  a griefer can omit the dispute account, reclaim an InProgress-originated
-  deferred claim, and close_task → brick. The worker can always front-run with
-  `apply_dispute_slash` (7-day window); the omission-proof alternative (carving
-  a pending-slash flag from `Task._reserved`) stays rejected (schema retirement).
+  **FOLLOW-UP RESOLVED 2026-07-18 (commit `8ca868d`)**: the Task now records a
+  durable pending-worker-slash bit in its reserved schema. Because the Task is a
+  required `reclaim_terminal_claim` account, the reclaim guard reads that bit
+  directly and is omission-proof; callers can no longer hide slash debt by
+  omitting a Dispute remaining account. The dedicated slash finalizer clears the
+  bit only after revalidating and settling the bound claim.
 - **Problem** (original entry): immediately after `resolve_dispute`, the task
   meets every `close_task` precondition. Destroying the Task PDA permanently
   bricks `apply_dispute_slash` and `apply_initiator_slash`.
@@ -160,6 +164,13 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
 
 ### [x] F-3 — Close the completing-accept orphan gaps (MEDIUM, full-surface)
 
+- **FOLLOW-UP RESOLVED 2026-07-18 (current candidate)**: completing
+  Collaborative accepts are intentionally exempt from the sole-live-submission
+  guard. A still-Submitted peer now exits through `reclaim_terminal_claim`,
+  which settles both validation counters and returns the full claim/submission
+  balance. The guard and its fail-first test remain for completing
+  **non-Collaborative** manual/quorum tasks; Collaborative coverage now asserts
+  successful completion followed by terminal peer cleanup.
 - **RESOLVED 2026-07-18 (commit `cc8870e`)**: (a) `validate_task_result`'s accept
   branch now calls `validate_completing_accept_sole_submission` before the
   counter decrements, mirroring the CreatorReview accept paths; (b)
@@ -168,12 +179,7 @@ tests, and a "done when" checklist. Do not mark an item done while any of its
   bounced submission's rent to the worker (`task_submission` marked `mut`,
   non-canary). litesvm: `completing-accept-orphan.test.mjs` covers both
   scenarios (incl. the litesvm AlreadyProcessed blockhash gotcha on retries).
-- **Problem (a)** (original entry): `validate_task_result`'s accept branch has no
-  `validate_completing_accept_sole_submission` — a quorum/attestation completing
-  accept flips the task to Completed while peer submissions/claims are live,
-  stranding them with no exit.
-
-- **Problem (a)**: `validate_task_result`'s accept branch has no
+- **Problem (a) (original entry)**: `validate_task_result`'s accept branch had no
   `validate_completing_accept_sole_submission` — a quorum/attestation completing
   accept flips the task to Completed while peer submissions/claims are live,
   stranding them with no exit (validate/reject/expire need non-terminal;
@@ -551,27 +557,25 @@ revert-sensitive tests; each commit is independently gate-green.
 
 ### [x] S-9 — Documentation-only residuals
 Recorded in `docs/DESIGN_DECISIONS.md`: D8 (quorum is friction, not Byzantine
-resistance), D9 (governance vote-weight recyclability — needs redesign, not a
-patch), D10 (resolver leg conflict bounded by fee caps), D11 (V-2 same-round
-revote tombstone wedge), D12 (durable-submission dispute with closed claim —
-preflight scan flags it), D13 above.
+resistance), D9 (governance stake remains locked through an election), D10
+(settlement beneficiaries cannot resolve), D11 (V-2 same-round revote tombstone
+wedge), D12 (every dispute binds a live claim and exitable task state), and D13
+(proof dependencies deliberately do not gate the sole ghost/frozen exits).
 
 ---
 
-## Informational — accepted design decisions to DOCUMENT (no code change)
+## Informational — reviewed decision index
 
-All four are now recorded as D1–D4 in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)
-(with D5–D7 added for F-17, the F-12 preflight result, and the F-2 reclaim
-omission residual; D8–D13 added by the 2026-07 swarm wave). Kept here as the
-short index:
+The current D1–D4 status is recorded in
+[docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) (with D5 onward covering
+later findings and reviewed trade-offs). Kept here as the short index:
 
-- **D1** — Canary surface has no timeout exit from `PendingValidation` (mutual
-  lock, frozen-surface design).
-- **D2** — M-2 trade-off: creator must reject stragglers before the completing
-  accept; an absent creator then locks everyone (previously: one orphan).
-- **D3** — Schema-0 completing-accept orphan accepted for legacy tasks
-  (`live_submissions` unmaintained there; counter-drift risk on the 169+
-  legacy accounts outweighs).
+- **D1** — Canary `PendingValidation` timeout resolved through the frozen
+  `accept_task_result` surface with strict task-shape and recipient checks.
+- **D2** — Collaborative completing accepts may leave Submitted peers because
+  `reclaim_terminal_claim` now provides their permissionless full-refund exit.
+- **D3** — The same terminal straggler cleanup covers schema-0 Collaborative
+  tasks without fabricating legacy `live_submissions` counters.
 - **D4** — `accept_task_result` `hire_record` optionality stays on the frozen
   canary surface; moot there (no hires exist on canary).
 
@@ -582,7 +586,7 @@ short index:
 | ID | Priority | Owner | Status |
 |----|----------|-------|--------|
 | F-1 | ~~P0~~ DONE (4b70630) | | ☒ |
-| F-2 | ~~P0~~ DONE (aa6aae5) — omission residual disclosed in-entry | | ☒ |
+| F-2 | ~~P0~~ DONE (aa6aae5; omission-proof follow-up 8ca868d) | | ☒ |
 | F-3 | ~~P0~~ DONE (cc8870e) | | ☒ |
 | F-5 | ~~P0~~ DONE (b3eb824) | | ☒ |
 | F-6 | ~~P0~~ CLOSED — init already executed with sane params (verified on-chain 2026-07-17) | | ☒ |

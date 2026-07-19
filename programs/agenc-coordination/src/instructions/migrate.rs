@@ -15,8 +15,9 @@ use anchor_lang::system_program;
 /// Protocol-config migration to the P6.5 surface-versioning layout AND the version
 /// bump. A historical pre-P6.5 `ProtocolConfig` is exactly `OLD_CONFIG_SIZE`
 /// (349B); this reallocs it up to `SIZE` (351B) and zero-fills the appended
-/// `surface_revision` (so the migrated surface reads as "unstamped" / 0 until an
-/// operator declares it via `update_launch_controls`). Multisig/upgrade-authority
+/// `surface_revision` (so the migrated surface reads as "unstamped" / 0 until the
+/// production-only atomic release boundary establishes CURRENT; the legacy launch
+/// controls may select only older conservative revisions). Multisig/upgrade-authority
 /// gated, NOT permissionless.
 ///
 /// `protocol_config` is RAW (`UncheckedAccount`) on purpose — a typed

@@ -53,8 +53,9 @@ spl-associated-token-account-client = { version = "=2.0.0", optional = true }
 indexmap = "=2.12.0"
 
 # SHA-256 hashing is shared by the verifier journal and the full-surface bid
-# acceptance CAS. Keep it available even when `private-zk` is disabled so a
-# no-default-features full build cannot silently lose bid-term commitments.
+# acceptance CAS. Keep it unconditional: the supported surfaces are the default
+# full build (which requires `spl-token-rewards`) and the explicitly selected
+# no-default `mainnet-canary`; neither may silently lose bid-term commitments.
 solana-sha256-hasher = { version = "=2.3.0", features = ["sha2"] }
 
 # Defense-in-depth: the Rust release profile defaults overflow-checks = false, so any

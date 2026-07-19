@@ -165,7 +165,7 @@ var listListings = defineTool({
     if (args.state !== void 0) options.state = ListingState2[args.state];
     const decoded = await listActiveListings(ctx.read, options);
     const limit = args.limit ?? 50;
-    const listings = decoded.slice(0, limit).map(({ address, account }) => projectListing(address, account));
+    const listings = decoded.slice(0, limit).map(({ address: address2, account }) => projectListing(address2, account));
     return { listings };
   }
 });
@@ -227,7 +227,7 @@ var listOpenTasksTool = defineTool({
     if (args.creator !== void 0) options.creator = args.creator;
     const decoded = await listOpenTasks(ctx.read, options);
     const limit = args.limit ?? 50;
-    const tasks = decoded.slice(0, limit).map(({ address, account }) => projectTask(address, account));
+    const tasks = decoded.slice(0, limit).map(({ address: address2, account }) => projectTask(address2, account));
     return { tasks };
   }
 });
@@ -333,13 +333,13 @@ var search = defineTool({
     const result = { listings: [], tasks: [] };
     if (kind === "listings" || kind === "both") {
       const decoded = await listActiveListings(ctx.read);
-      result.listings = decoded.map(({ address, account }) => projectListing(address, account)).filter(
+      result.listings = decoded.map(({ address: address2, account }) => projectListing(address2, account)).filter(
         (l) => l.name.toLowerCase().includes(q) || l.category.toLowerCase().includes(q) || l.specUri.toLowerCase().includes(q) || l.tags.some((t) => t.toLowerCase().includes(q))
       ).slice(0, limit);
     }
     if (kind === "tasks" || kind === "both") {
       const decoded = await listOpenTasks(ctx.read);
-      result.tasks = decoded.map(({ address, account }) => projectTask(address, account)).filter(
+      result.tasks = decoded.map(({ address: address2, account }) => projectTask(address2, account)).filter(
         (t) => t.pda.toLowerCase().includes(q) || t.description.toLowerCase().includes(q) || t.creator.toLowerCase().includes(q)
       ).slice(0, limit);
     }
@@ -356,7 +356,12 @@ var readonlyTools = [
 ];
 
 // src/tools/prepare.ts
-import { createNoopSigner, none, some } from "@solana/kit";
+import {
+  address,
+  createNoopSigner,
+  none,
+  some
+} from "@solana/kit";
 import { facade as facade2, findCreatorCompletionBondPda, values as values2 } from "@tetsuo-ai/marketplace-sdk";
 function hex32(value, field, tool) {
   const clean = value.startsWith("0x") ? value.slice(2) : value;
@@ -372,6 +377,17 @@ function hex32(value, field, tool) {
     out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
   }
   return out;
+}
+function accountAddress(value, field, tool) {
+  try {
+    return address(value);
+  } catch {
+    throw new MarketplaceToolError(
+      "BAD_ADDRESS",
+      `${tool}: ${field} must be a valid base58 Solana address`,
+      tool
+    );
+  }
 }
 var MAX_FEE_BPS = 2e3;
 var MAX_U16 = 65535;
@@ -758,6 +774,10 @@ var prepareClaim = defineTool({
       jobSpecHash: {
         type: "string",
         description: "The task's pinned job-spec hash as 64 hex chars (BLOCK-gate binding)."
+      },
+      parentTask: {
+        type: "string",
+        description: "Canonical parent Task PDA for a dependent task. Omit only for an independent task; when present it is appended as remaining_accounts[0]."
       }
     }
   },
@@ -767,7 +787,14 @@ var prepareClaim = defineTool({
       task: args.task,
       worker: args.worker,
       authority,
-      jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_claim")
+      jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_claim"),
+      ...args.parentTask !== void 0 ? {
+        parentTask: accountAddress(
+          args.parentTask,
+          "parentTask",
+          "prepare_claim"
+        )
+      } : {}
     });
     return projectInstruction(ix);
   }
@@ -1198,8 +1225,8 @@ function round2(n2) {
   return Math.round(n2 * 100) / 100;
 }
 function listingToAgentCard(decoded, options = {}) {
-  const { address, account } = decoded;
-  const listingPda = String(address);
+  const { address: address2, account } = decoded;
+  const listingPda = String(address2);
   const name = values3.decodeListingName(account.name);
   const category = values3.decodeListingCategory(
     account.category

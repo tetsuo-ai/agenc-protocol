@@ -20,15 +20,15 @@ export const CONTEST_DEPOSIT_FORFEITED_EVENT_DISCRIMINATOR: ReadonlyUint8Array =
 ]);
 
 /**
- * Emitted when a contest entry deposit is FORFEITED to the protocol treasury on
- * a no-show exit (`expire_claim` with a provably-absent submission PDA, or
- * `reclaim_terminal_claim`). Workers who submitted are always refunded in full
- * (their claim closes with all lamports — deposit included — to them).
+ * Emitted when `expire_claim` or `cancel_task` forfeits a contest entry deposit
+ * to the protocol treasury for a proven no-show. Terminal empty/Rejected claim
+ * cleanup reports the same forfeiture through
+ * [`TerminalClaimReclaimed::forfeited`] instead of emitting this event.
  */
 export type ContestDepositForfeitedEventData = {
   task: Address;
   claim: Address;
-  /** The no-show worker's `AgentRegistration` PDA. */
+  /** The proven no-show worker's `AgentRegistration` PDA. */
   workerAgent: Address;
   /** Lamports forfeited to the treasury (the surplus above the claim's rent). */
   amount: bigint;

@@ -31,8 +31,9 @@ POST /api/agenc/job-specs/activate
 
 The starter expects that route to:
 
-1. Host the submitted job spec.
-2. Compute the canonical job spec hash.
+1. Normalize the submitted job spec and hash its `json-stable-v1` canonical
+   payload.
+2. Host that payload in a worker-verifiable integrity envelope.
 3. Record task moderation for `(taskPda, jobSpecHash)`.
 4. Return:
 
@@ -41,6 +42,26 @@ The starter expects that route to:
   "jobSpecHashHex": "64 lowercase hex chars",
   "jobSpecUri": "https://...",
   "moderationAttested": true
+}
+```
+
+The document at `jobSpecUri` is an envelope. Its declared hash and the on-chain
+commitment both cover the canonical `payload` only:
+
+```json
+{
+  "integrity": {
+    "algorithm": "sha256",
+    "canonicalization": "json-stable-v1",
+    "payloadHash": "64 lowercase hex chars"
+  },
+  "payload": {
+    "schema": "agenc.marketplace.starter.jobSpec.v1",
+    "taskPda": "...",
+    "title": "...",
+    "deliverables": ["..."],
+    "acceptanceCriteria": ["..."]
+  }
 }
 ```
 
@@ -53,14 +74,20 @@ oversized canonical specs before calling storage or attestation adapters.
 The route implementation lives in `server/`:
 
 - `server/activate-job-spec.ts` validates the request, builds a canonical
-  starter job-spec payload, computes the `json-stable-v1` hash, stores it, and
-  asks an attestor to record task moderation.
-- `server/file-store.ts` is a content-addressed local file store adapter for
-  self-hosted deployments.
+  starter job-spec payload, computes the `json-stable-v1` hash, stores its
+  integrity envelope, and asks an attestor to record task moderation.
+- `server/file-store.ts` canonicalizes and validates the complete envelope, then
+  publishes it through an immutable content-addressed local file store. Repeated
+  writes of the same document are idempotent; an existing hash with different
+  bytes fails closed.
 - `server/remote-attestor.ts` posts the canonical payload to a moderation
   attestation service that records `TaskModeration`.
 - `server/next-route.example.ts` shows how to wire those pieces into a Next.js
   App Router route at `app/api/agenc/job-specs/activate/route.ts`.
+- `server/next-public-job-spec-route.example.ts` is the matching public GET
+  route. Copy it to `app/job-specs/[hash]/route.ts`; it serves only exact
+  64-hex content addresses with immutable cache headers. The configured public
+  base URL must resolve to this route, not merely name the storage directory.
 - `server/setup-check.ts` validates the environment variables shared by the
   route example and the local setup checker.
 

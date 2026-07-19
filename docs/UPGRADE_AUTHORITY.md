@@ -204,25 +204,25 @@ ProgramData allocation:
 
 - live ProgramData: 2,183,269 account-data bytes = 45 bytes of loader metadata
   + 2,183,224 bytes of executable capacity;
-- candidate SBF: 2,257,104 bytes;
-- required extension: at least 73,880 bytes (73,880 is the exact minimum);
+- candidate SBF: 2,277,664 bytes;
+- required extension: at least 94,440 bytes (94,440 is the exact minimum);
 - loader ceiling: 10,485,760 account-data bytes = 10,485,715 executable bytes.
 
 Mainnet has the SIMD-0431 minimum-extension rule active. An ordinary checked
 extension must add at least 10,240 bytes; only an extension within 10,240 bytes
 of the loader ceiling may be smaller, and then it must consume all remaining
-headroom. The candidate's 73,880-byte exact-minimum extension satisfies that
+headroom. The candidate's 94,440-byte exact-minimum extension satisfies that
 rule directly.
 
 Current read-only rent evidence, to be re-queried at the ceremony:
 
 - live ProgramData balance/rent floor: 15,196,443,120 lamports;
-- exact candidate-capacity ProgramData floor: 15,710,647,920 lamports;
-- extension top-up: 514,204,800 lamports (0.5142048 SOL);
-- Agave CLI 3.0.13 Buffer allocation: 2,257,141 bytes (37-byte Buffer header),
-  rent floor 15,710,592,240 lamports;
-- Agave CLI 3.0.13 Buffer funding basis: 2,257,149 bytes (the 45-byte
-  ProgramData basis), 15,710,647,920 lamports, or 55,680 lamports above the
+- exact candidate-capacity ProgramData floor: 15,853,745,520 lamports;
+- extension top-up: 657,302,400 lamports (0.6573024 SOL);
+- Agave CLI 3.0.13 Buffer allocation: 2,277,701 bytes (37-byte Buffer header),
+  rent floor 15,853,689,840 lamports;
+- Agave CLI 3.0.13 Buffer funding basis: 2,277,709 bytes (the 45-byte
+  ProgramData basis), 15,853,745,520 lamports, or 55,680 lamports above the
   Buffer allocation floor.
 
 Required choreography:
@@ -232,7 +232,7 @@ Required choreography:
    and the independently approved SBF/IDL hashes. The rail accepts only Solana
    CLI 3.0.13 for these reviewed loader semantics.
 2. In a separately reviewed Squads transaction, invoke loader
-   `ExtendProgramChecked` through Squads CPI for at least 73,880 bytes and fund
+   `ExtendProgramChecked` through Squads CPI for at least 94,440 bytes and fund
    the required rent top-up. The Squads vault PDA must sign through the Squads
    program; it cannot be provided to `solana program deploy` as a keypair.
 3. Confirm the extension on-chain and wait for a later slot. Extension writes

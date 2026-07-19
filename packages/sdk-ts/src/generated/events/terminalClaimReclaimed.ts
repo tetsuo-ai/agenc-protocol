@@ -20,18 +20,22 @@ export const TERMINAL_CLAIM_RECLAIMED_EVENT_DISCRIMINATOR: ReadonlyUint8Array = 
 ]);
 
 /**
- * Emitted by `reclaim_terminal_claim`: a claimed-but-never-submitted (no-show)
- * claim on an already-terminal (Completed/Cancelled) task was reclaimed —
- * claim rent back to the worker, any contest entry-deposit surplus forfeited
- * to the protocol treasury, and the task/worker slot counters freed (which
- * un-bricks `close_task` and the worker's `active_tasks` budget).
+ * Emitted by `reclaim_terminal_claim`: an unsettled claim on an already-terminal
+ * task was reclaimed. The eligible shapes are an empty/no-submission record, a
+ * Rejected submission, or a still-Submitted Collaborative straggler after
+ * completion. Task/worker slot counters are freed; applicable claim surplus is
+ * forfeited to the treasury while a Submitted straggler is refunded in full.
  */
 export type TerminalClaimReclaimedEventData = {
   task: Address;
   claim: Address;
-  /** The no-show worker's `AgentRegistration` PDA. */
+  /** The affected worker's `AgentRegistration` PDA. */
   workerAgent: Address;
-  /** Lamports returned to the worker authority (the claim's rent-exempt minimum). */
+  /**
+   * Claim lamports returned to the worker authority: the rent-exempt minimum
+   * for empty/Rejected cleanup, or the full balance for a Submitted
+   * Collaborative straggler.
+   */
   workerRefund: bigint;
   /**
    * Lamports forfeited to the protocol treasury (the contest entry-deposit

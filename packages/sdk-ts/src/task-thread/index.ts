@@ -16,17 +16,23 @@ export {
   type TaskThreadRole,
 } from "./envelope.js";
 export {
+  DEFAULT_CONTENT_TRANSPORT_TIMEOUT_MS,
+  DEFAULT_MAX_CONTENT_RESPONSE_BYTES,
   createContentTransport,
   ContentTransportError,
   type ContentTransport,
   type ContentTransportOptions,
+  type ContentBodyReader,
+  type ContentBodyStream,
   type ContentFetchLike,
   type UploadTicket,
 } from "./transport.js";
 export {
+  DEFAULT_MAX_TASK_THREAD_MESSAGES,
   postTaskMessage,
   fetchTaskThread,
   resolveChangesRequest,
+  type FetchTaskThreadOptions,
   type TaskThread,
   type PostTaskMessageResult,
 } from "./client.js";

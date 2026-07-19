@@ -145,7 +145,7 @@ function sanitizeDiagnostic(text) {
 
 // src/server.ts
 var SERVER_NAME = "@tetsuo-ai/marketplace-mcp";
-var SERVER_VERSION = "0.4.0";
+var SERVER_VERSION = "0.5.0";
 function selectTools(enableMutations) {
   return enableMutations ? import_marketplace_tools.marketplaceTools : import_marketplace_tools.readonlyTools;
 }

@@ -16,6 +16,8 @@
 //   EXPECTED_TASKS=<count-from-reviewed-plan> \
 //   IDL_PATH=target/idl/agenc_coordination.json \
 //   EXPECTED_IDL_SHA256=<reviewed-64-hex-digest> \
+//   SO_PATH=programs/agenc-coordination/target/deploy/agenc_coordination.so \
+//   EXPECTED_SO_SHA256=<reviewed-64-hex-digest> \
 //   node scripts/mainnet-migrate-sweep.mjs [--execute] [--skip-protocol]
 
 import { createHash } from "node:crypto";
@@ -23,6 +25,17 @@ import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertExactMultipleAccountsResponse,
+  enumerateTaskCandidates,
+} from "./mainnet-upgrade.mjs";
+import {
+  assertApprovedExecutableSnapshot,
+  assertImmediatePreUpgradeSnapshot,
+  loadReviewedUpgradeAuthorityPolicy,
+  readProgramUpgradeAuthoritySnapshot,
+} from "./program-upgrade-authority-policy.mjs";
+import { simulateNonBroadcastableInstructions } from "./mainnet-release-boundary.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
@@ -34,7 +47,6 @@ const {
   Transaction,
 } = require("@solana/web3.js");
 const anchor = require("@coral-xyz/anchor");
-const bs58 = require("bs58").default ?? require("bs58");
 
 const PROGRAM_ID_STR = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK";
 const PROGRAM_ID = new PublicKey(PROGRAM_ID_STR);
@@ -49,6 +61,12 @@ const SIZES = {
 const RPC_URL = process.env.RPC_URL;
 const EXECUTE = process.argv.includes("--execute");
 const SKIP_PROTOCOL = process.argv.includes("--skip-protocol");
+
+for (const argument of process.argv.slice(2)) {
+  if (argument !== "--execute" && argument !== "--skip-protocol") {
+    die(`unknown argument '${argument}'; expected --execute and/or --skip-protocol.`);
+  }
+}
 
 function redactRpc(value) {
   return String(value).replace(
@@ -127,6 +145,28 @@ function loadApprovedIdl() {
   return { idl, idlPath, actualHash };
 }
 
+function loadApprovedSbf() {
+  const rawPath = String(process.env.SO_PATH ?? "").trim();
+  if (!rawPath) {
+    die("SO_PATH is required and must identify the independently reviewed SBF artifact.");
+  }
+  const soPath = path.isAbsolute(rawPath) ? rawPath : path.join(ROOT, rawPath);
+  if (!existsSync(soPath)) die(`SO_PATH does not exist: ${soPath}`);
+  const expectedHash = String(process.env.EXPECTED_SO_SHA256 ?? "")
+    .trim()
+    .toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedHash)) {
+    die("EXPECTED_SO_SHA256 is required and must be an independently reviewed 64-hex digest.");
+  }
+  const bytes = readFileSync(soPath);
+  if (bytes.length === 0) die("approved SBF artifact is empty.");
+  const actualHash = createHash("sha256").update(bytes).digest("hex");
+  if (actualHash !== expectedHash) {
+    die(`SBF sha256 ${actualHash} != approved ${expectedHash}. Refusing.`);
+  }
+  return { bytes, soPath, actualHash };
+}
+
 if (!RPC_URL) die("RPC_URL is required (a mainnet RPC that allows getProgramAccounts).");
 if (process.env.PROGRAM_ID && process.env.PROGRAM_ID !== PROGRAM_ID_STR) {
   die(`PROGRAM_ID overrides are forbidden: this mainnet rail is pinned to ${PROGRAM_ID_STR}.`);
@@ -137,30 +177,16 @@ if (!process.env.AUTHORITY_KEYPAIR) {
 
 const EXPECTED_TASKS = parseExpectedTasks();
 const approvedIdl = loadApprovedIdl();
-const authority = loadKeypair(process.env.AUTHORITY_KEYPAIR);
-const cosigners = String(process.env.COSIGNERS || "")
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean)
-  .map(loadKeypair);
-const signerKps = [authority, ...cosigners].filter(
-  (keypair, index, all) =>
-    all.findIndex((candidate) => candidate.publicKey.equals(keypair.publicKey)) ===
-    index,
-);
-const signerMetas = signerKps.map((keypair) => ({
-  pubkey: keypair.publicKey,
-  isSigner: true,
-  isWritable: false,
-}));
+const approvedSbf = loadApprovedSbf();
+const upgradeAuthorityPolicy = loadReviewedUpgradeAuthorityPolicy();
+let authority;
+let signerKps;
+let signerMetas;
+let program;
+let genesisHash;
+let approvedLoaderSnapshot;
 
 const connection = new Connection(RPC_URL, "confirmed");
-const provider = new anchor.AnchorProvider(
-  connection,
-  new anchor.Wallet(authority),
-  { commitment: "confirmed" },
-);
-const program = new anchor.Program(approvedIdl.idl, provider);
 const [protocolPda] = PublicKey.findProgramAddressSync(
   [Buffer.from("protocol")],
   PROGRAM_ID,
@@ -174,10 +200,52 @@ const TASK_DISCRIMINATOR = createHash("sha256")
   .digest()
   .subarray(0, 8);
 
-async function readAndValidateProtocolConfig() {
-  const account = await connection.getAccountInfo(protocolPda, "confirmed");
+function initializeSigningMaterial() {
+  authority = loadKeypair(process.env.AUTHORITY_KEYPAIR);
+  const cosigners = String(process.env.COSIGNERS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(loadKeypair);
+  signerKps = [authority, ...cosigners].filter(
+    (keypair, index, all) =>
+      all.findIndex((candidate) =>
+        candidate.publicKey.equals(keypair.publicKey),
+      ) === index,
+  );
+  signerMetas = signerKps.map((keypair) => ({
+    pubkey: keypair.publicKey,
+    isSigner: true,
+    isWritable: false,
+  }));
+  const provider = new anchor.AnchorProvider(
+    connection,
+    new anchor.Wallet(authority),
+    { commitment: "confirmed" },
+  );
+  program = new anchor.Program(approvedIdl.idl, provider);
+}
+
+async function readAndValidateProtocolConfig(minContextSlot = 0) {
+  const response = await connection.getAccountInfoAndContext(protocolPda, {
+    commitment: "confirmed",
+    minContextSlot,
+  });
+  if (
+    !response?.context ||
+    !Number.isSafeInteger(response.context.slot) ||
+    response.context.slot < minContextSlot
+  ) {
+    die(
+      `ProtocolConfig RPC context ${String(response?.context?.slot)} is invalid or below ${minContextSlot}.`,
+    );
+  }
+  const account = response.value;
   if (!account) die(`ProtocolConfig ${protocolPda.toBase58()} does not exist.`);
   if (!account.owner.equals(PROGRAM_ID)) die("ProtocolConfig has the wrong owner.");
+  if (account.executable !== false) {
+    die("ProtocolConfig must be non-executable.");
+  }
   if (
     account.data.length !== SIZES.CONFIG_LEGACY &&
     account.data.length !== SIZES.CONFIG_CURRENT
@@ -189,6 +257,15 @@ async function readAndValidateProtocolConfig() {
   }
   const base = 8;
   const configAuthority = new PublicKey(account.data.subarray(base, base + 32));
+  const pausedByte = account.data[base + 179];
+  if (pausedByte !== 0 && pausedByte !== 1) {
+    die(`ProtocolConfig protocol_paused byte ${pausedByte} is not canonical.`);
+  }
+  if (pausedByte !== 1) {
+    die(
+      "ProtocolConfig.protocol_paused=false; migration broadcasts and simulations require the cutover freeze.",
+    );
+  }
   const threshold = account.data[base + 132];
   const ownersLength = account.data[base + 133];
   if (ownersLength < 2 || ownersLength > 5 || threshold < 2 || threshold >= ownersLength) {
@@ -210,10 +287,42 @@ async function readAndValidateProtocolConfig() {
     die(`only ${eligible.length} supplied unique signer(s) are ProtocolConfig owners; ${threshold} required.`);
   }
   return {
+    authority: configAuthority,
+    contextSlot: response.context.slot,
     dataLength: account.data.length,
+    protocolPaused: true,
     threshold,
     ownersLength,
     owners,
+  };
+}
+
+async function verifyMigrationBoundary(label, minContextSlot = 0) {
+  const immediate = await readProgramUpgradeAuthoritySnapshot(
+    connection,
+    upgradeAuthorityPolicy,
+    { commitment: "confirmed", minContextSlot },
+  );
+  if (approvedLoaderSnapshot) {
+    assertImmediatePreUpgradeSnapshot(approvedLoaderSnapshot, immediate);
+  }
+  if (EXECUTE) {
+    assertApprovedExecutableSnapshot({
+      genesisHash,
+      policy: upgradeAuthorityPolicy,
+      snapshot: immediate,
+      binaryBytes: approvedSbf.bytes,
+      expectedSha256: approvedSbf.actualHash,
+    });
+  }
+  const config = await readAndValidateProtocolConfig(immediate.contextSlot);
+  console.log(
+    `  ✓ ${label}: loader/custody${EXECUTE ? " + approved SBF" : ""} + paused config at slot ${Math.max(immediate.contextSlot, config.contextSlot)}`,
+  );
+  return {
+    config,
+    contextSlot: Math.max(immediate.contextSlot, config.contextSlot),
+    loader: immediate,
   };
 }
 
@@ -244,14 +353,28 @@ function validateTaskAccount(pubkey, account) {
 }
 
 async function enumerateAndValidateTasks() {
-  const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
-    commitment: "confirmed",
-    filters: [
-      { memcmp: { offset: 0, bytes: bs58.encode(TASK_DISCRIMINATOR) } },
-    ],
-  });
-  if (accounts.length !== EXPECTED_TASKS) {
-    die(`EXPECTED_TASKS=${EXPECTED_TASKS}, but mainnet currently has ${accounts.length}; account set changed or RPC/program is wrong.`);
+  // Shared with the orchestrator: union supported Task sizes (including corrupt
+  // discriminators) with every correctly tagged account at any size.
+  const candidates = await enumerateTaskCandidates(connection);
+  if (candidates.length !== EXPECTED_TASKS) {
+    die(`EXPECTED_TASKS=${EXPECTED_TASKS}, but mainnet currently has ${candidates.length}; account set changed or RPC/program is wrong.`);
+  }
+  const accounts = [];
+  const CHUNK = 100;
+  for (let offset = 0; offset < candidates.length; offset += CHUNK) {
+    const chunk = candidates.slice(offset, offset + CHUNK);
+    const pubkeys = chunk.map(({ pubkey }) => new PublicKey(pubkey));
+    const infos = assertExactMultipleAccountsResponse(
+      await connection.getMultipleAccountsInfo(pubkeys, "confirmed"),
+      pubkeys.length,
+      "migration sweep getMultipleAccountsInfo",
+    );
+    for (let index = 0; index < pubkeys.length; index++) {
+      if (!infos[index]) {
+        die(`Task candidate ${pubkeys[index].toBase58()} disappeared during inventory.`);
+      }
+      accounts.push({ pubkey: pubkeys[index], account: infos[index] });
+    }
   }
   return accounts
     .map(({ pubkey, account }) => validateTaskAccount(pubkey, account))
@@ -272,32 +395,62 @@ async function signedTransaction(instruction) {
 }
 
 async function simulateInstruction(instruction, label) {
-  const { transaction } = await signedTransaction(instruction);
-  const result = await connection.simulateTransaction(transaction, {
+  const boundary = await verifyMigrationBoundary(`${label} pre-simulation`);
+  const result = await simulateNonBroadcastableInstructions(connection, {
+    feePayer: authority.publicKey,
+    instructions: [instruction],
     commitment: "confirmed",
-    sigVerify: true,
   });
   if (result.value.err) {
     const logs = (result.value.logs ?? []).slice(-12).join(" | ");
     throw new Error(`${label} simulation failed: ${JSON.stringify(result.value.err)}${logs ? `; ${logs}` : ""}`);
   }
   console.log(`  ✓ ${label} — simulated successfully (no state committed)`);
+  return { contextSlot: boundary.contextSlot, signature: null };
 }
 
 async function sendInstruction(instruction, label) {
+  const boundary = await verifyMigrationBoundary(`${label} pre-broadcast`);
   const { transaction, latest } = await signedTransaction(instruction);
   const signature = await connection.sendRawTransaction(transaction.serialize(), {
     skipPreflight: false,
   });
-  const confirmation = await connection.confirmTransaction(
-    { signature, ...latest },
-    "confirmed",
-  );
-  if (confirmation.value.err) {
-    throw new Error(`${label} confirmation failed: ${JSON.stringify(confirmation.value.err)}`);
+  console.log(`  ↗ ${label} submitted — ${signature}`);
+  try {
+    const confirmation = await connection.confirmTransaction(
+      { signature, ...latest },
+      "confirmed",
+    );
+    if (confirmation.value.err) {
+      throw new Error(
+        `confirmation failed: ${JSON.stringify(confirmation.value.err)}`,
+      );
+    }
+    const confirmationSlot = confirmation?.context?.slot;
+    if (
+      !Number.isSafeInteger(confirmationSlot) ||
+      confirmationSlot < boundary.contextSlot
+    ) {
+      throw new Error(
+        `confirmation context slot ${String(confirmationSlot)} is invalid or below ` +
+          `pre-broadcast slot ${boundary.contextSlot}`,
+      );
+    }
+    const postBoundary = await verifyMigrationBoundary(
+      `${label} post-confirmation`,
+      confirmationSlot,
+    );
+    console.log(`  ✓ ${label} confirmed — ${signature}`);
+    return {
+      contextSlot: Math.max(confirmationSlot, postBoundary.contextSlot),
+      signature,
+    };
+  } catch (error) {
+    throw new Error(
+      `${label} transaction ${signature} was submitted, but confirmation/post-boundary ` +
+        `verification failed: ${error instanceof Error ? error.message : error}`,
+    );
   }
-  console.log(`  ✓ ${label} — ${signature}`);
-  return signature;
 }
 
 async function processInstruction(instruction, label) {
@@ -305,13 +458,25 @@ async function processInstruction(instruction, label) {
   return simulateInstruction(instruction, label);
 }
 
-async function verifyTaskPostImage(task) {
-  const account = await connection.getAccountInfo(task, "confirmed");
+async function verifyTaskPostImage(task, minContextSlot) {
+  const response = await connection.getAccountInfoAndContext(task, {
+    commitment: "confirmed",
+    minContextSlot,
+  });
+  if (
+    !response?.context ||
+    !Number.isSafeInteger(response.context.slot) ||
+    response.context.slot < minContextSlot
+  ) {
+    die(`post-migration Task RPC context is invalid or below ${minContextSlot}.`);
+  }
+  const account = response.value;
   if (!account) die(`post-migration Task ${task.toBase58()} disappeared.`);
   validateTaskAccount(task, account);
   if (account.data.length !== SIZES.TASK_CURRENT) {
     die(`post-migration Task ${task.toBase58()} is ${account.data.length}B, expected ${SIZES.TASK_CURRENT}B.`);
   }
+  return response.context.slot;
 }
 
 async function main() {
@@ -323,16 +488,51 @@ async function main() {
     `Approved IDL: ${approvedIdl.idlPath} | sha256=${approvedIdl.actualHash} | instructions=${approvedIdl.idl.instructions.length}`,
   );
   console.log(
+    `Approved SBF: ${approvedSbf.soPath} | sha256=${approvedSbf.actualHash}`,
+  );
+
+  genesisHash = await connection.getGenesisHash();
+  if (genesisHash !== MAINNET_GENESIS) {
+    die(`RPC genesis ${genesisHash} is not mainnet-beta ${MAINNET_GENESIS}; refusing every migration.`);
+  }
+  if (
+    upgradeAuthorityPolicy.genesisHash !== MAINNET_GENESIS ||
+    upgradeAuthorityPolicy.programId !== PROGRAM_ID_STR
+  ) {
+    die("reviewed upgrade-authority policy is not pinned to this mainnet program.");
+  }
+  console.log(`Cluster genesis: ${genesisHash} (mainnet-beta)`);
+
+  // Establish the loader and reviewed custody policy before opening plaintext
+  // signing material. In PLAN the candidate may intentionally not be live yet;
+  // EXECUTE additionally requires its exact bytes before any key is loaded and
+  // repeats that proof immediately around every broadcast.
+  approvedLoaderSnapshot = await readProgramUpgradeAuthoritySnapshot(
+    connection,
+    upgradeAuthorityPolicy,
+    { commitment: "confirmed" },
+  );
+  if (EXECUTE) {
+    assertApprovedExecutableSnapshot({
+      genesisHash,
+      policy: upgradeAuthorityPolicy,
+      snapshot: approvedLoaderSnapshot,
+      binaryBytes: approvedSbf.bytes,
+      expectedSha256: approvedSbf.actualHash,
+    });
+  }
+  console.log(
+    `Live loader/custody policy verified at slot ${approvedLoaderSnapshot.contextSlot}` +
+      (EXECUTE ? "; exact approved SBF is live" : "; candidate-byte equality is deferred until EXECUTE"),
+  );
+
+  initializeSigningMaterial();
+  console.log(
     `Authority: ${authority.publicKey.toBase58()} | unique supplied signers: ${signerKps.length}`,
   );
 
-  const genesis = await connection.getGenesisHash();
-  if (genesis !== MAINNET_GENESIS) {
-    die(`RPC genesis ${genesis} is not mainnet-beta ${MAINNET_GENESIS}; refusing every migration.`);
-  }
-  console.log(`Cluster genesis: ${genesis} (mainnet-beta)`);
-
-  let config = await readAndValidateProtocolConfig();
+  let migrationBoundary = await verifyMigrationBoundary("initial migration boundary");
+  let config = migrationBoundary.config;
   console.log(
     `ProtocolConfig ${protocolPda.toBase58()}: ${config.dataLength}B, multisig ${config.threshold}-of-${config.ownersLength}`,
   );
@@ -364,9 +564,9 @@ async function main() {
       })
       .remainingAccounts(signerMetas)
       .instruction();
-    await processInstruction(instruction, "migrate_protocol");
+    const result = await processInstruction(instruction, "migrate_protocol");
     if (EXECUTE) {
-      config = await readAndValidateProtocolConfig();
+      config = await readAndValidateProtocolConfig(result.contextSlot);
       if (config.dataLength !== SIZES.CONFIG_CURRENT) {
         die(`post-migration ProtocolConfig is ${config.dataLength}B, expected ${SIZES.CONFIG_CURRENT}B.`);
       }
@@ -402,8 +602,10 @@ async function main() {
         })
         .remainingAccounts(signerMetas)
         .instruction();
-      await processInstruction(instruction, label);
-      if (EXECUTE) await verifyTaskPostImage(task.pubkey);
+      const result = await processInstruction(instruction, label);
+      if (EXECUTE) {
+        await verifyTaskPostImage(task.pubkey, result.contextSlot);
+      }
       processed++;
     } catch (error) {
       const detail = redactRpc(error instanceof Error ? error.message : error);
@@ -420,7 +622,10 @@ async function main() {
   }
 
   if (EXECUTE) {
-    const finalConfig = await readAndValidateProtocolConfig();
+    migrationBoundary = await verifyMigrationBoundary(
+      "final post-sweep boundary",
+    );
+    const finalConfig = migrationBoundary.config;
     const finalTasks = await enumerateAndValidateTasks();
     if (
       finalConfig.dataLength !== SIZES.CONFIG_CURRENT ||

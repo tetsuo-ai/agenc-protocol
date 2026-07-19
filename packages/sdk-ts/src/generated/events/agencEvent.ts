@@ -255,6 +255,10 @@ import {
   type RejectFrozenResolvedEventData,
 } from "./rejectFrozenResolved";
 import {
+  getReleaseSurfaceStampedEventDecoder,
+  type ReleaseSurfaceStampedEventData,
+} from "./releaseSurfaceStamped";
+import {
   getReputationChangedEventDecoder,
   type ReputationChangedEventData,
 } from "./reputationChanged";
@@ -473,6 +477,7 @@ export type AgencEvent =
   | { eventName: "ReferrerFeePaid"; data: ReferrerFeePaidEventData }
   | { eventName: "RejectFrozenExpired"; data: RejectFrozenExpiredEventData }
   | { eventName: "RejectFrozenResolved"; data: RejectFrozenResolvedEventData }
+  | { eventName: "ReleaseSurfaceStamped"; data: ReleaseSurfaceStampedEventData }
   | { eventName: "ReputationChanged"; data: ReputationChangedEventData }
   | { eventName: "ReputationDelegationRetired"; data: ReputationDelegationRetiredEventData }
   | { eventName: "ReputationDelegationRevoked"; data: ReputationDelegationRevokedEventData }
@@ -962,6 +967,13 @@ export const AGENC_EVENT_DECODERS: {
     decode: (payload) => ({
       eventName: "RejectFrozenResolved",
       data: getRejectFrozenResolvedEventDecoder().decode(payload),
+    }),
+  },
+  "746890e96896b811": {
+    eventName: "ReleaseSurfaceStamped",
+    decode: (payload) => ({
+      eventName: "ReleaseSurfaceStamped",
+      data: getReleaseSurfaceStampedEventDecoder().decode(payload),
     }),
   },
   "bebe5d4106275cfa": {

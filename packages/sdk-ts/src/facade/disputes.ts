@@ -3,7 +3,11 @@
 // encodes data; the facade adds friendly signatures, defaults, and (for the multi-PDA
 // settlement flows) derives the completion-bond accounts so callers cannot omit them.
 // Never import from generated/ internals other than its public exports.
-import { AccountRole, type Address } from "@solana/kit";
+import {
+  AccountRole,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   // builders
   getInitiateDisputeInstructionAsync,
@@ -38,6 +42,7 @@ import {
   findBidBookPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../generated/index.js";
+import { appendMultisigSignerMetas } from "./wire.js";
 
 export {
   findDisputePda,
@@ -432,10 +437,16 @@ export async function applyInitiatorSlash(input: ApplyInitiatorSlashAsyncInput) 
  * auto-derived by the generated builder (from task/creator and task/worker-authority),
  * along with escrow, the task submission, and protocol-config.
  */
-export type ResolveRejectFrozenInput = ResolveRejectFrozenAsyncInput;
+export type ResolveRejectFrozenInput = ResolveRejectFrozenAsyncInput & {
+  /** Current ProtocolConfig M-of-N owner approvals, in remaining-account order. */
+  readonly multisigSigners: readonly TransactionSigner[];
+};
 
 export async function resolveRejectFrozen(input: ResolveRejectFrozenInput) {
-  return getResolveRejectFrozenInstructionAsync(input);
+  const { multisigSigners, ...generatedInput } = input;
+  const instruction =
+    await getResolveRejectFrozenInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
 }
 
 /**

@@ -5,8 +5,9 @@
 //   - migrate_protocol reallocs a legacy 349B config up to 351B (multisig-gated),
 //     zero-inits surface_revision, tops up rent, preserves the legacy prefix, and is
 //     idempotent + dry-run-equivalent (re-runnable);
-//   - the appended surface_revision is then stamped via the existing config-update
-//     authority path (update_launch_controls), with unknown revisions rejected.
+//   - the appended surface_revision permits historical/conservative values through
+//     update_launch_controls, while the current revision requires the atomic release
+//     stamp and unknown revisions remain rejected.
 //
 // NOTE: this test is written against the POST-regen IDL (the field/arg names below
 // — surface_revision on ProtocolConfig, the surfaceRevision arg on
@@ -26,6 +27,7 @@ import {
 const OLD_CONFIG_SIZE = 349;
 const NEW_CONFIG_SIZE = 351;
 const SURFACE_REVISION_FULL = 1;
+const SURFACE_REVISION_CURRENT = 5;
 
 // Build the 2-of-2 multisig signer metas the migrate/admin gate requires.
 async function arm2of2(w) {
@@ -118,7 +120,7 @@ test("migrate_protocol: reallocs a legacy 349B ProtocolConfig to 351B (multisig-
   assert.equal(decode(w.svm, "ProtocolConfig", protocolPda).surface_revision, 0, "surface_revision still 0 after re-run");
 });
 
-test("update_launch_controls: stamps surface_revision via the config-update authority path (and rejects unknown revisions)", async () => {
+test("update_launch_controls: permits historical revisions but cannot bypass the current atomic stamp", async () => {
   const w = await freshWorld({ price: 1_000_000 });
   // Arm the multisig on the full-size config first, then truncate to the legacy layout
   // and migrate up — so we start from a migrated (351B) config with surface_revision 0.
@@ -134,9 +136,9 @@ test("update_launch_controls: stamps surface_revision via the config-update auth
   );
   assert.equal(getSurfaceRevision(w.svm), 0, "unstamped after migration");
 
-  const buildStamp = async (rev) =>
+  const buildStamp = async (rev, paused = true) =>
     makeProgram(w.admin).methods
-      .updateLaunchControls(false, 0, rev)
+      .updateLaunchControls(paused, 0, rev)
       .accounts({ protocolConfig: protocolPda, authority: w.admin.publicKey })
       .remainingAccounts(signerMetas)
       .instruction();
@@ -147,14 +149,33 @@ test("update_launch_controls: stamps surface_revision via the config-update auth
   expectFail(send(w.svm, await buildStamp(7), [w.admin, owner2]), "InvalidSurfaceRevision", "unknown revision rejected");
   assert.equal(getSurfaceRevision(w.svm), 0, "rejected stamp left surface_revision untouched");
 
+  // The current production revision is reserved for stamp_release_surface,
+  // which binds the reviewed release boundary atomically.
+  w.svm.expireBlockhash();
+  expectFail(
+    send(w.svm, await buildStamp(SURFACE_REVISION_CURRENT), [w.admin, owner2]),
+    "InvalidSurfaceRevision",
+    "current revision bypass rejected",
+  );
+  assert.equal(getSurfaceRevision(w.svm), 0, "atomic-stamp bypass left revision untouched");
+
+  // The full build cannot be made live while the resulting revision is still
+  // unstamped. This closes the pause-toggle bypass around the atomic stamp.
+  w.svm.expireBlockhash();
+  expectFail(
+    send(w.svm, await buildStamp(0, false), [w.admin, owner2]),
+    "ReleaseUnpauseRequiresCurrentSurface",
+    "unstamped unpause rejected",
+  );
+
   // Stamp the full surface.
   w.svm.expireBlockhash();
-  expectOk(send(w.svm, await buildStamp(SURFACE_REVISION_FULL), [w.admin, owner2]), "stamp full surface");
+  expectOk(send(w.svm, await buildStamp(SURFACE_REVISION_FULL), [w.admin, owner2]), "stamp full surface while paused");
   assert.equal(getSurfaceRevision(w.svm), SURFACE_REVISION_FULL, "surface_revision stamped to FULL");
 
   // An operator can revert to unstamped (0) too.
   w.svm.expireBlockhash();
-  expectOk(send(w.svm, await buildStamp(0), [w.admin, owner2]), "stamp back to 0");
+  expectOk(send(w.svm, await buildStamp(0), [w.admin, owner2]), "stamp back to 0 while paused");
   assert.equal(getSurfaceRevision(w.svm), 0, "surface_revision back to 0");
 });
 

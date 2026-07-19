@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/marketplace-mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Open-source, npx-able MCP server for the AgenC marketplace — readonly discovery/inspection/track-record tools by default; keyless, opt-in unsigned mutation-prepare tools. Built on the public @tetsuo-ai/marketplace-sdk + @tetsuo-ai/marketplace-tools.",
   "packageManager": "npm@11.7.0",
   "type": "module",
@@ -39,8 +39,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@tetsuo-ai/marketplace-sdk": "^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0",
-    "@tetsuo-ai/marketplace-tools": "^0.4.0"
+    "@tetsuo-ai/marketplace-sdk": "^0.12.0",
+    "@tetsuo-ai/marketplace-tools": "^0.5.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"

@@ -13,26 +13,26 @@ initialized, so `complete_task_private` is off and `initialize_zk_config` is
 multisig-gated (audit H-5).
 
 Candidate status (verified from `src/lib.rs`, Cargo features, and generated IDL on
-2026-07-18): default production is **97 instructions**, explicit `private-zk` is
-**100**, and `mainnet-canary` is **25**. `lib.rs` therefore contains 125 raw
-`pub fn` declarations across its mutually exclusive modules but 100 unique names;
+2026-07-18): default production is **98 instructions**, explicit `private-zk` is
+**101**, and `mainnet-canary` is **25**. `lib.rs` therefore contains 126 raw
+`pub fn` declarations across its mutually exclusive modules but 101 unique names;
 the canary repeats 25 full-module names. The candidate retires the three private-ZK
 entrypoints from production and adds `reclaim_orphan_task_child`; it is not live
 until an independently approved upgrade. The canonical candidate IDL contains
-**97 instructions / 43 accounts / 98 events / 388 errors**;
+**98 instructions / 43 accounts / 99 events / 393 errors**;
 `docs/reference/INSTRUCTIONS.md` is its generated instruction reference.
 
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (388 variants in the generated candidate IDL)
+- `src/errors.rs` - program error codes (393 variants in the generated candidate IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
 ## Instruction Families
 
-The families below describe the 97-instruction production candidate. The three
+The families below describe the 98-instruction production candidate. The three
 entries explicitly marked `private-zk development build only` are shown for
 context and are excluded from that count. The batch-N subsections recall which
 milestone introduced instructions already listed under their primary family.
@@ -203,6 +203,7 @@ they were signed instruction data.
 - update treasury
 - update multisig
 - update launch controls (pause / task-type disable kill switch)
+- atomically stamp the reviewed release surface (ProgramData/IDL/singleton/custody locks)
 - update min version
 - update state
 - migrate protocol / migrate task (Task/ProtocolConfig layout migration; multisig + version gated — the 2026-06-11 mainnet upgrade migrated 169 live tasks 382B→466B)

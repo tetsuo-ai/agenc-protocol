@@ -15,7 +15,10 @@ import { detectProject, type ProjectKind } from "./detect.js";
 import {
   appCheckoutPage,
   appCheckoutRoute,
+  appJobSpecRoute,
+  jobSpecStoreModule,
   pagesCheckoutApi,
+  pagesJobSpecApi,
   pagesCheckoutPage,
   scaffoldPackageJson,
   workerLoopMjs,
@@ -75,6 +78,14 @@ export function planInitFiles(
       files.push(
         { relPath: path.join(appDir, "agenc", "page.tsx"), content: appCheckoutPage(config) },
         {
+          relPath: path.join(appDir, "agenc", "job-spec-store.ts"),
+          content: jobSpecStoreModule(),
+        },
+        {
+          relPath: path.join(appDir, "agenc", "job-specs", "route.ts"),
+          content: appJobSpecRoute(),
+        },
+        {
           relPath: path.join(appDir, "agenc", "checkout", "route.ts"),
           content: appCheckoutRoute(config),
         },
@@ -84,6 +95,14 @@ export function planInitFiles(
       const pagesDir = detection.pagesDir;
       files.push(
         { relPath: path.join(pagesDir, "agenc.tsx"), content: pagesCheckoutPage(config) },
+        {
+          relPath: path.join(pagesDir, "api", "agenc", "job-spec-store.ts"),
+          content: jobSpecStoreModule(),
+        },
+        {
+          relPath: path.join(pagesDir, "api", "agenc", "job-specs.ts"),
+          content: pagesJobSpecApi(),
+        },
         {
           relPath: path.join(pagesDir, "api", "agenc", "checkout.ts"),
           content: pagesCheckoutApi(config),
@@ -146,7 +165,8 @@ function instructionsFor(
       "                  uses the localnet stack when present, else the in-process litesvm sandbox)",
       "Checkout surface: GET /agenc renders the form; POST /agenc/checkout runs hireAndActivate.",
       "                  Wire AGENC_RPC_URL / AGENC_WALLET / AGENC_LISTING / AGENC_LISTING_SPEC_HASH /",
-      "                  AGENC_MODERATOR / AGENC_ATTESTOR_URL before real hires (route returns 501 until then).",
+      "                  AGENC_MODERATOR / AGENC_ATTESTOR_URL / AGENC_JOB_SPEC_DIR /",
+      "                  AGENC_JOB_SPEC_PUBLIC_BASE_URL before real hires (route returns 501 until then).",
       "Go-live diff:     agenc promote",
     );
   } else {

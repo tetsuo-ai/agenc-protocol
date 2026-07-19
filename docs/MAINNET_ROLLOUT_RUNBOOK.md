@@ -20,6 +20,13 @@
 > OFF (its init is now multisig-gated per audit H-5). The open `[ ]` boxes in §6
 > are left exactly as recorded on rollout day — for anything current, see
 > [`MAINNET_MAINLINE.md`](./MAINNET_MAINLINE.md).
+>
+> **Current-rail safety correction (2026-07-18):** the numbered order below records
+> what happened in the 2026-06-11 historical rollout. It is not the safe order for
+> a new release. `scripts/mainnet-upgrade.mjs` now publishes and fetch-verifies the
+> reviewed compact on-chain IDL **before** `surface_revision` is stamped, and the
+> stamp is the final mutation. A new revision must never be advertised over an old
+> or unverified IDL.
 
 Operational runbook that was used to upgrade the live mainnet `agenc-coordination`
 program from the restricted **25-instruction canary** surface to the full
@@ -213,14 +220,16 @@ Full rationale + the adversarial-review addendum: `docs/P1_2_OPEN_ROSTER_SPEC.md
      mainnet moderation authority.
    - `initialize_bid_book` is per-task and is created on demand by creators, not here.
 
-5. **Stamp `surface_revision` LAST** via `update_launch_controls` with
+5. **Historical action: stamp `surface_revision`** via `update_launch_controls` with
    `SURFACE_REVISION_FULL`. This flips `getDeployedSurface(rpc)` to advertise the
    full capability set. Doing this before steps 2–4 complete would advertise
    features over not-yet-migrated or not-yet-initialized state.
 
-6. **Publish the on-chain IDL** for the mainnet cluster to match the now-live
+6. **Historical action: publish the on-chain IDL** for the mainnet cluster to
+   match the now-live
    full surface (`anchor idl upgrade` against the full IDL — NOT the 25-instruction
-   canary IDL). See `MAINNET_MAINLINE.md` step 5.
+   canary IDL). For every new rollout, reverse these final two historical actions:
+   publish + fetch-verify the deterministic reviewed projection first, then stamp last.
 
 ---
 
@@ -267,7 +276,7 @@ program. The rehearsal extends that to the full 169-task sweep choreography.
 - [x] `BidMarketplaceConfig` initialized; bid marketplace LIVE (step 4).
 - [ ] **`ZkConfig` DEFERRED** — `complete_task_private` stays OFF until `initialize_zk_config` runs with the audited agenc-prover image id.
 - [x] `getDeployedSurface(rpc)` reports the full capability set.
-- [ ] Mainnet IDL published and fetchable matches the full surface (the now-live **84-instruction** IDL, not the canary IDL).
+- [ ] Historical Phase 9 IDL publication evidence captured for its **84-instruction** surface (not the canary IDL). This unchecked historical item is not a statement about the current 99-instruction deployment or the 98-instruction revision-5 candidate.
 - [x] `MAINNET_MAINLINE.md` "Current Mainnet Deployment" updated (scope = full surface).
 - [ ] Buffer account refund received by the payer.
 - [ ] Published SDK semver compatible with the now-live surface (see `VERSIONS.md`).

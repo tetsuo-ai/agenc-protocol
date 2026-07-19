@@ -48,7 +48,7 @@ Downstream repos should consume released protocol artifacts from:
 - this repo's committed artifact surface only when intentionally integrating the
   pending candidate.
 
-At current HEAD, committed artifacts describe the 97-instruction revision-5
+At current HEAD, committed artifacts describe the 98-instruction revision-5
 candidate while published `@tetsuo-ai/protocol@0.3.0` describes the live
 99-instruction revision-4 wire. They are deliberately not interchangeable before
 the coordinated program/package release.

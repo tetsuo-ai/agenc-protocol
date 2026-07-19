@@ -163,8 +163,8 @@ The completion surface is now intentionally split:
 - `complete_task`: immediate settlement for normal public tasks
 - `submit_task_result`: reviewed settlement for manual-validation public tasks
 - `complete_task_private`: zk-backed private completion in the explicit,
-  unsupported 100-instruction `private-zk` development build; it is absent from
-  the 97-instruction production candidate
+  unsupported 101-instruction `private-zk` development build; it is absent from
+  the 98-instruction production candidate
 
 In the explicit `private-zk` development build, private tasks stay on the zk path
 and are not eligible for Task Validation V2. The production candidate rejects

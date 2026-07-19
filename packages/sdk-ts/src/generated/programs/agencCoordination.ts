@@ -241,6 +241,7 @@ import {
   getSetServiceListingStateInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
   getStakeReputationInstructionAsync,
+  getStampReleaseSurfaceInstructionAsync,
   getSubmitTaskResultInstructionAsync,
   getSuspendAgentInstructionAsync,
   getUnsuspendAgentInstructionAsync,
@@ -338,6 +339,7 @@ import {
   parseSetServiceListingStateInstruction,
   parseSetTaskJobSpecInstruction,
   parseStakeReputationInstruction,
+  parseStampReleaseSurfaceInstruction,
   parseSubmitTaskResultInstruction,
   parseSuspendAgentInstruction,
   parseUnsuspendAgentInstruction,
@@ -480,6 +482,7 @@ import {
   type ParsedSetServiceListingStateInstruction,
   type ParsedSetTaskJobSpecInstruction,
   type ParsedStakeReputationInstruction,
+  type ParsedStampReleaseSurfaceInstruction,
   type ParsedSubmitTaskResultInstruction,
   type ParsedSuspendAgentInstruction,
   type ParsedUnsuspendAgentInstruction,
@@ -532,6 +535,7 @@ import {
   type SetServiceListingStateAsyncInput,
   type SetTaskJobSpecAsyncInput,
   type StakeReputationAsyncInput,
+  type StampReleaseSurfaceAsyncInput,
   type SubmitTaskResultAsyncInput,
   type SuspendAgentAsyncInput,
   type UnsuspendAgentAsyncInput,
@@ -1219,6 +1223,7 @@ export enum AgencCoordinationInstruction {
   SetServiceListingState,
   SetTaskJobSpec,
   StakeReputation,
+  StampReleaseSurface,
   SubmitTaskResult,
   SuspendAgent,
   UnsuspendAgent,
@@ -2086,6 +2091,17 @@ export function identifyAgencCoordinationInstruction(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([20, 228, 18, 239, 43, 249, 247, 119]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.StampReleaseSurface;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([39, 108, 74, 4, 66, 125, 157, 7]),
       ),
       0,
@@ -2550,6 +2566,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.StakeReputation;
     } & ParsedStakeReputationInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.StampReleaseSurface;
+    } & ParsedStampReleaseSurfaceInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.SubmitTaskResult;
     } & ParsedSubmitTaskResultInstruction<TProgram>)
@@ -3152,6 +3171,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseStakeReputationInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.StampReleaseSurface: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.StampReleaseSurface,
+        ...parseStampReleaseSurfaceInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.SubmitTaskResult: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -3708,6 +3734,10 @@ export type AgencCoordinationPluginInstructions = {
   stakeReputation: (
     input: StakeReputationAsyncInput,
   ) => ReturnType<typeof getStakeReputationInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  stampReleaseSurface: (
+    input: StampReleaseSurfaceAsyncInput,
+  ) => ReturnType<typeof getStampReleaseSurfaceInstructionAsync> &
     SelfPlanAndSendFunctions;
   submitTaskResult: (
     input: SubmitTaskResultAsyncInput,
@@ -4374,6 +4404,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getStakeReputationInstructionAsync(input),
+            ),
+          stampReleaseSurface: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getStampReleaseSurfaceInstructionAsync(input),
             ),
           submitTaskResult: (input) =>
             addSelfPlanAndSendFunctions(

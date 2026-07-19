@@ -172,9 +172,13 @@ test("initialize_protocol accepts canonical ProgramData and writes the complete 
   assert.equal(config.slash_percentage, 25);
   assert.equal(config.protocol_version, 1);
   assert.equal(config.min_supported_version, 1);
-  assert.equal(config.protocol_paused, false);
+  assert.equal(
+    config.protocol_paused,
+    true,
+    "fresh production initialization remains frozen until the atomic release stamp",
+  );
   assert.equal(config.disabled_task_type_mask, 0);
-  assert.equal(config.surface_revision, 5);
+  assert.equal(config.surface_revision, 0, "fresh initialization is not a release stamp");
 
   const replay = await sendInitialize(world);
   assert.ok(

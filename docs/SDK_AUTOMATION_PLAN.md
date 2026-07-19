@@ -5,7 +5,7 @@ Decisions locked 2026-06-09.
 
 > Current-state note (2026-07-18): this plan is retained as implementation
 > history. Mainnet and the published SDK 0.11.0 still speak the 99-instruction
-> revision-4 wire. The workspace now contains the 97-instruction revision-5
+> revision-4 wire. The workspace now contains the 98-instruction revision-5
 > candidate client, which must ship with the program upgrade. `sdk:drift` hashes
 > the generated path/byte tree immediately before and after deterministic
 > regeneration; it no longer compares an intentionally dirty reviewed tree to

@@ -67,6 +67,7 @@ export * from "./rateLimitsUpdated";
 export * from "./referrerFeePaid";
 export * from "./rejectFrozenExpired";
 export * from "./rejectFrozenResolved";
+export * from "./releaseSurfaceStamped";
 export * from "./reputationChanged";
 export * from "./reputationDelegationRetired";
 export * from "./reputationDelegationRevoked";

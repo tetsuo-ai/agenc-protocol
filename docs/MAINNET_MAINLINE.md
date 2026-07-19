@@ -35,20 +35,20 @@ window or before the deploy is announced publicly.
 
 ## Pending Revision-5 Candidate (not deployed)
 
-The production/default `#[program]` surface contains **97 actual Rust
+The production/default `#[program]` surface contains **98 actual Rust
 entrypoints**. That number is derived from the cfg-gated source, not this
 document:
 
-- production defaults: 97 (`spl-token-rewards`; `private-zk` off);
-- explicit development `private-zk`: 100;
+- production defaults: 98 (`spl-token-rewards`; `private-zk` off);
+- explicit development `private-zk`: 101;
 - restricted `mainnet-canary`: 25;
 - raw `pub fn` declarations across the mutually exclusive full/canary modules:
-  125, representing 100 unique names because the canary's 25 names are repeated.
+  126, representing 101 unique names because the canary's 25 names are repeated.
 
 The three private-proof entrypoints are quarantined because the guest,
 verifier/router deployment, and end-to-end proof policy have not been
 independently established for mainnet. Production builds and IDLs must exclude
-them; `scripts/mainnet-upgrade.mjs` enforces the exact 97/100/25 sets and
+them; `scripts/mainnet-upgrade.mjs` enforces the exact 98/101/25 sets and
 refuses stale artifacts.
 
 Revision 5 is a coordinated, paused cutover rather than an in-place client
@@ -63,7 +63,7 @@ the mainnet inventory currently contains no bid accounts.
 
 The deployment rail is deliberately fail-closed:
 
-- it requires a fresh production binary and matching 97-instruction IDL;
+- it requires a fresh production binary and matching 98-instruction IDL;
 - it verifies the canonical ProgramData and Squads v4 2-of-3 vault/controller
   policy instead of inferring an EOA from account shape;
 - it proves the approved binary fits the live ProgramData allocation and forces
@@ -86,25 +86,25 @@ The deployment rail is deliberately fail-closed:
 canonical ProgramData account as
 `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, with data length 2,183,269
 bytes (45 loader metadata + 2,183,224 executable payload). The current
-2,257,104-byte candidate needs a 2,257,149-byte account, so it is 73,880 payload
+2,277,664-byte candidate needs a 2,277,709-byte account, so it is 94,440 payload
 bytes too large. The loader maximum is 10,485,760 account-data bytes, or
 10,485,715 executable bytes after ProgramData metadata. Mainnet's active
 SIMD-0431 rule normally requires an extension of at least 10,240 bytes (except
-when consuming all remaining loader headroom); the exact 73,880-byte extension
+when consuming all remaining loader headroom); the exact 94,440-byte extension
 is valid without rounding.
 
 The existing ProgramData account held its exact 15,196,443,120-lamport rent
 floor. Extending it to the candidate's exact capacity requires
-15,710,647,920 lamports, a 514,204,800-lamport (0.5142048 SOL) top-up. Agave
-CLI 3.0.13 allocates the candidate upgrade Buffer at 2,257,141 bytes (37-byte
-Buffer header), whose rent floor is 15,710,592,240 lamports, but funds it on the
-2,257,149-byte ProgramData basis: 15,710,647,920 lamports, 55,680 lamports more.
+15,853,745,520 lamports, a 657,302,400-lamport (0.6573024 SOL) top-up. Agave
+CLI 3.0.13 allocates the candidate upgrade Buffer at 2,277,701 bytes (37-byte
+Buffer header), whose rent floor is 15,853,689,840 lamports, but funds it on the
+2,277,709-byte ProgramData basis: 15,853,745,520 lamports, 55,680 lamports more.
 Those are different accounting surfaces; do not substitute the Buffer allocation
 size for ProgramData capacity.
 
 Before the binary upgrade, a separate reviewed Squads proposal must execute
-loader `ExtendProgramChecked` for at least 73,880 additional bytes through
-Squads CPI; 73,880 is the exact minimum for this candidate. The vault PDA is the
+loader `ExtendProgramChecked` for at least 94,440 additional bytes through
+Squads CPI; 94,440 is the exact minimum for this candidate. The vault PDA is the
 loader authority and cannot be supplied as a
 CLI keypair. Extension stamps the ProgramData slot, so the extension and
 `Upgrade` cannot execute in the same slot; wait for a later slot, then rerun the
@@ -206,20 +206,23 @@ Before or during any future mainnet upgrade:
    inventory, not a deploy blocker: the new binary must prevent new assignment
    while preserving already-assigned workers' settlement and exit paths.
 4. Keep the protocol paused through binary verification, migrations, config init,
-   the postdeploy cutover rescan, revision stamp, and IDL publication. Unpause only
+   the postdeploy cutover rescan, IDL publication/verification, and the final
+   revision stamp. Unpause only
    through a **later, separately reviewed multisig action** after postdeploy canary
    checks; the upgrade rail preserves `paused=true` and never unpauses itself.
 5. Confirm `main` contains the exact program source tree being deployed.
 6. Refresh this file if the live scope or rollout rules changed (slot,
    `surface_revision`, instruction count, upgrade authority).
 7. Keep committed artifacts and downstream protocol consumers aligned.
-8. Publish/upgrade the **on-chain IDL per cluster** (`anchor idl init` first time,
-   `anchor idl upgrade` thereafter) so the deployed IDL is fetchable truth. Mainnet
-   now runs the **full surface**, so publish the full `target/idl/agenc_coordination.json`
-   to the mainnet cluster (the 25-instruction `agenc_coordination.canary.json` is no
-   longer the mainnet IDL — it remains the IDL of the restricted
+8. Before the final surface stamp, publish/upgrade and fetch-verify the **on-chain
+   IDL per cluster**. The canonical rail derives a deterministic docs-free projection
+   from the hash-approved full `target/idl/agenc_coordination.json`, checks Anchor
+   0.32.1 authority/capacity/rent, publishes that ABI-complete projection, and verifies
+   every non-`docs` value from chain. Do not pass the oversized documented source IDL
+   directly to `anchor idl upgrade`. The 25-instruction
+   `agenc_coordination.canary.json` remains the IDL of the restricted
    rehearsal/fallback `--features mainnet-canary` build kept frozen in CI via
-   `scripts/canary-idl-baseline.json`). See [./VERSIONS.md](./VERSIONS.md) for the full
+   `scripts/canary-idl-baseline.json`. See [./VERSIONS.md](./VERSIONS.md) for the full
    surface-versioning release runbook (config/task migration choreography +
    `surface_revision` stamping).
 

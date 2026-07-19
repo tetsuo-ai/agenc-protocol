@@ -30,6 +30,7 @@ import {
   findProtocolConfigPda,
   findBidBookPda,
   findWorkerCompletionBondPda,
+  DependencyType,
 } from "../src/index.js";
 import {
   createTask,
@@ -398,6 +399,154 @@ describe("validateTaskResult facade instruction", () => {
     const decoded =
       getValidateTaskResultInstructionDataDecoder().decode(ix.data);
     expect(decoded.approved).toBe(true);
+  });
+
+  it.each([
+    {
+      dependencyType: DependencyType.None,
+      approved: true,
+      includesParent: false,
+    },
+    {
+      dependencyType: DependencyType.None,
+      approved: false,
+      includesParent: false,
+    },
+    {
+      dependencyType: DependencyType.Data,
+      approved: true,
+      includesParent: true,
+    },
+    {
+      dependencyType: DependencyType.Data,
+      approved: false,
+      includesParent: false,
+    },
+    {
+      dependencyType: DependencyType.Ordering,
+      approved: true,
+      includesParent: true,
+    },
+    {
+      dependencyType: DependencyType.Ordering,
+      approved: false,
+      includesParent: false,
+    },
+    {
+      dependencyType: DependencyType.Proof,
+      approved: true,
+      includesParent: true,
+    },
+    {
+      dependencyType: DependencyType.Proof,
+      approved: false,
+      includesParent: true,
+    },
+  ])(
+    "lays out BidExclusive dependency $dependencyType with approved=$approved",
+    async ({ dependencyType, approved, includesParent }) => {
+      const [bidBook] = await findBidBookPda({ task: A });
+      const acceptedBid = B;
+      const bidderMarketState = C;
+      const bidderAuthority = D;
+      const dependent = dependencyType !== DependencyType.None;
+      const ix = await validateTaskResult({
+        task: A,
+        worker: B,
+        treasury: C,
+        creator: D,
+        workerAuthority: A,
+        reviewer: signerA,
+        approved,
+        dependencyType,
+        ...(dependent ? { dependencyParent: D } : {}),
+        bidSettlement: {
+          acceptedBid,
+          bidderMarketState,
+          bidderAuthority,
+        },
+      });
+
+      // validate_task_result has 22 generated accounts; everything after that
+      // is the facade-owned remaining-account wire consumed by Rust.
+      expect(ix.accounts.slice(22).map((meta) => meta.address)).toEqual([
+        ...(includesParent ? [D] : []),
+        bidBook,
+        acceptedBid,
+        bidderMarketState,
+        bidderAuthority,
+      ]);
+    },
+  );
+
+  it("rejects an ambiguous BidExclusive rejection dependency layout", async () => {
+    await expect(
+      validateTaskResult({
+        task: A,
+        worker: B,
+        treasury: C,
+        creator: D,
+        workerAuthority: A,
+        reviewer: signerA,
+        approved: false,
+        dependencyParent: D,
+        bidSettlement: {
+          acceptedBid: B,
+          bidderMarketState: C,
+          bidderAuthority: D,
+        },
+      }),
+    ).rejects.toThrow(/dependencyType/);
+
+    await expect(
+      validateTaskResult({
+        task: A,
+        worker: B,
+        treasury: C,
+        creator: D,
+        workerAuthority: A,
+        reviewer: signerA,
+        approved: false,
+        dependencyType: DependencyType.None,
+        dependencyParent: D,
+        bidSettlement: {
+          acceptedBid: B,
+          bidderMarketState: C,
+          bidderAuthority: D,
+        },
+      }),
+    ).rejects.toThrow(/independent task/);
+  });
+
+  it("requires a parent for declared dependent acceptance and Proof rejection", async () => {
+    const base = {
+      task: A,
+      worker: B,
+      treasury: C,
+      creator: D,
+      workerAuthority: A,
+      reviewer: signerA,
+      bidSettlement: {
+        acceptedBid: B,
+        bidderMarketState: C,
+        bidderAuthority: D,
+      },
+    } as const;
+
+    await expect(
+      validateTaskResult({
+        ...base,
+        approved: true,
+        dependencyType: DependencyType.Data,
+      }),
+    ).rejects.toThrow(/dependencyParent/);
+    await expect(
+      validateTaskResult({
+        ...base,
+        approved: false,
+        dependencyType: DependencyType.Proof,
+      }),
+    ).rejects.toThrow(/dependencyParent/);
   });
 });
 

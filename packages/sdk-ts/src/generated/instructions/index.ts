@@ -82,6 +82,7 @@ export * from "./setModerationBlock";
 export * from "./setServiceListingState";
 export * from "./setTaskJobSpec";
 export * from "./stakeReputation";
+export * from "./stampReleaseSurface";
 export * from "./submitTaskResult";
 export * from "./suspendAgent";
 export * from "./unsuspendAgent";

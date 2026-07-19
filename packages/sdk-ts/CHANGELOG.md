@@ -1,5 +1,23 @@
 # @tetsuo-ai/marketplace-sdk
 
+## 0.12.0 (unreleased candidate)
+
+### Release coordination
+
+- Regenerate the client for the 98-instruction revision-5 production candidate,
+  including the atomic release-surface stamp and hardened terminal-claim recovery.
+  The published 0.11.0 package remains the client release paired with the live
+  revision-4 program; publish 0.12.0 only in the coordinated revision-5 cutover.
+
+### Reliability and bounded reads
+
+- Expiry retries now fail closed when a post-broadcast signature cannot be
+  reconciled, preventing a duplicate non-idempotent submission. A proven
+  preflight `BlockhashNotFound` remains safe to retry.
+- Task-thread content fetches default to a 10-second timeout and 1 MiB response
+  cap, and thread reads default to 256 messages. Callers may override those
+  limits explicitly.
+
 ## 0.11.0
 
 ### Minor Changes
@@ -60,9 +78,10 @@
   equal share of the prize pool plus the refunded entry deposit and rent,
   settles the fee legs, and closes the claim + submission.
 - New `facade.reclaimTerminalClaim`: the permissionless janitor for claims
-  stranded on already-terminal tasks — requires a provably-absent submission,
-  returns claim rent to the worker authority, and forfeits any contest
-  entry-deposit surplus to the protocol treasury (never the creator).
+  stranded on already-terminal tasks — accepts canonical empty, Rejected, and
+  terminal Collaborative Submitted cleanup records. Empty/Rejected forms return
+  claim rent and forfeit eligible contest surplus to the protocol treasury;
+  Submitted stragglers receive the full claim and submission balances.
 - New exported constants (mirrors of the on-chain values):
   `CONTEST_ENTRY_DEPOSIT_LAMPORTS` (0.01 SOL refundable anti-slop entry
   deposit, carried as surplus on the contest claim PDA) and

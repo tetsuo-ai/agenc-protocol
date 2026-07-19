@@ -1,6 +1,6 @@
 {
   "name": "@tetsuo-ai/marketplace-tools",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Framework-neutral AgenC marketplace tool definitions (JSON-Schema) for AI agents — discovery, inspection, and unsigned mutation-prepare tools, with OpenAI / LangChain / CrewAI adapters",
   "packageManager": "npm@11.7.0",
   "type": "module",
@@ -34,7 +34,7 @@
     "docs:api": "typedoc"
   },
   "dependencies": {
-    "@tetsuo-ai/marketplace-sdk": "^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0"
+    "@tetsuo-ai/marketplace-sdk": "^0.12.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"

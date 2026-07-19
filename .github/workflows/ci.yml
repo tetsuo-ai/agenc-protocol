@@ -36,6 +36,16 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Install deployment/preflight dependencies
+        run: npm ci
+        working-directory: tests-integration
+
+      - name: Audit independent deployment/preflight dependencies
+        run: npm run audit:tests-integration
+
+      - name: Deployment and preflight script regressions
+        run: npm run test:deployment-scripts
+
       - name: Check program formatting
         run: cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
 
@@ -74,6 +84,11 @@ jobs:
 
       - name: Reject mixed release surfaces
         run: |
+          if bare_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features 2>&1); then
+            echo "bare --no-default-features unexpectedly compiled an unnamed full surface" >&2
+            exit 1
+          fi
+          grep -F "the full protocol surface requires spl-token-rewards" <<<"${bare_output}"
           if mixed_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --features mainnet-canary 2>&1); then
             echo "default features + mainnet-canary unexpectedly compiled" >&2
             exit 1

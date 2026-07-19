@@ -18,6 +18,16 @@ const IDL_DRIFT_WORKFLOW = new URL(
   "../.github/workflows/idl-drift.yml",
   import.meta.url,
 );
+const CI_WORKFLOW = new URL("../.github/workflows/ci.yml", import.meta.url);
+const SDK_WORKFLOW = new URL("../.github/workflows/sdk.yml", import.meta.url);
+const INTEGRATION_LOCKFILE = new URL(
+  "../tests-integration/package-lock.json",
+  import.meta.url,
+);
+const INTEGRATION_AUDIT_SCRIPT = new URL(
+  "./audit-tests-integration.mjs",
+  import.meta.url,
+);
 const TAG_BINDING_SCRIPT = new URL(
   "./verify-release-tag-binding.mjs",
   import.meta.url,
@@ -124,14 +134,24 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   const driftCanaryCompiled = driftNames.indexOf(
     "Compiled mainnet-canary LiteSVM regression",
   );
+  const driftIntegrationInstall = driftNames.indexOf(
+    "Install compiled canary integration dependencies",
+  );
   assert.ok(
     driftProductionBuild >= 0 &&
       driftProductionBuild < driftProductionArtifacts &&
       driftProductionArtifacts < driftCanaryBuild &&
       driftCanaryBuild < driftCanaryIdl &&
-      driftCanaryIdl < driftCanaryCompiled,
+      driftCanaryIdl < driftCanaryCompiled &&
+      driftIntegrationInstall >= 0 &&
+      driftIntegrationInstall < driftCanaryCompiled,
     "IDL drift must compare production artifacts before replacing the shared .so with canary",
   );
+  assert.equal(
+    driftSteps[driftIntegrationInstall]["working-directory"],
+    "tests-integration",
+  );
+  assert.match(driftSteps[driftIntegrationInstall].run, /^npm ci$/);
   assert.equal(driftSteps[driftCanaryCompiled].env.AGENC_CANARY_LITESVM, "1");
   assert.match(
     driftSteps[driftCanaryCompiled].run,
@@ -163,6 +183,129 @@ test("release shell never directly interpolates tag-derived package outputs", as
   assert.match(scripts, /git merge-base --is-ancestor/);
   assert.match(scripts, /invalid production executable hash/);
   assert.match(scripts, /invalid canary executable hash/);
+});
+
+test("normal pull-request CI enforces deployment and compiled integration gates", async () => {
+  const [ci, sdk, release, integrationLock, integrationAuditSource] = await Promise.all([
+    loadWorkflow(CI_WORKFLOW),
+    loadWorkflow(SDK_WORKFLOW),
+    loadWorkflow(RELEASE_WORKFLOW),
+    readFile(INTEGRATION_LOCKFILE, "utf8").then(JSON.parse),
+    readFile(INTEGRATION_AUDIT_SCRIPT, "utf8"),
+  ]);
+
+  const ciSteps = ci.jobs.verify.steps;
+  const deployment = ciSteps.find(
+    (step) => step.name === "Deployment and preflight script regressions",
+  );
+  assert.ok(deployment, "normal CI must run deployment/preflight regressions");
+  assert.match(deployment.run, /test:deployment-scripts/);
+  const ciPreflightInstall = ciSteps.find(
+    (step) => step.name === "Install deployment/preflight dependencies",
+  );
+  assert.ok(ciPreflightInstall);
+  assert.equal(ciPreflightInstall["working-directory"], "tests-integration");
+  assert.match(ciPreflightInstall.run, /^npm ci$/);
+  const ciPreflightAudit = ciSteps.find(
+    (step) => step.name === "Audit independent deployment/preflight dependencies",
+  );
+  assert.ok(ciPreflightAudit);
+  assert.match(ciPreflightAudit.run, /audit:tests-integration/);
+  assert.ok(
+    ciSteps.indexOf(ciPreflightInstall) < ciSteps.indexOf(ciPreflightAudit) &&
+      ciSteps.indexOf(ciPreflightAudit) < ciSteps.indexOf(deployment),
+  );
+
+  const releaseSteps = release.jobs.release.steps;
+  const releasePreflightInstall = releaseSteps.find(
+    (step) => step.name === "Install deployment/preflight dependencies",
+  );
+  const releaseProtocolMatrix = releaseSteps.find(
+    (step) => step.name === "Protocol Rust release matrix",
+  );
+  assert.ok(releasePreflightInstall);
+  assert.ok(releaseProtocolMatrix);
+  assert.equal(
+    releasePreflightInstall["working-directory"],
+    "tests-integration",
+  );
+  assert.match(releasePreflightInstall.if, /protocol-v/);
+  assert.match(releasePreflightInstall.run, /^npm ci$/);
+  const releasePreflightAudit = releaseSteps.find(
+    (step) => step.name === "Audit independent deployment/preflight dependencies",
+  );
+  assert.ok(releasePreflightAudit);
+  assert.match(releasePreflightAudit.if, /protocol-v/);
+  assert.match(releasePreflightAudit.run, /audit:tests-integration/);
+  assert.ok(
+    releaseSteps.indexOf(releasePreflightInstall) <
+      releaseSteps.indexOf(releasePreflightAudit) &&
+      releaseSteps.indexOf(releasePreflightAudit) <
+        releaseSteps.indexOf(releaseProtocolMatrix),
+  );
+
+  const sdkSteps = sdk.jobs["sdk-e2e"].steps;
+  const integration = sdkSteps.find(
+    (step) => step.name === "Root compiled-program integration suite",
+  );
+  assert.ok(integration, "normal SDK PR CI must run the root compiled integration suite");
+  assert.match(integration.run, /tests-integration\/\*\.test\.mjs/);
+  const integrationInstall = sdkSteps.find(
+    (step) => step.name === "Install compiled-program integration dependencies",
+  );
+  assert.ok(
+    integrationInstall,
+    "compiled integration CI must install its independent lockfile",
+  );
+  assert.equal(integrationInstall["working-directory"], "tests-integration");
+  assert.match(integrationInstall.run, /^npm ci$/);
+  assert.equal(integrationLock.lockfileVersion, 3);
+  assert.equal(
+    integrationLock.packages[""].dependencies["@coral-xyz/anchor"],
+    "^0.32.1",
+  );
+  assert.equal(
+    integrationLock.packages["node_modules/rpc-websockets"].version,
+    "9.3.8",
+  );
+  assert.equal(
+    integrationLock.packages[
+      "node_modules/rpc-websockets/node_modules/uuid"
+    ].version,
+    "11.1.1",
+  );
+  assert.match(integrationAuditSource, /reviewedHighAdvisories/);
+  assert.match(integrationAuditSource, /report\.error !== undefined/);
+  assert.match(integrationAuditSource, /require\("@solana\/web3\.js"\)/);
+  const idlStage = sdkSteps.find(
+    (step) => step.name === "Stage committed IDL for compiled integration harness",
+  );
+  assert.ok(idlStage, "compiled integration CI must stage its reviewed IDL");
+  assert.match(
+    idlStage.run,
+    /artifacts\/anchor\/idl\/agenc_coordination\.json/,
+  );
+  assert.match(idlStage.run, /target\/idl\/agenc_coordination\.json/);
+  const buildIndex = sdkSteps.findIndex(
+    (step) => step.name === "Build program (full surface, default features)",
+  );
+  const integrationInstallIndex = sdkSteps.indexOf(integrationInstall);
+  const idlStageIndex = sdkSteps.indexOf(idlStage);
+  const integrationIndex = sdkSteps.indexOf(integration);
+  assert.ok(buildIndex >= 0 && buildIndex < integrationIndex);
+  assert.ok(
+    integrationInstallIndex >= 0 && integrationInstallIndex < integrationIndex,
+  );
+  assert.ok(idlStageIndex > buildIndex && idlStageIndex < integrationIndex);
+
+  for (const workflow of [ci, release]) {
+    const rejectStep = Object.values(workflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .find((step) => step.name === "Reject mixed release surfaces");
+    assert.ok(rejectStep);
+    assert.match(rejectStep.run, /--no-default-features/);
+    assert.match(rejectStep.run, /full protocol surface requires spl-token-rewards/);
+  }
 });
 
 test("package resolver exports only shell-safe version text", async (t) => {

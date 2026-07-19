@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --tsconfig tsconfig.test.json --test \"test/*.test.ts\" \"test/*.test.tsx\"",
+    "test": "tsx --tsconfig tsconfig.test.json --test test/*.test.ts test/*.test.tsx",
     "check:setup": "tsx scripts/check-setup.ts",
     "verify:clean": "node scripts/verify-clean-install.mjs",
     "verify:registry": "node scripts/verify-registry-install.mjs"

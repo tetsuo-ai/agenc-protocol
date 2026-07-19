@@ -2,7 +2,7 @@
 //
 // One program ID historically served the restricted 25-instruction canary surface on
 // mainnet and the full surface on dev/devnet. The live revision-4 deployment has
-// 99 instructions; this revision-5 production candidate has 97 after quarantining
+// 99 instructions; this revision-5 production candidate has 98 after quarantining
 // private-ZK entrypoints and retiring the dispute-vote path.
 // `getDeployedSurface` lets a client ask, against a live RPC, WHICH surface a given
 // cluster actually exposes — so the facade/client can fail-closed (throw
@@ -58,7 +58,7 @@ export const SURFACE_REVISION_FULL = 1;
 export const SURFACE_REVISION_BATCH4 = 4;
 
 /**
- * Audit-hardening release revision. The production inventory is 97 instructions, and
+ * Audit-hardening release revision. The production inventory is 98 instructions, and
  * several existing instructions gained stricter remaining-account conventions.
  * Mirrors `ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING` on-chain.
  */

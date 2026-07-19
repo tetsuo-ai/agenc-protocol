@@ -349,10 +349,10 @@ pub fn handler(ctx: Context<AcceptTaskResult>) -> Result<()> {
     // submission has been rejected (losers' claim + submission rent must flow
     // back to them before the task can go terminal). No-op for non-contests.
     validate_contest_accept_window(&ctx.accounts.task, clock.unix_timestamp)?;
-    // Audit M-2: block a completing accept for a Collaborative task while a peer submission
-    // is still live (see validate_completing_accept_sole_submission). MUST run BEFORE the
-    // pending-count / live-submission decrement below, while this submission is still
-    // counted in live_submissions().
+    // Audit M-2: block a completing non-Collaborative accept while a peer
+    // submission is live. Collaborative tasks are deliberately exempt because
+    // reclaim_terminal_claim provides terminal cleanup for Submitted peers.
+    // MUST run before this submission leaves the live-submission counter.
     validate_completing_accept_sole_submission(&ctx.accounts.task)?;
 
     validate_task_dependency(

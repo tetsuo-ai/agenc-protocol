@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**388 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**393 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -351,7 +351,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6337 | 0x18c1 | `SubmissionRentAccountsRequired` | Straggler submission rent requires its worker agent + worker authority accounts (never paid to the creator) |
 | 6338 | 0x18c2 | `ContestForfeitTreasuryRequired` | Contest no-show forfeit requires the protocol treasury account |
 | 6339 | 0x18c3 | `ClaimReclaimRequiresTerminalTask` | reclaim_terminal_claim requires a terminal (Completed/Cancelled) task |
-| 6340 | 0x18c4 | `ClaimReclaimRequiresNoSubmission` | reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim) |
+| 6340 | 0x18c4 | `ClaimReclaimRequiresNoSubmission` | reclaim_terminal_claim requires a canonical empty, Rejected, or terminal Collaborative Submitted record |
 | 6341 | 0x18c5 | `GoodsSurfaceNotEnabled` | Goods market requires surface revision 4 to be stamped (update_launch_controls) |
 | 6342 | 0x18c6 | `GoodsInvalidId` | Good id must be non-zero |
 | 6343 | 0x18c7 | `GoodsInvalidName` | Good name must be non-zero |
@@ -399,3 +399,8 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6385 | 0x18f1 | `MarketplacePayeeAccountAlias` | A marketplace fee payee cannot alias the task or its escrow account |
 | 6386 | 0x18f2 | `LamportTransferAccountAlias` | A positive lamport transfer requires distinct source and destination accounts |
 | 6387 | 0x18f3 | `ReputationDelegationRecoveryAccountsRequired` | Orphan delegation recovery requires the canonical protocol config and writable treasury |
+| 6388 | 0x18f4 | `ReleaseStampRequiresPaused` | The reviewed release surface can only be stamped while the protocol is paused |
+| 6389 | 0x18f5 | `ReleaseBoundaryAccountMismatch` | A release-boundary account does not match its reviewed identity or loader state |
+| 6390 | 0x18f6 | `ReleaseBoundaryDigestMismatch` | A release-boundary account data digest changed before the atomic stamp |
+| 6391 | 0x18f7 | `ReleaseProgramDataNotSettled` | The reviewed ProgramData upgrade slot has not settled before the release stamp |
+| 6392 | 0x18f8 | `ReleaseUnpauseRequiresCurrentSurface` | The full production protocol can only be unpaused after the current release surface is atomically stamped |

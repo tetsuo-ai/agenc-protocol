@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**97 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**98 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -87,6 +87,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`set_service_listing_state`](#set_service_listing_state)
 - [`set_task_job_spec`](#set_task_job_spec)
 - [`stake_reputation`](#stake_reputation)
+- [`stamp_release_surface`](#stamp_release_surface)
 - [`submit_task_result`](#submit_task_result)
 - [`suspend_agent`](#suspend_agent)
 - [`unsuspend_agent`](#unsuspend_agent)
@@ -1532,13 +1533,13 @@ _None._
 
 ## reclaim_terminal_claim
 
-Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim
-stranded on an already-terminal (Completed/Cancelled) task (fix round):
-claim rent to the worker, contest entry-deposit surplus forfeited to the
-treasury, slot counters freed (un-bricks close_task + the worker's
-active_tasks budget). Requires unfakeable proof there is no live
-submission (the derived submission PDA must be empty). Exit path —
-settles even while paused (money never locks).
+Permissionlessly reclaim an unsettled claim stranded on an already-terminal
+(Completed/Cancelled) task. The canonical submission PDA must prove an
+empty/no-submission record, a Rejected submission, or a still-Submitted
+Collaborative straggler after completion. Frees task/worker slot counters,
+returns eligible claim/submission balances to the worker, and forfeits any
+applicable no-show/rejection surplus to the treasury. Exit path — settles
+even while paused (money never locks).
 
 ### Accounts (9)
 
@@ -1547,12 +1548,12 @@ settles even while paused (money never locks).
 | 1 | `authority` |  | yes |  |  | Permissionless caller; pays only the transaction fee. |
 | 2 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
 | 3 | `claim` | yes |  |  | PDA ["claim", account:task, account:worker] |  |
-| 4 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] | The derived `["task_submission", claim]` PDA — the unfakeable liveness probe. It must be system-owned with zero data (no submission was ever made for this claim, or it was already closed together with the claim by a settlement path — in which case THIS claim would not exist) OR hold a REJECTED submission (audit F-3 — then its rent is returned to the worker and it is tombstoned here, hence `mut`). A live program-owned submission in any other state means the claim is still settleable by the normal paths and must not be short-circuited. |
+| 4 | `task_submission` | yes |  |  | PDA ["task_submission", account:claim] | The derived `["task_submission", claim]` PDA — the unfakeable liveness probe. It must be system-owned with zero data (no submission was ever made for this claim, or it was already closed together with the claim by a settlement path — in which case THIS claim would not exist) OR hold a REJECTED submission (audit F-3 — then its rent is returned to the worker and it is tombstoned here, hence `mut`), OR hold a still-SUBMITTED Collaborative straggler after the task completed (its validation debt is settled here). A live program-owned submission in any other shape means the claim is still settleable by the normal paths and must not be short-circuited. |
 | 5 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] | Validation counters for terminal cleanup of a still-Submitted Collaborative straggler. Omitted for the historical no-submission and Rejected-submission cleanup forms. |
 | 6 | `worker` | yes |  |  | PDA ["agent", account:worker.agent_id (AgentRegistration)] |  |
 | 7 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
 | 8 | `treasury` | yes |  |  |  | Receives the forfeited contest entry-deposit surplus (never the creator); 0 lamports for non-contest claims. |
-| 9 | `rent_recipient` | yes |  |  |  | worker authority (stored pubkey; no caller-supplied-account trust). |
+| 9 | `rent_recipient` | yes |  |  |  | Receives the eligible claim refund (rent minimum for an empty or Rejected record; full balance for a Submitted Collaborative straggler) and any closed submission balance. No caller-supplied-account trust. |
 
 ### Args (0)
 
@@ -2106,6 +2107,40 @@ Creates or adds to an existing reputation stake account.
 | # | Arg | Type |
 |---|---|---|
 | 1 | `amount` | `u64` |
+
+## stamp_release_surface
+
+Atomically verify the reviewed mainnet release accounts and stamp the
+current surface revision while the protocol remains paused.
+
+### Accounts (7)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `protocol_config` | yes |  |  | PDA ["protocol"] |  |
+| 2 | `bid_marketplace_config` |  |  |  | PDA ["bid_marketplace"] |  |
+| 3 | `moderation_config` |  |  |  | PDA ["moderation_config"] |  |
+| 4 | `program_data` |  |  |  |  | below before any state write. Read-only inclusion also takes the runtime account lock against a concurrent loader upgrade. |
+| 5 | `anchor_idl` |  |  |  |  |  |
+| 6 | `upgrade_authority_custody` |  |  |  |  | reviewed arguments. Its read lock prevents a concurrent custody-policy mutation from crossing the stamp boundary. |
+| 7 | `authority` |  | yes |  |  |  |
+
+### Args (12)
+
+| # | Arg | Type |
+|---|---|---|
+| 1 | `disabled_task_type_mask` | `u8` |
+| 2 | `surface_revision` | `u16` |
+| 3 | `expected_protocol_config_hash` | `[u8; 32]` |
+| 4 | `expected_program_data_slot` | `u64` |
+| 5 | `expected_program_data_payload_len` | `u32` |
+| 6 | `expected_upgrade_authority` | `pubkey` |
+| 7 | `expected_bid_config_hash` | `[u8; 32]` |
+| 8 | `expected_moderation_config_hash` | `[u8; 32]` |
+| 9 | `expected_idl_account_hash` | `[u8; 32]` |
+| 10 | `expected_custody_address` | `pubkey` |
+| 11 | `expected_custody_owner` | `pubkey` |
+| 12 | `expected_custody_account_hash` | `[u8; 32]` |
 
 ## submit_task_result
 

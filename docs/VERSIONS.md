@@ -5,11 +5,11 @@ release surfaces:
 
 - the restricted **25-instruction canary** surface (`--features mainnet-canary`) —
   a conservative BUILD that still exists in the source; and
-- the full production surface (the pending revision-5 candidate is **97
+- the full production surface (the pending revision-5 candidate is **98
   instructions** with default features).
 
 An explicit development-only `private-zk` feature adds three quarantined proof
-instructions, producing a 100-instruction build. It is not a release surface and
+instructions, producing a 101-instruction build. It is not a release surface and
 the deployment preflight rejects a production build or IDL that contains it.
 
 > **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
@@ -33,7 +33,7 @@ just from the address. P6.5 makes that knowable on-chain and answerable from the
 | `2` (`SURFACE_REVISION_BATCH2`) | Batch-2: **94 ix** — store identity, moderation heartbeat, dispute/freeze-exit referrer legs, `rate_hire` rollup | full-surface capabilities `true`; **`goods: false`** |
 | `3` (`SURFACE_REVISION_BATCH3`) | Batch-3 contest: **96 ix** — submission-rent return, contest rails (`distribute_ghost_share`, `reclaim_terminal_claim`, entry deposit, selection window) | full-surface capabilities `true`; **`goods: false`** |
 | `4` (`SURFACE_REVISION_BATCH4`) | Batch-4 goods: **99 ix** — `create_goods_listing` / `purchase_good` / `update_goods_listing` (handlers require `surface_revision >= 4`) | full-surface capabilities `true`; **`goods: true`** |
-| `5` (`SURFACE_REVISION_AUDIT_HARDENING`) | Pending 2026-07 audit-hardening contract: **97 production ix**; explicitly retires the three unaudited private-ZK entrypoints, adds orphan-child recovery, and tightens account/finalizer conventions | full-surface capabilities `true`; **`goods: true`** |
+| `5` (`SURFACE_REVISION_AUDIT_HARDENING`) | Pending 2026-07 audit-hardening contract: **98 production ix**; explicitly retires the three unaudited private-ZK entrypoints, adds orphan-child recovery and an atomic release-boundary stamp, and tightens account/finalizer conventions | full-surface capabilities `true`; **`goods: true`** |
 
 > **Goods is the first revision-gated capability.** Revisions ≥ 1 still imply the
 > pre-goods full capability set (`listings`, `disputes`, `bonds`, …); only
@@ -61,14 +61,22 @@ otherwise fail with a raw "instruction not found" error.
 
 The live account is brought forward by **`migrate_protocol`** (realloc 349→351,
 zero-init `surface_revision = 0`, multisig-gated, idempotent, version-ungated — call it
-with `target_version == current_version` = `1` for the realloc-only path). An operator
-then stamps the real revision via **`update_launch_controls`** (existing multisig
-config-update authority; rejects unknown revisions with `InvalidSurfaceRevision`).
+with `target_version == current_version` = `1` for the realloc-only path). Historical
+revisions `0`–`4` remain selectable through **`update_launch_controls`** for
+conservative rollback. Revision `5` can be established only by
+**`stamp_release_surface`**, which atomically verifies the reviewed ProtocolConfig,
+singletons, ProgramData metadata, on-chain IDL, and upgrade-custody account.
 
-A **fresh full-surface deploy** stamps `SURFACE_REVISION_CURRENT` (`5` in this
-source) in `initialize_protocol`, so it advertises the exact wire contract compiled
-into the binary. Goods handlers are enabled at every revision `>= 4`; a fresh
-**canary** deploy stamps `0`.
+A **fresh production deploy** initializes with `protocol_paused = true` and
+`surface_revision = 0`; initialization alone is not proof that the reviewed
+release singletons, IDL, and custody boundary are present. Production reaches
+`SURFACE_REVISION_CURRENT` (`5` in this source) only through
+`stamp_release_surface`. After that stamp, `update_launch_controls` may unpause
+only when the resulting stored revision is CURRENT; rolling back to revision
+`0`–`4` pauses conservatively and requires a new atomic stamp before another
+unpause. Goods handlers are enabled at every revision `>= 4`. The restricted
+**canary** has no atomic stamp instruction, remains at revision `0`, and may be
+unpaused on that conservative surface.
 
 ## Compatibility matrix (program build ↔ SDK semver ↔ cluster)
 
@@ -80,15 +88,16 @@ into the binary. Goods handlers are enabled at every revision `>= 4`; a fresh
 | Program build | Live surface | Cluster | `surface_revision` | SDK semver | `listings` | `goods` |
 |---|---|---|---|---|---|---|
 | full | **99 ix** | **mainnet** (live as of 2026-07-09) | `4` (BATCH4) | `@tetsuo-ai/marketplace-sdk` **0.8.x – 0.11.x** (goods facade: **≥ 0.11.0**) | `true` | `true` |
-| production audit-hardening candidate | **97 ix** | pending next mainnet upgrade | `5` | coordinated SDK release required | `true` | `true` |
-| explicit `private-zk` development build | 100 ix | local development only | not releasable | unsupported | n/a | n/a |
+| production audit-hardening candidate | **98 ix** | pending next mainnet upgrade | `5` | `@tetsuo-ai/marketplace-sdk` **0.12.0 candidate** (unreleased) | `true` | `true` |
+| explicit `private-zk` development build | 101 ix | local development only | not releasable | unsupported | n/a | n/a |
 | historical full builds | 84…99 ix | devnet / localnet | `1`…`4` | version-matched client required | `true` if ≥ 1 | `true` only if ≥ 4 |
 | `mainnet-canary` | 25 ix | mainnet (HISTORICAL, pre-2026-06-11) | absent (349B) / `0` | ≥ 0.4.0 | `false` | `false` |
 
 Current published packages at the time of writing: `@tetsuo-ai/protocol` **0.3.0**
 and `@tetsuo-ai/marketplace-sdk` **0.11.0** speak the live revision-4 wire. The
-revision-5 program and regenerated 97-instruction clients must be released as one
-coordinated compatibility set; they are not yet live.
+unreleased candidates are protocol **0.4.0** and SDK **0.12.0**. The revision-5
+program and regenerated 98-instruction clients must be released as one coordinated
+compatibility set; they are not yet live.
 
 ## Release runbook — `anchor idl init` per cluster (fetchable on-chain IDL)
 
@@ -100,20 +109,8 @@ program deploy/upgrade:
    - mainnet canary: `npm run canary:build && npm run canary:idl && npm run canary:check-idl`
      (the IDL surface must stay at exactly **25** instructions — `check-canary-idl.mjs`).
    - dev/devnet full: `anchor build` then `npm run artifacts:refresh && npm run artifacts:check`.
-2. Publish the on-chain IDL for that cluster (first deploy) / upgrade it (subsequent):
-   ```bash
-   # first time on a cluster:
-   anchor idl init   <PROGRAM_ID> -f target/idl/agenc_coordination.json --provider.cluster <devnet|mainnet>
-   # later upgrades on that cluster:
-   anchor idl upgrade <PROGRAM_ID> -f target/idl/agenc_coordination.json --provider.cluster <devnet|mainnet>
-   ```
-   Publish the IDL that matches the surface actually live on the target cluster.
-   Mainnet now runs the full surface, so publish the full `agenc_coordination.json`
-   there; only a cluster still running the `--features mainnet-canary` build takes the
-   25-instruction `agenc_coordination.canary.json`. The on-chain IDL must match the
-   surface that is actually live.
-3. Run the **169-task + single-config migration choreography** (binary-first → migrate
-   all live accounts → version/surface stamp last). `migrate_protocol` reallocs the
+2. Deploy the hash-approved binary, then run the **169-task + single-config migration
+   choreography** (binary-first → migrate all live accounts). `migrate_protocol` reallocs the
    config; `migrate_task` reallocs the live tasks (169 at the 2026-06-11 mainnet
    upgrade). Both are idempotent and multisig-gated.
 
@@ -134,10 +131,17 @@ program deploy/upgrade:
    and 351B (post) config. The natural "migrate the tasks, then the config" order is
    therefore safe. The first-call constraint above is about restoring the rest of the live
    surface (every typed-`Account<ProtocolConfig>` instruction), not about the migration pair.
-4. **Stamp the surface**: `update_launch_controls(..., surface_revision)` —
-   stamp the highest revision actually verified live (`4` for the currently deployed
-   mainnet binary; `5` only after the audit-hardening artifact is verified live);
-   otherwise leave `0` or the last verified lower revision.
+3. Initialize/verify release singletons, then publish the on-chain IDL and fetch it
+   back before advertising the revision. For the full mainnet surface, use
+   `scripts/mainnet-upgrade.mjs`: it derives an ABI-complete docs-free projection
+   from the hash-approved documented IDL, pins Anchor 0.32.1, verifies the live IDL
+   authority and capacity, and checks every published non-`docs` value. Do not invoke
+   `anchor idl init/upgrade` directly with the oversized documented full IDL.
+4. **Stamp the surface last**: use `update_launch_controls(..., 4)` only for the
+   historical revision-4 artifact. Establish revision `5` only with the atomic
+   `stamp_release_surface` rail after every reviewed dependency is verified and
+   locked in that transaction; otherwise leave `0` or the last verified lower
+   revision.
 5. Update the matrix above (program build, cluster, `surface_revision`, SDK semver) and
    `docs/MAINNET_MAINLINE.md` in the same release window.
 

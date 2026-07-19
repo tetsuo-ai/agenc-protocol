@@ -1,5 +1,17 @@
 # @tetsuo-ai/agenc-cli
 
+## 0.3.0 (unreleased candidate)
+
+### Release coordination
+
+- Align generated projects and runtime dependencies on the coordinated
+  revision-5 candidates: `@tetsuo-ai/marketplace-sdk@^0.12.0` and
+  `@tetsuo-ai/agenc-worker@^0.2.0`. `agenc promote` recognizes both the
+  published revision-4-compatible lines and this explicitly unreleased candidate
+  set; its install hint now points at SDK 0.12.0.
+- The unscoped `agenc-cli` alias advances to 0.3.0 with the scoped package. The
+  published 0.2.0 pair remains current until the coordinated cutover.
+
 ## 0.2.0
 
 Onboarding-funnel release — a cold machine now gets from `npx` to a settled

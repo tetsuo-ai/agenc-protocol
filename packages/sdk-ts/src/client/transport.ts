@@ -6,9 +6,12 @@
 import {
   getBase64EncodedWireTransaction,
   getSignatureFromTransaction,
+  isSolanaError,
   sendAndConfirmTransactionFactory,
   SolanaError,
   SOLANA_ERROR__BLOCK_HEIGHT_EXCEEDED,
+  SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+  SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND,
   type Blockhash,
   type Commitment,
   type GetEpochInfoApi,
@@ -41,11 +44,15 @@ export interface LatestBlockhash {
 
 /** Result of a confirmed transaction submission. */
 export interface TransportSendResult {
-  /** Base58 transaction signature. */
+  /**
+   * Base58 signature of the exact `signedTx` passed to `sendAndConfirm`.
+   * The client validates this against the locally signed wire transaction.
+   */
   signature: string;
   /**
    * Program logs for the transaction. Transports that cannot cheaply provide
-   * logs on success (e.g. the subscription-based RPC path) return `[]`.
+   * logs on success (e.g. the subscription-based RPC path) return `[]`. This
+   * must be an array of strings; the client rejects malformed success results.
    */
   logs: readonly string[];
 }
@@ -73,14 +80,22 @@ export interface TransportSignatureStatus {
  *
  * Implementations exist for kit RPC ({@link createRpcTransport}) and litesvm
  * (the e2e test transport); the P2.1 sandbox injects its own. A transport's
- * `sendAndConfirm` MUST reject on failure; the rejection is hydrated into an
- * `AgencError` by the client. Attaching a `logs: string[]` property to the
- * thrown error lets the client surface program logs on failures, and attaching
- * a `signature: string` property to every error thrown after submission lets
- * the client expose which in-flight transaction the failure refers to
- * (`AgencError.signature`).
+ * `sendAndConfirm` MUST reject on failure. Once a custom transport has been
+ * invoked, every rejection is conservatively treated as outcome-ambiguous and
+ * bound to the locally derived wire signature, even if the rejection omitted
+ * one. A reported signature is trusted only when it exactly matches that local
+ * signature. Attaching `logs: string[]` still lets the client surface failure
+ * logs. Automatic re-signing is reserved for an internal, SDK-branded
+ * first-party BlockhashNotFound preflight rejection; custom transports cannot
+ * create that capability by returning a matching error shape.
  */
 export interface Transport {
+  /**
+   * Commitment that `sendAndConfirm` promises to reach. Custom transports may
+   * omit this; expiry reconciliation then conservatively requires
+   * `"confirmed"`.
+   */
+  readonly confirmationCommitment?: Commitment;
   /**
    * Fetch a fresh blockhash for transaction lifetimes.
    * @returns The latest blockhash and its `lastValidBlockHeight`.
@@ -89,18 +104,19 @@ export interface Transport {
   /**
    * Submit a signed transaction and wait until it is confirmed.
    * @param signedTx - The fully signed, blockhash-lifetime transaction.
-   * @returns The signature and (when available) the program logs.
+   * @returns The exact signature of `signedTx` and a string-array of logs.
+   * A mismatched, empty, or malformed success result is rejected as an unknown
+   * outcome carrying the local signature and must not be re-submitted.
    */
   sendAndConfirm(signedTx: SignedTransaction): Promise<TransportSendResult>;
   /**
    * OPTIONAL: look up the current status of a previously submitted signature.
    *
-   * When implemented, the client uses this before every blockhash-expiry
-   * triggered re-sign to detect the race where the expiry signal (block
-   * height) outruns the status view while the original transaction actually
-   * landed — short-circuiting to the FIRST signature instead of submitting a
-   * duplicate. Transports that cannot check (e.g. fire-and-forget venues) may
-   * omit it; the client then falls back to plain re-sign-and-resend.
+   * For an unmarked expiry rejection, the client uses this to detect the race
+   * where the expiry signal outruns the status view while the original
+   * transaction actually landed. A status at the promised commitment returns
+   * the FIRST signature; an absent/unavailable status fails closed without a
+   * re-sign. Transports that cannot check may omit it.
    *
    * @param signature - Base58 signature of the transaction to look up.
    * @returns The status snapshot, or `null` when the cluster has not seen the
@@ -178,19 +194,225 @@ function stringifyTransactionError(err: unknown): string {
 const EXPIRY_STATUS_RECHECKS = 2;
 
 /**
- * Attach the submitted transaction's signature to an error thrown after
- * submission (without clobbering an existing one), so consumers — and the
- * client's `AgencError` hydration — can reconcile in-flight outcomes.
+ * Return an error carrying the submitted transaction's signature (without
+ * clobbering an existing one), so consumers — and the client's `AgencError`
+ * hydration — can reconcile in-flight outcomes. JavaScript permits rejecting
+ * with primitives and frozen objects, so wrap when mutation is impossible.
  */
-function attachSignature(error: unknown, signature: string): void {
-  if (error === null || typeof error !== "object") return;
-  const carrier = error as { signature?: unknown };
-  if (typeof carrier.signature === "string") return;
-  try {
-    carrier.signature = signature;
-  } catch {
-    // Frozen/sealed error object — nothing more we can do.
+function withSignature(error: unknown, signature: string): unknown {
+  if (error !== null && typeof error === "object") {
+    const carrier = error as { signature?: unknown };
+    try {
+      if (
+        typeof carrier.signature === "string" &&
+        carrier.signature.length > 0
+      ) {
+        return error;
+      }
+      carrier.signature = signature;
+      if (carrier.signature === signature) return error;
+    } catch {
+      // Frozen/sealed/proxied object: preserve it as the wrapper's cause below.
+    }
   }
+
+  const message =
+    error instanceof Error && error.message
+      ? error.message
+      : typeof error === "string" && error.length > 0
+        ? error
+        : `Transaction ${signature} failed after submission`;
+  const wrapped = new Error(message, { cause: error }) as Error & {
+    signature: string;
+  };
+  wrapped.signature = signature;
+  return wrapped;
+}
+
+/** True only for a typed/-32002 RPC simulation rejection before broadcast. */
+function isTypedSendTransactionPreflightFailure(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 16 && current != null; depth += 1) {
+    if (
+      isSolanaError(
+        current,
+        SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+      )
+    ) {
+      return true;
+    }
+    try {
+      const carrier = current as {
+        code?: unknown;
+        context?: { __code?: unknown; err?: unknown };
+      };
+      if (
+        carrier.code ===
+          SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE ||
+        carrier.context?.__code ===
+          SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE
+      ) {
+        return true;
+      }
+      current = (current as { cause?: unknown }).cause;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Polling adapters may preserve only raw `context.err` at the direct
+ * `sendTransaction().send()` response seam. That seam is still before any
+ * status/confirmation work, so this narrow compatibility fallback is safe
+ * there. It must not be used around the subscription helper's combined
+ * send-and-confirm boundary.
+ */
+function isDirectSendPreflightFailure(error: unknown): boolean {
+  if (isTypedSendTransactionPreflightFailure(error)) return true;
+  let current = error;
+  for (let depth = 0; depth < 16 && current != null; depth += 1) {
+    try {
+      const carrier = current as {
+        context?: { err?: unknown };
+        cause?: unknown;
+      };
+      if (carrier.context?.err === "BlockhashNotFound") return true;
+      current = carrier.cause;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** True only when a deterministic preflight rejection is BlockhashNotFound. */
+function isBlockhashNotFoundPreflightFailure(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 16 && current != null; depth += 1) {
+    if (
+      isSolanaError(
+        current,
+        SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND,
+      )
+    ) {
+      return true;
+    }
+    try {
+      const carrier = current as {
+        transactionError?: unknown;
+        context?: { err?: unknown };
+        cause?: unknown;
+      };
+      if (
+        carrier.transactionError === "BlockhashNotFound" ||
+        carrier.context?.err === "BlockhashNotFound"
+      ) {
+        return true;
+      }
+      current = carrier.cause;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Private capability set for errors the SDK itself proved happened before
+ * broadcast and may therefore be retried with a fresh blockhash. A WeakMap is
+ * deliberately used instead of a public structural property: custom
+ * transports cannot accidentally (or by copying an error shape) opt into the
+ * automatic re-sign path. Binding the capability to the exact wire signature
+ * also prevents replaying a branded error for another transaction.
+ */
+const retrySafePreBroadcastFailures = new WeakMap<object, string>();
+
+function markRetrySafePreBroadcastFailure(
+  error: unknown,
+  wireSignature: string,
+): unknown {
+  if (
+    error !== null &&
+    (typeof error === "object" || typeof error === "function")
+  ) {
+    retrySafePreBroadcastFailures.set(error as object, wireSignature);
+    return error;
+  }
+  // The current first-party preflight classifiers always produce objects, but
+  // retain a safe fallback so a future adapter cannot lose the capability by
+  // rejecting with a primitive.
+  const wrapped = new Error("Retry-safe RPC preflight failure", {
+    cause: error,
+  });
+  retrySafePreBroadcastFailures.set(wrapped, wireSignature);
+  return wrapped;
+}
+
+/**
+ * Internal predicate consumed by the sibling client module. This is not
+ * re-exported from the package's public client barrel; only an object branded
+ * by this module's private WeakMap for that exact wire signature can pass it.
+ */
+export function isRetrySafePreBroadcastFailure(
+  error: unknown,
+  wireSignature: string,
+): boolean {
+  return (
+    error !== null &&
+    (typeof error === "object" || typeof error === "function") &&
+    retrySafePreBroadcastFailures.get(error as object) === wireSignature
+  );
+}
+
+/** Internal sentinel for a failure before an RPC request object exists. */
+class RpcRequestConstructionFailure extends Error {
+  readonly original: unknown;
+
+  constructor(original: unknown) {
+    super("RPC sendTransaction request construction failed", { cause: original });
+    this.name = "RpcRequestConstructionFailure";
+    this.original = original;
+  }
+}
+
+/**
+ * Kit's subscription helper combines request construction, send, and confirm
+ * in one promise. Guard only the synchronous construction call so its outer
+ * catch can distinguish a proven pre-submission failure from an ambiguous
+ * send/confirmation failure.
+ */
+function guardSendTransactionConstruction(
+  rpc: RpcTransportRpc,
+): RpcTransportRpc {
+  const boundMethods = new Map<PropertyKey, unknown>();
+  // Proxy a fresh target rather than `rpc` itself. A frozen custom RPC may
+  // expose non-configurable methods, and ECMAScript forbids a Proxy from
+  // returning wrappers for those properties when the original is its target.
+  const proxyTarget = Object.create(null) as RpcTransportRpc;
+  return new Proxy(proxyTarget, {
+    get(_target, property) {
+      if (property !== "sendTransaction") {
+        const value = Reflect.get(rpc, property, rpc);
+        if (typeof value !== "function") return value;
+        if (!boundMethods.has(property)) {
+          // Preserve class/private-field and other receiver-sensitive RPC
+          // implementations; the guard proxy must be transparent to every
+          // method except sendTransaction construction.
+          boundMethods.set(property, value.bind(rpc));
+        }
+        return boundMethods.get(property);
+      }
+      return (...args: Parameters<RpcTransportRpc["sendTransaction"]>) => {
+        try {
+          return rpc.sendTransaction(...args);
+        } catch (error) {
+          throw new RpcRequestConstructionFailure(error);
+        }
+      };
+    },
+  });
 }
 
 /**
@@ -212,7 +434,8 @@ function attachSignature(error: unknown, signature: string): void {
  * signaling expiry. A residual window remains: a status view lagging longer
  * than the rechecks can still mis-report a landed transaction as expired, so
  * the client additionally rechecks via {@link Transport.getSignatureStatus}
- * before any re-sign.
+ * before any possible re-sign. If that status remains unavailable, the
+ * transport's attached signature makes the client fail closed.
  *
  * Every error thrown after submission carries a `signature` property (lifted
  * into `AgencError.signature`): on a timeout or mid-poll network failure the
@@ -262,10 +485,11 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
 
   if (rpcSubscriptions) {
     const sendAndConfirmTransaction = sendAndConfirmTransactionFactory({
-      rpc,
+      rpc: guardSendTransactionConstruction(rpc),
       rpcSubscriptions,
     });
     return {
+      confirmationCommitment: commitment,
       getLatestBlockhash,
       getSignatureStatus,
       async sendAndConfirm(signedTx) {
@@ -273,8 +497,18 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
         try {
           await sendAndConfirmTransaction(signedTx, { commitment });
         } catch (error) {
-          attachSignature(error, signature);
-          throw error;
+          if (error instanceof RpcRequestConstructionFailure) {
+            throw error.original;
+          }
+          // A simulation failure proves the RPC did not broadcast. Other
+          // failures at this boundary may have happened after acceptance.
+          if (isTypedSendTransactionPreflightFailure(error)) {
+            if (isBlockhashNotFoundPreflightFailure(error)) {
+              throw markRetrySafePreBroadcastFailure(error, signature);
+            }
+            throw error;
+          }
+          throw withSignature(error, signature);
         }
         return { signature, logs: [] };
       },
@@ -282,17 +516,47 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
   }
 
   return {
+    confirmationCommitment: commitment,
     getLatestBlockhash,
     getSignatureStatus,
     async sendAndConfirm(signedTx) {
       const signature = getSignatureFromTransaction(signedTx);
       const wireTransaction = getBase64EncodedWireTransaction(signedTx);
-      await rpc
-        .sendTransaction(wireTransaction, {
+      let sendRequest: ReturnType<RpcTransportRpc["sendTransaction"]>;
+      try {
+        sendRequest = rpc.sendTransaction(wireTransaction, {
           encoding: "base64",
           preflightCommitment: commitment,
-        })
-        .send();
+        });
+      } catch (error) {
+        // Request construction failed synchronously, before the RPC transport
+        // received wire bytes. This is a proven pre-submission failure.
+        throw error;
+      }
+      try {
+        await sendRequest.send();
+      } catch (error) {
+        // A standard -32002 simulation rejection is deterministic and was not
+        // broadcast. In particular, BlockhashNotFound must remain eligible for
+        // the client's fresh-blockhash retry without becoming "in flight".
+        if (isTypedSendTransactionPreflightFailure(error)) {
+          if (isBlockhashNotFoundPreflightFailure(error)) {
+            throw markRetrySafePreBroadcastFailure(error, signature);
+          }
+          throw error;
+        }
+        // Some compatible adapters retain only raw context.err at this direct
+        // send response seam. Preserve their historical unsigned error shape,
+        // but do NOT brand it retry-safe: without the standard -32002
+        // provenance the client treats it as ambiguous and will not re-sign.
+        if (isDirectSendPreflightFailure(error)) throw error;
+        // The RPC may accept and forward the transaction before its HTTP
+        // response is lost. This boundary is therefore outcome-ambiguous even
+        // though status polling has not started yet; retain the known wire
+        // signature so callers can reconcile instead of treating it as a
+        // proven pre-send failure.
+        throw withSignature(error, signature);
+      }
 
       const pollStatus = async () => {
         const { value: statuses } = await rpc
@@ -351,8 +615,7 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
         // Anything thrown after submission (real on-chain failure, expiry,
         // timeout, mid-poll network error) refers to an in-flight signature —
         // attach it so consumers can reconcile the outcome.
-        attachSignature(error, signature);
-        throw error;
+        throw withSignature(error, signature);
       }
     },
   };

@@ -151,8 +151,12 @@ export type ProtocolConfig = {
    * historical pre-P6.5 prefix stays valid. A legacy account is migrated up to
    * the new size by `migrate_protocol` (realloc +
    * zero-init), which lands this at `0` = "surface not yet stamped". An operator
-   * then sets the real revision via `update_launch_controls` (the existing
-   * multisig-gated config-update authority path).
+   * then establishes the current revision through the atomic
+   * `stamp_release_surface` release boundary. `update_launch_controls` may
+   * preserve the current value or select an older conservative revision, but
+   * cannot establish the current production revision. In the full production
+   * build, an older/unstamped revision must remain paused; unpausing requires
+   * that CURRENT was already established by the atomic stamp.
    *
    * Semantics:
    * - `0`  → surface unstamped (treat as the conservative canary surface;
@@ -257,8 +261,12 @@ export type ProtocolConfigArgs = {
    * historical pre-P6.5 prefix stays valid. A legacy account is migrated up to
    * the new size by `migrate_protocol` (realloc +
    * zero-init), which lands this at `0` = "surface not yet stamped". An operator
-   * then sets the real revision via `update_launch_controls` (the existing
-   * multisig-gated config-update authority path).
+   * then establishes the current revision through the atomic
+   * `stamp_release_surface` release boundary. `update_launch_controls` may
+   * preserve the current value or select an older conservative revision, but
+   * cannot establish the current production revision. In the full production
+   * build, an older/unstamped revision must remain paused; unpausing requires
+   * that CURRENT was already established by the atomic stamp.
    *
    * Semantics:
    * - `0`  → surface unstamped (treat as the conservative canary surface;

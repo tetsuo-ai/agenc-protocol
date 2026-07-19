@@ -68,7 +68,9 @@ export class AgencError extends Error {
   readonly logs: readonly string[];
   /**
    * Base58 signature of the attempted transaction, or `null` when the failure
-   * happened before any transaction was submitted (blockhash fetch, signing).
+   * happened before the transport boundary (blockhash fetch/signing) or the
+   * SDK proved a first-party BlockhashNotFound preflight rejected before
+   * broadcast.
    *
    * A non-null signature on a timeout or network-failure error means the
    * outcome is UNKNOWN — the transaction may still land. Check this signature
@@ -240,8 +242,9 @@ const BLOCKHASH_EXPIRED_RE =
 
 /**
  * Classify whether a failure means the transaction's blockhash lifetime
- * expired (and the transaction is therefore safe to re-sign with a fresh
- * blockhash and resend).
+ * expired. This classification alone does NOT prove a retry is safe: callers
+ * must separately distinguish a deterministic pre-broadcast rejection from a
+ * post-broadcast outcome carrying an in-flight signature.
  *
  * Recognizes kit `SolanaError` codes (`SOLANA_ERROR__BLOCK_HEIGHT_EXCEEDED`,
  * `SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND`), raw RPC
@@ -257,8 +260,14 @@ export function isBlockhashExpiredError(error: unknown): boolean {
     if (isSolanaError(link, SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND)) {
       return true;
     }
-    const carrier = link as { transactionError?: unknown };
+    const carrier = link as {
+      transactionError?: unknown;
+      context?: { err?: unknown };
+    };
     if (carrier.transactionError === "BlockhashNotFound") return true;
+    // Older/custom Kit RPC adapters may preserve the raw preflight `err`
+    // inside context instead of converting it to a SolanaError `cause`.
+    if (carrier.context?.err === "BlockhashNotFound") return true;
     if (typeof link === "string" && BLOCKHASH_EXPIRED_RE.test(link)) return true;
     const message = (link as { message?: unknown }).message;
     if (typeof message === "string" && BLOCKHASH_EXPIRED_RE.test(message)) {

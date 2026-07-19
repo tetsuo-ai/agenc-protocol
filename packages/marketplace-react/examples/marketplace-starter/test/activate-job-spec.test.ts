@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { values } from "@tetsuo-ai/marketplace-sdk";
 import {
   createActivateJobSpecHandler,
   type StoreJobSpecInput,
@@ -24,7 +25,7 @@ function rawRequest(body: string, headers: HeadersInit = {}): Request {
   });
 }
 
-test("activate job-spec handler stores and attests the canonical payload", async () => {
+test("activate job-spec handler stores a verifiable envelope and attests its canonical payload", async () => {
   const stored: StoreJobSpecInput[] = [];
   const attested: TaskModerationInput[] = [];
   const handler = createActivateJobSpecHandler({
@@ -68,9 +69,27 @@ test("activate job-spec handler stores and attests the canonical payload", async
   assert.equal(storedInput.jobSpecHashHex, body.jobSpecHashHex);
   assert.equal(attestedInput.jobSpecHashHex, body.jobSpecHashHex);
   assert.equal(attestedInput.jobSpecUri, body.jobSpecUri);
-  assert.equal(storedInput.payload.taskPda, TASK_PDA);
-  assert.equal(storedInput.payload.schema, "agenc.marketplace.starter.jobSpec.v1");
-  assert.ok(storedInput.canonicalJson.includes("Summarize the source material"));
+  assert.equal(storedInput.envelope.payload.taskPda, TASK_PDA);
+  assert.equal(
+    storedInput.envelope.payload.schema,
+    "agenc.marketplace.starter.jobSpec.v1",
+  );
+  assert.ok(attestedInput.canonicalJson.includes("Summarize the source material"));
+  assert.deepEqual(
+    storedInput.envelope,
+    {
+      integrity: {
+        algorithm: "sha256",
+        canonicalization: "json-stable-v1",
+        payloadHash: body.jobSpecHashHex,
+      },
+      payload: attestedInput.payload,
+    },
+  );
+  assert.equal(
+    (await values.canonicalJobSpecHash(storedInput.envelope.payload)).hex,
+    body.jobSpecHashHex,
+  );
 });
 
 test("activate job-spec handler rejects invalid task PDA and malformed spec", async () => {
@@ -95,6 +114,22 @@ test("activate job-spec handler rejects invalid task PDA and malformed spec", as
   );
   assert.equal(badTask.status, 400);
   assert.match((await badTask.json()).error, /taskPda/);
+
+  const base58LookingButWrongWidth = await handler(
+    request({
+      taskPda: "z".repeat(32),
+      spec: {
+        title: "Title",
+        deliverables: ["Deliverable"],
+        acceptanceCriteria: ["Criterion"],
+      },
+    }),
+  );
+  assert.equal(base58LookingButWrongWidth.status, 400);
+  assert.match(
+    (await base58LookingButWrongWidth.json()).error,
+    /exact 32-byte Solana address/,
+  );
 
   const badSpec = await handler(
     request({
@@ -188,9 +223,19 @@ test("activate job-spec handler rejects invalid JSON and oversized request bodie
   assert.equal(oversizedByHeader.status, 413);
 });
 
-test("activate job-spec handler rejects oversized canonical specs before storing", async () => {
+test("activate job-spec handler applies its size limit to the complete hosted envelope", async () => {
+  const canonicalPayloadBytes = new TextEncoder().encode(
+    values.canonicalJobSpecJson({
+      schema: "agenc.marketplace.starter.jobSpec.v1",
+      taskPda: TASK_PDA,
+      title: "Title",
+      deliverables: ["Deliverable"],
+      acceptanceCriteria: ["Criterion"],
+    }),
+  ).byteLength;
   const handler = createActivateJobSpecHandler({
-    maxCanonicalBytes: 12,
+    // The payload fits exactly, but its required integrity envelope does not.
+    maxCanonicalBytes: canonicalPayloadBytes,
     storeJobSpec: async () => {
       throw new Error("store should not run");
     },
@@ -252,6 +297,30 @@ test("activate job-spec handler reports storage and attestation failures without
     (await emptyUriResponse.json()).error,
     "Job-spec storage returned no URI.",
   );
+
+  let invalidUriAttestorCalls = 0;
+  for (const uri of [
+    "job-specs/spec.json",
+    "ftp://market.example/job-specs/spec.json",
+    "https://user:secret@[::1]/job-specs/spec.json",
+    `https://market.example/${"x".repeat(300)}`,
+  ]) {
+    const invalidStorageUri = createActivateJobSpecHandler({
+      storeJobSpec: async () => ({ uri }),
+      attestTaskModeration: async () => {
+        invalidUriAttestorCalls += 1;
+        return { attested: true };
+      },
+    });
+
+    const invalidUriResponse = await invalidStorageUri(request(baseBody));
+    assert.equal(invalidUriResponse.status, 502);
+    assert.equal(
+      (await invalidUriResponse.json()).error,
+      "Job-spec storage returned an invalid URI.",
+    );
+  }
+  assert.equal(invalidUriAttestorCalls, 0);
 
   const attestationFailure = createActivateJobSpecHandler({
     storeJobSpec: async (input) => ({

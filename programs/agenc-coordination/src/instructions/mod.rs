@@ -163,6 +163,8 @@ pub mod set_task_job_spec;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod stake_reputation;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod stamp_release_surface;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod store_identity;
 pub mod submit_task_result;
 pub mod suspend_agent;
@@ -369,6 +371,9 @@ pub use set_task_job_spec::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use stake_reputation::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use stamp_release_surface::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use store_identity::*;

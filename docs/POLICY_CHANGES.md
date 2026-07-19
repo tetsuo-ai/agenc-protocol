@@ -11,6 +11,17 @@ program **deploys/upgrades** are recorded in
 (3 owners, threshold 2). A change requires two owner signatures before the
 config instruction executes; a single key cannot move policy.
 
+**Fee-governance signing rail:** an executing `--vote` or `--finalize` run of
+`scripts/mainnet-fee-change.mjs` requires `SECONDARY_RPC_URL` on a different
+host operated independently from `RPC_URL`. The rail verifies the secondary
+genesis is mainnet-beta, then—after the immediate executable/custody check and
+immediately before Anchor signs—requires both endpoints to return identical
+finalized Proposal account metadata and bytes. It decodes only that agreed raw
+snapshot with the hash-approved IDL and reasserts the exact `PROPOSAL` PDA and
+`NEW_FEE_BPS` intent. Do not satisfy the two variables with aliases or endpoints
+run by the same provider; hostname diversity is only the script's mechanically
+checkable minimum. Read-only plans do not require the secondary endpoint.
+
 Entries are newest-first. Every entry must carry the date, the values
 before→after (or the decision), the transaction signature where applicable,
 and the rationale.

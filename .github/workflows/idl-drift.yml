@@ -104,6 +104,13 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      # tests-integration is deliberately outside the root npm workspace. The
+      # compiled canary harness imports Anchor/web3/SPL from its independently
+      # pinned lockfile, so a clean runner must install that tree explicitly.
+      - name: Install compiled canary integration dependencies
+        run: npm ci
+        working-directory: tests-integration
+
       # Fresh full-surface build: regenerates target/idl/agenc_coordination.json
       # and target/types/agenc_coordination.ts from the Rust source.
       - name: Anchor build (full surface, default features)

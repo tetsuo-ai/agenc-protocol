@@ -47,6 +47,12 @@ const CLAIM = a("SysvarS1otHashes111111111111111111111111111");
 const DISPUTE = a("SysvarStakeHistory1111111111111111111111111");
 const AUTHORITY_ADDR = a("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const AUTHORITY = createNoopSigner(AUTHORITY_ADDR);
+const MULTISIG_APPROVER_A = createNoopSigner(
+  a("LoaderV411111111111111111111111111111111111"),
+);
+const MULTISIG_APPROVER_B = createNoopSigner(
+  a("SysvarC1ock11111111111111111111111111111111"),
+);
 const PEER_CLAIM = a("SysvarRecentB1ockHashes11111111111111111111");
 const PEER_WORKER = a("AddressLookupTab1e1111111111111111111111111");
 const PARENT_TASK = a("Config1111111111111111111111111111111111111");
@@ -339,7 +345,7 @@ describe("disputes facade (structural)", () => {
     ).not.toThrow();
   });
 
-  it("resolveRejectFrozen: program, derives bond PDAs, account order, data round-trip", async () => {
+  it("resolveRejectFrozen: derives bonds and appends a nonzero-threshold multisig suffix", async () => {
     const ix = await facade.resolveRejectFrozen({
       task: TASK,
       claim: CLAIM,
@@ -351,12 +357,13 @@ describe("disputes facade (structural)", () => {
       approveCompletion: true,
       operator: AGENT,
       referrer: DISPUTE,
+      multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_B],
     });
 
     expect(programOf(ix)).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
 
     const accs = order(ix);
-    expect(accs).toHaveLength(16);
+    expect(accs).toHaveLength(18);
     expect(accs[0]).toBe(TASK);
     expect(accs[1]).toBe(CLAIM);
     const [hireRecord] = await findHireRecordPda({ task: TASK });
@@ -365,8 +372,8 @@ describe("disputes facade (structural)", () => {
     expect(accs[11]).toBe(DISPUTE);
     expect(accs[12]).toBe(AUTHORITY_ADDR);
 
-    // Generated builder auto-derives the bonds; assert they made it in (positions
-    // [-3], [-2] before systemProgram at [-1]).
+    // The generated base ends with both derived bonds + systemProgram; the
+    // facade-owned multisig approvals follow as signer remaining accounts.
     const [creatorBond] = await findCreatorCompletionBondPda({
       task: TASK,
       creator: CREATOR,
@@ -375,12 +382,43 @@ describe("disputes facade (structural)", () => {
       task: TASK,
       workerAuthority: WORKER_WALLET,
     });
-    expect(accs[accs.length - 3]).toBe(creatorBond);
-    expect(accs[accs.length - 2]).toBe(workerBond);
-    expect(accs[accs.length - 1]).toBe(SYSTEM_PROGRAM);
+    expect(accs[13]).toBe(creatorBond);
+    expect(accs[14]).toBe(workerBond);
+    expect(accs[15]).toBe(SYSTEM_PROGRAM);
+    expect(accs.slice(-2)).toEqual([
+      MULTISIG_APPROVER_A.address,
+      MULTISIG_APPROVER_B.address,
+    ]);
+    for (const [index, signer] of [
+      MULTISIG_APPROVER_A,
+      MULTISIG_APPROVER_B,
+    ].entries()) {
+      expect(ix.accounts[16 + index]).toMatchObject({
+        role: AccountRole.READONLY_SIGNER,
+        signer,
+      });
+    }
 
     const decoded = getResolveRejectFrozenInstructionDataDecoder().decode(ix.data);
     expect(decoded.approveCompletion).toBe(true);
+  });
+
+  it("resolveRejectFrozen rejects duplicate multisig approvers", async () => {
+    await expect(
+      facade.resolveRejectFrozen({
+        task: TASK,
+        claim: CLAIM,
+        worker: WORKER_AGENT,
+        treasury: TREASURY,
+        creator: CREATOR,
+        workerAuthority: WORKER_WALLET,
+        authority: AUTHORITY,
+        approveCompletion: false,
+        operator: AGENT,
+        referrer: DISPUTE,
+        multisigSigners: [MULTISIG_APPROVER_A, MULTISIG_APPROVER_A],
+      }),
+    ).rejects.toThrow(/duplicate signer address/);
   });
 
   it("expireRejectFrozen: program, derives bond PDAs, account order, data round-trip", async () => {

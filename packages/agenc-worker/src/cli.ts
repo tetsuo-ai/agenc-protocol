@@ -22,7 +22,10 @@ import {
   createSolanaRpc,
   type Address,
 } from "@solana/kit";
-import { createMarketplaceClient } from "@tetsuo-ai/marketplace-sdk";
+import {
+  createMarketplaceClient,
+  taskThread,
+} from "@tetsuo-ai/marketplace-sdk";
 import {
   configFromEnv,
   ConfigError,
@@ -33,6 +36,7 @@ import {
   type WorkerConfigInput,
 } from "./config.js";
 import type { AccountReader } from "./job-spec.js";
+import { formatDiagnosticError } from "./redact.js";
 import {
   lamportsToSol,
   runTickOnce,
@@ -77,6 +81,8 @@ FLAGS (flags > AGENC_WORKER_* env > config file > defaults)
   --creator <address>        creator allowlist (repeatable)
   --allow-any-creator        UNSAFE: explicitly disable creator allowlisting
   --endpoint <url>           agent endpoint recorded at registration
+  --task-thread-base-url <url>
+                             HTTPS content host for request_changes feedback
   --poll-interval <ms>       up-mode poll interval (default 15000)
   --executor-timeout <ms>    executor wall-clock budget (default 900000)
   --dry-run                  preview what would be claimed; sign nothing
@@ -87,7 +93,10 @@ function logLine(event: WorkerLogEvent): void {
   // One structured JSON line per event; the human-facing settlement line also
   // goes to stdout plainly so `earned ... — receipt: ...` is greppable.
   console.log(JSON.stringify({ ts: new Date().toISOString(), ...event }));
-  if (event.event === "settlement.observed" && typeof event.message === "string") {
+  if (
+    event.event === "settlement.observed" &&
+    typeof event.message === "string"
+  ) {
     console.log(event.message);
   }
 }
@@ -107,27 +116,39 @@ function flagsToConfigInput(values: {
   creator?: string[];
   "allow-any-creator"?: boolean;
   endpoint?: string;
+  "task-thread-base-url"?: string;
   "poll-interval"?: string;
   "executor-timeout"?: string;
 }): WorkerConfigInput {
   const input: WorkerConfigInput = {};
   if (values["rpc-url"] !== undefined) input.rpcUrl = values["rpc-url"];
   if (values.wallet !== undefined) input.walletPath = values.wallet;
-  if (values.capabilities !== undefined) input.capabilities = values.capabilities;
-  if (values["min-reward"] !== undefined) input.minRewardLamports = values["min-reward"];
-  if (values["max-reward"] !== undefined) input.maxRewardLamports = values["max-reward"];
-  if (values["allow-unbounded-reward"] === true) input.allowUnboundedReward = true;
+  if (values.capabilities !== undefined)
+    input.capabilities = values.capabilities;
+  if (values["min-reward"] !== undefined)
+    input.minRewardLamports = values["min-reward"];
+  if (values["max-reward"] !== undefined)
+    input.maxRewardLamports = values["max-reward"];
+  if (values["allow-unbounded-reward"] === true)
+    input.allowUnboundedReward = true;
   if (values.executor !== undefined) input.executor = values.executor;
-  if (values["executor-mode"] !== undefined) input.executorMode = values["executor-mode"];
-  if (values["executor-env"] !== undefined) input.executorEnvAllowlist = values["executor-env"];
-  if (values["result-uploader"] !== undefined) input.resultUploader = values["result-uploader"];
+  if (values["executor-mode"] !== undefined)
+    input.executorMode = values["executor-mode"];
+  if (values["executor-env"] !== undefined)
+    input.executorEnvAllowlist = values["executor-env"];
+  if (values["result-uploader"] !== undefined)
+    input.resultUploader = values["result-uploader"];
   if (values["state-dir"] !== undefined) input.stateDir = values["state-dir"];
   if (values.creator !== undefined && values.creator.length > 0) {
     input.creatorAllowlist = values.creator;
   }
   if (values["allow-any-creator"] === true) input.allowAnyCreator = true;
   if (values.endpoint !== undefined) input.endpoint = values.endpoint;
-  if (values["poll-interval"] !== undefined) input.pollIntervalMs = values["poll-interval"];
+  if (values["task-thread-base-url"] !== undefined) {
+    input.taskThreadBaseUrl = values["task-thread-base-url"];
+  }
+  if (values["poll-interval"] !== undefined)
+    input.pollIntervalMs = values["poll-interval"];
   if (values["executor-timeout"] !== undefined) {
     input.executorTimeoutMs = values["executor-timeout"];
   }
@@ -140,10 +161,14 @@ async function loadSigner(walletPath: string) {
   try {
     parsed = JSON.parse(readFileSync(walletPath, "utf8"));
   } catch (error) {
-    throw new ConfigError(`wallet ${walletPath}: ${(error as Error).message}`);
+    throw new ConfigError(
+      `wallet ${walletPath}: ${formatDiagnosticError(error)}`,
+    );
   }
   if (!Array.isArray(parsed) || !parsed.every((n) => typeof n === "number")) {
-    throw new ConfigError(`wallet ${walletPath}: expected a Solana keypair JSON array`);
+    throw new ConfigError(
+      `wallet ${walletPath}: expected a Solana keypair JSON array`,
+    );
   }
   return createKeyPairSignerFromBytes(new Uint8Array(parsed));
 }
@@ -163,14 +188,18 @@ async function buildContext(
     if (value === null) return null;
     return new Uint8Array(Buffer.from(value.data[0], "base64"));
   };
-  const findSettlementSignature = async (task: Address): Promise<string | null> => {
+  const findSettlementSignature = async (
+    task: Address,
+  ): Promise<string | null> => {
     // The most recent transaction touching a settled Task account is its
     // settlement (accept/auto-accept/complete) — the receipt page verifies it.
     const signatures = await rpc
       .getSignaturesForAddress(task, { limit: 1 })
       .send();
     const newest = signatures[0];
-    return newest === undefined || newest.err !== null ? null : (newest.signature as string);
+    return newest === undefined || newest.err !== null
+      ? null
+      : (newest.signature as string);
   };
   const ctx: WorkerContext = {
     config,
@@ -181,10 +210,14 @@ async function buildContext(
     stateDir: config.stateDir,
     log: logLine,
     dryRun,
+    taskThreadTransport: taskThread.createContentTransport({
+      baseUrl: config.taskThreadBaseUrl,
+    }),
     findSettlementSignature,
     // Pre-registration funding preflight: fail with the exact lamports needed
     // BEFORE the first transaction instead of an on-chain revert.
-    getBalance: async (address) => BigInt((await rpc.getBalance(address).send()).value),
+    getBalance: async (address) =>
+      BigInt((await rpc.getBalance(address).send()).value),
   };
   return { ctx, rpc };
 }
@@ -209,6 +242,7 @@ async function main(): Promise<number> {
       creator: { type: "string", multiple: true },
       "allow-any-creator": { type: "boolean" },
       endpoint: { type: "string" },
+      "task-thread-base-url": { type: "string" },
       "poll-interval": { type: "string" },
       "executor-timeout": { type: "string" },
       "dry-run": { type: "boolean" },
@@ -256,7 +290,9 @@ async function main(): Promise<number> {
           (record.earnedLamports != null && record.earnedLamports !== "0"
             ? ` earned ${lamportsToSol(BigInt(record.earnedLamports))} SOL`
             : "") +
-          (record.settlementSignature ? ` sig ${record.settlementSignature}` : ""),
+          (record.settlementSignature
+            ? ` sig ${record.settlementSignature}`
+            : ""),
       );
     }
     process.stdout.write(`${lines.join("\n")}\n`);
@@ -292,9 +328,11 @@ main().then(
   },
   (error) => {
     if (error instanceof ConfigError) {
-      process.stderr.write(`config error: ${error.message}\n`);
+      process.stderr.write(`config error: ${formatDiagnosticError(error)}\n`);
     } else {
-      process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+      process.stderr.write(
+        `${formatDiagnosticError(error, { includeStack: true })}\n`,
+      );
     }
     process.exitCode = 1;
   },

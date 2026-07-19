@@ -51,13 +51,13 @@ The protocol covers that lifecycle plus advanced primitives:
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Store identity, contest tasks, goods market, bid marketplace, reputation, skills,
   governance (multisig), and a social feed** round out the surface. The current
-  default production candidate and committed IDL contain **97 instructions**;
-  the restricted canary remains 25 and explicit private-ZK development is 100.
+  default production candidate and committed IDL contain **98 instructions**;
+  the restricted canary remains 25 and explicit private-ZK development is 101.
 
-> **Build surfaces.** `lib.rs` has a default production module (97 instructions in
+> **Build surfaces.** `lib.rs` has a default production module (98 instructions in
 > this revision-5 candidate) and a conservative **mainnet-canary** module (the
 > frozen 25-instruction build). Enabling `private-zk` adds three quarantined
-> development instructions to production, yielding 100; deployment rails reject
+> development instructions to production, yielding 101; deployment rails reject
 > that feature for a production release. Mainnet still runs the prior 99-instruction
 > revision-4 binary until a separately reviewed and approved upgrade occurs.
 
@@ -121,26 +121,33 @@ surface.
 
 | Package | Path | Version | What |
 |---------|------|---------|------|
-| `@tetsuo-ai/protocol` | `packages/protocol` | 0.3.0 (workspace; release bump pending) | Committed 97-instruction candidate IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 still contains live revision 4 and must not be overwritten. |
-| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | 0.11.0 (workspace; release bump pending) | Codama-generated `@solana/kit` client for the **97-instruction revision-5 candidate** + ergonomic facade. The published 0.11.0 release still targets live revision 4; program and SDK must ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
-| `@tetsuo-ai/marketplace-react` | `packages/marketplace-react` | 0.4.1 | React hooks/components for embeddable marketplace UIs. |
-| `@tetsuo-ai/marketplace-tools` | `packages/marketplace-tools` | 0.4.0 | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
-| `@tetsuo-ai/marketplace-mcp` | `packages/marketplace-mcp` | 0.4.0 | MCP server exposing marketplace tools. |
+| `@tetsuo-ai/protocol` | `packages/protocol` | 0.4.0 candidate (published: 0.3.0) | Committed 98-instruction candidate IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 still contains live revision 4 and must not be overwritten. |
+| `@tetsuo-ai/marketplace-sdk` | `packages/sdk-ts` | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **98-instruction revision-5 candidate** + ergonomic facade. The published 0.11.0 release still targets live revision 4; program and SDK must ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/marketplace-react` | `packages/marketplace-react` | 0.4.2 candidate (published: 0.4.1) | React hooks/components for embeddable marketplace UIs; the candidate peer range admits SDK 0.12. |
+| `@tetsuo-ai/marketplace-tools` | `packages/marketplace-tools` | 0.5.0 candidate (published: 0.4.0) | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers. |
+| `@tetsuo-ai/marketplace-mcp` | `packages/marketplace-mcp` | 0.5.0 candidate (published: 0.4.0) | MCP server exposing marketplace tools. |
 | `@tetsuo-ai/marketplace-moderation` | `packages/marketplace-moderation` | 0.1.0 | Shared moderation canon / test vectors. |
-| `@tetsuo-ai/agenc-cli` | `packages/agenc-cli` | 0.2.0 | `init` / `dev` / `promote` developer CLI. |
-| `@tetsuo-ai/agenc-worker` | `packages/agenc-worker` | 0.1.1 | Worker claim/submit runtime loop. |
+| `@tetsuo-ai/agenc-cli` | `packages/agenc-cli` | 0.3.0 candidate (published: 0.2.0) | `init` / `dev` / `promote` developer CLI. |
+| `agenc-cli` | `packages/agenc-cli-alias` | 0.3.0 candidate (published: 0.2.0) | Thin unscoped alias; ships with the scoped CLI. |
+| `@tetsuo-ai/agenc-worker` | `packages/agenc-worker` | 0.2.0 candidate (published: 0.1.1) | Worker claim/submit runtime loop. |
+
+Every version labeled **candidate** above is unreleased and belongs to the same
+revision-5 release train. The published versions continue to describe and support
+the revision-4 mainnet deployment until the coordinated program/package cutover.
 
 Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
 ## Build, test & validate
 
-Prereqs: Rust + the Anchor/Solana toolchain (Anchor 0.32.1, Solana 3.0.13), Node ≥18, `npm ci`.
+Prereqs: Rust + the Anchor/Solana toolchain (Anchor 0.32.1, Solana 3.0.13),
+Node ≥20.18, `npm ci`, and `npm ci --prefix tests-integration` for the independent
+deployment/preflight dependency tree.
 
 ```bash
 # Rust program: unit tests + lint (default + canary)
 cargo test  --lib --manifest-path programs/agenc-coordination/Cargo.toml
 cargo clippy --lib --manifest-path programs/agenc-coordination/Cargo.toml -- -D warnings
-cargo clippy --lib --manifest-path programs/agenc-coordination/Cargo.toml --features mainnet-canary -- -D warnings
+cargo clippy --lib --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary -- -D warnings
 
 # Build the program + regenerate/verify committed artifacts
 anchor build
@@ -160,12 +167,12 @@ npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/prot
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
 ```
 
-**Test coverage (runner totals as of 2026-07-18):** Rust **521** production /
-**521** `validation-timings` / **546** private-ZK / **319** canary; **76**
-model/property tests; **388** compiled-program integrations (387 pass, one
+**Test coverage (runner totals as of 2026-07-18):** Rust **524** production /
+**524** `validation-timings` / **549** private-ZK / **321** canary; **76**
+model/property tests; **395** compiled-program integrations (394 pass, one
 canary-only conditional skip), plus the separate canary compiled test at **1/1**;
-SDK **545 pass + one skip**; all npm workspaces
-**1,012 pass + one skip**; deployment/preflight **185 pass**. Exact commands and
+SDK **575 pass + one skip**; all npm workspaces
+**1,092 pass + one skip**; deployment/preflight **225 pass**. Exact commands and
 artifact hashes are in [docs/VALIDATION.md](docs/VALIDATION.md). Audit status:
 the batch 1–3 internal audits closed with 0 open findings **at that time**
 ([docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)); the 2026-07-16/17 adversarial
@@ -209,7 +216,7 @@ Before any mainnet deploy that changes the deployed surface or account layout:
    Reporting is currently disabled and the documented security mailbox is not
    confirmed active. Enable and test at least one private channel, then activate
    `.well-known/security.txt`; do not ship a false contact record.
-4. **ProgramData capacity ceremony.** The current candidate is 73,880 bytes too
+4. **ProgramData capacity ceremony.** The current candidate is 94,440 bytes too
    large for the live allocation. Before upgrade, execute a separately reviewed
    Squads-CPI `ExtendProgramChecked`, wait for a later slot, and rerun the full
    capacity/rent/authority preflight. Never let deploy auto-extend.

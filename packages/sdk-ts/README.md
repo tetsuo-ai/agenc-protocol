@@ -248,13 +248,14 @@ pin a moderated job spec → claim → submit → accept/close/rate) is in
 getting-started guide is in [`docs/guides/quickstart.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/packages/sdk-ts/docs/guides/quickstart.md).
 ### Workspace status (revision-5 candidate)
 
-- Generated client covers the current **97-instruction** production-candidate IDL.
+- Workspace package version is the unreleased `0.12.0` candidate.
+- Generated client covers the current **98-instruction** production-candidate IDL.
 - The published 0.11.0 package targets the live 99-instruction revision-4 wire;
-  this regenerated workspace must receive a coordinated release with the
-  revision-5 program. Pre-1.0 versioning still applies.
+  publish 0.12.0 only in the coordinated release with the revision-5 program.
+  Pre-1.0 versioning still applies.
 - Facade intentionally omits bare `claim_task` (program fail-closed).
   `complete_task_private` is not in the production IDL; it exists only in the
-  unsupported 100-instruction `private-zk` development build.
+  unsupported 101-instruction `private-zk` development build.
 
 **Advanced / additive facade surfaces** (beyond the hire lifecycle):
 
@@ -408,7 +409,7 @@ Pre-1.0. The generated client covers all program instructions; the facade wraps 
 core marketplace lifecycle and most advanced instruction groups. It intentionally
 omits legacy `claim_task` (fail-closed in the program) and keeps
 `complete_task_private` out of the production client. That instruction exists
-only in the separate, unsupported 100-instruction `private-zk` development
+only in the separate, unsupported 101-instruction `private-zk` development
 surface. On-chain coverage is via litesvm e2e tests.
 
 ## License

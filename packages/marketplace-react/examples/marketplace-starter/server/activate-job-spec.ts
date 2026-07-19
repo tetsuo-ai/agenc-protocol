@@ -1,12 +1,13 @@
 import { values } from "@tetsuo-ai/marketplace-sdk";
+import { isAddress } from "@solana/kit";
 
-const TASK_PDA_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const MAX_TITLE_CHARS = 160;
 const MAX_ITEM_CHARS = 280;
 const MAX_ITEMS = 12;
 const MAX_NOTES_CHARS = 2_000;
 const DEFAULT_MAX_CANONICAL_BYTES = 64 * 1024;
 const DEFAULT_MAX_REQUEST_BYTES = 128 * 1024;
+const TASK_JOB_SPEC_URI_MAX_BYTES = 256;
 
 export interface StarterJobSpecInput {
   title: string;
@@ -20,6 +21,15 @@ export interface StarterJobSpecPayload extends StarterJobSpecInput {
   taskPda: string;
 }
 
+export interface StarterJobSpecEnvelope {
+  integrity: {
+    algorithm: "sha256";
+    canonicalization: "json-stable-v1";
+    payloadHash: string;
+  };
+  payload: StarterJobSpecPayload;
+}
+
 export interface StoredJobSpec {
   uri: string;
 }
@@ -27,11 +37,14 @@ export interface StoredJobSpec {
 export interface StoreJobSpecInput {
   taskPda: string;
   jobSpecHashHex: string;
-  payload: StarterJobSpecPayload;
-  canonicalJson: string;
+  envelope: StarterJobSpecEnvelope;
 }
 
-export interface TaskModerationInput extends StoreJobSpecInput {
+export interface TaskModerationInput {
+  taskPda: string;
+  jobSpecHashHex: string;
+  payload: StarterJobSpecPayload;
+  canonicalJson: string;
   jobSpecUri: string;
 }
 
@@ -131,6 +144,29 @@ function jsonResponse(
   });
 }
 
+function validateStoredJobSpecUri(value: string): string {
+  if (
+    new TextEncoder().encode(value).byteLength > TASK_JOB_SPEC_URI_MAX_BYTES
+  ) {
+    throw new Error("Stored job-spec URI is too long.");
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Stored job-spec URI must be an absolute public URL.");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.hostname === "" ||
+    url.username !== "" ||
+    url.password !== ""
+  ) {
+    throw new Error("Stored job-spec URI must be credential-free HTTP(S).");
+  }
+  return value;
+}
+
 function stringField(
   source: Record<string, unknown>,
   key: string,
@@ -200,8 +236,8 @@ function requestParts(body: unknown): { taskPda: string; spec: unknown } {
   }
   const record = body as Record<string, unknown>;
   const taskPda = typeof record.taskPda === "string" ? record.taskPda.trim() : "";
-  if (!TASK_PDA_RE.test(taskPda)) {
-    throw new Error("taskPda must be a base58 task PDA.");
+  if (!isAddress(taskPda)) {
+    throw new Error("taskPda must be an exact 32-byte Solana address.");
   }
   return { taskPda, spec: record.spec };
 }
@@ -231,15 +267,30 @@ export function createActivateJobSpecHandler({
     let payload: StarterJobSpecPayload;
     let canonicalJson: string;
     let jobSpecHashHex: string;
+    let envelope: StarterJobSpecEnvelope;
     try {
       const parts = requestParts(body);
       taskPda = parts.taskPda;
       payload = normalizeSpec(taskPda, parts.spec);
       canonicalJson = values.canonicalJobSpecJson(payload);
-      if (new TextEncoder().encode(canonicalJson).byteLength > maxCanonicalBytes) {
+      jobSpecHashHex = (await values.canonicalJobSpecHash(payload)).hex;
+      envelope = {
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: jobSpecHashHex,
+        },
+        payload,
+      };
+      // The worker's fetch limit applies to the complete hosted document, not
+      // just its payload. Include integrity-envelope overhead in the route cap.
+      const canonicalEnvelopeJson = values.canonicalJobSpecJson(envelope);
+      if (
+        new TextEncoder().encode(canonicalEnvelopeJson).byteLength >
+        maxCanonicalBytes
+      ) {
         return jsonResponse({ error: "Canonical job spec is too large." }, 413);
       }
-      jobSpecHashHex = (await values.canonicalJobSpecHash(payload)).hex;
     } catch (cause) {
       return jsonResponse(
         { error: cause instanceof Error ? cause.message : String(cause) },
@@ -252,8 +303,7 @@ export function createActivateJobSpecHandler({
       stored = await storeJobSpec({
         taskPda,
         jobSpecHashHex,
-        payload,
-        canonicalJson,
+        envelope,
       });
     } catch {
       return jsonResponse({ error: "Job-spec storage failed." }, 502);
@@ -261,6 +311,11 @@ export function createActivateJobSpecHandler({
 
     if (!stored.uri) {
       return jsonResponse({ error: "Job-spec storage returned no URI." }, 502);
+    }
+    try {
+      stored.uri = validateStoredJobSpecUri(stored.uri);
+    } catch {
+      return jsonResponse({ error: "Job-spec storage returned an invalid URI." }, 502);
     }
 
     let moderation: TaskModerationResult;

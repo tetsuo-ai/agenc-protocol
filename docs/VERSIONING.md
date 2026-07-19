@@ -42,7 +42,7 @@ The exact live wire artifact is the deployed commit `097ded1` (99 instructions /
 46 accounts / 104 events / 354 errors). Current generated references at
 [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) and
 [`reference/ERRORS.md`](./reference/ERRORS.md) describe the pending
-97-instruction revision-5 candidate, not mainnet. `npm run check:idl-reference`
+98-instruction revision-5 candidate, not mainnet. `npm run check:idl-reference`
 keeps those candidate references aligned with the committed candidate IDL.
 
 **This is the wire-compatible published set today:**
@@ -63,6 +63,28 @@ keeps those candidate references aligned with the committed candidate IDL.
 Every published major/minor **below** these ranges fails **closed** against mainnet
 today (transactions reject at Borsh decode or account resolution — no funds at
 risk, but the flow is down). See §1.2 for exactly which upgrade broke which range.
+
+### 1.1.1 Unreleased revision-5 candidate set
+
+The workspace also contains the following **unreleased** coordinated candidates.
+They are not evidence that revision 5 is deployed and they do not replace the
+published/live matrix above. Publish them only with the reviewed revision-5
+program cutover:
+
+| Package | Unreleased candidate | Coordination note |
+|---|---:|---|
+| `@tetsuo-ai/protocol` | **0.4.0** | 98-instruction revision-5 IDL/types; must not be published as 0.3.0 |
+| `@tetsuo-ai/marketplace-sdk` | **0.12.0** | revision-5 generated client; remains usable for existing revision-4 workflows while mainnet is still on revision 4 |
+| `@tetsuo-ai/marketplace-react` | **0.4.2** | patch candidate widening the SDK peer range through 0.12 |
+| `@tetsuo-ai/marketplace-tools` | **0.5.0** | depends on SDK `^0.12.0` |
+| `@tetsuo-ai/marketplace-mcp` | **0.5.0** | depends on tools `^0.5.0` and SDK `^0.12.0` |
+| `@tetsuo-ai/agenc-worker` | **0.2.0** | depends on SDK `^0.12.0`; security-hardening release |
+| `@tetsuo-ai/agenc-cli` / `agenc-cli` | **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`; scoped package and alias ship together |
+
+The `agenc init` and `agenc promote` code in the unreleased CLI intentionally
+knows this candidate set so a source checkout does not reject its own generated
+pins. That is candidate compatibility, not a claim that those versions are
+already on npm or that revision 5 is live.
 
 ### 1.2 Break-event history (why this document exists)
 
@@ -155,6 +177,7 @@ Update this file **in the same release window** as any of:
 
 - a program deploy that changes the wire (add a §1.2 row, rewrite §1.1);
 - a lockstep npm republish (rewrite §1.1 ranges);
+- a coordinated candidate-version change (rewrite §1.1.1 and the CLI matrix);
 - a change to the capability-detection exports (§2.1 links).
 
 Related: [`VERSIONS.md`](./VERSIONS.md) (on-chain surface detection),

@@ -475,6 +475,39 @@ describe("prepare_claim handler", () => {
     const auth = ix.accounts.find((a) => a.address === A_AUTHORITY);
     expect(auth!.role.signer).toBe(true);
   });
+
+  it("appends a dependent task's parent as the readonly remaining-account prefix", async () => {
+    const ix = (await getTool("prepare_claim")!.handler(
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        jobSpecHash: HEX32,
+        parentTask: A_LISTING_PDA,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+
+    expect(ix.accounts.at(-1)).toEqual({
+      address: A_LISTING_PDA,
+      role: { writable: false, signer: false },
+    });
+  });
+
+  it("rejects an invalid parentTask address before building", async () => {
+    await expect(
+      getTool("prepare_claim")!.handler(
+        {
+          task: A_TASK_PDA,
+          worker: A_PROVIDER,
+          workerAuthority: A_AUTHORITY,
+          jobSpecHash: HEX32,
+          parentTask: "not-base58!",
+        },
+        ctx,
+      ),
+    ).rejects.toMatchObject({ code: "BAD_ADDRESS" });
+  });
 });
 
 describe("review/cleanup/rating prepare handlers", () => {

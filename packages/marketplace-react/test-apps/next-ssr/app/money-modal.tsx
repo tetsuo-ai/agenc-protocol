@@ -55,6 +55,9 @@ const FIXTURE_LISTING: HireCheckoutListing = {
     base64ToBytes(FIRST.accountBase64),
   ) as ServiceListing,
 };
+const FIXTURE_MODERATOR = address(
+  "7HiVp4xTm3XxuN1gGWcKQn39vwyS2kUcWAjw4MwpS1v5",
+);
 
 export function MoneyModal() {
   return (
@@ -64,10 +67,12 @@ export function MoneyModal() {
         listing={FIXTURE_LISTING}
         buildHireInput={(l) => ({
           listing: l.address,
+          providerAgent: l.account.providerAgent,
           creatorAgent: l.account.providerAgent,
           taskId: new Uint8Array(32),
           expectedPrice: l.account.price,
           expectedVersion: l.account.version,
+          moderator: FIXTURE_MODERATOR,
         })}
       />
       {/* The OPEN money dialog, server-rendered to prove it SSRs without throwing. */}

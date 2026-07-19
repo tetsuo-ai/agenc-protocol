@@ -18,6 +18,8 @@ See `Anchor.toml`, `programs/agenc-coordination/Cargo.toml`, and `.github/workfl
 
 ```bash
 npm ci
+npm ci --prefix tests-integration
+npm run audit:tests-integration
 cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
 cargo fmt --manifest-path zkvm/guest/Cargo.toml --all --check
 npm run artifacts:check
@@ -33,12 +35,17 @@ cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets 
 cargo test --manifest-path programs/agenc-coordination/Cargo.toml --all-targets --no-default-features --features mainnet-canary
 cargo test --manifest-path programs/agenc-coordination/fuzz/Cargo.toml --all-targets
 
+# This unnamed feature combination is deliberately rejected: use the default
+# full surface, or add --features mainnet-canary for the restricted surface.
+cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features
+
 node --test tests-integration/*.test.mjs
 npm test --workspaces --if-present
 ```
 
-Those are the same gates enforced by CI for Marketplace V2 work. CI additionally
-builds the program fresh and runs `npm run artifacts:check:built`
+Those are the same gates enforced by normal pull-request CI for Marketplace V2
+work; the bare no-default command is an expected compile-fail assertion. CI
+additionally builds the program fresh and runs `npm run artifacts:check:built`
 (`--require-build`) plus the canary-IDL gate (`.github/workflows/idl-drift.yml`).
 
 Current candidate evidence, measured from the commands and built artifacts on
@@ -46,17 +53,17 @@ Current candidate evidence, measured from the commands and built artifacts on
 
 | Gate | Result |
 |------|--------|
-| Rust production/default | 521 tests |
-| Rust `validation-timings` | 521 tests |
-| Rust explicit `private-zk` | 546 tests |
-| Rust restricted `mainnet-canary` | 319 tests |
+| Rust production/default | 524 tests |
+| Rust `validation-timings` | 524 tests |
+| Rust explicit `private-zk` | 549 tests |
+| Rust restricted `mainnet-canary` | 321 tests |
 | Model/property suite | 76 tests |
-| Compiled-program litesvm | 388 total: 387 pass, one canary-only conditional skip; separate canary run 1 pass |
-| SDK | 546 total: 545 pass, one conditional skip |
-| All npm workspaces | 1,013 total: 1,012 pass, one conditional skip |
-| Deployment/preflight scripts | 185 pass |
-| Production SBF | 2,257,104 bytes; SHA-256 `c8d3b011a3c64b9dbdeef4ab097b9a48690a46a10daf4d8dfef72ace93b563d5` |
-| Candidate IDL | 97 instructions / 43 accounts / 98 events / 388 errors; SHA-256 `c6920983a5f72396bea7dc6672f1b3a9017ab1097dfa9cf59f4b6bf2f33a0f53` |
+| Compiled-program litesvm | 395 total: 394 pass, one canary-only conditional skip; separate canary run 1 pass |
+| SDK | 576 total: 575 pass, one conditional skip |
+| All npm workspaces | 1,093 total: 1,092 pass, one conditional skip |
+| Deployment/preflight scripts | 225 pass |
+| Production SBF | 2,277,664 bytes; SHA-256 `2b4b80b899d36073417c0ace53c0f62aedc2bfa801af20038c8d83fe5678bf0a` |
+| Candidate IDL | 98 instructions / 43 accounts / 99 events / 393 errors; SHA-256 `5951d233e98c61ce77243fe807b9df4c79905532185495e0b36e9d8b14d43604` |
 
 These are candidate facts, not a claim that this binary is deployed: mainnet
 still runs the verified revision-4 artifact at commit `097ded1` (99 instructions /
@@ -268,7 +275,7 @@ canonical stake and AgentRegistration PDA bindings, and each account's own rent
 plus tracked `staked_amount` backing. Fully backed nonzero stake is compatible;
 malformed state, principal without its agent identity, or a per-account deficit
 blocks deployment even when aggregate balances appear sufficient.
-The current candidate remains blocked on a separate 73,880-byte Squads-CPI
+The current candidate remains blocked on a separate 94,440-byte Squads-CPI
 `ExtendProgramChecked` action in a slot before the binary upgrade.
 
 The SDK drift gate snapshots a deterministic digest of every generated path and

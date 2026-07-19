@@ -28,7 +28,7 @@ to the ground-truth code/doc.
 `agenc-coordination` (Anchor 0.32.1, Solana 3.0.13, program id
 `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, upgradeable) is a Solana escrow +
 coordination program for an agent task marketplace. It has **two `#[program]` modules**:
-the **full** surface (**99 IDL instructions** as of batch-4) and a restricted
+the deployed revision-4 **full** surface (**99 IDL instructions** as of batch-4) and a restricted
 **mainnet-canary** surface (**25 instructions**). This handoff was originally written
 while the canary was live on mainnet; **as of 2026-07-09 the full 99-instruction
 surface is live on mainnet** (`surface_revision = 4`, last slot **431918664**, store +
@@ -49,9 +49,11 @@ the migration was executed 2026-06-11 against the then-169 live tasks (0 failure
 
 ### In scope (primary)
 
-- **The full 99-instruction surface** — `programs/agenc-coordination/src/` (the
-  `#[cfg(not(feature = "mainnet-canary"))]` module). Authoritative inventory:
-  `docs/reference/INSTRUCTIONS.md` (IDL-generated).
+- **The deployed revision-4 99-instruction surface** — the historical scope of
+  this handoff. The current `programs/agenc-coordination/src/`
+  `#[cfg(not(feature = "mainnet-canary"))]` module is instead the pending
+  98-instruction revision-5 candidate; its authoritative generated inventory is
+  `docs/reference/INSTRUCTIONS.md`.
 - **The two migrations** — `programs/agenc-coordination/src/instructions/migrate.rs`:
   - `migrate_protocol`: reallocs the single live `ProtocolConfig` 349 → 351B
     (appends `surface_revision`).
@@ -97,11 +99,15 @@ the migration was executed 2026-06-11 against the then-169 live tasks (0 failure
 
 ### Surface counting note (be precise)
 
-The full IDL is **99 instructions** (`artifacts/anchor/idl/agenc_coordination.json`;
-`docs/reference/INSTRUCTIONS.md`). Older historical docs may say "77", "80", "82",
-"84", or "90"; those counts are intermediate milestones (Phase 9 = 84, P1.2 = 90,
-batch-2 = 94, batch-3 = 96, batch-4 = 99). `vote_dispute` was **retired** (P6.3)
-and is not in the IDL. The **canary surface is exactly 25** instructions,
+The surface this historical handoff audited, and the surface still deployed as
+revision 4, has **99 instructions**. The current
+`artifacts/anchor/idl/agenc_coordination.json` and
+`docs/reference/INSTRUCTIONS.md` describe the pending revision-5 candidate and
+contain **98 instructions**; they are not evidence that revision 5 is live. Older
+historical docs may say "77", "80", "82", "84", or "90"; those counts are
+intermediate milestones (Phase 9 = 84, P1.2 = 90, batch-2 = 94, batch-3 = 96,
+batch-4 = 99). `vote_dispute` was **retired** (P6.3) and is absent from both the
+live and candidate inventories. The **canary surface is exactly 25** instructions,
 enforced by `scripts/check-canary-idl.mjs` (`npm run canary:check-idl`).
 
 ---

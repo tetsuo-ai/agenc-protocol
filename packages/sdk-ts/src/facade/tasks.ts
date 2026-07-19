@@ -70,6 +70,7 @@ import {
   type DistributeGhostShareAsyncInput,
   type ReclaimTerminalClaimAsyncInput,
   type SetTaskJobSpecAsyncInput,
+  DependencyType,
   ValidationMode,
 } from "../generated/index.js";
 
@@ -120,7 +121,9 @@ function withReferrerDefaults<
  * for the exact pre-referrer behavior (they default to the no-leg skip path —
  * `referrer: null`, `referrerFeeBps: 0`).
  */
-export async function createTask(input: OptionalReferrer<CreateTaskAsyncInput>) {
+export async function createTask(
+  input: OptionalReferrer<CreateTaskAsyncInput>,
+) {
   return getCreateTaskInstructionAsync(withReferrerDefaults(input));
 }
 
@@ -168,15 +171,8 @@ export type ClaimTaskWithJobSpecInput = Omit<
   parentTask?: Address;
 };
 
-export async function claimTaskWithJobSpec(
-  input: ClaimTaskWithJobSpecInput,
-) {
-  const {
-    jobSpecHash,
-    moderationBlock,
-    parentTask,
-    ...generatedInput
-  } = input;
+export async function claimTaskWithJobSpec(input: ClaimTaskWithJobSpecInput) {
+  const { jobSpecHash, moderationBlock, parentTask, ...generatedInput } = input;
   if (!moderationBlock && !jobSpecHash) {
     throw new Error(
       "claimTaskWithJobSpec: provide jobSpecHash (or moderationBlock) for the assignment-time BLOCK check",
@@ -256,7 +252,10 @@ async function appendCompletionRemainingAccounts<
       remaining.bidSettlement.bidBook ?? (await findBidBookPda({ task }))[0];
     accounts.push(
       { address: bidBook, role: AccountRole.WRITABLE },
-      { address: remaining.bidSettlement.acceptedBid, role: AccountRole.WRITABLE },
+      {
+        address: remaining.bidSettlement.acceptedBid,
+        role: AccountRole.WRITABLE,
+      },
       {
         address: remaining.bidSettlement.bidderMarketState,
         role: AccountRole.WRITABLE,
@@ -306,9 +305,7 @@ export async function rejectTaskResult(input: RejectTaskResultInput) {
  * tasks that is the empty system-owned PDA, which settles with no legs, exactly
  * as before.
  */
-export async function autoAcceptTaskResult(
-  input: AutoAcceptTaskResultInput,
-) {
+export async function autoAcceptTaskResult(input: AutoAcceptTaskResultInput) {
   const { dependencyParent, bidSettlement, ...generatedInput } = input;
   const hireRecord =
     input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
@@ -338,15 +335,76 @@ export type AutoAcceptTaskResultInput = Omit<
  * validation config/vote, submission, attestor config, and protocol-config PDAs.
  */
 export type ValidateTaskResultInput = ValidateTaskResultAsyncInput &
-  CompletionRemainingAccounts;
+  CompletionRemainingAccounts & {
+    /**
+     * The task's on-chain dependency type. Required when a BidExclusive
+     * rejection also supplies `dependencyParent`, because Rust reserves slot 0
+     * for that parent only for Proof dependencies. On acceptance, declaring a
+     * dependent type also lets the facade fail before signing if the canonical
+     * parent is missing.
+     */
+    dependencyType?: DependencyType;
+  };
+
+function validationDependencyParent(
+  input: ValidateTaskResultInput,
+): Address | undefined {
+  const { approved, bidSettlement, dependencyParent, dependencyType } = input;
+  const declaredDependent =
+    dependencyType !== undefined && dependencyType !== DependencyType.None;
+
+  if (approved && declaredDependent && dependencyParent === undefined) {
+    throw new Error(
+      "validateTaskResult: dependencyParent is required when accepting a declared dependent task",
+    );
+  }
+  if (
+    dependencyType === DependencyType.None &&
+    dependencyParent !== undefined
+  ) {
+    throw new Error(
+      "validateTaskResult: dependencyParent must be omitted for an independent task",
+    );
+  }
+
+  // Completion always uses the uniform [parent?, bid...] layout. Non-bid
+  // rejection has no bid suffix to offset, so preserving an optional parent is
+  // harmless and keeps the existing facade behavior.
+  if (approved || bidSettlement === undefined) return dependencyParent;
+
+  // BidExclusive rejection is intentionally different on-chain: Proof keeps
+  // its historical parent prefix, while Data/Ordering unwind speculatively and
+  // read bidBook from remaining_accounts[0]. Never let a supplied parent shift
+  // those three settlement accounts by one.
+  if (dependencyType === undefined) {
+    if (dependencyParent !== undefined) {
+      throw new Error(
+        "validateTaskResult: dependencyType is required to lay out a dependent BidExclusive rejection",
+      );
+    }
+    return undefined;
+  }
+  if (dependencyType === DependencyType.Proof) {
+    if (dependencyParent === undefined) {
+      throw new Error(
+        "validateTaskResult: dependencyParent is required for a Proof-dependent BidExclusive rejection",
+      );
+    }
+    return dependencyParent;
+  }
+  return undefined;
+}
 
 export async function validateTaskResult(input: ValidateTaskResultInput) {
-  const { dependencyParent, bidSettlement, ...generatedInput } = input;
-  const instruction = await getValidateTaskResultInstructionAsync(generatedInput);
+  const { dependencyParent, dependencyType, bidSettlement, ...generatedInput } =
+    input;
+  const parentForWire = validationDependencyParent(input);
+  const instruction =
+    await getValidateTaskResultInstructionAsync(generatedInput);
   return appendCompletionRemainingAccounts(
     instruction,
     input.task,
-    { dependencyParent, bidSettlement },
+    { dependencyParent: parentForWire, bidSettlement },
     input.workerAuthority,
   );
 }
@@ -464,16 +522,20 @@ export async function cancelTask(input: CancelTaskInput) {
   } = input;
   const creatorCompletionBond =
     input.creatorCompletionBond ??
-    (await findCreatorCompletionBondPda({
-      task: input.task,
-      creator: input.authority.address,
-    }))[0];
+    (
+      await findCreatorCompletionBondPda({
+        task: input.task,
+        creator: input.authority.address,
+      })
+    )[0];
   const workerCompletionBond =
     input.workerCompletionBond ??
-    (await findWorkerCompletionBondPda({
-      task: input.task,
-      workerAuthority: input.workerBondAuthority,
-    }))[0];
+    (
+      await findWorkerCompletionBondPda({
+        task: input.task,
+        workerAuthority: input.workerBondAuthority,
+      })
+    )[0];
   if (bidSettlement?.kind === "open" && workerAccounts.length !== 0) {
     throw new Error(
       "cancelTask: BidExclusive open-book cancellation cannot include worker accounts",
@@ -503,7 +565,10 @@ export async function cancelTask(input: CancelTaskInput) {
     if (bidSettlement.kind === "accepted") {
       bidMetas.push(
         { address: bidSettlement.acceptedBid, role: AccountRole.WRITABLE },
-        { address: bidSettlement.bidderMarketState, role: AccountRole.WRITABLE },
+        {
+          address: bidSettlement.bidderMarketState,
+          role: AccountRole.WRITABLE,
+        },
       );
     }
   }
@@ -621,8 +686,7 @@ export async function closeTask(input: CloseTaskInput) {
         { address: child.recipient, role: AccountRole.WRITABLE },
       );
     } else {
-      const rentRecipient =
-        child.rentRecipient ?? child.workerAuthority;
+      const rentRecipient = child.rentRecipient ?? child.workerAuthority;
       remainingAccounts.push(
         { address: child.submission, role: AccountRole.WRITABLE },
         { address: child.workerAgent, role: AccountRole.READONLY },
@@ -872,11 +936,11 @@ export async function setTaskJobSpec(input: SetTaskJobSpecInput) {
 /**
  * The refundable anti-slop contest entry deposit (0.01 SOL), carried as surplus
  * lamports on a contest claim PDA. Charged when claiming a contest-configured
- * task (Competitive + CreatorReview). Refunded in full on every exit where the
- * worker SUBMITTED (accept / reject / ghost-split); FORFEITED to the protocol
- * treasury (never the creator) on no-show exits (`expire_claim` with a
- * provably-absent submission, and `reclaim_terminal_claim`). Mirrors the
- * on-chain `CONTEST_ENTRY_DEPOSIT_LAMPORTS`.
+ * task (Competitive + CreatorReview). Refunded by normal contest settlement
+ * (accept / reject / ghost-split) and for a still-Submitted Collaborative
+ * terminal straggler; FORFEITED to the protocol treasury (never the creator)
+ * on no-show expiry and terminal cleanup of an empty or Rejected abandoned
+ * claim. Mirrors the on-chain `CONTEST_ENTRY_DEPOSIT_LAMPORTS`.
  */
 export const CONTEST_ENTRY_DEPOSIT_LAMPORTS = 10_000_000n;
 
@@ -978,12 +1042,13 @@ export async function distributeGhostShare(
 
 /**
  * Permissionlessly reclaim a claim stranded on an already-terminal task (the
- * Batch-3 janitor): requires a provably-absent submission (the derived
- * submission PDA must be an empty system account — a live submission means the
- * normal settlement paths still apply). Returns claim rent to the worker
- * authority and forfeits any contest entry-deposit surplus to the protocol
- * `treasury` (never the creator). Claim, submission, and protocol-config PDAs
- * auto-derive from `task`/`worker`.
+ * Batch-3 janitor). The canonical submission PDA must be empty, Rejected, or a
+ * still-Submitted Collaborative straggler after completion; the last form also
+ * requires the canonical validation config. Empty/Rejected cleanup returns the
+ * claim rent minimum and forfeits eligible contest surplus to the protocol
+ * `treasury`; a Submitted Collaborative straggler receives the full claim and
+ * submission balances. Claim, submission, and protocol-config PDAs auto-derive
+ * from `task`/`worker`.
  */
 export async function reclaimTerminalClaim(
   input: ReclaimTerminalClaimAsyncInput,

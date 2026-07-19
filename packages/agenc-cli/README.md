@@ -46,11 +46,18 @@ Framework-detects the **current** repo (never greenfield-only):
 - **Next.js detected** (`next` in deps): injects a minimal, clearly-marked
   checkout surface — `app/agenc/page.tsx` + `app/agenc/checkout/route.ts`
   (pages-router fallback: `pages/agenc.tsx` + `pages/api/agenc/checkout.ts`)
+  plus server-only content-addressed job-spec storage and a public GET route
   — built on the plain-SDK `hireAndActivate` orchestration
   (`@tetsuo-ai/marketplace-sdk`; marketplace-react is NOT required), plus an
   `agenc.config.json` with the listing terms. The scaffolded checkout route is
   **fail-closed** on BOTH the App Router and Pages Router variants: it refuses
-  to run unless `AGENC_CHECKOUT_SECRET` is configured (2026-07 audit M-5).
+  to run unless `AGENC_CHECKOUT_SECRET` is configured (2026-07 audit M-5), and
+  the generated password field carries that secret in the POST body (API clients
+  may instead use `x-agenc-checkout-secret`). It stores a canonical
+  worker-verifiable envelope before signing the hire. Set
+  `AGENC_JOB_SPEC_DIR` to durable shared storage and
+  `AGENC_JOB_SPEC_PUBLIC_BASE_URL` to the generated route's public HTTPS URL
+  (`/agenc/job-specs` for App Router, `/api/agenc/job-specs` for Pages Router).
 - **Anything else**: writes `agenc.config.json` + a `worker.mjs` loop wired to
   `@tetsuo-ai/agenc-worker`'s programmatic API (register → watch → claim →
   execute with your own coding-agent CLI → submit → report earnings).

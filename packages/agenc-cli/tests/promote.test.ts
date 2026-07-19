@@ -24,7 +24,7 @@ function statusOf(report: ReturnType<typeof runPromoteChecks>, id: string) {
   return report.checks.find((c) => c.id === id)?.status;
 }
 
-const SDK_LINES = ["0.8", "0.9", "0.10", "0.11"] as const;
+const SDK_LINES = ["0.8", "0.9", "0.10", "0.11", "0.12"] as const;
 
 describe("versionInMatrix", () => {
   it("accepts patch releases inside any supported line", () => {
@@ -34,10 +34,11 @@ describe("versionInMatrix", () => {
     expect(versionInMatrix("0.9.1", SDK_LINES)).toBe(true);
     expect(versionInMatrix("0.10.0", SDK_LINES)).toBe(true);
     expect(versionInMatrix("0.11.0", SDK_LINES)).toBe(true);
+    expect(versionInMatrix("0.12.0", SDK_LINES)).toBe(true);
   });
   it("rejects older and newer lines", () => {
     expect(versionInMatrix("0.7.9", SDK_LINES)).toBe(false);
-    expect(versionInMatrix("0.12.0", SDK_LINES)).toBe(false);
+    expect(versionInMatrix("0.13.0", SDK_LINES)).toBe(false);
     expect(versionInMatrix("0.9.0", ["0.8"])).toBe(false);
     expect(versionInMatrix("1.8.0", SDK_LINES)).toBe(false);
   });
@@ -104,13 +105,21 @@ describe("runPromoteChecks", () => {
     expect(report.ready).toBe(false);
     const pin = report.checks.find((c) => c.id === "pin:@tetsuo-ai/marketplace-sdk");
     expect(pin?.status).toBe("fail");
-    expect(pin?.action).toContain("npm install @tetsuo-ai/marketplace-sdk@^0.11.0");
+    expect(pin?.action).toContain("npm install @tetsuo-ai/marketplace-sdk@^0.12.0");
   });
 
-  it("passes all supported sdk lines — 0.8.x through 0.11.x speak the live wire", () => {
-    // Regression guard: promote must not flag current published minors as
-    // outside a stale narrow matrix.
-    for (const version of ["0.8.2", "0.9.0", "0.9.1", "0.10.0", "0.10.1", "0.11.0"]) {
+  it("passes published SDK lines and the explicitly unreleased 0.12 candidate", () => {
+    // Regression guard: promote must not flag current published minors or its
+    // own coordinated source-workspace candidate outside a stale narrow matrix.
+    for (const version of [
+      "0.8.2",
+      "0.9.0",
+      "0.9.1",
+      "0.10.0",
+      "0.10.1",
+      "0.11.0",
+      "0.12.0",
+    ]) {
       const input = readyInput();
       input.installedVersions["@tetsuo-ai/marketplace-sdk"] = version;
       const report = runPromoteChecks(input);
@@ -140,6 +149,15 @@ describe("runPromoteChecks", () => {
     const report = runPromoteChecks(input);
     expect(statusOf(report, "pin:@tetsuo-ai/marketplace-react")).toBe("fail");
     expect(statusOf(report, "pin:@tetsuo-ai/marketplace-sdk")).toBe("pass");
+  });
+
+  it("accepts the coordinated tools and MCP 0.5 candidates", () => {
+    const input = readyInput();
+    input.installedVersions["@tetsuo-ai/marketplace-tools"] = "0.5.0";
+    input.installedVersions["@tetsuo-ai/marketplace-mcp"] = "0.5.0";
+    const report = runPromoteChecks(input);
+    expect(statusOf(report, "pin:@tetsuo-ai/marketplace-tools")).toBe("pass");
+    expect(statusOf(report, "pin:@tetsuo-ai/marketplace-mcp")).toBe("pass");
   });
 
   it("fails when the SDK is not installed at all", () => {

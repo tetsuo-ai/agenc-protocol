@@ -9831,13 +9831,13 @@ export type AgencCoordination = {
     {
       "name": "reclaimTerminalClaim",
       "docs": [
-        "Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim",
-        "stranded on an already-terminal (Completed/Cancelled) task (fix round):",
-        "claim rent to the worker, contest entry-deposit surplus forfeited to the",
-        "treasury, slot counters freed (un-bricks close_task + the worker's",
-        "active_tasks budget). Requires unfakeable proof there is no live",
-        "submission (the derived submission PDA must be empty). Exit path —",
-        "settles even while paused (money never locks)."
+        "Permissionlessly reclaim an unsettled claim stranded on an already-terminal",
+        "(Completed/Cancelled) task. The canonical submission PDA must prove an",
+        "empty/no-submission record, a Rejected submission, or a still-Submitted",
+        "Collaborative straggler after completion. Frees task/worker slot counters,",
+        "returns eligible claim/submission balances to the worker, and forfeits any",
+        "applicable no-show/rejection surplus to the treasury. Exit path — settles",
+        "even while paused (money never locks)."
       ],
       "discriminator": [
         224,
@@ -9918,9 +9918,11 @@ export type AgencCoordination = {
             "made for this claim, or it was already closed together with the claim by",
             "a settlement path — in which case THIS claim would not exist) OR hold a",
             "REJECTED submission (audit F-3 — then its rent is returned to the worker",
-            "and it is tombstoned here, hence `mut`). A live program-owned submission",
-            "in any other state means the claim is still settleable by the normal",
-            "paths and must not be short-circuited."
+            "and it is tombstoned here, hence `mut`), OR hold a still-SUBMITTED",
+            "Collaborative straggler after the task completed (its validation debt is",
+            "settled here). A live program-owned submission in any other shape means",
+            "the claim is still settleable by the normal paths and must not be",
+            "short-circuited."
           ],
           "writable": true,
           "pda": {
@@ -10044,7 +10046,9 @@ export type AgencCoordination = {
         {
           "name": "rentRecipient",
           "docs": [
-            "worker authority (stored pubkey; no caller-supplied-account trust)."
+            "Receives the eligible claim refund (rent minimum for an empty or Rejected",
+            "record; full balance for a Submitted Collaborative straggler) and any",
+            "closed submission balance. No caller-supplied-account trust."
           ],
           "writable": true
         }
@@ -13607,6 +13611,198 @@ export type AgencCoordination = {
         {
           "name": "amount",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "stampReleaseSurface",
+      "docs": [
+        "Atomically verify the reviewed mainnet release accounts and stamp the",
+        "current surface revision while the protocol remains paused."
+      ],
+      "discriminator": [
+        20,
+        228,
+        18,
+        239,
+        43,
+        249,
+        247,
+        119
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidMarketplaceConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  112,
+                  108,
+                  97,
+                  99,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "moderationConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  111,
+                  100,
+                  101,
+                  114,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "programData",
+          "docs": [
+            "below before any state write. Read-only inclusion also takes the runtime",
+            "account lock against a concurrent loader upgrade."
+          ]
+        },
+        {
+          "name": "anchorIdl"
+        },
+        {
+          "name": "upgradeAuthorityCustody",
+          "docs": [
+            "reviewed arguments. Its read lock prevents a concurrent custody-policy",
+            "mutation from crossing the stamp boundary."
+          ]
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "disabledTaskTypeMask",
+          "type": "u8"
+        },
+        {
+          "name": "surfaceRevision",
+          "type": "u16"
+        },
+        {
+          "name": "expectedProtocolConfigHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedProgramDataSlot",
+          "type": "u64"
+        },
+        {
+          "name": "expectedProgramDataPayloadLen",
+          "type": "u32"
+        },
+        {
+          "name": "expectedUpgradeAuthority",
+          "type": "pubkey"
+        },
+        {
+          "name": "expectedBidConfigHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedModerationConfigHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedIdlAccountHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expectedCustodyAddress",
+          "type": "pubkey"
+        },
+        {
+          "name": "expectedCustodyOwner",
+          "type": "pubkey"
+        },
+        {
+          "name": "expectedCustodyAccountHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -17544,6 +17740,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "releaseSurfaceStamped",
+      "discriminator": [
+        116,
+        104,
+        144,
+        233,
+        104,
+        150,
+        184,
+        17
+      ]
+    },
+    {
       "name": "reputationChanged",
       "discriminator": [
         190,
@@ -19716,7 +19925,7 @@ export type AgencCoordination = {
     {
       "code": 6340,
       "name": "claimReclaimRequiresNoSubmission",
-      "msg": "reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)"
+      "msg": "reclaim_terminal_claim requires a canonical empty, Rejected, or terminal Collaborative Submitted record"
     },
     {
       "code": 6341,
@@ -19952,6 +20161,31 @@ export type AgencCoordination = {
       "code": 6387,
       "name": "reputationDelegationRecoveryAccountsRequired",
       "msg": "Orphan delegation recovery requires the canonical protocol config and writable treasury"
+    },
+    {
+      "code": 6388,
+      "name": "releaseStampRequiresPaused",
+      "msg": "The reviewed release surface can only be stamped while the protocol is paused"
+    },
+    {
+      "code": 6389,
+      "name": "releaseBoundaryAccountMismatch",
+      "msg": "A release-boundary account does not match its reviewed identity or loader state"
+    },
+    {
+      "code": 6390,
+      "name": "releaseBoundaryDigestMismatch",
+      "msg": "A release-boundary account data digest changed before the atomic stamp"
+    },
+    {
+      "code": 6391,
+      "name": "releaseProgramDataNotSettled",
+      "msg": "The reviewed ProgramData upgrade slot has not settled before the release stamp"
+    },
+    {
+      "code": 6392,
+      "name": "releaseUnpauseRequiresCurrentSurface",
+      "msg": "The full production protocol can only be unpaused after the current release surface is atomically stamped"
     }
   ],
   "types": [
@@ -21347,10 +21581,10 @@ export type AgencCoordination = {
     {
       "name": "contestDepositForfeited",
       "docs": [
-        "Emitted when a contest entry deposit is FORFEITED to the protocol treasury on",
-        "a no-show exit (`expire_claim` with a provably-absent submission PDA, or",
-        "`reclaim_terminal_claim`). Workers who submitted are always refunded in full",
-        "(their claim closes with all lamports — deposit included — to them)."
+        "Emitted when `expire_claim` or `cancel_task` forfeits a contest entry deposit",
+        "to the protocol treasury for a proven no-show. Terminal empty/Rejected claim",
+        "cleanup reports the same forfeiture through",
+        "[`TerminalClaimReclaimed::forfeited`] instead of emitting this event."
       ],
       "type": {
         "kind": "struct",
@@ -21366,7 +21600,7 @@ export type AgencCoordination = {
           {
             "name": "workerAgent",
             "docs": [
-              "The no-show worker's `AgentRegistration` PDA."
+              "The proven no-show worker's `AgentRegistration` PDA."
             ],
             "type": "pubkey"
           },
@@ -22871,8 +23105,8 @@ export type AgencCoordination = {
           {
             "name": "quorumBps",
             "docs": [
-              "Quorum in basis points of the bounded two-voter vote-weight capacity.",
-              "New proposals also enforce `2 * min_proposal_stake` as an absolute floor."
+              "Quorum in basis points of the bounded three-voter vote-weight capacity.",
+              "New proposals also enforce `3 * min_voter_stake` as an absolute floor."
             ],
             "type": "u16"
           },
@@ -24751,8 +24985,12 @@ export type AgencCoordination = {
               "historical pre-P6.5 prefix stays valid. A legacy account is migrated up to",
               "the new size by `migrate_protocol` (realloc +",
               "zero-init), which lands this at `0` = \"surface not yet stamped\". An operator",
-              "then sets the real revision via `update_launch_controls` (the existing",
-              "multisig-gated config-update authority path).",
+              "then establishes the current revision through the atomic",
+              "`stamp_release_surface` release boundary. `update_launch_controls` may",
+              "preserve the current value or select an older conservative revision, but",
+              "cannot establish the current production revision. In the full production",
+              "build, an older/unstamped revision must remain paused; unpausing requires",
+              "that CURRENT was already established by the atomic stamp.",
               "",
               "Semantics:",
               "- `0`  → surface unstamped (treat as the conservative canary surface;",
@@ -25103,6 +25341,87 @@ export type AgencCoordination = {
           {
             "name": "outcome",
             "type": "u8"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "releaseSurfaceStamped",
+      "docs": [
+        "Emitted only after the atomic release-boundary instruction has locked and",
+        "verified the reviewed executable metadata, IDL, singleton policy, and",
+        "upgrade-custody images in the same transaction as the surface stamp."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "surfaceRevision",
+            "type": "u16"
+          },
+          {
+            "name": "disabledTaskTypeMask",
+            "type": "u8"
+          },
+          {
+            "name": "programDataSlot",
+            "type": "u64"
+          },
+          {
+            "name": "protocolConfigHash",
+            "docs": [
+              "Full pre-stamp ProtocolConfig account-data hash."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "bidConfigHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "moderationConfigHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "idlAccountHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "custodyAccountHash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           },
           {
             "name": "timestamp",
@@ -28645,11 +28964,11 @@ export type AgencCoordination = {
     {
       "name": "terminalClaimReclaimed",
       "docs": [
-        "Emitted by `reclaim_terminal_claim`: a claimed-but-never-submitted (no-show)",
-        "claim on an already-terminal (Completed/Cancelled) task was reclaimed —",
-        "claim rent back to the worker, any contest entry-deposit surplus forfeited",
-        "to the protocol treasury, and the task/worker slot counters freed (which",
-        "un-bricks `close_task` and the worker's `active_tasks` budget)."
+        "Emitted by `reclaim_terminal_claim`: an unsettled claim on an already-terminal",
+        "task was reclaimed. The eligible shapes are an empty/no-submission record, a",
+        "Rejected submission, or a still-Submitted Collaborative straggler after",
+        "completion. Task/worker slot counters are freed; applicable claim surplus is",
+        "forfeited to the treasury while a Submitted straggler is refunded in full."
       ],
       "type": {
         "kind": "struct",
@@ -28665,14 +28984,16 @@ export type AgencCoordination = {
           {
             "name": "workerAgent",
             "docs": [
-              "The no-show worker's `AgentRegistration` PDA."
+              "The affected worker's `AgentRegistration` PDA."
             ],
             "type": "pubkey"
           },
           {
             "name": "workerRefund",
             "docs": [
-              "Lamports returned to the worker authority (the claim's rent-exempt minimum)."
+              "Claim lamports returned to the worker authority: the rent-exempt minimum",
+              "for empty/Rejected cleanup, or the full balance for a Submitted",
+              "Collaborative straggler."
             ],
             "type": "u64"
           },

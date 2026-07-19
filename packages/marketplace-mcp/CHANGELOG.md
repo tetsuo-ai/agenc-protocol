@@ -5,6 +5,19 @@ All notable changes to `@tetsuo-ai/marketplace-mcp` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 (unreleased candidate)
+
+### Release coordination
+
+- Align the server runtime version and dependencies with
+  `@tetsuo-ai/marketplace-tools@^0.5.0` and
+  `@tetsuo-ai/marketplace-sdk@^0.12.0`. These versions form part of the
+  unreleased revision-5 package set; published MCP 0.4.0 remains current until
+  the coordinated cutover.
+- Exposed AgentCard projections inherit marketplace-tools 0.5.0's A2A v1.0
+  shape. Tool count and the readonly-by-default, keyless mutation posture are
+  unchanged.
+
 ## 0.4.0
 
 ### Minor Changes (breaking — the P1.2 open-roster flag-day cutover)

@@ -2,25 +2,25 @@
 // signs, never flips config, never touches money paths; it prints pass/fail
 // with the exact next action for each gap.
 //
-// The version matrix mirrors docs/VERSIONING.md §1.1 (the human-maintained
-// source of truth for which published pins speak the live mainnet wire —
-// P1.2 wire + additive batch-2, 2026-07-05). Update BOTH on the next
-// lockstep republish. A package may have MULTIPLE compatible minor lines
-// when a program upgrade was additive (batch-2…4: sdk 0.8.x–0.11.x all
-// speak the live wire).
+// The version matrix mirrors docs/VERSIONING.md §1.1 (published/live lines)
+// plus §1.1.1 (the explicitly unreleased coordinated candidate set). Update
+// both the document and this constant on a candidate bump or lockstep publish.
+// A package may have MULTIPLE compatible minor lines when a program upgrade
+// was additive (batch-2…4: sdk 0.8.x–0.11.x all speak the live wire; the 0.12
+// candidate remains backward-compatible while adding the revision-5 wire).
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig, type AgencConfig, AgencConfigError, CONFIG_FILENAME } from "./config.js";
 
 /**
- * docs/VERSIONING.md §1.1 — compatible `major.minor` lines per package,
+ * docs/VERSIONING.md §1.1/§1.1.1 — compatible `major.minor` lines per package,
  * oldest first (the LAST entry is the current line install hints point at).
  */
 export const SUPPORT_MATRIX: Record<string, readonly string[]> = {
-  "@tetsuo-ai/marketplace-sdk": ["0.8", "0.9", "0.10", "0.11"],
+  "@tetsuo-ai/marketplace-sdk": ["0.8", "0.9", "0.10", "0.11", "0.12"],
   "@tetsuo-ai/marketplace-react": ["0.4"],
-  "@tetsuo-ai/marketplace-tools": ["0.4"],
-  "@tetsuo-ai/marketplace-mcp": ["0.4"],
+  "@tetsuo-ai/marketplace-tools": ["0.4", "0.5"],
+  "@tetsuo-ai/marketplace-mcp": ["0.4", "0.5"],
   "@tetsuo-ai/marketplace-moderation": ["0.1"],
   "@tetsuo-ai/store-core": ["0.5", "0.6"],
 };
@@ -208,7 +208,7 @@ export function runPromoteChecks(input: PromoteInput): PromoteReport {
       status: "fail",
       detail: "@tetsuo-ai/marketplace-sdk is not installed in this project",
       action:
-        "npm install @tetsuo-ai/marketplace-sdk@^0.11.0 (run it in the project root — `agenc init` scaffolds a package.json when the project has none)",
+        "npm install @tetsuo-ai/marketplace-sdk@^0.12.0 (run it in the project root — `agenc init` scaffolds a package.json when the project has none)",
     });
   }
 

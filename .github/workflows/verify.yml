@@ -113,7 +113,7 @@ jobs:
       # --- PRODUCTION CANDIDATE: default features ---
       # Do not describe this hash as live until a separately approved upgrade is
       # confirmed on-chain. Revision 4 currently exposes 99 instructions while
-      # the revision-5 default build intentionally exposes 97.
+      # the revision-5 default build intentionally exposes 98.
       - name: Reproducible build (production default-feature surface)
         working-directory: programs/agenc-coordination
         run: |

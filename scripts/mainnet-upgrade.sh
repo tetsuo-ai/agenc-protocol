@@ -10,7 +10,7 @@
 # that live authority and REFUSE the direct `solana program deploy` step when the
 # supplied ProtocolConfig signer is not the loader signer. Execute the reviewed
 # binary upgrade in Squads, then use this wrapper/orchestrator for the verified
-# post-deploy stamp + IDL steps.
+# post-deploy migration/configuration, verified IDL publication, and final stamp.
 #
 # This is a thin wrapper around scripts/mainnet-upgrade.mjs — it does NOT change
 # any of that script's safety: PLAN broadcasts nothing; EXECUTE still makes YOU
@@ -47,7 +47,7 @@ EXPECTED_SO_SHA256="${EXPECTED_SO_SHA256:-}"
 EXPECTED_IDL_SHA256="${EXPECTED_IDL_SHA256:-}"
 
 # ---- ROLLOUT KNOB: which task types go LIVE at the surface stamp ------------
-# The surface stamp (update_launch_controls) writes disabled_task_type_mask. A SET bit
+# The atomic surface stamp (stamp_release_surface) writes disabled_task_type_mask. A SET bit
 # DISABLES that task type:  1=Exclusive  2=Collaborative  4=Competitive  8=BidExclusive.
 #   0  = enable ALL task types (Exclusive + Collaborative + Competitive + BidExclusive) <-- rollout default
 #   6  = BidExclusive + Exclusive only (disable Collaborative+Competitive)
@@ -128,7 +128,9 @@ esac
 # Hand off to the safe orchestrator. It re-validates both artifact hashes, mainnet
 # genesis, the live ProtocolConfig authority, loader authority, exact ProgramData
 # bytes, balance, signer threshold, and live task count, then runs:
-#   deploy -> migrate sweep -> init configs -> stamp surface_revision -> publish IDL
+#   deploy -> migrate sweep -> init configs -> publish+verify IDL -> final stamp
+# The final stamp is deliberately reasserted even when the revision value is
+# already current, so an IDL-only resume cannot leave the ordering ambiguous.
 exec node scripts/mainnet-upgrade.mjs \
   --rpc "$RPC_URL" \
   --protocol-authority "$PROTOCOL_AUTHORITY" \

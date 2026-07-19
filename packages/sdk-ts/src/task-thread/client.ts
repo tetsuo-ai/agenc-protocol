@@ -15,6 +15,15 @@ import {
   type TaskThreadEnvelope,
 } from "./envelope.js";
 
+/** Default maximum number of envelopes accepted in one fetched task thread. */
+export const DEFAULT_MAX_TASK_THREAD_MESSAGES = 256;
+
+/** Resource bounds applied while decoding a fetched task thread. */
+export interface FetchTaskThreadOptions {
+  /** Maximum envelopes accepted in one response. Defaults to 256. */
+  maxMessages?: number;
+}
+
 /** The ordered thread returned by {@link fetchTaskThread}. */
 export interface TaskThread {
   /** Messages in publish order (oldest first), as the content host returned them. */
@@ -72,13 +81,22 @@ export async function postTaskMessage(
  *
  * @param transport - The content-rails transport.
  * @param taskPda - The Task PDA whose thread to read.
+ * @param options - Optional message-count bound.
  * @returns The ordered thread.
  * @throws TypeError when the body is not `{ messages: Envelope[] }`.
  */
 export async function fetchTaskThread(
   transport: ContentTransport,
   taskPda: Address | string,
+  options: FetchTaskThreadOptions = {},
 ): Promise<TaskThread> {
+  const maxMessages =
+    options.maxMessages ?? DEFAULT_MAX_TASK_THREAD_MESSAGES;
+  if (!Number.isSafeInteger(maxMessages) || maxMessages <= 0) {
+    throw new TypeError(
+      "fetchTaskThread: maxMessages must be a positive safe integer",
+    );
+  }
   const body = await transport.get(`/api/task-threads/${taskPda}`);
   if (body === null || typeof body !== "object" || !("messages" in body)) {
     throw new TypeError(
@@ -88,6 +106,12 @@ export async function fetchTaskThread(
   const raw = (body as { messages: unknown }).messages;
   if (!Array.isArray(raw)) {
     throw new TypeError("fetchTaskThread: `messages` is not an array");
+  }
+  if (raw.length > maxMessages) {
+    throw new TypeError(
+      `fetchTaskThread: content host returned ${raw.length} messages, ` +
+        `exceeding the limit of ${maxMessages}`,
+    );
   }
   return { messages: raw.map((m) => assertTaskThreadEnvelope(m)) };
 }
@@ -103,6 +127,7 @@ export async function fetchTaskThread(
  * @param transport - The content-rails transport.
  * @param taskPda - The Task PDA whose thread to search.
  * @param onChainHash - The 32-byte on-chain digest (bytes or lowercase-hex).
+ * @param options - Optional message-count bound for the fetched thread.
  * @returns The matching decoded envelope.
  * @throws Error when no thread message hashes to `onChainHash`.
  */
@@ -110,9 +135,10 @@ export async function resolveChangesRequest(
   transport: ContentTransport,
   taskPda: Address | string,
   onChainHash: Uint8Array | string,
+  options: FetchTaskThreadOptions = {},
 ): Promise<TaskThreadEnvelope> {
   const wantHex = normalizeHash(onChainHash);
-  const { messages } = await fetchTaskThread(transport, taskPda);
+  const { messages } = await fetchTaskThread(transport, taskPda, options);
   for (const envelope of messages) {
     const { hex } = await envelopeHash(envelope);
     if (hex === wantHex) return envelope;

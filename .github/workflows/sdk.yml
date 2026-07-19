@@ -120,6 +120,24 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Install compiled-program integration dependencies
+        run: npm ci
+        working-directory: tests-integration
+
+      # cargo build-sbf produces the executable but not Anchor's IDL output.
+      # The harness intentionally consumes the reviewed committed IDL, so stage
+      # it at the legacy path it loads before the compiled suite starts.
+      - name: Stage committed IDL for compiled integration harness
+        run: |
+          mkdir -p target/idl
+          cp artifacts/anchor/idl/agenc_coordination.json target/idl/agenc_coordination.json
+
+      # This is the normal PR compiled-program gate, not only a protocol-tag
+      # release check. It exercises the root LiteSVM corpus against the fresh
+      # production SBF built immediately above.
+      - name: Root compiled-program integration suite
+        run: node --test tests-integration/*.test.mjs
+
       - name: Sync testing program asset
         run: npm run testing:sync-so
         working-directory: packages/sdk-ts

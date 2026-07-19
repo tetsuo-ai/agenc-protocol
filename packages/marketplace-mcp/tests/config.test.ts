@@ -9,7 +9,14 @@ import {
   readonlyTools,
   marketplaceTools,
   prepareTools,
+  SERVER_VERSION,
 } from "../src/index.js";
+
+describe("server release identity", () => {
+  it("reports the coordinated 0.5 candidate version", () => {
+    expect(SERVER_VERSION).toBe("0.5.0");
+  });
+});
 
 describe("envFlag", () => {
   it("treats 1/true/yes/on (any case) as truthy and everything else as false", () => {

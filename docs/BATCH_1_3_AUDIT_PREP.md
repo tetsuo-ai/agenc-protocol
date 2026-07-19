@@ -499,7 +499,7 @@ are **design-approved, build-deferred** until there is real dispute/abuse volume
   0.5.0`).
 - clippy `--lib -D warnings` + `--features mainnet-canary` clean; `anchor build` +
   `npm run artifacts:check` clean; `npm run canary:check-idl` confirmed the historical
-  canary surface was **exactly 25 instructions**; current full IDL is **99**
+  canary surface was **exactly 25 instructions**; the then-current full IDL was **99**
   (was 84 at Phase 9; see `docs/reference/INSTRUCTIONS.md`).
 
 ## 5. Residual deploy gates (Phase 6, unchanged in spirit from Batch 2/3)

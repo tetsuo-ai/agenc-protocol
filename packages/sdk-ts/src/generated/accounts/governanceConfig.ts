@@ -63,8 +63,8 @@ export type GovernanceConfig = {
   /** Execution delay after voting ends (timelock) in seconds */
   executionDelay: bigint;
   /**
-   * Quorum in basis points of the bounded two-voter vote-weight capacity.
-   * New proposals also enforce `2 * min_proposal_stake` as an absolute floor.
+   * Quorum in basis points of the bounded three-voter vote-weight capacity.
+   * New proposals also enforce `3 * min_voter_stake` as an absolute floor.
    */
   quorumBps: number;
   /** Approval threshold in basis points (e.g., 5000 = simple majority) */
@@ -87,8 +87,8 @@ export type GovernanceConfigArgs = {
   /** Execution delay after voting ends (timelock) in seconds */
   executionDelay: number | bigint;
   /**
-   * Quorum in basis points of the bounded two-voter vote-weight capacity.
-   * New proposals also enforce `2 * min_proposal_stake` as an absolute floor.
+   * Quorum in basis points of the bounded three-voter vote-weight capacity.
+   * New proposals also enforce `3 * min_voter_stake` as an absolute floor.
    */
   quorumBps: number;
   /** Approval threshold in basis points (e.g., 5000 = simple majority) */

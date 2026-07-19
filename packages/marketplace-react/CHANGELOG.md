@@ -1,5 +1,13 @@
 # @tetsuo-ai/marketplace-react
 
+## 0.4.2 (unreleased candidate)
+
+### Patch Changes
+
+- Widen the SDK peer range through `^0.12.0` for the coordinated revision-5
+  client candidate. No React API changes; published 0.4.1 remains current until
+  the coordinated package cutover.
+
 ## 0.4.1
 
 ### Patch Changes (additive — WP-H3 phase 1, Guaranteed Hire)

@@ -39,20 +39,31 @@ describe("uploadResult", () => {
   const body = new TextEncoder().encode("artifact");
 
   it("POSTs the body and returns the uri from a {uri} response", async () => {
-    let seen: { url: string; method?: string } | null = null;
+    let seen: { url: string; method?: string; headers?: Headers } | null = null;
     const uri = await uploadResult({
       uploaderUrl: "https://up.example/store",
       body,
       fetchImpl: (async (url: unknown, init?: RequestInit) => {
-        seen = { url: String(url), method: init?.method ?? "" };
-        return new Response(JSON.stringify({ uri: "https://cdn.example/r/1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        seen = {
+          url: String(url),
+          method: init?.method ?? "",
+          headers: new Headers(init?.headers),
+        };
+        return new Response(
+          JSON.stringify({ uri: "https://cdn.example/r/1" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }) as typeof fetch,
     });
     expect(uri).toBe("https://cdn.example/r/1");
-    expect(seen).toEqual({ url: "https://up.example/store", method: "POST" });
+    expect(seen).toMatchObject({
+      url: "https://up.example/store",
+      method: "POST",
+    });
+    expect(seen!.headers!.get("idempotency-key")).toBe(sha256Hex(body));
   });
 
   it("rejects non-https uploader URLs", async () => {
@@ -66,7 +77,8 @@ describe("uploadResult", () => {
       uploadResult({
         uploaderUrl: "https://up.example",
         body,
-        fetchImpl: (async () => new Response("nope", { status: 500 })) as typeof fetch,
+        fetchImpl: (async () =>
+          new Response("nope", { status: 500 })) as typeof fetch,
       }),
     ).rejects.toThrow(/500/);
     await expect(
@@ -74,7 +86,9 @@ describe("uploadResult", () => {
         uploaderUrl: "https://up.example",
         body,
         fetchImpl: (async () =>
-          new Response(JSON.stringify({ notUri: true }), { status: 200 })) as typeof fetch,
+          new Response(JSON.stringify({ notUri: true }), {
+            status: 200,
+          })) as typeof fetch,
       }),
     ).rejects.toThrow(/uri/);
   });

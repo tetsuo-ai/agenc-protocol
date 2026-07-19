@@ -62,15 +62,15 @@ bytecode and different hashes**:
 
 | Surface | Cargo build args | What it is |
 |---------|------------------|------------|
-| **production / default** (**97** instructions at current HEAD) | *(default features)* | The pending revision-5 production candidate. It is not live until an approved upgrade is confirmed. |
-| **private-ZK development** (**100** instructions at current HEAD) | `--features private-zk` | Adds three quarantined proof instructions. Development/testing only; production preflight rejects this surface. |
+| **production / default** (**98** instructions at current HEAD) | *(default features)* | The pending revision-5 production candidate. It is not live until an approved upgrade is confirmed. |
+| **private-ZK development** (**101** instructions at current HEAD) | `--features private-zk` | Adds three quarantined proof instructions. Development/testing only; production preflight rejects this surface. |
 | **deployed revision 4** (**99** instructions at `097ded1`) | *(default features at the deployed commit)* | The build live at `HJsZ…` on mainnet (`surface_revision = 4`, last slot **431918664**). |
 | **mainnet-canary** (25 instructions) | `--no-default-features --features mainnet-canary` | The conservative restricted BUILD. Still in source, but **no longer live on mainnet** (it was the surface live before 2026-06-11). |
 
 > **Critical:** since 2026-06-11 the mainnet program runs a **full / default**
 > surface, but feature names do not identify a source revision. To match the
 > *currently deployed* program you MUST build default features at deployed commit
-> `097ded1`. Current HEAD is the different, 97-instruction revision-5 candidate
+> `097ded1`. Current HEAD is the different, 98-instruction revision-5 candidate
 > and must not be described as live before an upgrade. Building `private-zk` or
 > `mainnet-canary` also produces different bytecode and a non-matching hash;
 > `private-zk` must never be substituted for a production artifact.

@@ -691,6 +691,81 @@ export async function readProgramUpgradeAuthoritySnapshot(
   return snapshot;
 }
 
+/**
+ * Bind one independently approved SBF byte-for-byte to a loader snapshot that
+ * was decoded against the committed upgrade-authority/custody policy. Loader
+ * allocations can be larger than the ELF; only zero padding is accepted after
+ * the reviewed image.
+ *
+ * This is deliberately generic so every mainnet mutation rail can enforce the
+ * same executable boundary immediately before it broadcasts.
+ */
+export function assertApprovedExecutableSnapshot({
+  genesisHash,
+  policy,
+  snapshot,
+  binaryBytes,
+  expectedSha256,
+}) {
+  const expected = String(expectedSha256 ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    throw new Error(
+      "expected SBF sha256 is required and must be an independently reviewed 64-hex digest",
+    );
+  }
+  if (!policy || typeof policy !== "object") {
+    throw new Error("reviewed upgrade-authority policy is required");
+  }
+  if (genesisHash !== policy.genesisHash) {
+    throw new Error(
+      `RPC genesis ${String(genesisHash)} != reviewed ${String(policy.genesisHash)}`,
+    );
+  }
+  for (const [label, actual, reviewed] of [
+    ["program", snapshot?.programId, policy.programId],
+    ["ProgramData", snapshot?.programData, policy.expectedProgramData],
+    ["loader", snapshot?.loaderProgramId, policy.loaderProgramId],
+    ["policy sha256", snapshot?.policySha256, policy.policySha256],
+  ]) {
+    if (typeof reviewed !== "string" || actual !== reviewed) {
+      throw new Error(
+        `live loader ${label} ${String(actual)} != reviewed ${String(reviewed)}`,
+      );
+    }
+  }
+  if (!/^[0-9a-f]{64}$/.test(String(snapshot?.stateDigest ?? ""))) {
+    throw new Error("live loader snapshot state digest is malformed");
+  }
+
+  const binary = Buffer.from(binaryBytes ?? []);
+  if (binary.length === 0) {
+    throw new Error("approved SBF artifact is empty");
+  }
+  const actualSha256 = sha256(binary);
+  if (actualSha256 !== expected) {
+    throw new Error(`SBF sha256 ${actualSha256} != approved ${expected}`);
+  }
+  const payload = Buffer.from(snapshot?.payload ?? []);
+  if (payload.length < binary.length) {
+    throw new Error(
+      `live ProgramData payload ${payload.length} bytes is shorter than approved SBF ${binary.length}`,
+    );
+  }
+  if (!payload.subarray(0, binary.length).equals(binary)) {
+    throw new Error("live ProgramData executable bytes do not match the approved SBF");
+  }
+  if (!payload.subarray(binary.length).every((byte) => byte === 0)) {
+    throw new Error("live ProgramData has nonzero bytes after the approved SBF");
+  }
+  return {
+    actualSha256,
+    binaryBytes: binary.length,
+    contextSlot: snapshot.contextSlot,
+    programData: snapshot.programData,
+    stateDigest: snapshot.stateDigest,
+  };
+}
+
 export function assertImmediatePreUpgradeSnapshot(initial, immediate) {
   if (initial.policySha256 !== immediate.policySha256) {
     throw new Error("reviewed upgrade-authority policy changed after preflight");

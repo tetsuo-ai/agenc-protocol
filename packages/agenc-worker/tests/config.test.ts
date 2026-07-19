@@ -12,6 +12,7 @@ import {
   DEFAULT_EXECUTOR_ENV_ALLOWLIST,
   DEFAULT_EXECUTOR_TIMEOUT_MS,
   DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_TASK_THREAD_BASE_URL,
   loadConfigFile,
   resolveWorkerConfig,
 } from "../src/config.js";
@@ -27,13 +28,16 @@ describe("resolveWorkerConfig", () => {
     expect(config.allowUnboundedReward).toBe(false);
     expect(config.executor).toEqual([...DEFAULT_EXECUTOR]);
     expect(config.executorMode).toBe("safe");
-    expect(config.executorEnvAllowlist).toEqual([...DEFAULT_EXECUTOR_ENV_ALLOWLIST]);
+    expect(config.executorEnvAllowlist).toEqual([
+      ...DEFAULT_EXECUTOR_ENV_ALLOWLIST,
+    ]);
     expect(config.executor.at(-2)).toBe("--");
     expect(config.executor.at(-1)).toBe("{prompt}");
     expect(config.resultUploader).toBeNull();
     expect(config.creatorAllowlist).toBeNull();
     expect(config.allowAnyCreator).toBe(false);
     expect(config.endpoint).toBe(DEFAULT_ENDPOINT);
+    expect(config.taskThreadBaseUrl).toBe(DEFAULT_TASK_THREAD_BASE_URL);
     expect(config.pollIntervalMs).toBe(DEFAULT_POLL_INTERVAL_MS);
     expect(config.executorTimeoutMs).toBe(DEFAULT_EXECUTOR_TIMEOUT_MS);
     expect(config.stateDir).toContain("agenc-worker");
@@ -63,10 +67,16 @@ describe("resolveWorkerConfig", () => {
   });
 
   it("requires rpcUrl and walletPath", () => {
-    expect(() => resolveWorkerConfig({ walletPath: "/w" })).toThrow(ConfigError);
+    expect(() => resolveWorkerConfig({ walletPath: "/w" })).toThrow(
+      ConfigError,
+    );
     expect(() => resolveWorkerConfig({ walletPath: "/w" })).toThrow(/rpcUrl/);
-    expect(() => resolveWorkerConfig({ rpcUrl: "http://x" })).toThrow(/walletPath/);
-    expect(() => resolveWorkerConfig({ rpcUrl: "http://x" })).toThrow(/LOW-FUNDED/);
+    expect(() => resolveWorkerConfig({ rpcUrl: "http://x" })).toThrow(
+      /walletPath/,
+    );
+    expect(() => resolveWorkerConfig({ rpcUrl: "http://x" })).toThrow(
+      /LOW-FUNDED/,
+    );
   });
 
   it("rejects a zero capabilities bitmask (the program rejects 0)", () => {
@@ -114,9 +124,9 @@ describe("resolveWorkerConfig", () => {
 
   it("rejects a custom executor unless sandboxed or explicitly unsafe", () => {
     const custom = '["codex","exec","{prompt}"]';
-    expect(() => resolveWorkerConfig({ ...REQUIRED, executor: custom })).toThrow(
-      /custom argv.*safe mode/,
-    );
+    expect(() =>
+      resolveWorkerConfig({ ...REQUIRED, executor: custom }),
+    ).toThrow(/custom argv.*safe mode/);
     expect(
       resolveWorkerConfig({
         ...REQUIRED,
@@ -125,8 +135,11 @@ describe("resolveWorkerConfig", () => {
       }),
     ).toMatchObject({ executorMode: "sandboxed", executorEnvAllowlist: [] });
     expect(
-      resolveWorkerConfig({ ...REQUIRED, executor: custom, executorMode: "unsafe" })
-        .executorMode,
+      resolveWorkerConfig({
+        ...REQUIRED,
+        executor: custom,
+        executorMode: "unsafe",
+      }).executorMode,
     ).toBe("unsafe");
   });
 
@@ -148,7 +161,9 @@ describe("resolveWorkerConfig", () => {
         maxRewardLamports: "1000",
         creatorAllowlist: ["trusted"],
       });
-      expect(() => assertActiveWorkerConfig(config)).toThrow(/ANTHROPIC_API_KEY.*refusing/s);
+      expect(() => assertActiveWorkerConfig(config)).toThrow(
+        /ANTHROPIC_API_KEY.*refusing/s,
+      );
     } finally {
       if (oldKey !== undefined) process.env.ANTHROPIC_API_KEY = oldKey;
     }
@@ -156,9 +171,14 @@ describe("resolveWorkerConfig", () => {
 
   it("fails active startup without an explicit reward cap and creator policy", () => {
     const defaults = resolveWorkerConfig(REQUIRED);
-    expect(() => assertActiveWorkerConfig(defaults)).toThrow(/maxRewardLamports/);
+    expect(() => assertActiveWorkerConfig(defaults)).toThrow(
+      /maxRewardLamports/,
+    );
 
-    const capped = resolveWorkerConfig({ ...REQUIRED, maxRewardLamports: "1000" });
+    const capped = resolveWorkerConfig({
+      ...REQUIRED,
+      maxRewardLamports: "1000",
+    });
     expect(() => assertActiveWorkerConfig(capped)).toThrow(/creatorAllowlist/);
 
     const restricted = resolveWorkerConfig({
@@ -184,11 +204,16 @@ describe("resolveWorkerConfig", () => {
 
   it("requires the result uploader to be https", () => {
     expect(() =>
-      resolveWorkerConfig({ ...REQUIRED, resultUploader: "http://plain.example" }),
+      resolveWorkerConfig({
+        ...REQUIRED,
+        resultUploader: "http://plain.example",
+      }),
     ).toThrow(/https/);
     expect(
-      resolveWorkerConfig({ ...REQUIRED, resultUploader: "https://up.example/x" })
-        .resultUploader,
+      resolveWorkerConfig({
+        ...REQUIRED,
+        resultUploader: "https://up.example/x",
+      }).resultUploader,
     ).toBe("https://up.example/x");
   });
 
@@ -200,12 +225,48 @@ describe("resolveWorkerConfig", () => {
       /endpoint/,
     );
     expect(() =>
-      resolveWorkerConfig({ ...REQUIRED, endpoint: `https://x.example/${"a".repeat(130)}` }),
+      resolveWorkerConfig({
+        ...REQUIRED,
+        endpoint: `https://x.example/${"a".repeat(130)}`,
+      }),
     ).toThrow(/128/);
     expect(
-      resolveWorkerConfig({ ...REQUIRED, endpoint: "https://agent.example" }).endpoint,
+      resolveWorkerConfig({ ...REQUIRED, endpoint: "https://agent.example" })
+        .endpoint,
     ).toBe("https://agent.example");
     expect(resolveWorkerConfig(REQUIRED).endpoint).toBe(DEFAULT_ENDPOINT);
+  });
+
+  it("requires an HTTPS credential-free task-thread content host", () => {
+    expect(() =>
+      resolveWorkerConfig({
+        ...REQUIRED,
+        taskThreadBaseUrl: "http://threads.example",
+      }),
+    ).toThrow(/taskThreadBaseUrl/);
+    expect(() =>
+      resolveWorkerConfig({
+        ...REQUIRED,
+        taskThreadBaseUrl: "https://user:pass@threads.example",
+      }),
+    ).toThrow(/credentials/);
+    expect(() =>
+      resolveWorkerConfig({
+        ...REQUIRED,
+        taskThreadBaseUrl: "https://threads.example?token=secret",
+      }),
+    ).toThrow(/query/);
+    expect(
+      resolveWorkerConfig({
+        ...REQUIRED,
+        taskThreadBaseUrl: "https://threads.example/",
+      }).taskThreadBaseUrl,
+    ).toBe("https://threads.example");
+    expect(
+      configFromEnv({
+        AGENC_WORKER_TASK_THREAD_BASE_URL: "https://env-threads.example",
+      }).taskThreadBaseUrl,
+    ).toBe("https://env-threads.example");
   });
 
   it("parses creator allowlists from comma-separated env strings", () => {
@@ -221,7 +282,9 @@ describe("loadConfigFile", () => {
   it("returns {} for a missing DEFAULT-path file but errors on an explicit one", () => {
     const missing = path.join(tmpdir(), "definitely-missing-agenc-worker.json");
     expect(loadConfigFile(missing)).toEqual({});
-    expect(() => loadConfigFile(missing, { explicit: true })).toThrow(ConfigError);
+    expect(() => loadConfigFile(missing, { explicit: true })).toThrow(
+      ConfigError,
+    );
   });
 
   it("parses a JSON object and rejects non-objects", () => {

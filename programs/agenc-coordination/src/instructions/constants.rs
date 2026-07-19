@@ -202,13 +202,13 @@ pub const SELECTION_WINDOW_SECS: i64 = 172_800;
 /// Batch 3 WS-CONTEST fix round: refundable anti-slop contest entry deposit
 /// (0.01 SOL), carried as SURPLUS LAMPORTS on the contest claim PDA (no
 /// `TaskClaim` layout change). Charged only when claiming a contest-CONFIGURED
-/// task (schema-1 Competitive + CreatorReview). Refunded in full on every exit
-/// where the worker SUBMITTED (accept / reject / ghost-split close the claim
-/// with ALL its lamports to the worker — losers lose nothing). FORFEITED to the
-/// protocol treasury (never the creator) on no-show exits: `expire_claim` with a
-/// provably-absent submission PDA, and `reclaim_terminal_claim`. Rationale:
-/// claim rent alone was a free slot-squat DoS (fully refundable even to
-/// no-shows); the deposit prices squatting while keeping honest entry net-free.
+/// task (schema-1 Competitive + CreatorReview). Refunded in full when a
+/// submission is settled normally (accept / reject / ghost split) and for a
+/// terminal still-Submitted Collaborative straggler. FORFEITED to the protocol
+/// treasury (never the creator) for a provable no-show in `expire_claim` and for
+/// empty/Rejected abandoned claims cleaned by `reclaim_terminal_claim`.
+/// Rationale: claim rent alone was a free slot-squat DoS (fully refundable even
+/// to no-shows); the deposit prices both initial squatting and abandoned work.
 pub const CONTEST_ENTRY_DEPOSIT_LAMPORTS: u64 = 10_000_000;
 
 /// Default cooldown between task creations in seconds

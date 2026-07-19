@@ -42,9 +42,9 @@ authoritative deployed-state record is
 - **Authority/release:** governance elections snapshot immutable safety parameters and
   retain multisig dual control; deploy preflights validate upgrade authority, live
   obligations, account layouts, payout bindings, and all supported build surfaces.
-  Production is 97 instructions, explicit development `private-zk` is 100, and the
+  Production is 98 instructions, explicit development `private-zk` is 101, and the
   frozen canary is 25; invalid mixed feature combinations now fail compilation.
-  The candidate is 73,880 bytes larger than the live ProgramData payload capacity,
+  The candidate is 94,440 bytes larger than the live ProgramData payload capacity,
   so upgrade preflight now blocks until a separately reviewed Squads/loader
   `ExtendProgramChecked` action expands it. The rail models the loader's distinct
   45-byte ProgramData and 37-byte Buffer headers, mainnet's active minimum-extension
@@ -53,8 +53,11 @@ authoritative deployed-state record is
   capacity drift. Execute-mode step selection also refuses to deploy a needed
   binary while a migration is pending unless `sweep` immediately follows, so a
   partial `--only deploy` run cannot leave legacy accounts in the typed-read
-  frozen window. The Squads-CPI extension and upgrade must execute in different
-  slots. No extension was authorized or executed here.
+  frozen window. The final release uses `stamp_release_surface`, which locks and
+  validates the reviewed ProgramData metadata, canonical IDL, bid/moderation
+  singletons, freshness, and Squads custody image in the same transaction that
+  writes the revision. The Squads-CPI extension and upgrade must execute in
+  different slots. No extension was authorized or executed here.
 - **Memory safety/maintainability:** all 11 production lifetime transmutes were
   removed in favor of owned deserialization with explicit persist/close operations.
   Non-test builds deny `unsafe_code`; the remaining two unsafe blocks are confined to
@@ -66,6 +69,11 @@ authoritative deployed-state record is
   after deterministic regeneration, so it detects stale output without treating a
   reviewed uncommitted tree as drift. CI gates all four Rust profiles and every
   downstream workspace.
+- **Unreleased coordinated package set:** the workspace candidates are protocol
+  **0.4.0**, SDK **0.12.0**, React **0.4.2**, tools/MCP **0.5.0**, worker **0.2.0**,
+  and scoped/unscoped CLI **0.3.0**. They are not published/live-version claims:
+  protocol 0.3.0, SDK 0.11.0, React 0.4.1, tools/MCP 0.4.0, worker 0.1.1, and
+  CLI 0.2.0 remain the published revision-4 set until the coordinated cutover.
 - **Release supply chain:** npm publishes require OIDC provenance; GitHub Actions are
   pinned to full commit SHAs; the Agave bootstrap binary is version- and SHA-256-pinned;
   Dependabot tracks action/npm/Cargo updates. Protocol publication now requires the
@@ -81,17 +89,17 @@ authoritative deployed-state record is
   misleading `security.txt` contacts were deactivated, including the explorer-visible
   contact blob previously embedded in the candidate program; enable and test a real
   private intake before release, then publish matching on-chain and RFC 9116 metadata.
-- **Final local evidence:** Rust 521 production / 521 `validation-timings` / 546
-  private-ZK / 319 canary; 76 model/property tests; 388 compiled-program integrations
-  (387 pass, one canary-only conditional skip), plus the separate canary compiled
-  test passing 1/1; SDK 545 pass + one skip; 1,012
-  workspace tests pass + one skip; 185 deployment/preflight tests pass. Strict Clippy,
+- **Final local evidence:** Rust 524 production / 524 `validation-timings` / 549
+  private-ZK / 321 canary; 76 model/property tests; 395 compiled-program integrations
+  (394 pass, one canary-only conditional skip), plus the separate canary compiled
+  test passing 1/1; SDK 575 pass + one skip; 1,092
+  workspace tests pass + one skip; 225 deployment/preflight tests pass. Strict Clippy,
   formatting, artifact drift, package smoke, and SBF stack gates are green. The final
-  production SBF is 2,257,104 bytes with SHA-256
-  `c8d3b011a3c64b9dbdeef4ab097b9a48690a46a10daf4d8dfef72ace93b563d5`.
-  The canonical candidate IDL contains 97 instructions / 43 accounts / 98 events /
-  388 errors and has SHA-256
-  `c6920983a5f72396bea7dc6672f1b3a9017ab1097dfa9cf59f4b6bf2f33a0f53`.
+  production SBF is 2,277,664 bytes with SHA-256
+  `2b4b80b899d36073417c0ace53c0f62aedc2bfa801af20038c8d83fe5678bf0a`.
+  The canonical candidate IDL contains 98 instructions / 43 accounts / 99 events /
+  393 errors and has SHA-256
+  `5951d233e98c61ce77243fe807b9df4c79905532185495e0b36e9d8b14d43604`.
 - This is a pending candidate. Mainnet remains the revision-4, 99-instruction binary
   until an independently approved Squads upgrade and revision-5 stamp are complete.
 

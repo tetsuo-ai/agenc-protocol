@@ -214,11 +214,10 @@ pub fn handler(ctx: Context<AutoAcceptTaskResult>) -> Result<()> {
         CoordinationError::ReviewWindowNotElapsed
     );
 
-    // Audit M-2: auto-accept is permissionless, so a co-worker could otherwise re-claim /
-    // re-submit and drive a completing auto-accept that flips a Collaborative task to
-    // Completed while an honest peer's submission is still live, stranding it. Block the
-    // completing accept unless it is the sole live submission. MUST run BEFORE the
-    // live-submission decrement below. (Contest auto-accept is already disabled above.)
+    // Audit M-2: a completing non-Collaborative auto-accept must be the sole
+    // live submission. Collaborative tasks are deliberately exempt because a
+    // Submitted peer has a full-refund terminal reclaim path. MUST run before
+    // the live-submission decrement. (Contest auto-accept is disabled above.)
     validate_completing_accept_sole_submission(&ctx.accounts.task)?;
 
     validate_task_dependency(

@@ -1021,7 +1021,7 @@ pub enum CoordinationError {
     ContestForfeitTreasuryRequired,
     #[msg("reclaim_terminal_claim requires a terminal (Completed/Cancelled) task")]
     ClaimReclaimRequiresTerminalTask,
-    #[msg("reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)")]
+    #[msg("reclaim_terminal_claim requires a canonical empty, Rejected, or terminal Collaborative Submitted record")]
     ClaimReclaimRequiresNoSubmission,
 
     // === Batch 4 GOODS (appended — never reorder/delete): the rivalrous goods
@@ -1156,4 +1156,16 @@ pub enum CoordinationError {
         "Orphan delegation recovery requires the canonical protocol config and writable treasury"
     )]
     ReputationDelegationRecoveryAccountsRequired,
+    // Appended (atomic release stamp): keep these LAST so every existing Anchor
+    // error discriminant remains stable.
+    #[msg("The reviewed release surface can only be stamped while the protocol is paused")]
+    ReleaseStampRequiresPaused,
+    #[msg("A release-boundary account does not match its reviewed identity or loader state")]
+    ReleaseBoundaryAccountMismatch,
+    #[msg("A release-boundary account data digest changed before the atomic stamp")]
+    ReleaseBoundaryDigestMismatch,
+    #[msg("The reviewed ProgramData upgrade slot has not settled before the release stamp")]
+    ReleaseProgramDataNotSettled,
+    #[msg("The full production protocol can only be unpaused after the current release surface is atomically stamped")]
+    ReleaseUnpauseRequiresCurrentSurface,
 }

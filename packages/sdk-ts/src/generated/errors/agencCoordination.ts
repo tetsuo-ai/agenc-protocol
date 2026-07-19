@@ -694,7 +694,7 @@ export const AGENC_COORDINATION_ERROR__SUBMISSION_RENT_ACCOUNTS_REQUIRED = 0x18c
 export const AGENC_COORDINATION_ERROR__CONTEST_FORFEIT_TREASURY_REQUIRED = 0x18c2; // 6338
 /** ClaimReclaimRequiresTerminalTask: reclaim_terminal_claim requires a terminal (Completed/Cancelled) task */
 export const AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK = 0x18c3; // 6339
-/** ClaimReclaimRequiresNoSubmission: reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim) */
+/** ClaimReclaimRequiresNoSubmission: reclaim_terminal_claim requires a canonical empty, Rejected, or terminal Collaborative Submitted record */
 export const AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION = 0x18c4; // 6340
 /** GoodsSurfaceNotEnabled: Goods market requires surface revision 4 to be stamped (update_launch_controls) */
 export const AGENC_COORDINATION_ERROR__GOODS_SURFACE_NOT_ENABLED = 0x18c5; // 6341
@@ -790,6 +790,16 @@ export const AGENC_COORDINATION_ERROR__MARKETPLACE_PAYEE_ACCOUNT_ALIAS = 0x18f1;
 export const AGENC_COORDINATION_ERROR__LAMPORT_TRANSFER_ACCOUNT_ALIAS = 0x18f2; // 6386
 /** ReputationDelegationRecoveryAccountsRequired: Orphan delegation recovery requires the canonical protocol config and writable treasury */
 export const AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_RECOVERY_ACCOUNTS_REQUIRED = 0x18f3; // 6387
+/** ReleaseStampRequiresPaused: The reviewed release surface can only be stamped while the protocol is paused */
+export const AGENC_COORDINATION_ERROR__RELEASE_STAMP_REQUIRES_PAUSED = 0x18f4; // 6388
+/** ReleaseBoundaryAccountMismatch: A release-boundary account does not match its reviewed identity or loader state */
+export const AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_ACCOUNT_MISMATCH = 0x18f5; // 6389
+/** ReleaseBoundaryDigestMismatch: A release-boundary account data digest changed before the atomic stamp */
+export const AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_DIGEST_MISMATCH = 0x18f6; // 6390
+/** ReleaseProgramDataNotSettled: The reviewed ProgramData upgrade slot has not settled before the release stamp */
+export const AGENC_COORDINATION_ERROR__RELEASE_PROGRAM_DATA_NOT_SETTLED = 0x18f7; // 6391
+/** ReleaseUnpauseRequiresCurrentSurface: The full production protocol can only be unpaused after the current release surface is atomically stamped */
+export const AGENC_COORDINATION_ERROR__RELEASE_UNPAUSE_REQUIRES_CURRENT_SURFACE = 0x18f8; // 6392
 
 export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__ACCOUNT_VERSION_TOO_NEW
@@ -1063,6 +1073,11 @@ export type AgencCoordinationError =
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY
   | typeof AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED
+  | typeof AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_ACCOUNT_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_DIGEST_MISMATCH
+  | typeof AGENC_COORDINATION_ERROR__RELEASE_PROGRAM_DATA_NOT_SETTLED
+  | typeof AGENC_COORDINATION_ERROR__RELEASE_STAMP_REQUIRES_PAUSED
+  | typeof AGENC_COORDINATION_ERROR__RELEASE_UNPAUSE_REQUIRES_CURRENT_SURFACE
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF
   | typeof AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID
@@ -1237,7 +1252,7 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__CLAIM_ALREADY_COMPLETED]: `Claim has already been completed`,
     [AGENC_COORDINATION_ERROR__CLAIM_EXPIRED]: `Claim has expired`,
     [AGENC_COORDINATION_ERROR__CLAIM_NOT_EXPIRED]: `Claim has not expired yet`,
-    [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION]: `reclaim_terminal_claim requires a provably-absent submission PDA (no live submission for this claim)`,
+    [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_NO_SUBMISSION]: `reclaim_terminal_claim requires a canonical empty, Rejected, or terminal Collaborative Submitted record`,
     [AGENC_COORDINATION_ERROR__CLAIM_RECLAIM_REQUIRES_TERMINAL_TASK]: `reclaim_terminal_claim requires a terminal (Completed/Cancelled) task`,
     [AGENC_COORDINATION_ERROR__CLAIM_SLASH_PENDING]: `This claim's dispute was resolved but its slash has not been applied yet`,
     [AGENC_COORDINATION_ERROR__COMBINED_FEE_ABOVE_CAP]: `Combined protocol + operator + referrer fees leave the worker below the floor`,
@@ -1457,6 +1472,11 @@ if (process.env["NODE_ENV"] !== "production") {
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_SINGLE_WORKER_ONLY]: `RejectFrozen review is single-worker (Exclusive) only`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_SOL_ONLY]: `Reject-and-freeze is SOL-only in v1 (the frozen exits cannot settle a token escrow)`,
     [AGENC_COORDINATION_ERROR__REJECT_FROZEN_TIMEOUT_NOT_ELAPSED]: `RejectFrozen review timeout has not elapsed`,
+    [AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_ACCOUNT_MISMATCH]: `A release-boundary account does not match its reviewed identity or loader state`,
+    [AGENC_COORDINATION_ERROR__RELEASE_BOUNDARY_DIGEST_MISMATCH]: `A release-boundary account data digest changed before the atomic stamp`,
+    [AGENC_COORDINATION_ERROR__RELEASE_PROGRAM_DATA_NOT_SETTLED]: `The reviewed ProgramData upgrade slot has not settled before the release stamp`,
+    [AGENC_COORDINATION_ERROR__RELEASE_STAMP_REQUIRES_PAUSED]: `The reviewed release surface can only be stamped while the protocol is paused`,
+    [AGENC_COORDINATION_ERROR__RELEASE_UNPAUSE_REQUIRES_CURRENT_SURFACE]: `The full production protocol can only be unpaused after the current release surface is atomically stamped`,
     [AGENC_COORDINATION_ERROR__REPUTATION_AGENT_NOT_ACTIVE]: `Agent must be Active to participate in reputation economy`,
     [AGENC_COORDINATION_ERROR__REPUTATION_CANNOT_DELEGATE_SELF]: `Cannot delegate reputation to self`,
     [AGENC_COORDINATION_ERROR__REPUTATION_DELEGATION_AMOUNT_INVALID]: `Reputation delegation amount invalid: must be > 0, <= 10000, and >= MIN_DELEGATION_AMOUNT`,

@@ -124,27 +124,31 @@ behind `expire_claim` cranking. The implemented design:
   on the claim PDA** — no `TaskClaim` layout change, no new account.
 - Charged in `claim_task` ONLY for contest-configured tasks (schema-1 `Competitive` +
   CreatorReview). All other task types and schema-0 tasks are unchanged.
-- **Refund rule: anyone who SUBMITS is made whole.** Every submitted exit closes the claim
-  with ALL its lamports (rent + deposit) to the worker — accept, reject (losers lose
-  nothing), and the ghost-split. Net-free competition is preserved.
-- **Forfeit rule: no-shows lose the deposit.** On the no-show exits — `expire_claim` with a
-  provably-absent submission PDA (both the InProgress arm and the PendingValidation arm)
-  and `reclaim_terminal_claim` — the claim's rent-exempt minimum returns to the worker and
-  the surplus above it is forfeited to the protocol **treasury** (validated against
+- **Refund rule: settled submitters are made whole.** Accept, ordinary reject,
+  ghost-split, and terminal still-Submitted Collaborative cleanup close the
+  claim with all its lamports (rent + deposit) to the worker.
+- **Forfeit rule: no-shows and abandoned terminal claims lose the deposit.** On
+  `expire_claim` with a provably absent submission, and on the empty/Rejected
+  cleanup forms of `reclaim_terminal_claim`, the claim's rent-exempt minimum
+  returns to the worker and the surplus is forfeited to the protocol **treasury** (validated against
   `protocol_config`; NEVER the creator, who could otherwise farm forfeits with junk
   contests). The forfeit is non-skippable (absence proof + treasury account required).
+- `ContestDepositForfeited` records the `expire_claim`/`cancel_task` no-show
+  paths. Reclaim reports its amount in `TerminalClaimReclaimed.forfeited`.
 - The existing 1000-lamport `expire_claim` cleanup reward is unrelated (it comes from the
   escrow) and is kept.
 
-### 6. Terminal no-show reclaim (fix round)
+### 6. Terminal claim reclaim (fix round)
 
-`reclaim_terminal_claim` (full module only): permissionlessly reclaim a
-claimed-but-never-submitted claim on an already-terminal (Completed/Cancelled) task.
-Requires the derived `["task_submission", claim]` PDA to be system-owned + zero-data (the
-unfakeable no-submission proof); closes the claim (rent → worker, deposit surplus →
-treasury), decrements `task.current_workers` and the worker's `active_tasks`. This is what
-un-bricks `close_task` after a contest settles with a no-show entrant still holding a slot.
-No escrow account (closed by then), no cleanup reward.
+`reclaim_terminal_claim` (full module only) permissionlessly cleans a non-completed claim
+from an already-terminal task. The canonical `["task_submission", claim]` PDA must prove
+one of three cleanup forms: system-owned and empty (never submitted), a Rejected
+submission, or a still-Submitted Collaborative straggler after completion. The last form
+also requires the canonical validation config so its pending counter can be decremented.
+The instruction closes the claim, closes any live cleanup-eligible submission, and frees
+the task and worker slots. Claim surplus is forfeited to the treasury for the absent and
+Rejected forms; a Submitted Collaborative straggler receives the full claim and submission
+balances. No escrow account (closed by then), no cleanup reward.
 
 ### 7. Reject window (fix round — symmetric temporal partition)
 

@@ -13,6 +13,8 @@ import {
   SolanaError,
   SOLANA_ERROR__BLOCK_HEIGHT_EXCEEDED,
   SOLANA_ERROR__INSTRUCTION_ERROR__CUSTOM,
+  SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+  SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND,
   type Blockhash,
   type Instruction,
   type KeyPairSigner,
@@ -31,6 +33,7 @@ import {
   toAgencError,
   withReferrerDefault,
   type RpcTransportRpc,
+  type RpcTransportSubscriptions,
   type SignedTransaction,
   type Transport,
 } from "../src/client/index.js";
@@ -47,6 +50,30 @@ function blockhashFromSeed(seed: number): Blockhash {
   return getBase58Decoder().decode(
     new Uint8Array(32).fill(seed),
   ) as Blockhash;
+}
+
+/** Kit's real structured shape for an RPC sendTransaction preflight expiry. */
+function blockhashPreflightFailure(): SolanaError {
+  return new SolanaError(
+    SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+    {
+      accounts: null,
+      fee: null,
+      loadedAccountsDataSize: null,
+      loadedAddresses: null,
+      logs: null,
+      postBalances: null,
+      postTokenBalances: null,
+      preBalances: null,
+      preTokenBalances: null,
+      replacementBlockhash: null,
+      returnData: null,
+      unitsConsumed: null,
+      cause: new SolanaError(
+        SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND,
+      ),
+    },
+  );
 }
 
 /** A do-nothing instruction (never executed — transports are fakes here). */
@@ -233,8 +260,101 @@ describe("client compute-budget prepend (default / override / disable)", () => {
   });
 });
 
+describe("custom transport trust boundary", () => {
+  const malformedSuccessCases: ReadonlyArray<{
+    label: string;
+    result: unknown;
+    message: string;
+  }> = [
+    {
+      label: "a different signature",
+      result: { signature: "unrelated-signature", logs: [] },
+      message: "does not match local wire signature",
+    },
+    {
+      label: "an empty signature",
+      result: { signature: "", logs: [] },
+      message: "empty or non-string success signature",
+    },
+    {
+      label: "a malformed result",
+      result: null,
+      message: "malformed success result",
+    },
+  ];
+
+  it.each(malformedSuccessCases)(
+    "rejects a claimed success carrying $label",
+    async ({ result, message }) => {
+      const captured: SignedTransaction[] = [];
+      const transport = {
+        async getLatestBlockhash() {
+          return {
+            blockhash: blockhashFromSeed(1),
+            lastValidBlockHeight: 100n,
+          };
+        },
+        async sendAndConfirm(signedTx: SignedTransaction) {
+          captured.push(signedTx);
+          return result;
+        },
+      } as unknown as Transport;
+      const client = createMarketplaceClient({
+        transport,
+        signer: await generateKeyPairSigner(),
+      });
+
+      const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
+
+      expect(captured).toHaveLength(1);
+      expect(failure).toBeInstanceOf(AgencError);
+      expect((failure as AgencError).signature).toBe(
+        getSignatureFromTransaction(captured[0]!),
+      );
+      expect((failure as AgencError).message).toContain(message);
+      expect((failure as AgencError).message).toContain(
+        "must not be re-submitted",
+      );
+    },
+  );
+
+  it("rejects a thrown signature that does not match the local wire transaction", async () => {
+    const captured: SignedTransaction[] = [];
+    const transport: Transport = {
+      async getLatestBlockhash() {
+        return {
+          blockhash: blockhashFromSeed(1),
+          lastValidBlockHeight: 100n,
+        };
+      },
+      async sendAndConfirm(signedTx) {
+        captured.push(signedTx);
+        throw Object.assign(new Error("custom transport failed"), {
+          signature: "unrelated-signature",
+        });
+      },
+    };
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+
+    const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
+
+    expect(captured).toHaveLength(1);
+    expect(failure).toBeInstanceOf(AgencError);
+    expect((failure as AgencError).signature).toBe(
+      getSignatureFromTransaction(captured[0]!),
+    );
+    expect((failure as AgencError).message).toContain(
+      "does not match local wire signature",
+    );
+    expect((failure as AgencError).message).toContain("outcome is unknown");
+  });
+});
+
 describe("blockhash-expiry-aware retry", () => {
-  it("re-fetches the blockhash and RE-SIGNS on a kit BLOCK_HEIGHT_EXCEEDED failure", async () => {
+  it("does not re-sign an unmarked custom-transport BLOCK_HEIGHT_EXCEEDED failure", async () => {
     const expiry = new SolanaError(SOLANA_ERROR__BLOCK_HEIGHT_EXCEEDED, {
       currentBlockHeight: 101n,
       lastValidBlockHeight: 100n,
@@ -245,33 +365,70 @@ describe("blockhash-expiry-aware retry", () => {
     );
     const client = createMarketplaceClient({ transport, signer });
 
-    const result = await client.send([DUMMY_IX]);
+    const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
 
-    expect(transport.sendCalls()).toBe(2);
-    expect(signCalls()).toBe(2); // signed twice — once per attempt
-    const [first, second] = transport.captured;
-    // the retried transaction carries a DIFFERENT (re-fetched) blockhash...
-    expect(first!.lifetimeConstraint.blockhash).not.toBe(
-      second!.lifetimeConstraint.blockhash,
+    expect(transport.sendCalls()).toBe(1);
+    expect(signCalls()).toBe(1);
+    expect(failure).toBeInstanceOf(AgencError);
+    expect((failure as AgencError).signature).toBe(
+      getSignatureFromTransaction(transport.captured[0]!),
     );
-    // ...and is therefore a different signature (re-signed, not re-sent bytes)
-    expect(getSignatureFromTransaction(first!)).not.toBe(
-      getSignatureFromTransaction(second!),
-    );
-    expect(result.signature).toBe(getSignatureFromTransaction(second!));
+    expect((failure as AgencError).message).toContain("outcome is unknown");
   });
 
-  it("retries on a litesvm-style BlockhashNotFound message", async () => {
+  it("does not trust a custom transport's BlockhashNotFound message as retry proof", async () => {
     const transport = fakeTransport([
       new Error("Transaction failed: BlockhashNotFound"),
     ]);
     const signer = await generateKeyPairSigner();
     const client = createMarketplaceClient({ transport, signer });
 
-    await expect(client.send([DUMMY_IX])).resolves.toMatchObject({
-      logs: ["Program log: ok"],
+    const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
+
+    expect(transport.sendCalls()).toBe(1);
+    expect(failure).toBeInstanceOf(AgencError);
+    expect((failure as AgencError).signature).toBe(
+      getSignatureFromTransaction(transport.captured[0]!),
+    );
+  });
+
+  it("recognizes the raw preflight context shape used by compatible RPC adapters", () => {
+    const failure = Object.assign(new Error("Transaction simulation failed"), {
+      context: { err: "BlockhashNotFound" },
     });
-    expect(transport.sendCalls()).toBe(2);
+    expect(isBlockhashExpiredError(failure)).toBe(true);
+  });
+
+  it("does not retry a bare-context BlockhashNotFound without -32002 provenance", async () => {
+    let sendAttempts = 0;
+    const thunk = <T>(value: T) => ({ send: async () => value });
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(1), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => ({
+        send: async () => {
+          sendAttempts += 1;
+          throw Object.assign(new Error("Transaction simulation failed"), {
+            context: { err: "BlockhashNotFound" },
+          });
+        },
+      }),
+      getSignatureStatuses: () => thunk({ value: [null] }),
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const client = createMarketplaceClient({
+      transport: createRpcTransport({ rpc, pollIntervalMs: 1 }),
+      signer: await generateKeyPairSigner(),
+    });
+
+    const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
+
+    expect(sendAttempts).toBe(1);
+    expect(failure).toBeInstanceOf(AgencError);
+    expect((failure as AgencError).signature).not.toBeNull();
+    expect((failure as AgencError).message).toContain("outcome is unknown");
   });
 
   it("does NOT retry a non-expiry (program) failure and hydrates AgencError", async () => {
@@ -294,25 +451,47 @@ describe("blockhash-expiry-aware retry", () => {
     expect(agencError.errorName).toBe(
       "AGENC_COORDINATION_ERROR__AGENT_ALREADY_REGISTERED",
     );
+    expect(agencError.signature).toBe(
+      getSignatureFromTransaction(transport.captured[0]!),
+    );
   });
 
-  it("bounds retries by maxRetries and surfaces the final expiry as AgencError", async () => {
-    const failures = Array.from(
-      { length: 10 },
-      () => new Error("block height exceeded"),
-    );
-    const transport = fakeTransport(failures);
+  it("bounds SDK-proven preflight retries by maxRetries", async () => {
+    let blockhashFetches = 0;
+    let sendAttempts = 0;
+    const thunk = <T>(value: T) => ({ send: async () => value });
+    const rpc = {
+      getLatestBlockhash: () => {
+        blockhashFetches += 1;
+        return thunk({
+          value: {
+            blockhash: blockhashFromSeed(blockhashFetches),
+            lastValidBlockHeight: 100n + BigInt(blockhashFetches),
+          },
+        });
+      },
+      sendTransaction: () => ({
+        send: async () => {
+          sendAttempts += 1;
+          throw blockhashPreflightFailure();
+        },
+      }),
+      getSignatureStatuses: () => thunk({ value: [null] }),
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
     const signer = await generateKeyPairSigner();
     const client = createMarketplaceClient({
-      transport,
+      transport: createRpcTransport({ rpc, pollIntervalMs: 1 }),
       signer,
       maxRetries: 2,
     });
 
     const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
-    expect(transport.sendCalls()).toBe(3); // 1 attempt + 2 retries
+    expect(sendAttempts).toBe(3); // 1 attempt + 2 retries
+    expect(blockhashFetches).toBe(3);
     expect(failure).toBeInstanceOf(AgencError);
     expect((failure as AgencError).code).toBeNull();
+    expect((failure as AgencError).signature).toBeNull();
     expect(isBlockhashExpiredError((failure as AgencError).cause)).toBe(true);
   });
 });
@@ -471,6 +650,49 @@ describe("createRpcTransport (polling path, no subscriptions)", () => {
     const expiry = await expired.sendAndConfirm(tx).catch((e: unknown) => e);
     expect(isBlockhashExpiredError(expiry)).toBe(true);
   });
+
+  it("retries a real Kit BlockhashNotFound preflight with a fresh blockhash", async () => {
+    let blockhashFetches = 0;
+    let sendAttempts = 0;
+    let statusReads = 0;
+    const rpc = {
+      getLatestBlockhash: () => {
+        blockhashFetches += 1;
+        return thunk({
+          value: {
+            blockhash: blockhashFromSeed(blockhashFetches),
+            lastValidBlockHeight: 100n + BigInt(blockhashFetches),
+          },
+        });
+      },
+      sendTransaction: () => ({
+        send: async () => {
+          sendAttempts += 1;
+          if (sendAttempts === 1) throw blockhashPreflightFailure();
+          return "sig";
+        },
+      }),
+      getSignatureStatuses: () => {
+        statusReads += 1;
+        return thunk({
+          value: [
+            statusReads === 1
+              ? null
+              : { confirmationStatus: "confirmed", err: null },
+          ],
+        });
+      },
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const client = createMarketplaceClient({
+      transport: createRpcTransport({ rpc, pollIntervalMs: 1 }),
+      signer: await generateKeyPairSigner(),
+    });
+
+    await expect(client.send([DUMMY_IX])).resolves.toMatchObject({ logs: [] });
+    expect(blockhashFetches).toBe(2);
+    expect(sendAttempts).toBe(2);
+  });
 });
 
 describe("expiry-vs-landed race (no double submission)", () => {
@@ -484,6 +706,38 @@ describe("expiry-vs-landed race (no double submission)", () => {
     // Wire format: compact-u16 signature count (1 byte here), then 64-byte sigs.
     return getBase58Decoder().decode(bytes.subarray(1, 65));
   }
+
+  it("fails closed when a custom transport broadcasts then throws an unsigned expiry", async () => {
+    const captured: SignedTransaction[] = [];
+    const transport: Transport = {
+      async getLatestBlockhash() {
+        return {
+          blockhash: blockhashFromSeed(captured.length + 1),
+          lastValidBlockHeight: 100n,
+        };
+      },
+      async sendAndConfirm(signedTx) {
+        captured.push(signedTx);
+        // A custom transport can broadcast the wire bytes and still omit the
+        // signature from its rejection. Crossing this opaque boundary makes
+        // the outcome ambiguous even though the error itself is unsigned.
+        throw new Error("block height exceeded after broadcast");
+      },
+    };
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+
+    const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
+
+    expect(captured).toHaveLength(1);
+    expect(failure).toBeInstanceOf(AgencError);
+    expect((failure as AgencError).signature).toBe(
+      getSignatureFromTransaction(captured[0]!),
+    );
+    expect((failure as AgencError).message).toContain("outcome is unknown");
+  });
 
   it("polling transport rechecks the status after the expiry signal and returns the FIRST signature without re-submitting", async () => {
     // The reviewer's reproduction: the tx landed in a block at height
@@ -604,6 +858,89 @@ describe("expiry-vs-landed race (no double submission)", () => {
       getSignatureFromTransaction(base.captured[0]!),
     );
   });
+
+  it("does not report a merely processed expiry-race status as confirmed success", async () => {
+    const base = fakeTransport([
+      new SolanaError(SOLANA_ERROR__BLOCK_HEIGHT_EXCEEDED, {
+        currentBlockHeight: 101n,
+        lastValidBlockHeight: 100n,
+      }),
+    ]);
+    const transport: Transport = {
+      confirmationCommitment: "confirmed",
+      getLatestBlockhash: () => base.getLatestBlockhash(),
+      sendAndConfirm: (tx) => base.sendAndConfirm(tx),
+      async getSignatureStatus() {
+        return { confirmationStatus: "processed", err: null };
+      },
+    };
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+
+    const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
+    expect(base.sendCalls()).toBe(1);
+    expect(failure).toBeInstanceOf(AgencError);
+    expect((failure as AgencError).signature).toBe(
+      getSignatureFromTransaction(base.captured[0]!),
+    );
+    expect((failure as AgencError).message).toContain("only reached processed");
+  });
+
+  const unavailableStatusCases: ReadonlyArray<{
+    label: string;
+    lookup?: NonNullable<Transport["getSignatureStatus"]>;
+  }> = [
+    { label: "the transport has no status lookup" },
+    {
+      label: "the status lookup throws",
+      lookup: async () => {
+        throw new Error("signature status RPC is unavailable");
+      },
+    },
+    {
+      label: "the status lookup still returns null",
+      lookup: async () => null,
+    },
+  ];
+
+  it.each(unavailableStatusCases)(
+    "fails closed without re-signing a post-broadcast expiry when $label",
+    async ({ lookup }) => {
+      const captured: SignedTransaction[] = [];
+      const transport: Transport = {
+        async getLatestBlockhash() {
+          return {
+            blockhash: blockhashFromSeed(captured.length + 1),
+            lastValidBlockHeight: 100n,
+          };
+        },
+        async sendAndConfirm(signedTx) {
+          captured.push(signedTx);
+          const signature = getSignatureFromTransaction(signedTx);
+          throw Object.assign(
+            new Error("block height exceeded after broadcast"),
+            { signature },
+          );
+        },
+        ...(lookup === undefined ? {} : { getSignatureStatus: lookup }),
+      };
+      const client = createMarketplaceClient({
+        transport,
+        signer: await generateKeyPairSigner(),
+      });
+
+      const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
+
+      expect(captured).toHaveLength(1);
+      expect(failure).toBeInstanceOf(AgencError);
+      expect((failure as AgencError).signature).toBe(
+        getSignatureFromTransaction(captured[0]!),
+      );
+      expect((failure as AgencError).message).toContain("outcome is unknown");
+    },
+  );
 });
 
 describe("in-flight signature on post-submission failures", () => {
@@ -616,6 +953,24 @@ describe("in-flight signature on post-submission failures", () => {
     const client = createMarketplaceClient({ transport: capture, signer });
     await client.send([DUMMY_IX]);
     return capture.captured[0]!;
+  }
+
+  function successfulSubscriptions(): RpcTransportSubscriptions {
+    return {
+      signatureNotifications: () => ({
+        subscribe: async () =>
+          (async function* () {
+            yield { value: { err: null } };
+          })(),
+      }),
+      slotNotifications: () => ({
+        subscribe: async () =>
+          (async function* () {
+            yield { slot: 50n };
+            await new Promise<void>(() => undefined);
+          })(),
+      }),
+    } as unknown as RpcTransportSubscriptions;
   }
 
   it("timeout errors carry the signature (outcome unknown — check before retrying)", async () => {
@@ -660,6 +1015,223 @@ describe("in-flight signature on post-submission failures", () => {
     const hydrated = toAgencError(failure);
     expect(hydrated.signature).toBe(getSignatureFromTransaction(tx));
     expect(hydrated.message).toContain("ECONNRESET");
+  });
+
+  it("sendTransaction response failures retain the wire signature for reconciliation", async () => {
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => ({
+        send: async () => {
+          throw new Error("HTTP response lost after the RPC accepted the wire bytes");
+        },
+      }),
+      getSignatureStatuses: () => thunk({ value: [null] }),
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const transport = createRpcTransport({ rpc, pollIntervalMs: 1 });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    const failure = await transport.sendAndConfirm(tx).catch((e: unknown) => e);
+    const hydrated = toAgencError(failure);
+    expect(hydrated.signature).toBe(getSignatureFromTransaction(tx));
+    expect(hydrated.message).toContain("response lost");
+  });
+
+  it("does not tag a deterministic preflight rejection as broadcast", async () => {
+    const preflight = blockhashPreflightFailure();
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => ({
+        send: async () => {
+          throw preflight;
+        },
+      }),
+      getSignatureStatuses: () => thunk({ value: [null] }),
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const transport = createRpcTransport({ rpc, pollIntervalMs: 1 });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    const failure = await transport.sendAndConfirm(tx).catch((e: unknown) => e);
+    expect(failure).toBe(preflight);
+    expect(toAgencError(failure).signature).toBeNull();
+  });
+
+  it("does not tag a compatible raw BlockhashNotFound preflight as broadcast", async () => {
+    const preflight = Object.assign(new Error("Transaction simulation failed"), {
+      context: { err: "BlockhashNotFound" },
+    });
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => ({
+        send: async () => {
+          throw preflight;
+        },
+      }),
+      getSignatureStatuses: () => thunk({ value: [null] }),
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const transport = createRpcTransport({ rpc, pollIntervalMs: 1 });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    const failure = await transport.sendAndConfirm(tx).catch((e: unknown) => e);
+    expect(failure).toBe(preflight);
+    expect(toAgencError(failure).signature).toBeNull();
+  });
+
+  it("does not tag subscription-path request-construction failures as broadcast", async () => {
+    const requestFailure = new Error("subscription RPC request construction failed");
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => {
+        throw requestFailure;
+      },
+      getSignatureStatuses: () => thunk({ value: [null] }),
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    // Confirmation is never reached because request construction fails first.
+    const rpcSubscriptions = {} as unknown as RpcTransportSubscriptions;
+    const transport = createRpcTransport({ rpc, rpcSubscriptions });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    const failure = await transport.sendAndConfirm(tx).catch((e: unknown) => e);
+    expect(failure).toBe(requestFailure);
+    expect(toAgencError(failure).signature).toBeNull();
+  });
+
+  it("preserves receiver-sensitive and frozen RPC adapters on the subscription path", async () => {
+    class ReceiverSensitiveRpc {
+      readonly #ready = true;
+
+      #assertReceiver(): void {
+        if (!this.#ready) throw new Error("invalid RPC receiver");
+      }
+
+      sendTransaction() {
+        this.#assertReceiver();
+        return thunk("sig");
+      }
+
+      getSignatureStatuses() {
+        this.#assertReceiver();
+        return thunk({
+          value: [{ confirmationStatus: "confirmed", err: null }],
+        });
+      }
+
+      getEpochInfo() {
+        this.#assertReceiver();
+        return thunk({ absoluteSlot: 50n, blockHeight: 50n });
+      }
+
+      getLatestBlockhash() {
+        this.#assertReceiver();
+        return thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        });
+      }
+    }
+
+    const plainFrozenRpc = Object.freeze({
+      sendTransaction: () => thunk("sig"),
+      getSignatureStatuses: () =>
+        thunk({ value: [{ confirmationStatus: "confirmed", err: null }] }),
+      getEpochInfo: () => thunk({ absoluteSlot: 50n, blockHeight: 50n }),
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+    });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    for (const adapter of [new ReceiverSensitiveRpc(), plainFrozenRpc]) {
+      const transport = createRpcTransport({
+        rpc: adapter as unknown as RpcTransportRpc,
+        rpcSubscriptions: successfulSubscriptions(),
+      });
+      await expect(transport.sendAndConfirm(tx)).resolves.toEqual({
+        signature: getSignatureFromTransaction(tx),
+        logs: [],
+      });
+    }
+  });
+
+  it("does not tag synchronous RPC request-construction failures as broadcast", async () => {
+    const requestFailure = new Error("invalid local sendTransaction arguments");
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => {
+        throw requestFailure;
+      },
+      getSignatureStatuses: () => thunk({ value: [null] }),
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const transport = createRpcTransport({ rpc, pollIntervalMs: 1 });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    const failure = await transport.sendAndConfirm(tx).catch((e: unknown) => e);
+    expect(failure).toBe(requestFailure);
+    expect(toAgencError(failure).signature).toBeNull();
+  });
+
+  it("wraps a frozen post-broadcast error with the in-flight signature", async () => {
+    const frozen = Object.freeze(new Error("frozen RPC status failure"));
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => thunk("sig"),
+      getSignatureStatuses: () => {
+        throw frozen;
+      },
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const transport = createRpcTransport({ rpc, pollIntervalMs: 1 });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    const failure = await transport.sendAndConfirm(tx).catch((e: unknown) => e);
+    const hydrated = toAgencError(failure);
+    expect(hydrated.signature).toBe(getSignatureFromTransaction(tx));
+    expect(hydrated.message).toContain("frozen RPC status failure");
+    expect((failure as Error).cause).toBe(frozen);
+  });
+
+  it("wraps a primitive post-broadcast rejection with the in-flight signature", async () => {
+    const rpc = {
+      getLatestBlockhash: () =>
+        thunk({
+          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+        }),
+      sendTransaction: () => thunk("sig"),
+      getSignatureStatuses: () => {
+        throw "RPC status channel closed";
+      },
+      getEpochInfo: () => thunk({ blockHeight: 50n }),
+    } as unknown as RpcTransportRpc;
+    const transport = createRpcTransport({ rpc, pollIntervalMs: 1 });
+    const tx = await signedDummyTx(await generateKeyPairSigner());
+
+    const failure = await transport.sendAndConfirm(tx).catch((e: unknown) => e);
+    const hydrated = toAgencError(failure);
+    expect(hydrated.signature).toBe(getSignatureFromTransaction(tx));
+    expect(hydrated.message).toContain("RPC status channel closed");
+    expect((failure as Error).cause).toBe("RPC status channel closed");
   });
 
   it("pre-submission failures hydrate with signature: null", async () => {
@@ -765,6 +1337,7 @@ describe("MarketplaceClient first-party lifecycle surface", () => {
       "acceptTaskResult",
       "rejectTaskResult",
       "autoAcceptTaskResult",
+      "validateTaskResult",
       "cancelTask",
       "closeTask",
       "rateHire",

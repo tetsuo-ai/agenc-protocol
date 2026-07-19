@@ -7,34 +7,39 @@ trade-offs rather than open findings. Read the rationale before proposing a
 change: do not re-file a resolved path, and treat a change to an accepted
 trade-off as a design decision.
 
-## D1 — Canary surface has no timeout exit from `PendingValidation`
+## D1 — Resolved: canary `PendingValidation` has a permissionless timeout exit
 
-`auto_accept_task_result` and the dispute apparatus are compiled out of the
-frozen 25-instruction canary build, and `PendingValidation → Cancelled` is not a
-legal transition. A creator who ghosts after a submission therefore locks the
-escrow AND the worker's claim until they return. This is a **mutual** lock
-(creator's funds are equally hostage), accepted as frozen-surface design: the
-canary's conservative envelope trades a griefing creator's upside for a smaller
-audited surface. Recovery is the creator returning, or a program upgrade.
+The frozen 25-instruction canary still excludes `auto_accept_task_result` and the
+dispute apparatus, but `accept_task_result` now has a shape-restricted timeout
+branch. Before `review_deadline_at`, only the stored creator may accept. At or
+after the deadline, any signer may crank acceptance while the existing writable
+`operator` slot carries—and the handler revalidates—the stored creator as the
+escrow-rent recipient. The branch is limited to the direct, single-worker,
+SOL-only, dependency-free, affiliate-free task shape the canary can create. This
+preserves the frozen account and instruction surface without leaving creator
+silence as a permanent money lock.
 
-## D2 — M-2 completing-accept trade-off: the creator must reject stragglers first
+## D2 — Resolved: Collaborative completing accepts have terminal straggler cleanup
 
-`validate_completing_accept_sole_submission` blocks ANY completing accept while
-another submission is live (on schema-1 manual tasks, both accept paths and the
-quorum path). The intended flow is: reject the stragglers first, then accept.
-The alternative (accept-and-orphan) permanently stranded the peer's claim,
-submission rent, and `active_tasks` slot with no exit. Deliberate fail-closed:
-an absent creator then locks everyone (previously: one orphan). Documented in
-TODO.MD F-3.
+Collaborative completing accepts no longer require the creator to reject every
+peer submission first. A still-Submitted peer on the resulting Completed task can
+be closed permissionlessly through `reclaim_terminal_claim`, which decrements the
+validation and task counters and returns the claim and submission balances to the
+worker. This prevents timeout acceptance from deadlocking when more workers
+submit than the remaining completion slots. The sole-live-submission guard stays
+in force for schema-1 non-Collaborative manual tasks; contest tasks retain their
+separate temporal settlement rules.
 
-## D3 — Schema-0 completing-accept orphan is accepted for legacy tasks
+## D3 — Resolved: schema-0 Collaborative stragglers have the same terminal exit
 
-The M-2 guard no-ops for schema-0 (pre-batch-3) tasks because `live_submissions()`
-is unmaintained there (always reads 0). A schema-0 Collaborative CreatorReview
-completing accept can therefore still orphan a peer submission. The conservative
-choice stands: fabricating a counter on 169+ live legacy accounts risks
-counter-drift against their existing state, which is worse than the bounded
-orphan set. New tasks are all schema-1.
+The completing-accept guard remains a no-op for schema-0 (pre-batch-3) tasks
+because those accounts never maintained `live_submissions()`. That no longer
+creates a permanent orphan: `reclaim_terminal_claim` accepts a canonical
+still-Submitted Collaborative straggler after the task becomes Completed,
+decrements the legacy validation counter, frees the task and worker slots, and
+returns the claim and submission balances to the worker. The cleanup avoids
+fabricating `live_submissions()` state on legacy accounts while preserving a
+permissionless exit.
 
 ## D4 — `accept_task_result`'s optional `hire_record` stays as-is on the canary
 

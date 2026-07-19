@@ -3,8 +3,10 @@
 // Every transaction follows the same path regardless of venue (kit RPC or
 // litesvm): prepend compute-budget instructions per config -> fetch blockhash
 // -> assemble v0 message -> sign with the embedded signer -> submit via the
-// Transport -> on blockhash expiry re-fetch/RE-SIGN/resend (bounded by
-// maxRetries) -> on failure hydrate a structured AgencError.
+// Transport -> on a proven pre-broadcast blockhash expiry re-fetch/RE-SIGN/
+// resend (bounded by maxRetries) -> on an ambiguous post-broadcast expiry
+// reconcile the first signature or fail closed -> hydrate a structured
+// AgencError on failure.
 //
 // Named convenience methods are THIN: the facade builds the instruction, the
 // client sends it. They accept exactly the same input as the facade function.
@@ -28,9 +30,10 @@ import {
   getSetComputeUnitLimitInstruction,
   getSetComputeUnitPriceInstruction,
 } from "./compute-budget.js";
-import { isBlockhashExpiredError, toAgencError } from "./errors.js";
+import { AgencError, isBlockhashExpiredError, toAgencError } from "./errors.js";
 import {
   createRpcTransport,
+  isRetrySafePreBroadcastFailure,
   type RpcTransportRpc,
   type RpcTransportSubscriptions,
   type SignedTransaction,
@@ -80,7 +83,7 @@ export interface SendOptions {
    * units a single facade instruction actually consumes.
    */
   computeUnitPrice?: bigint | number;
-  /** Override the client's blockhash-expiry retry bound for this call. */
+  /** Override the client's proven-pre-broadcast blockhash-expiry retry bound. */
   maxRetries?: number;
 }
 
@@ -131,7 +134,7 @@ export type MarketplaceClientConfig = MarketplaceClientConnectionConfig & {
    * a single facade instruction actually consumes.
    */
   computeUnitPrice?: bigint | number;
-  /** Blockhash-expiry retry bound. Defaults to 3. */
+  /** Proven-pre-broadcast blockhash-expiry retry bound. Defaults to 3. */
   maxRetries?: number;
   /**
    * P6.2 demand-side referral default. When set, EVERY hire/create this client
@@ -173,23 +176,24 @@ export interface MarketplaceClient {
    * Assemble, sign, submit, and confirm a transaction from instructions.
    *
    * Compute-budget instructions are prepended per the client config (override
-   * or disable per call via `options`). On a blockhash-expiry failure the
-   * client re-fetches the blockhash, RE-SIGNS, and resends, up to
-   * `maxRetries` times; any other failure — including pre-submission failures
-   * such as a blockhash fetch or signing error — rejects with an
+   * or disable per call via `options`). On a proven pre-broadcast blockhash
+   * expiry the client re-fetches the blockhash, RE-SIGNS, and resends, up to
+   * `maxRetries` times. Any other failure — including blockhash fetch/signing
+   * errors and outcome-ambiguous post-broadcast expiry — rejects with an
    * {@link AgencError} (the original error is preserved as `cause`).
    *
    * Expiry-vs-landed race: an expiry signal can be reported while the
    * previous attempt actually landed (the status view can lag the
    * block-height view). When the transport implements
    * `getSignatureStatus`, the client rechecks the previous attempt's
-   * signature before every re-sign and short-circuits to success with the
-   * FIRST signature (or throws that attempt's real on-chain error) if it
-   * landed. A residual window remains: if the status view still lags at
-   * recheck time — or the transport cannot check — a landed transaction can
-   * be re-submitted. Duplicate marketplace instructions fail on-chain on PDA
-   * init; for non-idempotent instructions (e.g. bare transfers), reconcile
-   * via `AgencError.signature` before application-level retries.
+   * signature before every possible re-sign and short-circuits to success
+   * with the FIRST signature (or throws that attempt's real on-chain error)
+   * if it landed. Every unmarked rejection after entering a custom transport
+   * is treated as potentially submitted and bound to the local wire signature;
+   * if its status is absent or unavailable, the client fails closed with that
+   * `AgencError.signature`. Only an SDK-branded first-party
+   * BlockhashNotFound preflight can authorize a re-sign. Successful transport
+   * results are also checked for an exact signature match and valid log shape.
    *
    * @param instructions - The program instructions to execute, in order.
    * @param options - Per-call compute-budget / retry overrides.
@@ -273,6 +277,11 @@ export interface MarketplaceClient {
   /** Build (facade.autoAcceptTaskResult) and send an auto_accept_task_result transaction. */
   autoAcceptTaskResult(
     input: FacadeInput<typeof facade.autoAcceptTaskResult>,
+    options?: SendOptions,
+  ): Promise<SendResult>;
+  /** Build (facade.validateTaskResult) and send a validate_task_result transaction. */
+  validateTaskResult(
+    input: FacadeInput<typeof facade.validateTaskResult>,
     options?: SendOptions,
   ): Promise<SendResult>;
   /** Build (facade.cancelTask) and send a cancel_task transaction. */
@@ -457,26 +466,136 @@ export function createMarketplaceClient(
   }
 
   /**
-   * Before an expiry-triggered re-sign, check whether the previous attempt
-   * actually landed — the expiry signal can race a landed transaction when
-   * the status view lags the block-height view. Returns the success result
-   * (with the FIRST signature) to short-circuit with, throws the attempt's
-   * real on-chain error when it landed and failed, and returns `null` when
-   * the attempt did not land (or the transport cannot check).
+   * Once `sendAndConfirm` has been invoked, an unmarked failure from a custom
+   * transport is outcome-ambiguous even when that transport omitted a
+   * signature. Bind it to the signature of the exact signed wire transaction
+   * the SDK handed across the boundary. This also prevents a faulty transport
+   * from substituting an unrelated signature in the surfaced error.
+   */
+  function hydrateAmbiguousTransportFailure(
+    signedTransaction: SignedTransaction,
+    error: unknown,
+  ): AgencError {
+    const localSignature = getSignatureFromTransaction(signedTransaction);
+    const hydrated = toAgencError(error);
+    if (hydrated.signature === localSignature) return hydrated;
+
+    const ambiguity =
+      hydrated.signature === null
+        ? `the transport supplied no SDK retry-safe pre-broadcast proof; the submission outcome for local wire signature ${localSignature} is unknown`
+        : `the transport reported signature ${hydrated.signature}, which does not match local wire signature ${localSignature}; the local transaction's submission outcome is unknown`;
+    return new AgencError(`${hydrated.message}; ${ambiguity}`, {
+      code: hydrated.code,
+      errorName: hydrated.errorName,
+      logs: hydrated.logs,
+      signature: localSignature,
+      cause: error,
+    });
+  }
+
+  /** Reject a custom transport's false/malformed success at the same seam. */
+  function validateTransportSendResult(
+    signedTransaction: SignedTransaction,
+    result: unknown,
+  ): TransportSendResult {
+    const localSignature = getSignatureFromTransaction(signedTransaction);
+    const carrier =
+      result !== null && typeof result === "object"
+        ? (result as { signature?: unknown; logs?: unknown })
+        : null;
+    let defect: string | null = null;
+    if (!carrier) {
+      defect = "the transport returned a malformed success result";
+    } else if (
+      typeof carrier.signature !== "string" ||
+      carrier.signature.length === 0
+    ) {
+      defect = "the transport returned an empty or non-string success signature";
+    } else if (carrier.signature !== localSignature) {
+      defect =
+        `the transport reported success for signature ${carrier.signature}, ` +
+        `which does not match local wire signature ${localSignature}`;
+    } else if (
+      !Array.isArray(carrier.logs) ||
+      !carrier.logs.every((line) => typeof line === "string")
+    ) {
+      defect = "the transport returned malformed success logs";
+    }
+    if (defect !== null) {
+      throw new Error(
+        `${defect}; the local transaction's outcome is unknown and it must not be re-submitted`,
+      );
+    }
+    return result as TransportSendResult;
+  }
+
+  /**
+   * Reconcile an outcome-ambiguous expiry without re-signing. The expiry
+   * signal can race a landed transaction when the status view lags the
+   * block-height view. Returns the success result
+   * (with the FIRST signature) only after it reaches the transport's promised
+   * commitment, throws the attempt's real on-chain error when it failed,
+   * throws an in-flight signature error when it is visible below the promised
+   * commitment, and returns `null` only for a proven pre-broadcast failure
+   * whose signature is unseen (or cannot be checked). A post-broadcast failure
+   * with an unavailable status always throws an unknown-outcome error.
    */
   async function resolveLandedAttempt(
     signedTransaction: SignedTransaction,
+    submittedFailure: ReturnType<typeof toAgencError> | null,
   ): Promise<SendResult | null> {
-    if (!transport.getSignatureStatus) return null;
     const signature = getSignatureFromTransaction(signedTransaction);
+    const throwUnknownOutcome = (
+      reason: string,
+      reconciliationError?: unknown,
+    ): never => {
+      const originalFailure =
+        submittedFailure?.cause ?? submittedFailure ?? undefined;
+      const failure = new Error(
+        `Transaction ${signature} expired after submission, but ${reason}; ` +
+          "the outcome is unknown and the transaction was not re-submitted",
+        originalFailure === undefined ? undefined : { cause: originalFailure },
+      ) as Error & {
+        signature: string;
+        reconciliationError?: unknown;
+      };
+      failure.signature = signature;
+      if (reconciliationError !== undefined) {
+        failure.reconciliationError = reconciliationError;
+      }
+      throw toAgencError(failure);
+    };
+
+    if (
+      submittedFailure?.signature !== null &&
+      submittedFailure?.signature !== undefined &&
+      submittedFailure.signature !== signature
+    ) {
+      throwUnknownOutcome(
+        `the transport reported the different signature ${submittedFailure.signature}`,
+      );
+    }
+    if (!transport.getSignatureStatus) {
+      if (submittedFailure !== null) {
+        throwUnknownOutcome("the transport cannot look up its status");
+      }
+      return null;
+    }
     let status: TransportSignatureStatus | null;
     try {
       status = await transport.getSignatureStatus(signature);
-    } catch {
-      // Status view unavailable — fall back to the documented re-sign path.
+    } catch (reconciliationError) {
+      if (submittedFailure !== null) {
+        throwUnknownOutcome("its status lookup failed", reconciliationError);
+      }
       return null;
     }
-    if (!status) return null;
+    if (!status) {
+      if (submittedFailure !== null) {
+        throwUnknownOutcome("its cluster status is still unknown");
+      }
+      return null;
+    }
     if (status.err != null) {
       let detail: string;
       try {
@@ -490,6 +609,32 @@ export function createMarketplaceClient(
       failure.transactionError = status.err;
       failure.signature = signature;
       throw toAgencError(failure);
+    }
+    const targetCommitment = transport.confirmationCommitment ?? DEFAULT_COMMITMENT;
+    const statusRank =
+      status.confirmationStatus === "finalized"
+        ? 2
+        : status.confirmationStatus === "confirmed"
+          ? 1
+          : status.confirmationStatus === "processed"
+            ? 0
+            : -1;
+    const targetRank =
+      targetCommitment === "finalized"
+        ? 2
+        : targetCommitment === "processed"
+          ? 0
+          : 1;
+    if (statusRank < targetRank) {
+      // The first signature exists but has not reached this transport's
+      // promised commitment. Re-signing could duplicate an instruction if it
+      // later lands; reporting success could bless a fork that is dropped.
+      // Surface the signature as an explicitly in-flight/unknown outcome.
+      const pending = new Error(
+        `Transaction ${signature} has only reached ${status.confirmationStatus ?? "an unknown commitment"}; waiting for ${targetCommitment}`,
+      ) as Error & { signature: string };
+      pending.signature = signature;
+      throw toAgencError(pending);
     }
     return { signature, logs: [] };
   }
@@ -528,17 +673,40 @@ export function createMarketplaceClient(
         throw toAgencError(error);
       }
       try {
-        return await transport.sendAndConfirm(signedTransaction);
+        const result = await transport.sendAndConfirm(signedTransaction);
+        return validateTransportSendResult(signedTransaction, result);
       } catch (error) {
-        if (attempt < maxRetries && isBlockhashExpiredError(error)) {
-          // The expiry signal can race a landed transaction: short-circuit
-          // to the first signature instead of submitting a duplicate.
-          const landed = await resolveLandedAttempt(signedTransaction);
-          if (landed) return landed;
-          attempt += 1;
-          continue;
+        const expired = isBlockhashExpiredError(error);
+        const localSignature = getSignatureFromTransaction(signedTransaction);
+        if (isRetrySafePreBroadcastFailure(error, localSignature)) {
+          if (expired && attempt < maxRetries) {
+            // Only the SDK's private preflight capability proves that no wire
+            // transaction was broadcast. Re-fetch and RE-SIGN in that one
+            // machine-enforced case.
+            attempt += 1;
+            continue;
+          }
+          throw toAgencError(error);
         }
-        throw toAgencError(error);
+
+        // A custom transport may have broadcast before throwing any error,
+        // including an unsigned one. Bind every unmarked transport failure to
+        // the locally derived wire signature and never auto-submit another.
+        const submittedFailure = hydrateAmbiguousTransportFailure(
+          signedTransaction,
+          error,
+        );
+        if (expired) {
+          // A status lookup may prove the first transaction reached the
+          // promised commitment. Otherwise resolveLandedAttempt fails closed
+          // with the same local signature; it never authorizes a retry.
+          const landed = await resolveLandedAttempt(
+            signedTransaction,
+            submittedFailure,
+          );
+          if (landed) return landed;
+        }
+        throw submittedFailure;
       }
     }
   }
@@ -588,6 +756,7 @@ export function createMarketplaceClient(
     acceptTaskResult: viaFacade(facade.acceptTaskResult),
     rejectTaskResult: viaFacade(facade.rejectTaskResult),
     autoAcceptTaskResult: viaFacade(facade.autoAcceptTaskResult),
+    validateTaskResult: viaFacade(facade.validateTaskResult),
     cancelTask: viaFacade(facade.cancelTask),
     closeTask: viaFacade(facade.closeTask),
     rateHire: viaFacade(facade.rateHire),

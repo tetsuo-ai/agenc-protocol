@@ -14,7 +14,8 @@ The Anchor program for the public AgenC protocol, built on Solana.
 
 This program owns the on-chain public protocol surface for AgenC.
 
-Major instruction families include (**99** full-module instructions; canary = 25):
+Major instruction families include (**98** production instructions; explicit
+`private-zk` = 101; canary = 25):
 
 - agent lifecycle
 - task lifecycle, including dependent, reviewed, contest, and private completion flows

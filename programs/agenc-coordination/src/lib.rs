@@ -32,28 +32,48 @@ compile_error!(
 );
 #[cfg(all(feature = "mainnet-canary", feature = "private-zk"))]
 compile_error!("mainnet-canary and private-zk are mutually exclusive build surfaces");
+#[cfg(all(not(feature = "mainnet-canary"), not(feature = "spl-token-rewards")))]
+compile_error!(
+    "the full protocol surface requires spl-token-rewards; use default features, or select the restricted mainnet-canary surface"
+);
 
 use anchor_lang::prelude::*;
 
 declare_id!("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
 
+#[cfg(any(feature = "mainnet-canary", feature = "spl-token-rewards"))]
 pub mod errors;
+#[cfg(any(feature = "mainnet-canary", feature = "spl-token-rewards"))]
 pub mod events;
+#[cfg(any(feature = "mainnet-canary", feature = "spl-token-rewards"))]
 pub mod instructions;
 // Keep the private wire DTO out of the production build. The feature-gated
 // program entry uses flattened fields because Anchor 0.32 otherwise hoists a
 // defined argument type into the production IDL even when its cfg is false.
-#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
+#[cfg(all(
+    not(feature = "mainnet-canary"),
+    feature = "private-zk",
+    feature = "spl-token-rewards"
+))]
 mod private_completion_payload;
+#[cfg(any(feature = "mainnet-canary", feature = "spl-token-rewards"))]
 pub mod state;
+#[cfg(any(feature = "mainnet-canary", feature = "spl-token-rewards"))]
 pub mod utils;
 
+#[cfg(any(feature = "mainnet-canary", feature = "spl-token-rewards"))]
 use crate::errors::CoordinationError;
+#[cfg(any(feature = "mainnet-canary", feature = "spl-token-rewards"))]
 use instructions::*;
-#[cfg(all(not(feature = "mainnet-canary"), feature = "private-zk"))]
+#[cfg(all(
+    not(feature = "mainnet-canary"),
+    feature = "private-zk",
+    feature = "spl-token-rewards"
+))]
 pub use private_completion_payload::PrivateCompletionPayload;
 
 #[cfg(not(feature = "mainnet-canary"))]
+#[cfg(feature = "spl-token-rewards")]
 #[program]
 pub mod agenc_coordination {
     use super::*;
@@ -892,6 +912,41 @@ pub mod agenc_coordination {
         )
     }
 
+    /// Atomically verify the reviewed mainnet release accounts and stamp the
+    /// current surface revision while the protocol remains paused.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stamp_release_surface(
+        ctx: Context<StampReleaseSurface>,
+        disabled_task_type_mask: u8,
+        surface_revision: u16,
+        expected_protocol_config_hash: [u8; 32],
+        expected_program_data_slot: u64,
+        expected_program_data_payload_len: u32,
+        expected_upgrade_authority: Pubkey,
+        expected_bid_config_hash: [u8; 32],
+        expected_moderation_config_hash: [u8; 32],
+        expected_idl_account_hash: [u8; 32],
+        expected_custody_address: Pubkey,
+        expected_custody_owner: Pubkey,
+        expected_custody_account_hash: [u8; 32],
+    ) -> Result<()> {
+        instructions::stamp_release_surface::handler(
+            ctx,
+            disabled_task_type_mask,
+            surface_revision,
+            expected_protocol_config_hash,
+            expected_program_data_slot,
+            expected_program_data_payload_len,
+            expected_upgrade_authority,
+            expected_bid_config_hash,
+            expected_moderation_config_hash,
+            expected_idl_account_hash,
+            expected_custody_address,
+            expected_custody_owner,
+            expected_custody_account_hash,
+        )
+    }
+
     /// Migrate protocol to a new version (multisig gated).
     /// Handles state migration when upgrading the program.
     ///
@@ -1325,13 +1380,13 @@ pub mod agenc_coordination {
         instructions::distribute_ghost_share::handler(ctx)
     }
 
-    /// Permissionlessly reclaim a claimed-but-never-submitted (no-show) claim
-    /// stranded on an already-terminal (Completed/Cancelled) task (fix round):
-    /// claim rent to the worker, contest entry-deposit surplus forfeited to the
-    /// treasury, slot counters freed (un-bricks close_task + the worker's
-    /// active_tasks budget). Requires unfakeable proof there is no live
-    /// submission (the derived submission PDA must be empty). Exit path —
-    /// settles even while paused (money never locks).
+    /// Permissionlessly reclaim an unsettled claim stranded on an already-terminal
+    /// (Completed/Cancelled) task. The canonical submission PDA must prove an
+    /// empty/no-submission record, a Rejected submission, or a still-Submitted
+    /// Collaborative straggler after completion. Frees task/worker slot counters,
+    /// returns eligible claim/submission balances to the worker, and forfeits any
+    /// applicable no-show/rejection surplus to the treasury. Exit path — settles
+    /// even while paused (money never locks).
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn reclaim_terminal_claim(ctx: Context<ReclaimTerminalClaim>) -> Result<()> {
         instructions::reclaim_terminal_claim::handler(ctx)
@@ -1870,7 +1925,8 @@ pub mod agenc_coordination {
         )
     }
 
-    /// Update emergency launch controls and stamp the deployed surface revision.
+    /// Update emergency launch controls. The restricted canary may preserve its
+    /// live revision or explicitly select only the conservative revision `0`.
     pub fn update_launch_controls(
         ctx: Context<UpdateLaunchControls>,
         protocol_paused: bool,

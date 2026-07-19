@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
 import {
   PROGRAMDATA_METADATA_BYTES,
   REVIEWED_POLICY_URL,
+  assertApprovedExecutableSnapshot,
   assertImmediatePostUpgradeSnapshot,
   assertImmediatePreUpgradeSnapshot,
   assertSquadsV4CustodyPolicy,
@@ -240,6 +242,62 @@ test("canonical loader accounts decode exactly and policy rejects authority drif
         reviewedAuthority.toBase58(),
       ),
     /must be immutable/,
+  );
+});
+
+test("approved executable binding requires exact ELF bytes and zero loader padding", async () => {
+  const binary = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
+  const digest = createHash("sha256").update(binary).digest("hex");
+  const snapshot = await readProgramUpgradeAuthoritySnapshot(
+    mockConnection([
+      programAccount(),
+      programDataAccount({ payload: Buffer.concat([binary, Buffer.alloc(8)]) }),
+      custodyMultisigAccount(),
+    ]),
+    policy,
+  );
+  assert.equal(
+    assertApprovedExecutableSnapshot({
+      genesisHash: policy.genesisHash,
+      policy,
+      snapshot,
+      binaryBytes: binary,
+      expectedSha256: digest,
+    }).binaryBytes,
+    binary.length,
+  );
+  assert.throws(
+    () =>
+      assertApprovedExecutableSnapshot({
+        genesisHash: policy.genesisHash,
+        policy,
+        snapshot,
+        binaryBytes: binary,
+        expectedSha256: "00".repeat(32),
+      }),
+    /SBF sha256 .* != approved/,
+  );
+  assert.throws(
+    () =>
+      assertApprovedExecutableSnapshot({
+        genesisHash: policy.genesisHash,
+        policy,
+        snapshot: { ...snapshot, payload: Buffer.concat([binary, Buffer.from([1])]) },
+        binaryBytes: binary,
+        expectedSha256: digest,
+      }),
+    /nonzero bytes after the approved SBF/,
+  );
+  assert.throws(
+    () =>
+      assertApprovedExecutableSnapshot({
+        genesisHash: "wrong-cluster",
+        policy,
+        snapshot,
+        binaryBytes: binary,
+        expectedSha256: digest,
+      }),
+    /RPC genesis .* != reviewed/,
   );
 });
 

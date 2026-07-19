@@ -8,8 +8,8 @@ This file documents the protocol-owned private-completion and zk-config surfaces
   usable on mainnet: `ZkConfig` is **NOT initialized** there.
 - The pending revision-5 production build goes further and removes
   `complete_task_private`, `initialize_zk_config`, and `update_zk_image_id` from
-  its 97-instruction IDL. They exist only in the explicit, unsupported
-  100-instruction `private-zk` development build; release preflight rejects that
+  its 98-instruction IDL. They exist only in the explicit, unsupported
+  101-instruction `private-zk` development build; release preflight rejects that
   feature for production.
 - Mainnet settlement uses the public and reviewed (Task Validation V2) flows only.
 - `initialize_zk_config` is **multisig-gated** (audit H-5), matching

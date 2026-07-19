@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertIdlMatchesProgramInstructions,
+  anchorIdlStoragePlan,
+  assertDeployBufferSnapshotUnchanged,
+  assertPinnedAnchorCliVersion,
   assertPinnedSolanaCliVersion,
   assertProductionCargoFeaturePolicy,
   assertProgramDataCapacityUnchanged,
@@ -12,10 +15,14 @@ import {
   assertTreasuryAccountBoundary,
   assessProgramDataCapacity,
   captureConfirmedContextSlot,
+  calculateUpgradeFunding,
   createContextPinnedConnection,
   deriveFullProgramInstructionNames,
   deriveProgramInstructionNames,
+  decodeClockUnixTimestamp,
+  decodeReviewedDeployBufferAccount,
   loaderRentDataLengths,
+  parseSelectedSteps,
   rentLamports,
   scanStableRevision5CompletionBondCutover,
   withPinnedRevision5CutoverContext,
@@ -34,6 +41,98 @@ const PROGRAM_ID = new PublicKey(
 const TEST_ADDRESS = new PublicKey(
   "4tA32m8FRM1mVKTasuiEvbRksBJTGBvwF9jsT4WLM84n",
 );
+
+test("IDL content measurement defers first-init capacity rejection until account state is known", () => {
+  const opaque = [];
+  let measured = null;
+  for (let index = 0; index < 2_000; index++) {
+    opaque.push(createHash("sha256").update(`idl-growth-${index}`).digest("hex"));
+    if (index % 25 !== 0) continue;
+    measured = anchorIdlStoragePlan({ opaque });
+    if (measured.compressedLength > 29_956) break;
+  }
+  assert.ok(measured.compressedLength > 29_956);
+  assert.ok(measured.compressedLength <= 32_665);
+  assert.equal(measured.initFeasible, false);
+  assert.ok(measured.conservativeCompressedBound <= 65_330);
+});
+
+test("resumable deploy Buffer accepts only exact reviewed allocation and bytes", () => {
+  const loader = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+  const binary = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 9, 8, 7, 6]);
+  const data = Buffer.alloc(37 + binary.length);
+  data.writeUInt32LE(1, 0);
+  data[4] = 1;
+  TEST_ADDRESS.toBuffer().copy(data, 5);
+  binary.subarray(0, 4).copy(data, 37);
+  const account = {
+    data,
+    executable: false,
+    lamports: 10_000,
+    owner: loader,
+  };
+  const options = {
+    expectedAuthority: TEST_ADDRESS,
+    loaderProgramId: loader,
+    reviewedBinary: binary,
+    requiredFundingLamports: 9_000n,
+  };
+  const decoded = decodeReviewedDeployBufferAccount(account, options);
+  assert.equal(decoded.exists, true);
+  assert.equal(decoded.dataLength, 37 + binary.length);
+  assert.equal(
+    decodeReviewedDeployBufferAccount(null, options).exists,
+    false,
+  );
+
+  assert.throws(
+    () =>
+      decodeReviewedDeployBufferAccount(
+        { ...account, data: Buffer.concat([data, Buffer.from([1])]) },
+        options,
+      ),
+    /data length .* exact reviewed allocation/,
+  );
+  const foreign = Buffer.from(data);
+  foreign[37 + 5] = 0xff;
+  assert.throws(
+    () =>
+      decodeReviewedDeployBufferAccount(
+        { ...account, data: foreign },
+        options,
+      ),
+    /neither zero nor the reviewed SBF byte/,
+  );
+  assert.throws(
+    () =>
+      decodeReviewedDeployBufferAccount(
+        { ...account, lamports: 8_999 },
+        options,
+      ),
+    /below the reviewed CLI funding floor/,
+  );
+
+  const initial = {
+    ...decoded,
+    address: TEST_ADDRESS.toBase58(),
+    contextSlot: 100,
+  };
+  assert.doesNotThrow(() =>
+    assertDeployBufferSnapshotUnchanged(initial, {
+      ...initial,
+      contextSlot: 101,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertDeployBufferSnapshotUnchanged(initial, {
+        ...initial,
+        accountDataSha256: "00".repeat(32),
+        contextSlot: 101,
+      }),
+    /accountDataSha256 changed/,
+  );
+});
 
 function protocolConfigAccount({ paused = true, mask = 14 } = {}) {
   const data = Buffer.alloc(351);
@@ -70,11 +169,9 @@ test("execute-mode step safety rejects a deploy-only frozen-window sequence", ()
   );
   assert.throws(
     () =>
-      assertSafeSelectedSteps(
-        ["deploy", "init", "sweep"],
-        pending,
-        { execute: true },
-      ),
+      assertSafeSelectedSteps(["deploy", "init", "sweep"], pending, {
+        execute: true,
+      }),
     /UNSAFE STEP SUBSET/,
     "a non-adjacent sweep must not normalize an unsafe execution order",
   );
@@ -91,11 +188,24 @@ test("execute-mode step safety accepts the immediate deploy-to-sweep sequence", 
   );
   assert.doesNotThrow(() =>
     assertSafeSelectedSteps(
-      ["deploy", "sweep", "init", "stamp", "idl"],
+      ["deploy", "sweep", "init", "idl", "stamp"],
       pending,
       { execute: true },
     ),
   );
+});
+
+test("selected steps reject empty input and canonicalize the release order", () => {
+  assert.deepEqual(parseSelectedSteps(undefined), [
+    "deploy",
+    "sweep",
+    "init",
+    "idl",
+    "stamp",
+  ]);
+  assert.deepEqual(parseSelectedSteps("stamp, idl,idl"), ["idl", "stamp"]);
+  assert.throws(() => parseSelectedSteps(", ,"), /at least one step/);
+  assert.throws(() => parseSelectedSteps("deploy,nope"), /unknown step 'nope'/);
 });
 
 test("selected-step safety preserves safe resume and plan-only cases", () => {
@@ -106,26 +216,28 @@ test("selected-step safety preserves safe resume and plan-only cases", () => {
   assert.doesNotThrow(() =>
     assertSafeSelectedSteps(["deploy"], pending, { execute: false }),
   );
-  assert.doesNotThrow(() =>
-    assertSafeSelectedSteps(
-      ["deploy"],
-      {
-        deploy: { needed: false, done: true },
-        sweep: { needed: true, done: false },
-      },
-      { execute: true },
-    ),
+  assert.doesNotThrow(
+    () =>
+      assertSafeSelectedSteps(
+        ["deploy"],
+        {
+          deploy: { needed: false, done: true },
+          sweep: { needed: true, done: false },
+        },
+        { execute: true },
+      ),
     "an already-live approved binary cannot open a new frozen window",
   );
-  assert.doesNotThrow(() =>
-    assertSafeSelectedSteps(
-      ["deploy"],
-      {
-        deploy: { needed: true, done: false },
-        sweep: { needed: false, done: true },
-      },
-      { execute: true },
-    ),
+  assert.doesNotThrow(
+    () =>
+      assertSafeSelectedSteps(
+        ["deploy"],
+        {
+          deploy: { needed: true, done: false },
+          sweep: { needed: false, done: true },
+        },
+        { execute: true },
+      ),
     "a completed migration has no legacy typed-account freeze to close",
   );
 });
@@ -211,6 +323,19 @@ test("pins reviewed CLI semantics and obtains rent from the genesis-checked RPC"
     () => assertPinnedSolanaCliVersion("not-solana 3.0.13"),
     /could not parse/,
   );
+  assert.equal(assertPinnedAnchorCliVersion("anchor-cli 0.32.1"), "0.32.1");
+  assert.throws(
+    () => assertPinnedAnchorCliVersion("anchor-cli 0.31.1"),
+    /0\.31\.1 != reviewed 0\.32\.1/,
+  );
+  assert.throws(
+    () => assertPinnedAnchorCliVersion("anchor 0.32.1"),
+    /could not parse/,
+  );
+  assert.throws(
+    () => assertPinnedAnchorCliVersion("anchor-cli 0.32.1 unexpected"),
+    /could not parse/,
+  );
 
   const calls = [];
   const connection = {
@@ -228,6 +353,59 @@ test("pins reviewed CLI semantics and obtains rent from the genesis-checked RPC"
     bufferAllocation: 2_237_469,
     cliBufferFunding: 2_237_477,
   });
+});
+
+test("peak funding includes temporary IDL and permanent singleton/IDL rent", () => {
+  assert.deepEqual(
+    calculateUpgradeFunding({
+      deployBufferRent: 10n,
+      migrateRent: 20n,
+      releaseSingletonRent: 30n,
+      idlTemporaryBufferRent: 40n,
+      idlPermanentRent: 50n,
+      feeBudget: 60n,
+      programDataTopUp: 70n,
+    }),
+    {
+      peakLamports: 210n,
+      netPermanentLamports: 230n,
+    },
+  );
+  assert.throws(
+    () =>
+      calculateUpgradeFunding({
+        deployBufferRent: -1n,
+        migrateRent: 0n,
+        releaseSingletonRent: 0n,
+        idlTemporaryBufferRent: 0n,
+        idlPermanentRent: 0n,
+        feeBudget: 0n,
+        programDataTopUp: 0n,
+      }),
+    /deployBufferRent must be a non-negative bigint/,
+  );
+});
+
+test("Clock freshness input requires the exact non-executable sysvar account", () => {
+  const sysvarOwner = new PublicKey(
+    "Sysvar1111111111111111111111111111111111111",
+  );
+  const data = Buffer.alloc(40);
+  data.writeBigInt64LE(1_234n, 32);
+  const account = { data, executable: false, owner: sysvarOwner };
+  assert.equal(decodeClockUnixTimestamp(account), 1_234n);
+  assert.throws(
+    () => decodeClockUnixTimestamp({ ...account, data: Buffer.alloc(41) }),
+    /length 41 != 40/,
+  );
+  assert.throws(
+    () => decodeClockUnixTimestamp({ ...account, owner: PublicKey.default }),
+    /Clock sysvar owner/,
+  );
+  assert.throws(
+    () => decodeClockUnixTimestamp({ ...account, executable: true }),
+    /must not be executable/,
+  );
 });
 
 test("context-pinned scanner reads propagate and ratchet minContextSlot", async () => {
@@ -360,9 +538,7 @@ test("confirmed context capture rejects a lagging or malformed RPC", async () =>
     await captureConfirmedContextSlot(good, 120, "postdeploy floor"),
     125,
   );
-  assert.deepEqual(calls, [
-    { commitment: "confirmed", minContextSlot: 120 },
-  ]);
+  assert.deepEqual(calls, [{ commitment: "confirmed", minContextSlot: 120 }]);
 
   await assert.rejects(
     () =>
@@ -507,6 +683,74 @@ test("execute wiring anchors postdeploy scans between verified loader snapshots"
   );
 });
 
+test("IDL publish is fetched and verified before upgrade completion", () => {
+  const source = readFileSync(
+    new URL("./mainnet-upgrade.mjs", import.meta.url),
+    "utf8",
+  );
+  const runIdlStart = source.indexOf("async function runIdl(");
+  const mainStart = source.indexOf(
+    "// ------------------------------------------------------------------ main",
+  );
+  const runIdlSource = source.slice(runIdlStart, mainStart);
+  const publishAt = runIdlSource.indexOf('spawnSync("anchor", argv');
+  const fetchAt = runIdlSource.indexOf('"fetch"');
+  const verifyAt = runIdlSource.indexOf("assertFetchedIdlMatchesApproved");
+  assert.ok(runIdlStart >= 0 && mainStart > runIdlStart);
+  assert.ok(publishAt >= 0 && fetchAt > publishAt && verifyAt > fetchAt);
+
+  const invokeAt = source.lastIndexOf(
+    "await runIdl(pf, args, plan.idl, connection)",
+  );
+  const stampAt = source.lastIndexOf("runStamp(");
+  const completeAt = source.lastIndexOf('banner("UPGRADE COMPLETE")');
+  assert.ok(
+    invokeAt >= 0 && stampAt > invokeAt && completeAt > stampAt,
+    "IDL publish/fetch verification must precede the final surface stamp and completion banner",
+  );
+  assert.match(
+    source,
+    /stamp:\s*\{\s*needed: true,\s*done: false,/,
+    "the selected final stamp must be reasserted even when the revision is already current",
+  );
+  assert.match(
+    source,
+    /RUN_STAMP: "1",\s*FORCE_STAMP: "1"/,
+    "the parent must explicitly scope a forced idempotent write to its stamp-only child phase",
+  );
+  assert.doesNotMatch(
+    source,
+    /Step 6 STAMP: surface_revision already .* skipping/,
+    "the parent must not describe its mandatory final boundary assertion as skippable",
+  );
+  assert.match(
+    source,
+    /SKIP_BID_MARKETPLACE=1 SKIP_MODERATION=1 RUN_STAMP=1 FORCE_STAMP=1/,
+    "the printed reviewed command must show the same two-key stamp controls as execution",
+  );
+  assert.match(source, /banner\("SELECTED STEPS COMPLETE"\)/);
+  assert.match(source, /Full upgrade completion is NOT claimed/);
+});
+
+test("deploy and IDL runners consume immutable preflight byte snapshots", () => {
+  const source = readFileSync(
+    new URL("./mainnet-upgrade.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /const reviewedSoBytes = readFileSync\(soAbs\)/);
+  assert.match(source, /pf\.soBytes = Buffer\.from\(reviewedSoBytes\)/);
+  assert.match(source, /pf\.idlBytes = Buffer\.from\(idlBytes\)/);
+  assert.match(
+    source,
+    /writeFileSync\(reviewedSoPath, reviewedBytes, \{ flag: "wx", mode: 0o600 \}\)/,
+  );
+  assert.match(
+    source,
+    /writeFileSync\(reviewedPath, reviewedBytes, \{ flag: "wx", mode: 0o600 \}\)/,
+  );
+  assert.doesNotMatch(source, /pf\.soBytes = soBytes/);
+});
+
 test("direct deploy rejects a concurrent ProgramData capacity change", () => {
   assert.equal(
     assertProgramDataCapacityUnchanged(
@@ -531,13 +775,15 @@ test("derives the full instruction surface from Rust and rejects stale IDL inven
     "utf8",
   );
   const names = deriveFullProgramInstructionNames(source);
-  assert.equal(names.length, 97);
+  assert.equal(names.length, 98);
   assert.ok(names.includes("reclaim_orphan_task_child"));
   assert.ok(!names.includes("complete_task_private"));
   assert.equal(new Set(names).size, names.length);
 
-  const privateNames = deriveProgramInstructionNames(source, { privateZk: true });
-  assert.equal(privateNames.length, 100);
+  const privateNames = deriveProgramInstructionNames(source, {
+    privateZk: true,
+  });
+  assert.equal(privateNames.length, 101);
   assert.ok(privateNames.includes("complete_task_private"));
   assert.equal(
     deriveProgramInstructionNames(source, { mainnetCanary: true }).length,
@@ -559,12 +805,13 @@ test("derives the full instruction surface from Rust and rejects stale IDL inven
     "update_zk_image_id",
   ]);
   assert.throws(
-    () => assertProductionCargoFeaturePolicy(
-      cargo.replace(
-        'default = ["spl-token-rewards"]',
-        'default = ["private-zk", "spl-token-rewards"]',
+    () =>
+      assertProductionCargoFeaturePolicy(
+        cargo.replace(
+          'default = ["spl-token-rewards"]',
+          'default = ["private-zk", "spl-token-rewards"]',
+        ),
       ),
-    ),
     /must be exactly \[spl-token-rewards\]/,
   );
 
@@ -576,10 +823,11 @@ test("derives the full instruction surface from Rust and rejects stale IDL inven
     { sourceCount: 2, idlCount: 2 },
   );
   assert.throws(
-    () => assertIdlMatchesProgramInstructions(
-      [{ name: "firstIx" }],
-      ["first_ix", "second_ix"],
-    ),
+    () =>
+      assertIdlMatchesProgramInstructions(
+        [{ name: "firstIx" }],
+        ["first_ix", "second_ix"],
+      ),
     /missing_in_idl=\[second_ix\]/,
   );
 });
@@ -694,8 +942,7 @@ test("stable bond cutover rejects an old-entry source before scanning bond accou
             // real bond. The later eligibility scan would also see zero, so the
             // stale pair would incorrectly pass.
             const staleSnapshot = {
-              liveCompletionBondCount:
-                adversarialState.detachedBondCount,
+              liveCompletionBondCount: adversarialState.detachedBondCount,
               liveCompletionBondPrincipal:
                 adversarialState.detachedBondPrincipal,
               blockers: [],
@@ -765,11 +1012,12 @@ test("treasury boundary accepts only a live non-executable zero-data system acco
     }),
   );
   assert.throws(
-    () => assertTreasuryAccountBoundary(treasury, {
-      owner: new PublicKey("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK"),
-      executable: false,
-      data: Buffer.alloc(8),
-    }),
+    () =>
+      assertTreasuryAccountBoundary(treasury, {
+        owner: new PublicKey("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK"),
+        executable: false,
+        data: Buffer.alloc(8),
+      }),
     /System Program account/,
   );
   assert.throws(
@@ -1045,10 +1293,11 @@ test("revision-5 cutover fails closed when cutover aggregate fields are absent",
   delete missingBondEligibilityAggregate.taskSettlement
     .revision4BondPostEligibleTaskCount;
   assert.throws(
-    () => assertRevision5CutoverResults(
-      missingBondEligibilityAggregate,
-      "predeploy",
-    ),
+    () =>
+      assertRevision5CutoverResults(
+        missingBondEligibilityAggregate,
+        "predeploy",
+      ),
     /zero Tasks eligible for deployed revision-4 post_completion_bond/,
   );
 });

@@ -128,6 +128,24 @@ pub struct LaunchControlsUpdated {
     pub timestamp: i64,
 }
 
+/// Emitted only after the atomic release-boundary instruction has locked and
+/// verified the reviewed executable metadata, IDL, singleton policy, and
+/// upgrade-custody images in the same transaction as the surface stamp.
+#[event]
+pub struct ReleaseSurfaceStamped {
+    pub authority: Pubkey,
+    pub surface_revision: u16,
+    pub disabled_task_type_mask: u8,
+    pub program_data_slot: u64,
+    /// Full pre-stamp ProtocolConfig account-data hash.
+    pub protocol_config_hash: [u8; HASH_SIZE],
+    pub bid_config_hash: [u8; HASH_SIZE],
+    pub moderation_config_hash: [u8; HASH_SIZE],
+    pub idl_account_hash: [u8; HASH_SIZE],
+    pub custody_account_hash: [u8; HASH_SIZE],
+    pub timestamp: i64,
+}
+
 /// Emitted when a task with dependencies is created
 #[event]
 pub struct DependentTaskCreated {
@@ -1152,18 +1170,20 @@ pub struct GhostShareDistributed {
     pub remaining: u8,
 }
 
-/// Emitted by `reclaim_terminal_claim`: a claimed-but-never-submitted (no-show)
-/// claim on an already-terminal (Completed/Cancelled) task was reclaimed —
-/// claim rent back to the worker, any contest entry-deposit surplus forfeited
-/// to the protocol treasury, and the task/worker slot counters freed (which
-/// un-bricks `close_task` and the worker's `active_tasks` budget).
+/// Emitted by `reclaim_terminal_claim`: an unsettled claim on an already-terminal
+/// task was reclaimed. The eligible shapes are an empty/no-submission record, a
+/// Rejected submission, or a still-Submitted Collaborative straggler after
+/// completion. Task/worker slot counters are freed; applicable claim surplus is
+/// forfeited to the treasury while a Submitted straggler is refunded in full.
 #[event]
 pub struct TerminalClaimReclaimed {
     pub task: Pubkey,
     pub claim: Pubkey,
-    /// The no-show worker's `AgentRegistration` PDA.
+    /// The affected worker's `AgentRegistration` PDA.
     pub worker_agent: Pubkey,
-    /// Lamports returned to the worker authority (the claim's rent-exempt minimum).
+    /// Claim lamports returned to the worker authority: the rent-exempt minimum
+    /// for empty/Rejected cleanup, or the full balance for a Submitted
+    /// Collaborative straggler.
     pub worker_refund: u64,
     /// Lamports forfeited to the protocol treasury (the contest entry-deposit
     /// surplus above rent; 0 for non-contest claims).
@@ -1171,15 +1191,15 @@ pub struct TerminalClaimReclaimed {
     pub timestamp: i64,
 }
 
-/// Emitted when a contest entry deposit is FORFEITED to the protocol treasury on
-/// a no-show exit (`expire_claim` with a provably-absent submission PDA, or
-/// `reclaim_terminal_claim`). Workers who submitted are always refunded in full
-/// (their claim closes with all lamports — deposit included — to them).
+/// Emitted when `expire_claim` or `cancel_task` forfeits a contest entry deposit
+/// to the protocol treasury for a proven no-show. Terminal empty/Rejected claim
+/// cleanup reports the same forfeiture through
+/// [`TerminalClaimReclaimed::forfeited`] instead of emitting this event.
 #[event]
 pub struct ContestDepositForfeited {
     pub task: Pubkey,
     pub claim: Pubkey,
-    /// The no-show worker's `AgentRegistration` PDA.
+    /// The proven no-show worker's `AgentRegistration` PDA.
     pub worker_agent: Pubkey,
     /// Lamports forfeited to the treasury (the surplus above the claim's rent).
     pub amount: u64,

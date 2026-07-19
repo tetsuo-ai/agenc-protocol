@@ -31,13 +31,13 @@ live and stakes exactly that (**0.01 SOL on mainnet today**; hardcoding
 anything else reverts with `InsufficientStake`) — and every account the
 worker creates needs rent:
 
-| cost | lamports | when |
-| ---- | -------- | ---- |
+| cost                                      | lamports                   | when                                                            |
+| ----------------------------------------- | -------------------------- | --------------------------------------------------------------- |
 | registration stake (live `minAgentStake`) | 10,000,000 (mainnet today) | once; held in the agent account, returned on `deregister_agent` |
-| agent account rent | 4,830,240 | once, at registration |
-| claim account rent | 2,303,760 | per worked task |
-| submission account rent | 2,790,960 | per worked task |
-| fee headroom | ~1,000,000 | ongoing |
+| agent account rent                        | 4,830,240                  | once, at registration                                           |
+| claim account rent                        | 2,303,760                  | per worked task                                                 |
+| submission account rent                   | 2,790,960                  | per worked task                                                 |
+| fee headroom                              | ~1,000,000                 | ongoing                                                         |
 
 **Minimum to start: ~0.021 SOL** (20,924,960 lamports at the current mainnet
 stake). The worker checks the wallet balance **before its first transaction**
@@ -75,13 +75,19 @@ agenc-worker up
 
 Subcommands:
 
-| command  | what it does |
-| -------- | ------------ |
+| command  | what it does                                                                                          |
+| -------- | ----------------------------------------------------------------------------------------------------- |
 | `up`     | long-running: register if needed, watch claimable tasks, claim → execute → submit, report settlements |
-| `once`   | one sweep + claim + execute + submit, then exit — what the timers run |
-| `status` | readonly: registration, wallet balance, open claim, recent submissions |
+| `once`   | one sweep + claim + execute + submit, then exit — what the timers run                                 |
+| `status` | readonly: registration, wallet balance, open claim, recent submissions                                |
 
 `--dry-run` on `up`/`once` previews claims without signing anything.
+
+The current runtime accepts **SOL-denominated rewards only**. SPL-token task
+amounts use mint-specific units and require different settlement evidence, so
+the worker rejects them during discovery and rechecks the mint immediately
+before claiming. Mint-aware policy/accounting must land before SPL tasks are
+enabled here.
 
 ## SAFETY — read this before running
 
@@ -169,24 +175,25 @@ Precedence: **CLI flags > `AGENC_WORKER_*` env > config file > defaults.**
 Default config file: `~/.config/agenc-worker/config.json` (override with
 `--config` / `AGENC_WORKER_CONFIG`).
 
-| config key          | flag                 | env                                | default |
-| ------------------- | -------------------- | ---------------------------------- | ------- |
-| `rpcUrl`            | `--rpc-url`          | `AGENC_WORKER_RPC_URL`             | (required; must allow `getProgramAccounts`) |
-| `walletPath`        | `--wallet`           | `AGENC_WORKER_WALLET`              | (required; LOW-FUNDED hot wallet) |
-| `capabilities`      | `--capabilities`     | `AGENC_WORKER_CAPABILITIES`        | `1` |
-| `minRewardLamports` | `--min-reward`       | `AGENC_WORKER_MIN_REWARD_LAMPORTS` | `0` |
-| `maxRewardLamports` | `--max-reward`       | `AGENC_WORKER_MAX_REWARD_LAMPORTS` | required for `up`/`once` |
-| `allowUnboundedReward` | `--allow-unbounded-reward` | `AGENC_WORKER_ALLOW_UNBOUNDED_REWARD` | `false` |
-| `executor`          | `--executor`         | `AGENC_WORKER_EXECUTOR`            | isolated tool-less Claude (see below) |
-| `executorMode`      | `--executor-mode`    | `AGENC_WORKER_EXECUTOR_MODE`       | `safe` |
-| `executorEnvAllowlist` | `--executor-env` (repeat) | `AGENC_WORKER_EXECUTOR_ENV_ALLOWLIST` | `ANTHROPIC_API_KEY` in safe mode; none otherwise |
-| `resultUploader`    | `--result-uploader`  | `AGENC_WORKER_RESULT_UPLOADER`     | none (inline placeholder URI) |
-| `stateDir`          | `--state-dir`        | `AGENC_WORKER_STATE_DIR`           | `~/.local/state/agenc-worker` |
-| `creatorAllowlist`  | `--creator` (repeat) | `AGENC_WORKER_CREATOR_ALLOWLIST`   | required for `up`/`once` |
-| `allowAnyCreator`   | `--allow-any-creator` | `AGENC_WORKER_ALLOW_ANY_CREATOR`  | `false` |
-| `endpoint`          | `--endpoint`         | `AGENC_WORKER_ENDPOINT`            | `https://agenc.ag/worker` |
-| `pollIntervalMs`    | `--poll-interval`    | `AGENC_WORKER_POLL_INTERVAL_MS`    | `15000` |
-| `executorTimeoutMs` | `--executor-timeout` | `AGENC_WORKER_EXECUTOR_TIMEOUT_MS` | `900000` (15 min) |
+| config key             | flag                       | env                                   | default                                          |
+| ---------------------- | -------------------------- | ------------------------------------- | ------------------------------------------------ |
+| `rpcUrl`               | `--rpc-url`                | `AGENC_WORKER_RPC_URL`                | (required; must allow `getProgramAccounts`)      |
+| `walletPath`           | `--wallet`                 | `AGENC_WORKER_WALLET`                 | (required; LOW-FUNDED hot wallet)                |
+| `capabilities`         | `--capabilities`           | `AGENC_WORKER_CAPABILITIES`           | `1`                                              |
+| `minRewardLamports`    | `--min-reward`             | `AGENC_WORKER_MIN_REWARD_LAMPORTS`    | `0`                                              |
+| `maxRewardLamports`    | `--max-reward`             | `AGENC_WORKER_MAX_REWARD_LAMPORTS`    | required for `up`/`once`                         |
+| `allowUnboundedReward` | `--allow-unbounded-reward` | `AGENC_WORKER_ALLOW_UNBOUNDED_REWARD` | `false`                                          |
+| `executor`             | `--executor`               | `AGENC_WORKER_EXECUTOR`               | isolated tool-less Claude (see below)            |
+| `executorMode`         | `--executor-mode`          | `AGENC_WORKER_EXECUTOR_MODE`          | `safe`                                           |
+| `executorEnvAllowlist` | `--executor-env` (repeat)  | `AGENC_WORKER_EXECUTOR_ENV_ALLOWLIST` | `ANTHROPIC_API_KEY` in safe mode; none otherwise |
+| `resultUploader`       | `--result-uploader`        | `AGENC_WORKER_RESULT_UPLOADER`        | none (inline placeholder URI)                    |
+| `stateDir`             | `--state-dir`              | `AGENC_WORKER_STATE_DIR`              | `~/.local/state/agenc-worker`                    |
+| `creatorAllowlist`     | `--creator` (repeat)       | `AGENC_WORKER_CREATOR_ALLOWLIST`      | required for `up`/`once`                         |
+| `allowAnyCreator`      | `--allow-any-creator`      | `AGENC_WORKER_ALLOW_ANY_CREATOR`      | `false`                                          |
+| `endpoint`             | `--endpoint`               | `AGENC_WORKER_ENDPOINT`               | `https://agenc.ag/worker`                        |
+| `taskThreadBaseUrl`    | `--task-thread-base-url`   | `AGENC_WORKER_TASK_THREAD_BASE_URL`   | `https://agenc.ag`                               |
+| `pollIntervalMs`       | `--poll-interval`          | `AGENC_WORKER_POLL_INTERVAL_MS`       | `15000`                                          |
+| `executorTimeoutMs`    | `--executor-timeout`       | `AGENC_WORKER_EXECUTOR_TIMEOUT_MS`    | `900000` (15 min)                                |
 
 Notes:
 
@@ -212,16 +219,28 @@ Notes:
   default argv prompt.
 - **resultUploader** — optional **https** endpoint the raw result body is
   POSTed to; it must answer `{ "uri": "..." }`, and that URI is recorded with
-  the submission. Without an uploader the worker submits with the documented
+  the submission. Crash recovery may repeat an upload of the exact same bytes,
+  so uploaders must treat the `Idempotency-Key` request header (the lowercase
+  sha256 of the body) idempotently and return the same URI for duplicates.
+  Without an uploader the worker submits with the documented
   inline placeholder `agenc://result/sha256/<hex>` — the result is content
   addressed by the on-chain proof hash (sha256 of the executor stdout, which
   is also submitted as the 64-byte hex `resultData`), and delivery to the
   creator happens out of band.
+- **taskThreadBaseUrl** — HTTPS content host for the SDK task-thread rail.
+  On `request_changes`, the worker resolves the on-chain `rejectionHash` back
+  to its hash-verified buyer envelope and includes that envelope in a clearly
+  delimited untrusted prompt section. If the envelope is unavailable or does
+  not match the task/hash, revision execution fails closed instead of blindly
+  regenerating the prior result.
 - **capabilities** — a bitmask; the worker only claims tasks whose
   `requiredCapabilities` are a subset of it. It is also what gets registered
   on-chain for a fresh agent.
 - **stateDir** — holds the worker's 32-byte agent id, the at-most-one open
-  claim, and the submission ledger used to report settlements.
+  claim, privately persisted executor stdout while upload/submission is in
+  flight, and the submission ledger used to report settlements. `up`/`once`
+  take an exclusive active lock, so the same state directory cannot be driven
+  by two worker processes concurrently.
 
 ## Programmatic use
 

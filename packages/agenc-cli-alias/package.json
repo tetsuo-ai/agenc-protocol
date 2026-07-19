@@ -1,6 +1,6 @@
 {
   "name": "agenc-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Unscoped alias for @tetsuo-ai/agenc-cli — `npx agenc-cli dev` runs the AgenC marketplace dev loop (init / dev / promote)",
   "type": "module",
   "bin": {
@@ -12,7 +12,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@tetsuo-ai/agenc-cli": "^0.2.0"
+    "@tetsuo-ai/agenc-cli": "^0.3.0"
   },
   "license": "MIT",
   "publishConfig": {

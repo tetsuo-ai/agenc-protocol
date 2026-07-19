@@ -387,8 +387,12 @@ pub struct ProtocolConfig {
     /// historical pre-P6.5 prefix stays valid. A legacy account is migrated up to
     /// the new size by `migrate_protocol` (realloc +
     /// zero-init), which lands this at `0` = "surface not yet stamped". An operator
-    /// then sets the real revision via `update_launch_controls` (the existing
-    /// multisig-gated config-update authority path).
+    /// then establishes the current revision through the atomic
+    /// `stamp_release_surface` release boundary. `update_launch_controls` may
+    /// preserve the current value or select an older conservative revision, but
+    /// cannot establish the current production revision. In the full production
+    /// build, an older/unstamped revision must remain paused; unpausing requires
+    /// that CURRENT was already established by the atomic stamp.
     ///
     /// Semantics:
     /// - `0`  → surface unstamped (treat as the conservative canary surface;
@@ -445,12 +449,9 @@ impl Default for ProtocolConfig {
             protocol_paused: false,
             disabled_task_type_mask: 0,
             multisig_owners: [Pubkey::default(); ProtocolConfig::MAX_MULTISIG_OWNERS],
-            // P6.5: a freshly initialized config has the full surface available
-            // (init only runs on dev/devnet/localnet — the mainnet canary config
-            // already exists and is brought forward by migrate_protocol). Stamp it
-            // to the CURRENT revision so a fresh full-surface deploy advertises
-            // the exact wire contract without a manual stamp.
-            surface_revision: ProtocolConfig::SURFACE_REVISION_CURRENT,
+            // A fresh config is conservatively unstamped. Production establishes
+            // CURRENT only through the atomic release-boundary instruction.
+            surface_revision: 0,
         }
     }
 }
@@ -1728,8 +1729,8 @@ pub struct GovernanceConfig {
     pub voting_period: i64,
     /// Execution delay after voting ends (timelock) in seconds
     pub execution_delay: i64,
-    /// Quorum in basis points of the bounded two-voter vote-weight capacity.
-    /// New proposals also enforce `2 * min_proposal_stake` as an absolute floor.
+    /// Quorum in basis points of the bounded three-voter vote-weight capacity.
+    /// New proposals also enforce `3 * min_voter_stake` as an absolute floor.
     pub quorum_bps: u16,
     /// Approval threshold in basis points (e.g., 5000 = simple majority)
     pub approval_threshold_bps: u16,
@@ -3836,16 +3837,11 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_config_surface_revision_default_is_current_batch() {
-        // A freshly initialized config (full-surface deploy) advertises the CURRENT
-        // batch revision; a legacy config is brought to 0 by migrate_protocol and
-        // stamped later by an operator. Revisions are monotonic + additive:
-        // each batch must sit strictly above its predecessor.
+    fn test_protocol_config_surface_revision_default_is_unstamped() {
+        // Fresh and migrated configs begin at 0. Revisions are monotonic +
+        // additive, but CURRENT is established only by stamp_release_surface.
         let config = ProtocolConfig::default();
-        assert_eq!(
-            config.surface_revision,
-            ProtocolConfig::SURFACE_REVISION_AUDIT_HARDENING
-        );
+        assert_eq!(config.surface_revision, 0);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_FULL, 1);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH2, 2);
         assert_eq!(ProtocolConfig::SURFACE_REVISION_BATCH3, 3);

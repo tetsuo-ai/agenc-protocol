@@ -18,6 +18,7 @@ export {
   DEFAULT_EXECUTOR_ENV_ALLOWLIST,
   DEFAULT_EXECUTOR_TIMEOUT_MS,
   DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_TASK_THREAD_BASE_URL,
   type WorkerConfig,
   type WorkerConfigInput,
   type ExecutorMode,
@@ -86,13 +87,19 @@ export {
   type WorkerStatus,
 } from "./runtime.js";
 export {
+  acquireStateLock,
   bytesToHex,
   emptyState,
   hexToBytes,
   loadState,
   newAgentId,
   saveState,
+  WORKER_STATE_VERSION,
+  WorkerStateError,
+  type ExecutionIntent,
   type OpenClaim,
+  type SubmissionIntent,
   type SubmissionRecord,
   type WorkerState,
 } from "./state.js";
+export { formatDiagnosticError, redactSensitiveText } from "./redact.js";

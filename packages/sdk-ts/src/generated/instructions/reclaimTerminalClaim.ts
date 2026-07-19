@@ -155,9 +155,11 @@ export type ReclaimTerminalClaimAsyncInput<
    * made for this claim, or it was already closed together with the claim by
    * a settlement path — in which case THIS claim would not exist) OR hold a
    * REJECTED submission (audit F-3 — then its rent is returned to the worker
-   * and it is tombstoned here, hence `mut`). A live program-owned submission
-   * in any other state means the claim is still settleable by the normal
-   * paths and must not be short-circuited.
+   * and it is tombstoned here, hence `mut`), OR hold a still-SUBMITTED
+   * Collaborative straggler after the task completed (its validation debt is
+   * settled here). A live program-owned submission in any other shape means
+   * the claim is still settleable by the normal paths and must not be
+   * short-circuited.
    */
   taskSubmission?: Address<TAccountTaskSubmission>;
   /**
@@ -173,7 +175,11 @@ export type ReclaimTerminalClaimAsyncInput<
    * 0 lamports for non-contest claims.
    */
   treasury: Address<TAccountTreasury>;
-  /** worker authority (stored pubkey; no caller-supplied-account trust). */
+  /**
+   * Receives the eligible claim refund (rent minimum for an empty or Rejected
+   * record; full balance for a Submitted Collaborative straggler) and any
+   * closed submission balance. No caller-supplied-account trust.
+   */
   rentRecipient: Address<TAccountRentRecipient>;
 };
 
@@ -322,9 +328,11 @@ export type ReclaimTerminalClaimInput<
    * made for this claim, or it was already closed together with the claim by
    * a settlement path — in which case THIS claim would not exist) OR hold a
    * REJECTED submission (audit F-3 — then its rent is returned to the worker
-   * and it is tombstoned here, hence `mut`). A live program-owned submission
-   * in any other state means the claim is still settleable by the normal
-   * paths and must not be short-circuited.
+   * and it is tombstoned here, hence `mut`), OR hold a still-SUBMITTED
+   * Collaborative straggler after the task completed (its validation debt is
+   * settled here). A live program-owned submission in any other shape means
+   * the claim is still settleable by the normal paths and must not be
+   * short-circuited.
    */
   taskSubmission: Address<TAccountTaskSubmission>;
   /**
@@ -340,7 +348,11 @@ export type ReclaimTerminalClaimInput<
    * 0 lamports for non-contest claims.
    */
   treasury: Address<TAccountTreasury>;
-  /** worker authority (stored pubkey; no caller-supplied-account trust). */
+  /**
+   * Receives the eligible claim refund (rent minimum for an empty or Rejected
+   * record; full balance for a Submitted Collaborative straggler) and any
+   * closed submission balance. No caller-supplied-account trust.
+   */
   rentRecipient: Address<TAccountRentRecipient>;
 };
 
@@ -449,9 +461,11 @@ export type ParsedReclaimTerminalClaimInstruction<
      * made for this claim, or it was already closed together with the claim by
      * a settlement path — in which case THIS claim would not exist) OR hold a
      * REJECTED submission (audit F-3 — then its rent is returned to the worker
-     * and it is tombstoned here, hence `mut`). A live program-owned submission
-     * in any other state means the claim is still settleable by the normal
-     * paths and must not be short-circuited.
+     * and it is tombstoned here, hence `mut`), OR hold a still-SUBMITTED
+     * Collaborative straggler after the task completed (its validation debt is
+     * settled here). A live program-owned submission in any other shape means
+     * the claim is still settleable by the normal paths and must not be
+     * short-circuited.
      */
     taskSubmission: TAccountMetas[3];
     /**
@@ -467,7 +481,11 @@ export type ParsedReclaimTerminalClaimInstruction<
      * 0 lamports for non-contest claims.
      */
     treasury: TAccountMetas[7];
-    /** worker authority (stored pubkey; no caller-supplied-account trust). */
+    /**
+     * Receives the eligible claim refund (rent minimum for an empty or Rejected
+     * record; full balance for a Submitted Collaborative straggler) and any
+     * closed submission balance. No caller-supplied-account trust.
+     */
     rentRecipient: TAccountMetas[8];
   };
   data: ReclaimTerminalClaimInstructionData;

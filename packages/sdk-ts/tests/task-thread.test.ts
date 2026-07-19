@@ -9,12 +9,15 @@
 // A minimal fake content transport stands in for the storefront.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   TASK_THREAD_ENVELOPE_VERSION,
+  DEFAULT_MAX_TASK_THREAD_MESSAGES,
   canonicalEnvelopeJson,
   envelopeHash,
   assertTaskThreadEnvelope,
+  createContentTransport,
+  ContentTransportError,
   postTaskMessage,
   fetchTaskThread,
   resolveChangesRequest,
@@ -185,6 +188,113 @@ describe("postTaskMessage / fetchTaskThread (P7.1)", () => {
       },
     };
     await expect(fetchTaskThread(bad, TASK_PDA)).rejects.toThrow(/messages/);
+  });
+
+  it("fetchTaskThread rejects a thread above its configured message limit", async () => {
+    const t = makeFakeTransport([
+      makeEnvelope({ body: "one" }),
+      makeEnvelope({ body: "two" }),
+      makeEnvelope({ body: "three" }),
+    ]);
+
+    await expect(
+      fetchTaskThread(t, TASK_PDA, { maxMessages: 2 }),
+    ).rejects.toThrow(/3 messages.*limit of 2/i);
+  });
+
+  it("fetchTaskThread applies a finite message limit by default", async () => {
+    const messages = Array.from(
+      { length: DEFAULT_MAX_TASK_THREAD_MESSAGES + 1 },
+      (_unused, index) => makeEnvelope({ body: `message-${index}` }),
+    );
+
+    await expect(
+      fetchTaskThread(makeFakeTransport(messages), TASK_PDA),
+    ).rejects.toThrow(
+      new RegExp(
+        `${DEFAULT_MAX_TASK_THREAD_MESSAGES + 1} messages.*limit of ${DEFAULT_MAX_TASK_THREAD_MESSAGES}`,
+        "i",
+      ),
+    );
+  });
+});
+
+describe("content transport resource limits", () => {
+  it("rejects disabled or non-finite resource bounds", () => {
+    expect(() =>
+      createContentTransport({
+        baseUrl: "https://limits.test",
+        timeoutMs: 0,
+      }),
+    ).toThrow(/timeoutMs must be a positive integer/);
+    expect(() =>
+      createContentTransport({
+        baseUrl: "https://limits.test",
+        maxResponseBytes: Number.POSITIVE_INFINITY,
+      }),
+    ).toThrow(/maxResponseBytes must be a positive safe integer/);
+  });
+
+  it("times out even when an injected fetch implementation ignores abort", async () => {
+    const transport = createContentTransport({
+      baseUrl: "https://slow.test",
+      timeoutMs: 5,
+      fetchImpl: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return new Response('{"ok":true}', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    const failure = await transport.get("/slow").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ContentTransportError);
+    expect(failure).toMatchObject({ status: 0 });
+    expect((failure as Error).message).toContain("timed out after 5ms");
+  });
+
+  it("rejects an oversized streamed response before JSON parsing", async () => {
+    const transport = createContentTransport({
+      baseUrl: "https://large.test",
+      maxResponseBytes: 32,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ payload: "x".repeat(128) }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const failure = await transport.get("/large").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ContentTransportError);
+    expect(failure).toMatchObject({ status: 200 });
+    expect((failure as Error).message).toMatch(/exceeds.*32 bytes/i);
+  });
+
+  it("fails closed without materializing a response that has no byte stream", async () => {
+    const text = vi.fn(async () => {
+      throw new Error("response.text() must not be called");
+    });
+    const transport = createContentTransport({
+      baseUrl: "https://streamless.test",
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        body: null,
+        async json() {
+          return { ok: true };
+        },
+        text,
+      }),
+    });
+
+    const failure = await transport.get("/streamless").catch((error: unknown) =>
+      error,
+    );
+    expect(failure).toBeInstanceOf(ContentTransportError);
+    expect(failure).toMatchObject({ status: 200 });
+    expect((failure as Error).message).toMatch(/not a readable byte stream/i);
+    expect(text).not.toHaveBeenCalled();
   });
 });
 

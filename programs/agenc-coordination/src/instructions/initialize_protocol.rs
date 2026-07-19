@@ -298,25 +298,25 @@ pub fn handler(
     // Versioning
     config.protocol_version = CURRENT_PROTOCOL_VERSION;
     config.min_supported_version = MIN_SUPPORTED_VERSION;
-    config.protocol_paused = false;
-    config.disabled_task_type_mask = 0;
-    // P6.5: stamp the deployed surface this binary actually exposes.
-    // - Full build  -> stamp the exact current wire contract, so a fresh
-    //   dev/devnet/localnet deploy advertises every capability this binary exposes
-    //   without a manual `update_launch_controls` step.
-    // - Canary build -> only the restricted 25-ix surface is live: stamp 0
-    //   (unstamped/conservative) so a fresh canary cluster never claims the full
-    //   surface. An existing config is not re-initialized here; legacy layouts are
-    //   brought forward by `migrate_protocol` (surface_revision = 0) and stamped by
-    //   an operator if/when the corresponding surface is deployed.
-    #[cfg(not(feature = "mainnet-canary"))]
-    {
-        config.surface_revision = ProtocolConfig::SURFACE_REVISION_CURRENT;
-    }
+    // A production deployment starts frozen until its complete reviewed release
+    // boundary is atomically stamped. The restricted canary has no stamp
+    // instruction and remains operable on its deliberately conservative
+    // revision-0 surface.
     #[cfg(feature = "mainnet-canary")]
     {
-        config.surface_revision = 0;
+        config.protocol_paused = false;
     }
+    #[cfg(not(feature = "mainnet-canary"))]
+    {
+        config.protocol_paused = true;
+    }
+    config.disabled_task_type_mask = 0;
+    // A fresh deployment is not a reviewed release boundary. Production remains
+    // paused and conservatively unstamped until stamp_release_surface atomically
+    // verifies the initialized singletons, ProgramData, on-chain IDL, and upgrade
+    // custody. The restricted canary has no stamp path and therefore remains at
+    // revision 0 permanently.
+    config.surface_revision = 0;
     // Fix #497: Explicitly zero all slots before populating to ensure no data leakage.
     config.multisig_owners = [Pubkey::default(); ProtocolConfig::MAX_MULTISIG_OWNERS];
     for (index, owner) in multisig_owners.iter().enumerate() {

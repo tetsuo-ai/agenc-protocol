@@ -60,6 +60,9 @@ export const DEFAULT_EXECUTOR_TIMEOUT_MS = 15 * 60_000;
  */
 export const DEFAULT_ENDPOINT = "https://agenc.ag/worker";
 
+/** Default content host for anchored buyer→worker change-request envelopes. */
+export const DEFAULT_TASK_THREAD_BASE_URL = "https://agenc.ag";
+
 /** Default state directory. */
 export function defaultStateDir(): string {
   return path.join(homedir(), ".local", "state", "agenc-worker");
@@ -115,6 +118,8 @@ export type WorkerConfig = {
   allowAnyCreator: boolean;
   /** Agent endpoint recorded at registration (non-empty http(s); on-chain rule). */
   endpoint: string;
+  /** HTTPS content host used to resolve anchored request_changes envelopes. */
+  taskThreadBaseUrl: string;
   /** Poll interval for `up` mode (ms). */
   pollIntervalMs: number;
   /** Executor wall-clock budget (ms). */
@@ -137,6 +142,7 @@ export type WorkerConfigInput = Partial<{
   creatorAllowlist: string[] | string | null;
   allowAnyCreator: boolean | string;
   endpoint: string;
+  taskThreadBaseUrl: string;
   pollIntervalMs: string | number;
   executorTimeoutMs: string | number;
 }>;
@@ -173,7 +179,9 @@ function parseBoolean(field: string, value: boolean | string): boolean {
   if (typeof value === "boolean") return value;
   if (/^(1|true|yes|on)$/i.test(value.trim())) return true;
   if (/^(0|false|no|off)$/i.test(value.trim())) return false;
-  throw new ConfigError(`${field}: expected true or false, got ${JSON.stringify(value)}`);
+  throw new ConfigError(
+    `${field}: expected true or false, got ${JSON.stringify(value)}`,
+  );
 }
 
 function parseExecutor(field: string, value: string[] | string): string[] {
@@ -211,7 +219,10 @@ function parseAllowlist(
           .map((entry) => entry.trim())
           .filter((entry) => entry.length > 0)
       : value;
-  if (!Array.isArray(list) || !list.every((entry) => typeof entry === "string")) {
+  if (
+    !Array.isArray(list) ||
+    !list.every((entry) => typeof entry === "string")
+  ) {
     throw new ConfigError(`${field}: expected an array of base58 addresses`);
   }
   return list.length === 0 ? null : list;
@@ -225,16 +236,22 @@ function parseStringList(field: string, value: string[] | string): string[] {
       try {
         list = JSON.parse(trimmed);
       } catch {
-        throw new ConfigError(`${field}: expected a JSON array or comma-separated names`);
+        throw new ConfigError(
+          `${field}: expected a JSON array or comma-separated names`,
+        );
       }
     } else {
-      list = trimmed.split(",").map((entry) => entry.trim()).filter(Boolean);
+      list = trimmed
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
     }
   }
   if (
     !Array.isArray(list) ||
-    !list.every((entry) =>
-      typeof entry === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry)
+    !list.every(
+      (entry) =>
+        typeof entry === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry),
     )
   ) {
     throw new ConfigError(`${field}: expected environment variable names`);
@@ -243,14 +260,21 @@ function parseStringList(field: string, value: string[] | string): string[] {
 }
 
 function parseExecutorMode(value: string): ExecutorMode {
-  if (value === "safe" || value === "sandboxed" || value === "unsafe") return value;
+  if (value === "safe" || value === "sandboxed" || value === "unsafe")
+    return value;
   throw new ConfigError(
     `executorMode: expected "safe", "sandboxed", or "unsafe", got ${JSON.stringify(value)}`,
   );
 }
 
-function argvEquals(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+function argvEquals(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 /** Map `AGENC_WORKER_*` environment variables to a config input. */
@@ -258,8 +282,10 @@ export function configFromEnv(
   env: Record<string, string | undefined>,
 ): WorkerConfigInput {
   const input: WorkerConfigInput = {};
-  if (env.AGENC_WORKER_RPC_URL !== undefined) input.rpcUrl = env.AGENC_WORKER_RPC_URL;
-  if (env.AGENC_WORKER_WALLET !== undefined) input.walletPath = env.AGENC_WORKER_WALLET;
+  if (env.AGENC_WORKER_RPC_URL !== undefined)
+    input.rpcUrl = env.AGENC_WORKER_RPC_URL;
+  if (env.AGENC_WORKER_WALLET !== undefined)
+    input.walletPath = env.AGENC_WORKER_WALLET;
   if (env.AGENC_WORKER_CAPABILITIES !== undefined) {
     input.capabilities = env.AGENC_WORKER_CAPABILITIES;
   }
@@ -272,7 +298,8 @@ export function configFromEnv(
   if (env.AGENC_WORKER_ALLOW_UNBOUNDED_REWARD !== undefined) {
     input.allowUnboundedReward = env.AGENC_WORKER_ALLOW_UNBOUNDED_REWARD;
   }
-  if (env.AGENC_WORKER_EXECUTOR !== undefined) input.executor = env.AGENC_WORKER_EXECUTOR;
+  if (env.AGENC_WORKER_EXECUTOR !== undefined)
+    input.executor = env.AGENC_WORKER_EXECUTOR;
   if (env.AGENC_WORKER_EXECUTOR_MODE !== undefined) {
     input.executorMode = env.AGENC_WORKER_EXECUTOR_MODE;
   }
@@ -282,14 +309,19 @@ export function configFromEnv(
   if (env.AGENC_WORKER_RESULT_UPLOADER !== undefined) {
     input.resultUploader = env.AGENC_WORKER_RESULT_UPLOADER;
   }
-  if (env.AGENC_WORKER_STATE_DIR !== undefined) input.stateDir = env.AGENC_WORKER_STATE_DIR;
+  if (env.AGENC_WORKER_STATE_DIR !== undefined)
+    input.stateDir = env.AGENC_WORKER_STATE_DIR;
   if (env.AGENC_WORKER_CREATOR_ALLOWLIST !== undefined) {
     input.creatorAllowlist = env.AGENC_WORKER_CREATOR_ALLOWLIST;
   }
   if (env.AGENC_WORKER_ALLOW_ANY_CREATOR !== undefined) {
     input.allowAnyCreator = env.AGENC_WORKER_ALLOW_ANY_CREATOR;
   }
-  if (env.AGENC_WORKER_ENDPOINT !== undefined) input.endpoint = env.AGENC_WORKER_ENDPOINT;
+  if (env.AGENC_WORKER_ENDPOINT !== undefined)
+    input.endpoint = env.AGENC_WORKER_ENDPOINT;
+  if (env.AGENC_WORKER_TASK_THREAD_BASE_URL !== undefined) {
+    input.taskThreadBaseUrl = env.AGENC_WORKER_TASK_THREAD_BASE_URL;
+  }
   if (env.AGENC_WORKER_POLL_INTERVAL_MS !== undefined) {
     input.pollIntervalMs = env.AGENC_WORKER_POLL_INTERVAL_MS;
   }
@@ -313,7 +345,9 @@ export function loadConfigFile(
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (!explicit && (code === "ENOENT" || code === "ENOTDIR")) return {};
-    throw new ConfigError(`config file ${filePath}: ${(error as Error).message}`);
+    throw new ConfigError(
+      `config file ${filePath}: ${(error as Error).message}`,
+    );
   }
   let parsed: unknown;
   try {
@@ -361,7 +395,9 @@ export function resolveWorkerConfig(
       ? DEFAULT_CAPABILITIES
       : parseBigint("capabilities", merged.capabilities);
   if (capabilities === 0n) {
-    throw new ConfigError("capabilities: must be non-zero (the program rejects 0)");
+    throw new ConfigError(
+      "capabilities: must be non-zero (the program rejects 0)",
+    );
   }
 
   const minRewardLamports =
@@ -393,8 +429,8 @@ export function resolveWorkerConfig(
   if (executorMode === "safe" && !argvEquals(executor, DEFAULT_EXECUTOR)) {
     throw new ConfigError(
       "executor: custom argv is not permitted in safe mode; wrap it in an external " +
-        "sandbox and set executorMode=\"sandboxed\", or explicitly acknowledge legacy " +
-        "host access with executorMode=\"unsafe\"",
+        'sandbox and set executorMode="sandboxed", or explicitly acknowledge legacy ' +
+        'host access with executorMode="unsafe"',
     );
   }
   const executorEnvAllowlist =
@@ -405,7 +441,9 @@ export function resolveWorkerConfig(
       : parseStringList("executorEnvAllowlist", merged.executorEnvAllowlist);
   if (
     executorMode === "safe" &&
-    executorEnvAllowlist.some((name) => !DEFAULT_EXECUTOR_ENV_ALLOWLIST.includes(name))
+    executorEnvAllowlist.some(
+      (name) => !DEFAULT_EXECUTOR_ENV_ALLOWLIST.includes(name),
+    )
   ) {
     throw new ConfigError(
       "executorEnvAllowlist: safe mode may inherit only ANTHROPIC_API_KEY; use an " +
@@ -440,6 +478,26 @@ export function resolveWorkerConfig(
     );
   }
 
+  const taskThreadBaseUrl =
+    merged.taskThreadBaseUrl ?? DEFAULT_TASK_THREAD_BASE_URL;
+  let taskThreadUrl: URL;
+  try {
+    taskThreadUrl = new URL(taskThreadBaseUrl);
+  } catch {
+    throw new ConfigError("taskThreadBaseUrl: not a valid URL");
+  }
+  if (
+    taskThreadUrl.protocol !== "https:" ||
+    taskThreadUrl.username !== "" ||
+    taskThreadUrl.password !== "" ||
+    taskThreadUrl.search !== "" ||
+    taskThreadUrl.hash !== ""
+  ) {
+    throw new ConfigError(
+      "taskThreadBaseUrl: must be an HTTPS URL without credentials, query, or fragment",
+    );
+  }
+
   const creatorAllowlist =
     merged.creatorAllowlist === undefined
       ? null
@@ -464,6 +522,7 @@ export function resolveWorkerConfig(
     creatorAllowlist,
     allowAnyCreator,
     endpoint,
+    taskThreadBaseUrl: taskThreadBaseUrl.replace(/\/+$/u, ""),
     pollIntervalMs:
       merged.pollIntervalMs === undefined
         ? DEFAULT_POLL_INTERVAL_MS
@@ -509,7 +568,9 @@ export function assertActiveWorkerConfig(
     config.executorMode !== "sandboxed" &&
     config.executorMode !== "unsafe"
   ) {
-    throw new ConfigError(`executorMode: invalid runtime value ${String(config.executorMode)}`);
+    throw new ConfigError(
+      `executorMode: invalid runtime value ${String(config.executorMode)}`,
+    );
   }
   if (config.executorMode === "safe") {
     if (!argvEquals(config.executor, DEFAULT_EXECUTOR)) {
