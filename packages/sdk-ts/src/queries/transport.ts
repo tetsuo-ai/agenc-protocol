@@ -9,6 +9,7 @@ import {
   getBase64Decoder,
   getBase64Encoder,
   type Address,
+  type Commitment,
   type GetProgramAccountsApi,
   type GetProgramAccountsDatasizeFilter,
   type GetProgramAccountsMemcmpFilter,
@@ -66,6 +67,14 @@ export type ProgramAccountsSource =
   | Rpc<GetProgramAccountsApi>
   | ProgramAccountsTransport;
 
+/** Configuration for the raw-RPC program-account transport. */
+export interface RpcProgramAccountsTransportConfig {
+  /** Program to scan; defaults to the AgenC coordination program. */
+  readonly programAddress?: Address;
+  /** RPC commitment for every scan; defaults to the SDK-wide `confirmed`. */
+  readonly commitment?: Commitment;
+}
+
 /** Convert a transport-neutral {@link GpaFilter} to the kit RPC filter form. */
 function toRpcFilter(
   filter: GpaFilter,
@@ -87,9 +96,12 @@ function toRpcFilter(
  * Adapt a `@solana/kit` `Rpc<GetProgramAccountsApi>` to the
  * {@link ProgramAccountsTransport} seam.
  *
- * Issues `getProgramAccounts(programAddress, { encoding: "base64", filters })`
- * with memcmp bytes converted to their base64 RPC form, and decodes the
- * base64 response data back into `Uint8Array`s.
+ * Issues
+ * `getProgramAccounts(programAddress, { commitment, encoding: "base64", filters })`
+ * with memcmp bytes converted to their base64 RPC form, and decodes the base64
+ * response data back into `Uint8Array`s. Commitment defaults to `confirmed`,
+ * matching the SDK's transaction and watcher defaults; callers that require a
+ * finalized read can opt in explicitly.
  *
  * NOTE (read this before shipping a UI on top of it): raw `getProgramAccounts`
  * is RPC-provider-dependent — many public RPC providers disable or heavily
@@ -98,8 +110,7 @@ function toRpcFilter(
  * and is the intended drop-in replacement at scale.
  *
  * @param rpc - Any kit RPC that supports `getProgramAccounts`.
- * @param config - Optional `programAddress` override (defaults to the
- * agenc-coordination program).
+ * @param config - Optional program-address and commitment overrides.
  * @returns A {@link ProgramAccountsTransport} backed by the RPC.
  *
  * @example
@@ -111,15 +122,17 @@ function toRpcFilter(
  */
 export function createRpcProgramAccountsTransport(
   rpc: Rpc<GetProgramAccountsApi>,
-  config: { programAddress?: Address } = {},
+  config: RpcProgramAccountsTransportConfig = {},
 ): ProgramAccountsTransport {
   const programAddress =
     config.programAddress ?? AGENC_COORDINATION_PROGRAM_ADDRESS;
+  const commitment = config.commitment ?? "confirmed";
   const base64Encoder = getBase64Encoder();
   return {
     async getProgramAccounts({ filters }) {
       const results = await rpc
         .getProgramAccounts(programAddress, {
+          commitment,
           encoding: "base64",
           filters: filters.map(toRpcFilter),
         })
@@ -144,10 +157,13 @@ export function createRpcProgramAccountsTransport(
  * `getAccountInfo` function on the same object.
  *
  * @param source - A kit `Rpc<GetProgramAccountsApi>` or a transport.
+ * @param config - Optional raw-RPC program-address/commitment overrides;
+ * ignored when `source` is already a `ProgramAccountsTransport`.
  * @returns A {@link ProgramAccountsTransport}.
  */
 export function resolveProgramAccountsTransport(
   source: ProgramAccountsSource,
+  config: RpcProgramAccountsTransportConfig = {},
 ): ProgramAccountsTransport {
   if (
     typeof (source as Record<string, unknown>).getProgramAccounts !== "function"
@@ -162,6 +178,7 @@ export function resolveProgramAccountsTransport(
     // Full RPC method surface -> a kit Rpc proxy; wrap it.
     return createRpcProgramAccountsTransport(
       source as Rpc<GetProgramAccountsApi>,
+      config,
     );
   }
   return source as ProgramAccountsTransport;

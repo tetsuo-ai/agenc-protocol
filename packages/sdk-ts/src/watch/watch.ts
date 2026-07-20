@@ -44,6 +44,7 @@ import {
 } from "../events/index.js";
 import {
   DEFAULT_DIRECT_CLAIM_DEADLINE_SAFETY_SECONDS,
+  resolveProgramAccountsTransport,
   isTaskJobSpecPinned,
   isTaskStateDirectlyClaimable,
   listDirectClaimableTasks,
@@ -584,18 +585,24 @@ export function watchClaimableTasks(
 
   // The catch-up read source: prefer an explicit indexer, else the rpc (only
   // when it can serve getProgramAccounts).
-  const catchUpSource: ProgramAccountsSource | undefined =
+  const configuredCatchUpSource: ProgramAccountsSource | undefined =
     indexer ??
     (rpc !== undefined &&
     typeof (rpc as Record<string, unknown>).getProgramAccounts === "function"
       ? (rpc as ProgramAccountsSource)
       : undefined);
-  if (catchUpSource === undefined) {
+  if (configuredCatchUpSource === undefined) {
     throw new Error(
       "watchClaimableTasks: a getProgramAccounts-capable rpc or indexer " +
         "is required to validate current task state and job-spec pins",
     );
   }
+  const catchUpSource = resolveProgramAccountsTransport(
+    configuredCatchUpSource,
+    {
+      commitment,
+    },
+  );
 
   const controller = new AbortController();
   const onOuterAbort = () => controller.abort();
