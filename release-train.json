@@ -17,7 +17,7 @@
       "name": "@tetsuo-ai/marketplace-sdk",
       "directory": "packages/sdk-ts",
       "expectedVersion": "0.12.0",
-      "expectedIntegrity": "sha512-0qWIMt/5hT1dDlGRnGEiEyxbxBJwvOhN7C/GIs7WPfGW1+cAmarX0+2zJ0R4jysve0f4/BwZpIjk9q9gr2XIyQ==",
+      "expectedIntegrity": "sha512-+7hAMFi6pcOqkC+VLsj/Eru4IbRYN8iAaygOgmn7xQdcbc+OyeYpidHxtqUdEs8arEmS/opqw2FztClDMV+dpQ==",
       "requires": ["protocol"]
     },
     {

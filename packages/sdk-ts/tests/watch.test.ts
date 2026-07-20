@@ -565,6 +565,70 @@ describe("watchClaimableTasks: event path", () => {
 });
 
 describe("watchClaimableTasks: catch-up (gPA) path", () => {
+  it("forwards the watcher commitment to every raw-RPC catch-up scan", async () => {
+    const taskId = new Uint8Array(32).fill(9);
+    const [taskPda] = await findTaskPda({ creator: CREATOR_A, taskId });
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: taskPda });
+    const accounts = [
+      {
+        pubkey: taskPda,
+        data: encodeTask({
+          creator: CREATOR_A,
+          taskId,
+          requiredCapabilities: 1n,
+          rewardAmount: 3_000_000n,
+        }),
+      },
+      {
+        pubkey: jobSpecPda,
+        data: encodeTaskJobSpec(taskPda, CREATOR_A),
+      },
+    ];
+    const commitments: unknown[] = [];
+    const rpc = {
+      getAccountInfo() {
+        return { send: async () => null };
+      },
+      getProgramAccounts(_program: unknown, config: Record<string, unknown>) {
+        commitments.push(config.commitment);
+        const filters = config.filters as Array<
+          { dataSize: bigint } | { memcmp: { offset: bigint; bytes: string } }
+        >;
+        const matched = accounts.filter(({ data }) =>
+          filters.every((filter) => {
+            if ("dataSize" in filter)
+              return BigInt(data.length) === filter.dataSize;
+            const offset = Number(filter.memcmp.offset);
+            const bytes = Buffer.from(filter.memcmp.bytes, "base64");
+            return Buffer.from(
+              data.subarray(offset, offset + bytes.length),
+            ).equals(bytes);
+          }),
+        );
+        return {
+          send: async () =>
+            matched.map(({ pubkey, data }) => ({
+              pubkey,
+              account: { data: [toBase64(data), "base64"] },
+            })),
+        };
+      },
+    };
+
+    const { onTask, done } = collector(1);
+    const watch = watchClaimableTasks({
+      rpc: rpc as never,
+      commitment: "finalized",
+      onTask,
+      pollIntervalMs: 1_000_000,
+    });
+    await done;
+    await watch.stop();
+
+    expect(commitments.length).toBeGreaterThan(0);
+    expect(new Set(commitments)).toEqual(new Set(["finalized"]));
+  });
+
   it("surfaces task-state-claimable candidates and excludes a full InProgress task", async () => {
     const openId = new Uint8Array(32).fill(10);
     const claimedId = new Uint8Array(32).fill(11);

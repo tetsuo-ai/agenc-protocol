@@ -609,6 +609,7 @@ describe("createRpcProgramAccountsTransport", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].program).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(calls[0].config.commitment).toBe("confirmed");
     expect(calls[0].config.encoding).toBe("base64");
     expect(calls[0].config.filters).toEqual([
       { dataSize: 432n },
@@ -644,6 +645,15 @@ describe("createRpcProgramAccountsTransport", () => {
     });
     await transport.getProgramAccounts({ filters: [] });
     expect(calls[0].program).toBe(other);
+  });
+
+  it("forwards an explicit commitment override", async () => {
+    const { rpc, calls } = makeFakeRpc([]);
+    const transport = createRpcProgramAccountsTransport(rpc, {
+      commitment: "finalized",
+    });
+    await transport.getProgramAccounts({ filters: [] });
+    expect(calls[0].config.commitment).toBe("finalized");
   });
 });
 

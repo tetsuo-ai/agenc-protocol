@@ -319,7 +319,10 @@ module (`listActiveListings`, `listOpenTasks`, …) is built on raw
 `getProgramAccounts`, which many RPC providers **disable outright or restrict
 to paid tiers** — and even where enabled it scans every program account
 server-side on every call. It is the **trustless** read path, not the scale
-path. If a provider rejects gPA you will see provider-specific errors
+path. Raw RPC transports use `confirmed` commitment by default, matching the
+rest of the SDK; construct one with
+`createRpcProgramAccountsTransport(rpc, { commitment: "finalized" })` when a
+finalized list view is required. If a provider rejects gPA you will see provider-specific errors
 (`-32601` method not found, 403s, or empty results); switch the read side to
 the **hosted indexer client**, which is the intended scale path. The hosted
 indexer lives at **`https://api.agenc.ag`** (the agenc.ag API origin — note

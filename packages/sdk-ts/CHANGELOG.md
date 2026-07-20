@@ -13,6 +13,10 @@
 
 ### Reliability and bounded reads
 
+- Raw-RPC program-account transports now send an explicit commitment, defaulting
+  to `confirmed` like the rest of the SDK, and accept a `finalized` override.
+  This prevents consumers from accidentally combining provider-default list
+  scans with confirmed child-account reads in one snapshot.
 - Blockhash-expiry classification now caps every inspected cause-chain message
   and uses fixed-term plus single-pass line scans, so adversarial diagnostics
   cannot trigger unbounded regular-expression work. Receipt base URLs now trim

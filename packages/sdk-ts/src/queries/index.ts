@@ -33,6 +33,7 @@ export {
   type GpaFilter,
   type ProgramAccountsSource,
   type ProgramAccountsTransport,
+  type RpcProgramAccountsTransportConfig,
 } from "./transport.js";
 export {
   ANCHOR_DISCRIMINATOR_SIZE,
