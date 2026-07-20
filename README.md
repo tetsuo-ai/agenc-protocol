@@ -141,9 +141,12 @@ Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
 Reproducible-build prerequisites: Rust 1.85.0 (declared/tested MSRV 1.82.0),
 Anchor 0.32.1, Solana 3.0.13, Node 24.18.0, and npm 11.18.0. Package builds are
-also gated at the advertised Node 20.18.0 floor. Run `npm ci` and
+also gated at the advertised Node 22.23.1 floor. Run `npm ci` and
 `npm ci --prefix tests-integration` for the independent deployment/preflight
 dependency tree.
+
+Revision-5 packages no longer support Node 20: upstream marks that line EOL,
+and production deployments should use an Active or Maintenance LTS release.
 
 ```bash
 # Rust program: unit tests + lint (default + canary)
@@ -169,13 +172,13 @@ npm run validate            # build + typecheck + pack:smoke for @tetsuo-ai/prot
 cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm run build
 ```
 
-**Test coverage (runner totals as of 2026-07-19):** Rust **524** production /
+**Test coverage (runner totals refreshed 2026-07-19):** Rust **524** production /
 **524** `validation-timings` / **549** private-ZK / **321** canary; **77**
 model/property tests; **408** compiled-program integrations (**399** pass and
 **9** explicit canary-profile skips), plus the separate canary compiled suite at
-**11/11**; SDK **656 pass + one skip**; all npm workspaces
-**1,432 pass + two skips**; deployment/preflight **239 pass**; repository policy
-scripts **346 pass**. Exact commands and
+**11/11**; SDK **657 pass + one skip**; all npm workspaces
+**1,444 pass + two skips**; all `scripts/*.test.mjs` **355 pass**, including the
+deployment/preflight subset at **239 pass**. Exact commands and
 artifact hashes are in [docs/VALIDATION.md](docs/VALIDATION.md). Audit status:
 the batch 1–3 internal audits closed with 0 open findings **at that time**
 ([docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md)); the 2026-07-16/17 adversarial
@@ -216,9 +219,10 @@ Before any mainnet deploy that changes the deployed surface or account layout:
    prior rollout; see
    [docs/WP-A1-DEPLOY-READINESS.md](docs/WP-A1-DEPLOY-READINESS.md).
 3. **Working private vulnerability intake.** GitHub Private Vulnerability
-   Reporting is currently disabled and the documented security mailbox is not
-   confirmed active. Enable and test at least one private channel, then activate
-   `.well-known/security.txt`; do not ship a false contact record.
+   Reporting is enabled and is the confirmed private channel. Deploy the exact
+   active `.well-known/security.txt` at both canonical hosts and verify the
+   plain-text responses. Do not advertise the security mailbox until delivery
+   and alerting have been tested end to end.
 4. **ProgramData capacity ceremony.** The current candidate is 97,152 bytes too
    large for the live allocation. Before upgrade, execute a separately reviewed
    Squads-CPI `ExtendProgramChecked`, wait for a later slot, and rerun the full

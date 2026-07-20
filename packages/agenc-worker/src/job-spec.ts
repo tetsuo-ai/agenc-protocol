@@ -184,7 +184,7 @@ function hostnameWithoutBrackets(hostname: string): string {
 function validateFetchUrl(url: URL): void {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new JobSpecError(
-      `refusing job-spec URI scheme ${url.protocol}// — only public http(s) is fetched`,
+      `refusing job-spec URI scheme ${url.protocol.slice(0, -1)} — only public http(s) is fetched`,
     );
   }
   if (url.username !== "" || url.password !== "") {
@@ -437,23 +437,23 @@ function validateAgencJobSpecUri(
     url.hash !== ""
   ) {
     throw new JobSpecError(
-      `task ${task}: malformed agenc:// job-spec URI — credentials, ports, query, and fragment are forbidden`,
+      `task ${task}: malformed AgenC job-spec URI — credentials, ports, query, and fragment are forbidden`,
     );
   }
   if (url.hostname !== "job-spec") {
     throw new JobSpecError(
-      `task ${task}: malformed agenc:// job-spec URI — expected host job-spec`,
+      `task ${task}: malformed AgenC job-spec URI — expected host job-spec`,
     );
   }
   const match = /^\/sha256\/([0-9a-f]{64})$/.exec(url.pathname);
   if (match === null) {
     throw new JobSpecError(
-      `task ${task}: malformed agenc:// job-spec URI — expected /sha256/<64 lowercase hex>`,
+      `task ${task}: malformed AgenC job-spec URI — expected /sha256/<64 lowercase hex>`,
     );
   }
   if (match[1] !== expectedHashHex) {
     throw new JobSpecError(
-      `task ${task}: agenc:// URI hash does not match the on-chain commitment ` +
+      `task ${task}: AgenC URI hash does not match the on-chain commitment ` +
         `(expected ${expectedHashHex}, got ${match[1]})`,
     );
   }
@@ -583,7 +583,7 @@ export async function fetchAndVerifyJobSpec(options: {
     validateAgencJobSpecUri(task, url, hashHex(jobSpecHash));
     if (options.resolveAgencUri === undefined) {
       throw new JobSpecError(
-        `task ${task}: no trusted agenc:// resolver is configured; refusing to claim`,
+        `task ${task}: no trusted AgenC URI resolver is configured; refusing to claim`,
       );
     }
     try {
@@ -591,7 +591,7 @@ export async function fetchAndVerifyJobSpec(options: {
     } catch (error) {
       if (error instanceof JobSpecError) throw error;
       throw new JobSpecError(
-        `task ${task}: agenc:// job-spec resolution failed: ${(error as Error).message}`,
+        `task ${task}: AgenC URI job-spec resolution failed: ${(error as Error).message}`,
       );
     }
   } else if (url.protocol === "http:" || url.protocol === "https:") {
@@ -609,8 +609,8 @@ export async function fetchAndVerifyJobSpec(options: {
     }
   } else {
     throw new JobSpecError(
-      `task ${task}: refusing job-spec URI scheme ${url.protocol}// — only public http(s) ` +
-        `or resolver-backed agenc:// is supported`,
+      `task ${task}: refusing job-spec URI scheme ${url.protocol.slice(0, -1)} — only public http(s) ` +
+        `or a resolver-backed AgenC URI is supported`,
     );
   }
 

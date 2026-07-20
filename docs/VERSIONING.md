@@ -83,6 +83,9 @@ program cutover:
 | `@tetsuo-ai/agenc-cli` / `agenc-cli` | **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`; scoped package and alias ship together |
 | `@tetsuo-ai/store-core` / `create-agenc-store` | **0.6.1** | widens the SDK/React peers and scaffolds only the revision-5 client set |
 
+Every revision-5 package requires Node **22.23.1 or newer**. Node 20 is EOL and
+is intentionally outside the new release train's support contract.
+
 The `agenc init` and `agenc promote` code in the unreleased CLI intentionally
 knows this candidate set so a source checkout does not reject its own generated
 pins. That is candidate compatibility, not a claim that those versions are

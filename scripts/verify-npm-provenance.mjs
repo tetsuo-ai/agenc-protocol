@@ -31,9 +31,14 @@ function packagePurl(name, version) {
 }
 
 function attestationUrl(name, version) {
-  const encodedName = name.startsWith("@")
-    ? `@${name.slice(1).replace("/", "%2f")}`
-    : name;
+  let encodedName = name;
+  if (name.startsWith("@")) {
+    const separator = name.indexOf("/");
+    if (separator <= 1 || name.indexOf("/", separator + 1) !== -1) {
+      fail("scoped npm package name must contain exactly one scope separator");
+    }
+    encodedName = `${name.slice(0, separator)}%2f${name.slice(separator + 1)}`;
+  }
   return `${NPM_REGISTRY}-/npm/v1/attestations/${encodedName}@${version}`;
 }
 

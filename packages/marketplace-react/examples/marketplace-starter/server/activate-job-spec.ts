@@ -291,11 +291,11 @@ export function createActivateJobSpecHandler({
       ) {
         return jsonResponse({ error: "Canonical job spec is too large." }, 413);
       }
-    } catch (cause) {
-      return jsonResponse(
-        { error: cause instanceof Error ? cause.message : String(cause) },
-        400,
-      );
+    } catch {
+      // Validation helpers can throw values supplied by dependencies. Never
+      // reflect an arbitrary exception (or its stack-bearing message) across
+      // this public HTTP boundary.
+      return jsonResponse({ error: "Task PDA or job spec is invalid." }, 400);
     }
 
     let stored: StoredJobSpec;

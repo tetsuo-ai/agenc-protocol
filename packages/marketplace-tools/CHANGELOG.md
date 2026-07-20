@@ -11,6 +11,9 @@ This candidate depends on `@tetsuo-ai/marketplace-sdk@^0.12.0` and belongs to
 the coordinated revision-5 package set. Published 0.4.0 remains current until
 that cutover.
 
+The revision-5 candidate raises the runtime floor to Node 22.23.1; Node 20 is
+EOL and unsupported.
+
 ### Minor Changes (breaking for consumers of the `a2a` projection shape)
 
 - Re-pin the AgentCard `a2a` projection from the retired `a2a/v0.2` shape to

@@ -268,7 +268,9 @@ function configFileUrl(
     url.password !== "" ||
     (!options.allowQuery && (url.search !== "" || url.hash !== ""))
   ) {
-    const protocols = options.protocols.join(" or ");
+    const protocols = options.protocols
+      .map((protocol) => protocol.slice(0, -1).toUpperCase())
+      .join(" or ");
     configFileFieldError(
       filePath,
       field,
@@ -672,7 +674,9 @@ function parseHttpUrl(
     (options.allowQuery === false && (url.search !== "" || url.hash !== ""))
   ) {
     throw new ConfigError(
-      `${field}: must be a ${protocols.join(" or ")} URL without credentials${
+      `${field}: must be an ${protocols
+        .map((protocol) => protocol.slice(0, -1).toUpperCase())
+        .join(" or ")} URL without credentials${
         options.allowQuery === false ? " without query or fragment" : ""
       }`,
     );

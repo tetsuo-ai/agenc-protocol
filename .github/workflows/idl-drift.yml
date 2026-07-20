@@ -81,6 +81,10 @@ jobs:
       # Version pinned to Anchor.toml [toolchain].anchor_version. No prebuilt
       # npm binary exists for 0.32.x (@coral-xyz/anchor-cli stops at 0.31.2),
       # so build from crates.io once and cache the binary.
+      - name: Install Anchor native build dependencies (cache miss only)
+        if: steps.cache-anchor.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev pkg-config
+
       - name: Install anchor CLI (cache miss only)
         if: steps.cache-anchor.outputs.cache-hit != 'true'
         run: cargo install anchor-cli@0.32.1 --locked --force

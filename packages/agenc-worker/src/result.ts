@@ -167,7 +167,7 @@ export async function uploadResult(options: {
   try {
     url = new URL(uploaderUrl);
   } catch {
-    throw new ResultUploadError("resultUploader must be an absolute https: URL");
+    throw new ResultUploadError("resultUploader must be an absolute HTTPS URL");
   }
   if (
     url.protocol !== "https:" ||
@@ -176,7 +176,7 @@ export async function uploadResult(options: {
     url.hostname === ""
   ) {
     throw new ResultUploadError(
-      "resultUploader must be a credential-free https: URL",
+      "resultUploader must be a credential-free HTTPS URL",
     );
   }
   let response: Response;

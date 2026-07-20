@@ -335,6 +335,40 @@ test("broad action or deployment patterns do not satisfy the allowlists", async 
   );
 });
 
+test("schema dialect validation rejects lookalike and credentialed hosts", async () => {
+  for (const maliciousDialect of [
+    "https://json-schema.org.attacker.example/draft/2020-12/schema",
+    "https://json-schema.org@attacker.example/draft/2020-12/schema",
+    "http://json-schema.org/draft/2020-12/schema",
+    "https://json-schema.org/draft/not-supported/schema",
+  ]) {
+    const fixtures = await readyFixtures();
+    fixtures.set(
+      "https://agenc.ag/schemas/agenc.agentCard.v1.json",
+      response(
+        {
+          $schema: maliciousDialect,
+          $id: "https://agenc.ag/schemas/agenc.agentCard.v1.json",
+          type: "object",
+        },
+        {
+          contentType: "application/schema+json",
+          headers: { "cache-control": "public, max-age=31536000, immutable" },
+        },
+      ),
+    );
+    const result = await auditEnterpriseReadiness({
+      repoRoot: REPO_ROOT,
+      fetchImpl: mockFetch(fixtures, []),
+      now: new Date("2026-07-19T00:00:00Z"),
+    });
+    assert.equal(
+      result.checks.find((check) => check.id === "host.schemas")?.ok,
+      false,
+    );
+  }
+});
+
 test("readiness binds local audited bytes to remote main and protects every release-train tag", async () => {
   const staleCommit = await readyFixtures();
   staleCommit.set(`${API_ROOT}/commits/main`, response({ sha: "34".repeat(20) }));

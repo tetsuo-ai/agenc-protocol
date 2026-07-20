@@ -134,7 +134,6 @@ export const DEFAULT_READINESS_CONFIG = Object.freeze({
     "https://agenc.tech/.well-known/security.txt",
   ]),
   requiredSecurityContacts: Object.freeze([
-    "mailto:security@agenc.tech",
     "https://github.com/tetsuo-ai/agenc-protocol/security/advisories/new",
   ]),
   schemaEndpoints: Object.freeze([
@@ -1155,6 +1154,10 @@ function hasSafeVersionedCache(cacheControl, etag) {
   );
 }
 
+function isCanonicalJsonSchemaDialect(value) {
+  return value === "https://json-schema.org/draft/2020-12/schema";
+}
+
 async function auditHosted({ config, fetchImpl, readFileImpl, repoRoot, now }) {
   const options = {
     fetchImpl,
@@ -1217,10 +1220,7 @@ async function auditHosted({ config, fetchImpl, readFileImpl, repoRoot, now }) {
     if (hosted.$id !== endpoint.url) {
       schemaFailures.push(`${endpoint.url}: $id is ${String(hosted.$id)}`);
     }
-    if (
-      typeof hosted.$schema !== "string" ||
-      !hosted.$schema.includes("json-schema.org")
-    ) {
+    if (!isCanonicalJsonSchemaDialect(hosted.$schema)) {
       schemaFailures.push(`${endpoint.url}: missing a JSON Schema dialect URI`);
     }
     if (endpoint.localPath) {

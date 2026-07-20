@@ -17,6 +17,7 @@ import {
   loadConfigFile,
   resolveWorkerConfig,
 } from "../src/config.js";
+import { formatDiagnosticError } from "../src/redact.js";
 
 const REQUIRED = { rpcUrl: "http://localhost:8899", walletPath: "/tmp/w.json" };
 const CREATOR_A = "11111111111111111111111111111111";
@@ -232,7 +233,7 @@ describe("resolveWorkerConfig", () => {
         ...REQUIRED,
         resultUploader: "http://plain.example",
       }),
-    ).toThrow(/https/);
+    ).toThrow(/HTTPS/);
     expect(
       resolveWorkerConfig({
         ...REQUIRED,
@@ -259,6 +260,18 @@ describe("resolveWorkerConfig", () => {
         .endpoint,
     ).toBe("https://agent.example");
     expect(resolveWorkerConfig(REQUIRED).endpoint).toBe(DEFAULT_ENDPOINT);
+  });
+
+  it("keeps protocol validation errors actionable after diagnostic redaction", () => {
+    let failure: unknown;
+    try {
+      resolveWorkerConfig({ ...REQUIRED, endpoint: "ftp://worker.example" });
+    } catch (error) {
+      failure = error;
+    }
+    expect(formatDiagnosticError(failure)).toContain(
+      "endpoint: must be an HTTP or HTTPS URL without credentials",
+    );
   });
 
   it("requires an HTTPS credential-free task-thread content host", () => {

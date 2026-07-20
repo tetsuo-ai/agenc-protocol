@@ -9,12 +9,17 @@
   `@tetsuo-ai/agenc-worker@^0.2.0`. `agenc promote` recognizes both the
   published revision-4-compatible lines and this explicitly unreleased candidate
   set; its install hint now points at SDK 0.12.0.
+- Raise the scoped CLI and unscoped alias runtime floor to Node 22.23.1; Node 20
+  is EOL and unsupported by the revision-5 package train.
 - The unscoped `agenc-cli` alias advances to 0.3.0 with the scoped package. The
   published 0.2.0 pair remains current until the coordinated cutover.
 - Make `@tetsuo-ai/agenc-cli/cli` a side-effect-free command API. The `agenc`
   executable now uses a dedicated non-exported bin wrapper, and the unscoped
   alias calls `runCliProcess()` explicitly, so importing an advertised module
   can never print usage or set an exit code.
+- Project names now pass through one bounded structural npm-name normalizer
+  with npm's 214-character output cap. Hostile or million-character directory
+  names no longer trigger chained regular-expression work during scaffolding.
 
 ## 0.2.0
 

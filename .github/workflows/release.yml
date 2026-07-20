@@ -290,6 +290,10 @@ jobs:
           path: ~/.cargo/bin/anchor
           key: anchor-cli-0.32.1-${{ runner.os }}
 
+      - name: Install Anchor native build dependencies (cache miss only)
+        if: startsWith(github.ref_name, 'protocol-v') && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev pkg-config
+
       - name: Install anchor CLI (cache miss only)
         if: startsWith(github.ref_name, 'protocol-v') && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
         run: cargo install anchor-cli@0.32.1 --locked --force
@@ -364,9 +368,17 @@ jobs:
           VERIFIABLE_BUILD_MANIFEST: verifiable-build-hashes.txt
         run: node scripts/release-policy.mjs cutover
 
+      # Lifecycle stdout is not JSON, even with `npm pack --json --silent`.
+      # Run the reviewed prepack explicitly, then suppress lifecycle execution
+      # during the JSON-producing pack so every downstream parser receives one
+      # uncontaminated npm record.
+      - name: Run reviewed package prepack lifecycle
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: npm run prepack --if-present
+
       - name: Build reviewed npm tarball
         working-directory: ${{ steps.pkg.outputs.dir }}
-        run: npm pack --json > "${RUNNER_TEMP}/package-pack.json"
+        run: npm pack --ignore-scripts --json > "${RUNNER_TEMP}/package-pack.json"
 
       - name: Smoke the exact reviewed tarball surface
         env:

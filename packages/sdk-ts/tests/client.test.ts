@@ -399,6 +399,22 @@ describe("blockhash-expiry-aware retry", () => {
     expect(isBlockhashExpiredError(failure)).toBe(true);
   });
 
+  it("classifies bounded blockhash-expiry text without regex backtracking", () => {
+    expect(isBlockhashExpiredError("BlockhashNotFound")).toBe(true);
+    expect(isBlockhashExpiredError("blockhash \t not\nfound")).toBe(true);
+    expect(isBlockhashExpiredError("blockheight exceeded")).toBe(true);
+    expect(isBlockhashExpiredError("blockhash lifetime expired")).toBe(true);
+    expect(
+      isBlockhashExpiredError("blockhash was valid\nanother request expired"),
+    ).toBe(false);
+    expect(
+      isBlockhashExpiredError(`${"x".repeat(40_000)}BlockhashNotFound`),
+    ).toBe(false);
+    expect(
+      isBlockhashExpiredError("blockhash".repeat(4_096)),
+    ).toBe(false);
+  });
+
   it("does not retry a bare-context BlockhashNotFound without -32002 provenance", async () => {
     let sendAttempts = 0;
     const thunk = <T>(value: T) => ({ send: async () => value });

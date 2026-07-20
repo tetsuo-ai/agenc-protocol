@@ -5,7 +5,7 @@
   "description": "Public protocol source of truth for AgenC",
   "packageManager": "npm@11.18.0",
   "engines": {
-    "node": ">=20.18.0",
+    "node": ">=22.23.1",
     "npm": "11.18.0"
   },
   "allowScripts": {

@@ -237,8 +237,63 @@ function extractSignature(error: unknown): string | null {
   return null;
 }
 
-const BLOCKHASH_EXPIRED_RE =
-  /blockhash\s*not\s*found|block\s*height\s*exceeded|blockhash[^\n]*expired/i;
+const MAX_CLASSIFIED_ERROR_TEXT_CHARS = 32_768;
+
+function isWhitespace(character: string): boolean {
+  return character.trim() === "";
+}
+
+/** Match fixed terms separated only by optional whitespace, in linear time. */
+function containsWhitespaceSeparatedTerms(
+  text: string,
+  terms: readonly string[],
+): boolean {
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const first = text.indexOf(terms[0]!, searchFrom);
+    if (first === -1) return false;
+    let cursor = first + terms[0]!.length;
+    let matched = true;
+    for (let index = 1; index < terms.length; index += 1) {
+      while (cursor < text.length && isWhitespace(text[cursor]!)) cursor += 1;
+      const term = terms[index]!;
+      if (!text.startsWith(term, cursor)) {
+        matched = false;
+        break;
+      }
+      cursor += term.length;
+    }
+    if (matched) return true;
+    searchFrom = first + 1;
+  }
+  return false;
+}
+
+function containsBlockhashExpiredText(value: string): boolean {
+  // Error strings are diagnostic input supplied by transports. Classification
+  // must stay bounded even if a hostile RPC returns a multi-megabyte message.
+  const text = value.slice(0, MAX_CLASSIFIED_ERROR_TEXT_CHARS).toLowerCase();
+  if (
+    containsWhitespaceSeparatedTerms(text, ["blockhash", "not", "found"]) ||
+    containsWhitespaceSeparatedTerms(text, ["block", "height", "exceeded"])
+  ) {
+    return true;
+  }
+
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const newline = text.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? text.length : newline;
+    const blockhash = text.indexOf("blockhash", lineStart);
+    if (blockhash !== -1 && blockhash < lineEnd) {
+      const expired = text.indexOf("expired", blockhash + "blockhash".length);
+      if (expired !== -1 && expired < lineEnd) return true;
+    }
+    if (newline === -1) break;
+    lineStart = newline + 1;
+  }
+  return false;
+}
 
 /**
  * Classify whether a failure means the transaction's blockhash lifetime
@@ -268,9 +323,11 @@ export function isBlockhashExpiredError(error: unknown): boolean {
     // Older/custom Kit RPC adapters may preserve the raw preflight `err`
     // inside context instead of converting it to a SolanaError `cause`.
     if (carrier.context?.err === "BlockhashNotFound") return true;
-    if (typeof link === "string" && BLOCKHASH_EXPIRED_RE.test(link)) return true;
+    if (typeof link === "string" && containsBlockhashExpiredText(link)) {
+      return true;
+    }
     const message = (link as { message?: unknown }).message;
-    if (typeof message === "string" && BLOCKHASH_EXPIRED_RE.test(message)) {
+    if (typeof message === "string" && containsBlockhashExpiredText(message)) {
       return true;
     }
   }

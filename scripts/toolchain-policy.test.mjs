@@ -5,7 +5,7 @@ import { parse } from "yaml";
 
 const ROOT = new URL("../", import.meta.url);
 const RELEASE_NODE = "24.18.0";
-const MINIMUM_NODE = "20.18.0";
+const MINIMUM_NODE = "22.23.1";
 const RELEASE_RUST = "1.85.0";
 const PROGRAM_MSRV = "1.82.0";
 

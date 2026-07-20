@@ -1,23 +1,6 @@
-# AgenC protocol security contact — INACTIVE TEMPLATE
-#
-# DO NOT DEPLOY THIS FILE AS RFC 9116 METADATA. As verified 2026-07-18,
-# security@agenc.tech is not yet a confirmed mailbox and GitHub Private
-# Vulnerability Reporting is disabled for this repository. Advertising either
-# as an active Contact would misdirect embargoed vulnerability reports.
-#
-# Before activation, create and test at least one private intake channel, enable
-# the matching Contact line, set an Expires date no more than one year out, serve
-# the file over HTTPS at its Canonical URL, and verify the deployed response.
-# Until then this intentionally has no active Contact and is not RFC 9116-valid.
-
-# Inactive candidates — uncomment only after an end-to-end private-report test:
-# Contact: mailto:security@agenc.tech
-# Contact: https://github.com/tetsuo-ai/agenc-protocol/security/advisories/new
-# Expires: <RFC3339 timestamp no more than one year out>
-# Preferred-Languages: en
-# Canonical: https://agenc.tech/.well-known/security.txt
-# Policy: https://github.com/tetsuo-ai/agenc-protocol/blob/main/SECURITY.md
-
-# Optional, add when published:
-# Encryption: https://agenc.tech/.well-known/pgp-key.txt
-# Acknowledgments: https://agenc.tech/security/acknowledgments
+Contact: https://github.com/tetsuo-ai/agenc-protocol/security/advisories/new
+Expires: 2027-07-18T23:59:59Z
+Preferred-Languages: en
+Canonical: https://agenc.ag/.well-known/security.txt
+Canonical: https://agenc.tech/.well-known/security.txt
+Policy: https://github.com/tetsuo-ai/agenc-protocol/security/policy

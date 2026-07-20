@@ -113,7 +113,7 @@ test("activate job-spec handler rejects invalid task PDA and malformed spec", as
     }),
   );
   assert.equal(badTask.status, 400);
-  assert.match((await badTask.json()).error, /taskPda/);
+  assert.equal((await badTask.json()).error, "Task PDA or job spec is invalid.");
 
   const base58LookingButWrongWidth = await handler(
     request({
@@ -126,9 +126,9 @@ test("activate job-spec handler rejects invalid task PDA and malformed spec", as
     }),
   );
   assert.equal(base58LookingButWrongWidth.status, 400);
-  assert.match(
+  assert.equal(
     (await base58LookingButWrongWidth.json()).error,
-    /exact 32-byte Solana address/,
+    "Task PDA or job spec is invalid.",
   );
 
   const badSpec = await handler(
@@ -142,7 +142,7 @@ test("activate job-spec handler rejects invalid task PDA and malformed spec", as
     }),
   );
   assert.equal(badSpec.status, 400);
-  assert.match((await badSpec.json()).error, /deliverables/);
+  assert.equal((await badSpec.json()).error, "Task PDA or job spec is invalid.");
 });
 
 test("activate job-spec handler blocks a non-attested moderation result", async () => {

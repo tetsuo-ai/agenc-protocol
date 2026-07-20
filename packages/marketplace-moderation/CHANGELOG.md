@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.2.0 (unreleased candidate)
 
+### Changed
+
+- Raise the runtime floor to Node 22.23.1; Node 20 is EOL and unsupported by the
+  revision-5 package train.
+
 ### Fixed
 
 - Reject non-finite programmatic values during canonicalization so `NaN` and

@@ -472,7 +472,7 @@ describe("e2e: one worker tick against the real program", () => {
       events.some(
         (e) =>
           e.event === "task.job-spec-rejected" &&
-          String(e.reason).includes("no trusted agenc:// resolver"),
+          String(e.reason).includes("no trusted AgenC URI resolver"),
       ),
     ).toBe(true);
     expect(httpFetcherCalled).toBe(false);

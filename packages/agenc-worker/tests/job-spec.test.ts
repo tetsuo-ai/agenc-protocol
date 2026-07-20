@@ -15,6 +15,7 @@ import {
   isPublicIpAddress,
   JobSpecError,
 } from "../src/job-spec.js";
+import { formatDiagnosticError } from "../src/redact.js";
 
 const TASK = address("F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc");
 const CREATOR = address("7Y9dRMi8ZtyDjLdSpzUCsxDgHooZTfp3RyYs2eZWmL39");
@@ -198,7 +199,7 @@ describe("fetchAndVerifyJobSpec", () => {
           return fixture.body;
         },
       }),
-    ).rejects.toThrow(/no trusted agenc:\/\/ resolver/);
+    ).rejects.toThrow(/no trusted AgenC URI resolver/);
     expect(fetched).toBe(false);
   });
 
@@ -263,13 +264,20 @@ describe("fetchAndVerifyJobSpec", () => {
     "refuses non-http(s) scheme %s",
     async (uri) => {
       const { pda, data } = await jobSpecAccount({ jobSpecUri: uri });
-      await expect(
-        fetchAndVerifyJobSpec({
+      let failure: unknown;
+      try {
+        await fetchAndVerifyJobSpec({
           task: TASK,
           readAccount: readerFor(pda, data),
           fetchUri: async () => new Uint8Array(),
-        }),
-      ).rejects.toBeInstanceOf(JobSpecError);
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(JobSpecError);
+      expect(formatDiagnosticError(failure)).toContain(
+        "only public http(s) or a resolver-backed AgenC URI is supported",
+      );
     },
   );
 

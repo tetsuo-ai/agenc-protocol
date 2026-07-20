@@ -4,6 +4,8 @@
 
 ### Patch Changes
 
+- Raise the runtime floor to Node 22.23.1 for the coordinated revision-5 train;
+  Node 20 is EOL.
 - The optional `./tailwind-preset` export is now a dependency-free Tailwind v3
   plugin descriptor. Importing the React package's advertised preset no longer
   fails in clean consumers that do not otherwise install Tailwind; pinned

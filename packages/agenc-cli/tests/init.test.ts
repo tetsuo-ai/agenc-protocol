@@ -28,10 +28,23 @@ import {
   checkoutCoreModule,
   checkoutPolicyModule,
   jobSpecStoreModule,
+  npmPackageName,
   pagesCheckoutPage,
   walletFileModule,
   workerLoopMjs,
 } from "../src/templates.js";
+
+describe("npmPackageName", () => {
+  it("normalizes hostile and very long names with bounded output", () => {
+    expect(npmPackageName("  ...My Package///Name---  ")).toBe("my-package-name");
+    expect(npmPackageName("---.___")).toBe("agenc-project");
+    expect(npmPackageName(`${"a".repeat(213)} ! b`)).toBe(`${"a".repeat(213)}-`);
+    expect(npmPackageName(`${"a".repeat(213)}${"-".repeat(50)}`)).toBe(
+      "a".repeat(213),
+    );
+    expect(npmPackageName("x".repeat(1_000_000))).toHaveLength(214);
+  });
+});
 
 function nextAppDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "agenc-cli-init-"));
