@@ -235,7 +235,19 @@ Required choreography:
 2. In a separately reviewed Squads transaction, invoke loader
    `ExtendProgramChecked` through Squads CPI for at least 97,152 bytes and fund
    the required rent top-up. The Squads vault PDA must sign through the Squads
-   program; it cannot be provided to `solana program deploy` as a keypair.
+   program; it cannot be provided to `solana program deploy` as a keypair. Use
+   `node scripts/squads-extend-program.mjs` to preview the pinned message. Its
+   SHA-256 must be
+   `12c64e5b1476e6eec9d98c9f4743e6cbcf1a4b14366d1ab6741e246fc156f69b`.
+   Create the proposal only with `--execute --keypair <member-keypair>` after
+   funding the vault and rechecking the preview; the wrapper passes arguments
+   directly to `squads-multisig-cli` and that CLI asks for an interactive
+   confirmation. Despite the generic flag name, this creates and activates the
+   proposal but does **not** approve quorum or execute the extension. Record the
+   transaction index, obtain the second member's approval, then execute that
+   exact proposal as a separate reviewed action. Use a credential-free HTTPS
+   RPC URL for this wrapper: the third-party Squads CLI prints its RPC URL
+   verbatim, and the wrapper rejects userinfo/path/query credential shapes.
 3. Confirm the extension on-chain and wait for a later slot. Extension writes
    `ProgramData.slot`; a same-slot `Upgrade` is rejected.
 4. Re-run the complete preflight against the extended account. Do not bypass
@@ -250,15 +262,16 @@ extension or the upgrade.
 
 ---
 
-## 7. Status
+## 7. Upgrade-authority migration status (completed)
 
-- [x] Current single-key authority documented & verified on-chain (`HcecpKX…GLqh`).
+- [x] Former single-key authority documented and verified before transfer (`HcecpKX…GLqh`; historical evidence).
 - [x] Risk articulated; target custody (Squads/equivalent multisig) stated here and in `SECURITY.md` §5.3.
 - [x] Runbook + safety checks written.
 - [x] **Multisig created** 2026-07-03 — Squads v4 2-of-3, vault `Cj9dWtov…` (members `HcecpKX…`/`3HvRz5t…`/`6CpyZBm…`).
 - [~] Devnet rehearsal — public devnet faucet was down; substituted an equivalent on **mainnet** pre-transfer proof: the 2-of-3 executed a no-op config transaction (propose→2 votes→execute), proving M-of-N signing works before the transfer.
 - [x] **Mainnet `set-upgrade-authority` executed** 2026-07-03 (destination triple-verified; no `--final`).
-- [x] **Post-migration verification** — `solana program show` reports the vault as `Authority:`. Docs updated (this file + the member-folder README). Still TODO: `SECURITY.md` §5.3 wording + swap one member to a Ledger.
+- [x] **Post-migration verification** — `solana program show` reports the vault as `Authority:`. Docs and `SECURITY.md` §5.3 are updated. Remaining custody hardening: swap at least one member to a Ledger or independently controlled signer.
 
-This is **done** only when `solana program show` reports the multisig as the
-upgrade authority on mainnet and the docs above are updated to match.
+The authority migration is complete: `solana program show` reports the Squads
+vault as the mainnet upgrade authority and the custody docs match. The separate
+revision-5 capacity ceremony in §6 remains pending until executed and verified.

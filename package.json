@@ -50,7 +50,7 @@
     "canary:test": "cargo test --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features --features mainnet-canary",
     "check:stack": "node scripts/check-stack-frames.mjs",
     "audit:tests-integration": "node scripts/audit-tests-integration.mjs",
-    "test:deployment-scripts": "node --test scripts/preflight-*.test.mjs scripts/anchor-idl-publication.test.mjs scripts/env-flags.test.mjs scripts/mainnet-release-boundary.test.mjs scripts/mainnet-init-and-stamp-boundary.test.mjs scripts/mainnet-migrate-sweep-boundary.test.mjs"
+    "test:deployment-scripts": "node --test scripts/preflight-*.test.mjs scripts/anchor-idl-publication.test.mjs scripts/env-flags.test.mjs scripts/mainnet-release-boundary.test.mjs scripts/mainnet-init-and-stamp-boundary.test.mjs scripts/mainnet-migrate-sweep-boundary.test.mjs scripts/squads-extend-program.test.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",

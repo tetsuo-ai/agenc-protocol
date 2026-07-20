@@ -174,7 +174,7 @@ cd packages/sdk-ts && npm run sdk:drift && npx tsc --noEmit && npm test && npm r
 model/property tests; **408** compiled-program integrations (**399** pass and
 **9** explicit canary-profile skips), plus the separate canary compiled suite at
 **11/11**; SDK **656 pass + one skip**; all npm workspaces
-**1,429 pass + two skips**; deployment/preflight **231 pass**; repository policy
+**1,432 pass + two skips**; deployment/preflight **239 pass**; repository policy
 scripts **346 pass**. Exact commands and
 artifact hashes are in [docs/VALIDATION.md](docs/VALIDATION.md). Audit status:
 the batch 1–3 internal audits closed with 0 open findings **at that time**
@@ -223,9 +223,10 @@ Before any mainnet deploy that changes the deployed surface or account layout:
    large for the live allocation. Before upgrade, execute a separately reviewed
    Squads-CPI `ExtendProgramChecked`, wait for a later slot, and rerun the full
    capacity/rent/authority preflight. Never let deploy auto-extend.
-5. **The irreversible task-layout migration choreography** — binary-first → migrate all
-   live tasks → version-bump last; multisig/upgrade-authority gated. (The 2026-06-11
-   upgrade migrated 169 tasks.)
+5. **Migration verification and revision stamp.** Run the canonical idempotent sweep after
+   deployment and stamp the new surface last. The 2026-06-11 upgrade's 169-Task migration
+   is historical; revision 5 expects the already-migrated 351-byte config and 466-byte
+   Tasks and must stop on any unexpected layout drift.
 6. **SDK/client updates** for any new required accounts.
 
 ## Security & trust

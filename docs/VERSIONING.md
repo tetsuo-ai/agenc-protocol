@@ -81,6 +81,7 @@ program cutover:
 | `@tetsuo-ai/marketplace-moderation` | **0.2.0** | strict JSON canonicalization plus capability-gated complete semantic-v2 payloads; 0.1.0 remains the immutable legacy-v1 release |
 | `@tetsuo-ai/agenc-worker` | **0.2.0** | depends on SDK `^0.12.0`; security-hardening release |
 | `@tetsuo-ai/agenc-cli` / `agenc-cli` | **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`; scoped package and alias ship together |
+| `@tetsuo-ai/store-core` / `create-agenc-store` | **0.6.1** | widens the SDK/React peers and scaffolds only the revision-5 client set |
 
 The `agenc init` and `agenc promote` code in the unreleased CLI intentionally
 knows this candidate set so a source checkout does not reject its own generated
@@ -97,6 +98,7 @@ already on npm or that revision 5 is live.
 | 2026-07-05 | **Batch-2 store + heartbeat** | 90 → **94 ix**, `surface_revision = 2` | additive (no flag-day gate change) | none (old pins keep working) | sdk **0.9.0** additive facade |
 | 2026-07-05 | **Batch-3 contest** ([`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md)) | 94 → **96 ix**, `surface_revision = 3` | additive optional accounts | none | sdk **0.10.0** / **0.10.1** additive facade |
 | 2026-07-09 | **Batch-4 goods** ([`design/batch-4-goods.md`](./design/batch-4-goods.md)) | 96 → **99 ix**, `surface_revision = 4` | goods handlers require rev ≥ 4 | none for pre-goods flows; goods needs sdk **≥ 0.11.0** | sdk **0.11.0**, protocol **0.3.0** |
+| pending cutover | **Revision-5 audit hardening** | 99 → **98 production ix**, `surface_revision = 5` | coordinated account/argument hardening across hire, claim, settlement, cancellation, goods, staking, skills, and governance paths | sdk **≤0.11.x** and the corresponding old first-party clients fail closed on changed writes | flag-day release: protocol **0.4.0**, sdk **0.12.0**, react **0.4.2**, tools/MCP **0.5.0**, moderation/worker **0.2.0**, CLI **0.3.0**, store-core/create **0.6.1**; every first-party writer is staged before the paused cutover |
 
 The 2026-06-11 row is the motivating failure: a flag-day wire change shipped with
 no deprecation window while the old sdk pin was still being scaffolded by public

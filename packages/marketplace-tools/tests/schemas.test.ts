@@ -107,6 +107,7 @@ const VALID_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
     worker: A_PROVIDER,
     workerAuthority: A_AUTHORITY,
     jobSpecHash: HEX32,
+    legacyListing: A_LISTING_PDA,
     parentTask: A_LISTING_PDA,
   },
   prepare_submit: {
@@ -463,6 +464,12 @@ describe("tool registry", () => {
     );
     expect(getTool("prepare_claim")!.inputSchema.required).toContain(
       "jobSpecHash",
+    );
+    expect(getTool("prepare_claim")!.inputSchema.properties).toHaveProperty(
+      "legacyListing",
+    );
+    expect(getTool("prepare_claim")!.inputSchema.required).not.toContain(
+      "legacyListing",
     );
     expect(getTool("prepare_claim")!.inputSchema.properties).toHaveProperty(
       "parentTask",

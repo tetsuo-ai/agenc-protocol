@@ -40,6 +40,11 @@ current npm release while mainnet is on revision 4.
   as well as on timeout/overflow.
 - Timer templates no longer run mutable `npx` installs. The systemd unit uses
   an absolute preinstalled binary and adds host hardening directives.
+- Claims created from a service listing are now provider-bound. The worker
+  runtime reads the task's `HireRecord` before building a claim and, for the
+  live revision-4 records that predate the immutable provider field, supplies
+  the exact stored listing as migration evidence. This keeps existing open
+  hires claimable without allowing a different registered agent to take them.
 
 ### Breaking Changes
 

@@ -551,6 +551,24 @@ describe("prepare_claim handler", () => {
     });
   });
 
+  it("places a pre-revision-5 hire's stored listing in the legacy slot", async () => {
+    const ix = (await getTool("prepare_claim")!.handler(
+      {
+        task: A_TASK_PDA,
+        worker: A_PROVIDER,
+        workerAuthority: A_AUTHORITY,
+        jobSpecHash: HEX32,
+        legacyListing: A_LISTING_PDA,
+      },
+      ctx,
+    )) as UnsignedInstructionView;
+
+    expect(ix.accounts[3]).toEqual({
+      address: A_LISTING_PDA,
+      role: { writable: false, signer: false },
+    });
+  });
+
   it("rejects an invalid parentTask address before building", async () => {
     await expect(
       getTool("prepare_claim")!.handler(

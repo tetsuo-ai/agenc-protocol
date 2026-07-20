@@ -62,8 +62,8 @@ Current candidate evidence, measured from the commands and built artifacts on
 | Model/property suite             | 77 tests                                                                                                                           |
 | Compiled-program litesvm         | 408 total: 399 pass, 9 explicit canary-profile skips; separate canary run 11 pass                                                  |
 | SDK                              | 657 total: 656 pass, one environment-gated skip                                                                                    |
-| All npm workspaces               | 1,431 total: 1,429 pass, two environment-gated skips                                                                               |
-| Deployment/preflight scripts     | 231 pass                                                                                                                           |
+| All npm workspaces               | 1,434 total: 1,432 pass, two environment-gated skips                                                                               |
+| Deployment/preflight scripts     | 239 pass                                                                                                                           |
 | Repository policy scripts        | 346 pass                                                                                                                           |
 | Production SBF                   | 2,280,376 bytes; SHA-256 `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`                                        |
 | Candidate IDL                    | 98 instructions / 43 accounts / 99 events / 393 errors; SHA-256 `5ae986603626d0dfe9024c7dc180f184931622c350c0c32b4abf920a0d918f1b` |

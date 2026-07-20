@@ -17,7 +17,7 @@
       "name": "@tetsuo-ai/marketplace-sdk",
       "directory": "packages/sdk-ts",
       "expectedVersion": "0.12.0",
-      "expectedIntegrity": "sha512-+TGUJQkV+ObET0dZQTWAjC/XczBMtc8cQ6RzpFuM5/MjVpTKeFVX3B8c10lfide4Caqq0uJyG3QvetBbr62e1g==",
+      "expectedIntegrity": "sha512-1pNzSA9DKCNp7IQrd7Ktvn2Gh3aTRTZEPpKdwM33/NZKcVinZgjff5oM4uPpavd3QFbvbUng9zBswLcXBnSuPw==",
       "requires": ["protocol"]
     },
     {
@@ -44,7 +44,7 @@
       "name": "@tetsuo-ai/marketplace-tools",
       "directory": "packages/marketplace-tools",
       "expectedVersion": "0.5.0",
-      "expectedIntegrity": "sha512-A1XFCMywLoMGn71v5/JGFsaaRVyo41EDZ6gRJkj1RHRHLsLO3qwy03rAuNTiqAd3EabNt8D+0yVibeppY6Yhpw==",
+      "expectedIntegrity": "sha512-ChGFCYpbq+nGEG+Qbfj0krWUdQ+wfacwV2F5Qa+ZxNlXKPtbhoR7a7EHZhZ01wNi4CyeObSq4Of3IHMo+NLarQ==",
       "requires": ["sdk"]
     },
     {
@@ -53,7 +53,7 @@
       "name": "@tetsuo-ai/agenc-worker",
       "directory": "packages/agenc-worker",
       "expectedVersion": "0.2.0",
-      "expectedIntegrity": "sha512-mCTPhKSPklRykDTe9VR2hu076rysapqFctOEnxx+FHXyEpLHRzsHcYaF+PX7QY/L9PP9kjmnRXxeHD4nLE2AJQ==",
+      "expectedIntegrity": "sha512-AdErqtVgJMJNF5OVQxsRslI43UnsymkM0yNLlJQgiIwSvvnvcJhmXZNaOebGB+1njxM2FKYE59S4qGDsBKKu6Q==",
       "requires": ["sdk"]
     },
     {

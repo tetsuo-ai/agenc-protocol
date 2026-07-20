@@ -10,6 +10,7 @@
 // writes, URI fetches, the executor) is injected through the context so the
 // loop is testable end-to-end (litesvm) without network access.
 import {
+  address,
   unwrapOption,
   type Address,
   type TransactionSigner,
@@ -18,9 +19,11 @@ import {
   AgencError,
   findAgentPda,
   findClaimPda,
+  findHireRecordPda,
   findProtocolConfigPda,
   findTaskSubmissionPda,
   getAgentRegistrationDecoder,
+  getHireRecordDecoder,
   getProtocolConfigDecoder,
   getTaskClaimDecoder,
   getTaskSubmissionDecoder,
@@ -153,6 +156,7 @@ export type WorkerAgent = {
 };
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
+const DEFAULT_ADDRESS = address("11111111111111111111111111111111");
 
 /** Exact program account allocations, compile-time pinned in state.rs. */
 export const AGENT_ACCOUNT_SIZE = 566;
@@ -602,6 +606,30 @@ async function readTask(
 ): Promise<Task | null> {
   const data = await ctx.readAccount(task);
   return data === null ? null : getTaskDecoder().decode(data);
+}
+
+/**
+ * Revision-5 claims carry the original listing only for pre-upgrade hire
+ * records whose former reserved provider field is still zero. New hire
+ * records bind the designated provider directly and direct tasks have no hire
+ * record, so neither case needs an extra account.
+ */
+async function legacyListingForClaim(
+  ctx: WorkerContext,
+  task: Address,
+): Promise<Address | null> {
+  const [hireRecordPda] = await findHireRecordPda({ task });
+  const data = await ctx.readAccount(hireRecordPda);
+  if (data === null) return null;
+  const hireRecord = getHireRecordDecoder().decode(data);
+  if (hireRecord.task !== task) {
+    throw new Error(
+      `canonical hire record ${hireRecordPda} has inconsistent task field`,
+    );
+  }
+  return hireRecord.designatedProvider === DEFAULT_ADDRESS
+    ? hireRecord.listing
+    : null;
 }
 
 /** Read and validate this worker's canonical claim account. */
@@ -1183,6 +1211,12 @@ export async function processCandidate(
   // submission.
   await assertFreshClaimFunding(ctx);
 
+  // Resolve every read-only account needed to build the claim before opening
+  // the write-ahead boundary. A read/decode failure cannot have broadcast a
+  // transaction and therefore must never leave a phase=claiming marker that
+  // startup treats as an ambiguous send.
+  const legacyListing = await legacyListingForClaim(ctx, task);
+
   const claimStartedAt = new Date().toISOString();
   // Write-ahead marker: if the process dies anywhere after this point, startup
   // reconciles the canonical claim PDA before considering another task.
@@ -1205,6 +1239,7 @@ export async function processCandidate(
         // content we just fetched and verified.
         jobSpecHash: verified.jobSpecHash,
         ...(parentTask !== null ? { parentTask } : {}),
+        ...(legacyListing !== null ? { legacyListing } : {}),
       },
       { maxRetries: 0 },
     );

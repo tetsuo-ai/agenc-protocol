@@ -129,6 +129,7 @@ pins the spec and activates discovery; transaction-time gates remain authoritati
 ```ts
 const hireIx = await facade.hireFromListingHumanless({
   listing,
+  providerAgent,
   creator: buyerAuthority,
   taskId,
   expectedPrice: 1_000_000n,
@@ -183,8 +184,13 @@ const claimIx = await facade.claimTaskWithJobSpec({
   task,
   worker: workerAgent,
   authority: workerAuthority,
+  jobSpecHash,
 });
 ```
+
+For a listing hire created before revision 5, decode its canonical `HireRecord`.
+If `designatedProvider` is the system-program address, also pass the record's
+immutable `listing` as `legacyListing`. Revision-5 hires and direct tasks omit it.
 
 For any dependent task, also pass its exact parent as `parentTask`. The SDK
 appends that account read-only, and the program refuses to assign the child
@@ -330,6 +336,7 @@ await market.moderator.attestListing(listing, listingSpecHash);
 const taskId = new Uint8Array(32).fill(8);
 await buyerClient.hireFromListingHumanless({
   listing,
+  providerAgent,
   creator: buyer,
   taskId,
   expectedPrice: price,
@@ -359,6 +366,7 @@ await providerClient.claimTaskWithJobSpec({
   task,
   worker: providerAgent,
   authority: provider,
+  jobSpecHash,
 });
 const balanceBefore = market.svm.getBalance(provider.address) ?? 0n;
 await providerClient.submitTaskResult({

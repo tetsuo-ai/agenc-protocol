@@ -8,10 +8,12 @@ import {
   DependencyType,
   findAgentPda,
   findClaimPda,
+  findHireRecordPda,
   findTaskJobSpecPda,
   findTaskSubmissionPda,
   getTaskClaimEncoder,
   getAgentRegistrationEncoder,
+  getHireRecordEncoder,
   getTaskEncoder,
   getTaskJobSpecEncoder,
   getTaskSubmissionEncoder,
@@ -54,6 +56,9 @@ const CREATOR = address("7Y9dRMi8ZtyDjLdSpzUCsxDgHooZTfp3RyYs2eZWmL39");
 const WORKER = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
 const WALLET = address("E5NfNsr4SxWf8wJtVH5m7WpujYzxT6f17CFqN6c51dWm");
 const PARENT = address("11111111111111111111111111111111");
+const LEGACY_LISTING = address(
+  "SysvarRent111111111111111111111111111111111",
+);
 const REWARD = 4_200_000n;
 const SPEC_URI = "https://specs.example/task.json";
 
@@ -234,6 +239,147 @@ const agent: WorkerAgent = {
 };
 
 describe("transaction-boundary recovery", () => {
+  it("supplies the stored listing when claiming a pre-revision-5 hire", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-legacy-hire-"),
+    );
+    const payload = { title: "legacy hire", summary: "preserve existing work" };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const [hireRecordPda] = await findHireRecordPda({ task: TASK });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Open)],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+      [
+        hireRecordPda,
+        new Uint8Array(
+          getHireRecordEncoder().encode({
+            task: TASK,
+            listing: LEGACY_LISTING,
+            operator: PARENT,
+            operatorFeeBps: 0,
+            bump: 247,
+            designatedProvider: PARENT,
+            referrer: PARENT,
+            referrerFeeBps: 0,
+          }),
+        ),
+      ],
+    ]);
+    const claimTaskWithJobSpec = vi.fn(
+      async (_input: {
+        task: Address;
+        worker: Address;
+        jobSpecHash: Uint8Array;
+        legacyListing?: Address;
+      }) => {
+        throw new AgencError("stop after inspecting claim", { signature: null });
+      },
+    );
+    const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
+    ctx.fetchUri = async () => body;
+
+    await expect(
+      processCandidate(ctx, agent, {
+        task: TASK,
+        creator: CREATOR,
+        rewardAmount: REWARD,
+        rewardMint: null,
+        requiredCapabilities: 1n,
+        parentTask: PARENT,
+      }),
+    ).resolves.toMatchObject({ status: "claim-failed", task: TASK });
+    expect(claimTaskWithJobSpec).toHaveBeenCalledTimes(1);
+    expect(claimTaskWithJobSpec.mock.calls[0]?.[0]).toMatchObject({
+      task: TASK,
+      worker: WORKER,
+      legacyListing: LEGACY_LISTING,
+    });
+    expect(claimTaskWithJobSpec.mock.calls[0]?.[0].jobSpecHash).toEqual(
+      digest.bytes,
+    );
+  });
+
+  it("does not open the claim WAL when the legacy hire read fails before broadcast", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-legacy-hire-read-failure-"),
+    );
+    const payload = { title: "legacy hire", summary: "fail before broadcast" };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const [hireRecordPda] = await findHireRecordPda({ task: TASK });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Open)],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+      // A truncated canonical account exercises the decoder-failure boundary.
+      [hireRecordPda, new Uint8Array([1, 2, 3])],
+    ]);
+    const claimTaskWithJobSpec = vi.fn();
+    const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
+    ctx.fetchUri = async () => body;
+
+    await expect(
+      processCandidate(ctx, agent, {
+        task: TASK,
+        creator: CREATOR,
+        rewardAmount: REWARD,
+        rewardMint: null,
+        requiredCapabilities: 1n,
+        parentTask: PARENT,
+      }),
+    ).rejects.toThrow();
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(stateDir).openClaim).toBeNull();
+  });
+
   it("rejects SPL-reward candidates before reading content or claiming", async () => {
     const stateDir = mkdtempSync(
       path.join(tmpdir(), "agenc-worker-spl-reward-reject-"),

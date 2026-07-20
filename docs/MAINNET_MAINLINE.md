@@ -105,8 +105,17 @@ size for ProgramData capacity.
 Before the binary upgrade, a separate reviewed Squads proposal must execute
 loader `ExtendProgramChecked` for at least 97,152 additional bytes through
 Squads CPI; 97,152 is the exact minimum for this candidate. The vault PDA is the
-loader authority and cannot be supplied as a
-CLI keypair. Extension stamps the ProgramData slot, so the extension and
+loader authority and cannot be supplied as a CLI keypair. The pinned
+`scripts/squads-extend-program.mjs` builder derives the ProgramData PDA, checks
+the official Squads-program vault PDA from the reviewed multisig/index, checks
+the exact capacity arithmetic, and refuses any message whose independently
+compiled Squads serialization differs from SHA-256
+`12c64e5b1476e6eec9d98c9f4743e6cbcf1a4b14366d1ab6741e246fc156f69b`.
+Its `--execute` flag creates and activates that Squads proposal only; it does
+not approve quorum or execute the inner loader instruction. A second member
+must approve the recorded proposal and an authorized executor must execute it
+as separate, reviewed actions.
+Extension stamps the ProgramData slot, so the extension and
 `Upgrade` cannot execute in the same slot; wait for a later slot, then rerun the
 entire preflight. The rail pins Solana CLI 3.0.13, queries rent through the
 genesis-checked RPC, forces `--no-auto-extend`, and rejects pre/post capacity

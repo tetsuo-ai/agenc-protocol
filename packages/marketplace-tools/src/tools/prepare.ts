@@ -733,6 +733,7 @@ interface PrepareClaimArgs {
   worker: string;
   workerAuthority: string;
   jobSpecHash: string;
+  legacyListing?: string;
   parentTask?: string;
 }
 
@@ -758,6 +759,9 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
         "The task's non-zero pinned job-spec hash as 64 hex chars (BLOCK-gate binding).",
         true,
       ),
+      legacyListing: solanaAddress(
+        "For a pre-revision-5 listing hire only: the exact ServiceListing address stored in its HireRecord. Omit for direct tasks and revision-5 hires.",
+      ),
       parentTask: solanaAddress(
         "Canonical parent Task PDA for a dependent task. Omit only for an independent task; when present it is appended as remaining_accounts[0].",
       ),
@@ -770,6 +774,15 @@ const prepareClaim = defineTool<PrepareClaimArgs, UnsignedInstructionView>({
       worker: args.worker as Address,
       authority,
       jobSpecHash: hex32(args.jobSpecHash, "jobSpecHash", "prepare_claim"),
+      ...(args.legacyListing !== undefined
+        ? {
+            legacyListing: accountAddress(
+              args.legacyListing,
+              "legacyListing",
+              "prepare_claim",
+            ),
+          }
+        : {}),
       ...(args.parentTask !== undefined
         ? {
             parentTask: accountAddress(

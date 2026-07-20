@@ -109,28 +109,20 @@ program deploy/upgrade:
    - mainnet canary: `npm run canary:build && npm run canary:idl && npm run canary:check-idl`
      (the IDL surface must stay at exactly **25** instructions — `check-canary-idl.mjs`).
    - dev/devnet full: `anchor build` then `npm run artifacts:refresh && npm run artifacts:check`.
-2. Deploy the hash-approved binary, then run the **169-task + single-config migration
-   choreography** (binary-first → migrate all live accounts). `migrate_protocol` reallocs the
-   config; `migrate_task` reallocs the live tasks (169 at the 2026-06-11 mainnet
-   upgrade). Both are idempotent and multisig-gated.
+2. Deploy the hash-approved binary, then run the canonical migration **verification/sweep**.
+   `scripts/mainnet-upgrade.mjs` reads the live account sizes and runs only the idempotent
+   migrations that are actually required; it must never assume a historical account count.
+   Mainnet's `ProtocolConfig` is already 351 bytes and its Tasks are already 466 bytes, so
+   the pending revision-5 cutover is expected to verify those layouts without reallocating
+   them. Any newly discovered undersized account is a stop condition until the reviewed
+   sweep plan accounts for it.
 
-   **Precondition — `migrate_protocol` MUST be the FIRST post-deploy call.** Because
-   `ProtocolConfig` grew (349B → 351B) when `surface_revision` was appended, after the new
-   binary is deployed but BEFORE `migrate_protocol` runs, the single live config account is
-   still 349 bytes (this was the state during the 2026-06-11 upgrade). Every instruction
-   that takes a **typed** `Account<ProtocolConfig>` then
-   fails at Anchor account resolution with `AccountDidNotDeserialize` (borsh: "Unexpected
-   length of input") — it cannot deserialize a 349B buffer into the now-351B struct. So the
-   normal surface is effectively frozen until the config is grown. Run `migrate_protocol`
-   (the realloc-only path, `target_version == current_version == 1`) first to restore normal
-   operation, then sweep the tasks.
-
-   `migrate_protocol` and `migrate_task` are themselves **order-independent** between each
-   other: both take the config as a RAW `UncheckedAccount` and hand-decode it
-   size-tolerantly, so `migrate_task` succeeds against BOTH the 349B (pre-`migrate_protocol`)
-   and 351B (post) config. The natural "migrate the tasks, then the config" order is
-   therefore safe. The first-call constraint above is about restoring the rest of the live
-   surface (every typed-`Account<ProtocolConfig>` instruction), not about the migration pair.
+   **Historical context only:** the 2026-06-11 upgrade grew one 349-byte
+   `ProtocolConfig` and 169 Tasks. During that specific binary-first migration window,
+   `migrate_protocol` restored typed config reads and `migrate_task` grew each legacy Task.
+   Both paths remain idempotent and multisig-gated for recovery, but those historical
+   counts and ordering constraints are not instructions for revision 5 or every future
+   upgrade.
 3. Initialize/verify release singletons, then publish the on-chain IDL and fetch it
    back before advertising the revision. For the full mainnet surface, use
    `scripts/mainnet-upgrade.mjs`: it derives an ABI-complete docs-free projection

@@ -52,6 +52,10 @@ that cutover.
   with `UNSUPPORTED_TOKEN_PRICING` when supplied, matching the program's
   current SOL-only create-and-hire invariant instead of returning a guaranteed
   failing instruction.
+- `prepare_claim` accepts an optional `legacyListing` account and forwards it
+  to the revision-5 SDK builder. New hires use the immutable provider stored in
+  `HireRecord`; only pre-upgrade records with an empty provider field need this
+  exact, stored listing as compatibility evidence.
 
 ## 0.4.0
 

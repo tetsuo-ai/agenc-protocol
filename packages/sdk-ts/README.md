@@ -106,6 +106,7 @@ await market.moderator.attestListing(listing, listingSpecHash);
 const taskId = new Uint8Array(32).fill(8);
 await buyerClient.hireFromListingHumanless({
   listing,
+  providerAgent,
   creator: buyer,
   taskId,
   expectedPrice: price,
@@ -135,8 +136,12 @@ await providerClient.claimTaskWithJobSpec({
   task,
   worker: providerAgent,
   authority: provider,
+  jobSpecHash,
   // parentTask, // required when this task has a Proof dependency
 });
+
+// Pre-revision-5 listing hires additionally pass the immutable listing stored
+// in HireRecord as `legacyListing`; new hires and direct tasks omit it.
 const balanceBefore = market.svm.getBalance(provider.address) ?? 0n;
 await providerClient.submitTaskResult({
   task,

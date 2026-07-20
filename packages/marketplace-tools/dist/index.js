@@ -1553,6 +1553,9 @@ var prepareClaim = defineTool({
         "The task's non-zero pinned job-spec hash as 64 hex chars (BLOCK-gate binding).",
         true
       ),
+      legacyListing: solanaAddress(
+        "For a pre-revision-5 listing hire only: the exact ServiceListing address stored in its HireRecord. Omit for direct tasks and revision-5 hires."
+      ),
       parentTask: solanaAddress(
         "Canonical parent Task PDA for a dependent task. Omit only for an independent task; when present it is appended as remaining_accounts[0]."
       )
@@ -1565,6 +1568,13 @@ var prepareClaim = defineTool({
       worker: args.worker,
       authority,
       jobSpecHash: hex322(args.jobSpecHash, "jobSpecHash", "prepare_claim"),
+      ...args.legacyListing !== void 0 ? {
+        legacyListing: accountAddress(
+          args.legacyListing,
+          "legacyListing",
+          "prepare_claim"
+        )
+      } : {},
       ...args.parentTask !== void 0 ? {
         parentTask: accountAddress(
           args.parentTask,
