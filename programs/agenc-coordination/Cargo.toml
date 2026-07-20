@@ -41,7 +41,7 @@ validation-timings = []
 
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
-anchor-spl  = { version = "0.32.1", default-features = false, optional = true }
+anchor-spl  = { version = "1.0.3", default-features = false, optional = true }
 # Instruction/address-only ATA client. Using Anchor SPL's `associated_token`
 # feature pulls the complete Token-2022 program, confidential-transfer proofs,
 # and ZK/ElGamal stack into the default classic-SPL dependency graph even though
