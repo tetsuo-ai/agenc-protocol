@@ -50,10 +50,12 @@ of still-unimplemented blockers. Treat `CHANGELOG.md` and
 the present gates is evidence, not a guarantee that no unknown vulnerability
 exists.
 
-Security operations are not yet enterprise-ready: as verified 2026-07-18, the
-documented email intake is unconfirmed, GitHub Private Vulnerability Reporting is
-disabled, and `.well-known/security.txt` is therefore an inactive template. A
-working, tested private intake is a release blocker, not an on-chain invariant.
+GitHub Private Vulnerability Reporting is enabled and is the verified private
+intake. The unconfirmed email mailbox is intentionally not advertised, and the
+checked-in `.well-known/security.txt` actively names only PVR. Enterprise
+readiness still requires deploying and verifying that exact metadata at both
+canonical hosts; hosted delivery is a release blocker, not an on-chain
+invariant.
 
 ## Core Invariants
 

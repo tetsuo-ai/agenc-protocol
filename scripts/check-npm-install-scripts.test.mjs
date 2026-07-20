@@ -125,14 +125,14 @@ test("every install root pins the enforced Node and npm toolchain", async (t) =>
       mutate(project) {
         project.manifest.engines.node = ">=20";
       },
-      error: /engines must require node >=20\.18\.0 and npm 11\.18\.0/,
+      error: /engines must require node >=22\.23\.1 and npm 11\.18\.0/,
     },
     {
       name: "npm engine",
       mutate(project) {
         project.manifest.engines.npm = ">=11";
       },
-      error: /engines must require node >=20\.18\.0 and npm 11\.18\.0/,
+      error: /engines must require node >=22\.23\.1 and npm 11\.18\.0/,
     },
     {
       name: "missing npm config",

@@ -84,17 +84,23 @@ authoritative deployed-state record is
   mutation re-resolves the remote tag to the triggering commit and exact fetched tag
   object (including annotated tags), and a pre-existing npm version fails closed instead
   of being silently endorsed as a successful rerun.
-- **Unresolved security-operations blocker:** the advertised security mailbox is not
-  confirmed active and repository Private Vulnerability Reporting is disabled. The
-  misleading `security.txt` contacts were deactivated, including the explorer-visible
-  contact blob previously embedded in the candidate program; enable and test a real
-  private intake before release, then publish matching on-chain and RFC 9116 metadata.
+- **Post-audit CodeQL and cold-release hardening:** all ten reported source patterns
+  are remediated with bounded structural parsing or linear scans, including public
+  error handling, npm identity validation, SDK retry classification, receipt URLs,
+  and fail-closed worker URL redaction. Release packing now separates explicit
+  prepack output from machine-readable `npm pack --json`, and both IDL drift and
+  protocol-tag release jobs install Anchor's native dependencies on a cold cache.
+- **Security operations:** GitHub Private Vulnerability Reporting is enabled as the
+  verified private intake. The unconfirmed mailbox remains unadvertised, and active
+  RFC 9116 metadata names only PVR. Release still requires deploying and verifying the
+  exact metadata at both canonical hosts; no unverified contact is embedded in the
+  candidate program.
 - **Final local evidence (refreshed 2026-07-19):** Rust 524 production / 524
   `validation-timings` / 549 private-ZK / 321 canary; 77 model/property tests;
   408 compiled-program integrations (399 pass and 9 explicit canary-profile
-  skips), plus the separate canary compiled suite passing 11/11; SDK 656 pass +
-  one skip; 1,429 workspace tests pass + two skips; 231 deployment/preflight and
-  346 repository-policy tests pass. Strict Clippy,
+  skips), plus the separate canary compiled suite passing 11/11; SDK 657 pass +
+  one skip; 1,444 workspace tests pass + two skips; all 355 script tests pass,
+  including the 239-test deployment/preflight subset. Strict Clippy,
   formatting, artifact drift, package smoke, and SBF stack gates are green. The final
   production SBF is 2,280,376 bytes with SHA-256
   `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`.

@@ -16,12 +16,49 @@ export const KIT_DEP_RANGE = "^6.9.0";
 
 /** Make a directory/config name a valid npm package name. */
 export function npmPackageName(name: string): string {
-  const cleaned = name
-    .toLowerCase()
-    .replace(/[^a-z0-9-._~]+/gu, "-")
-    .replace(/^[-._]+/u, "")
-    .replace(/-+$/u, "")
-    .slice(0, 214);
+  const maximumLength = 214;
+  let cleaned = "";
+  let normalizedLength = 0;
+  let lastNonHyphenEnd = 0;
+  let started = false;
+  let pendingSeparator = false;
+
+  const append = (character: string): void => {
+    if (cleaned.length < maximumLength) cleaned += character;
+    normalizedLength += 1;
+    if (character !== "-") lastNonHyphenEnd = normalizedLength;
+  };
+
+  for (const character of name.toLowerCase()) {
+    const code = character.charCodeAt(0);
+    const allowed =
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      character === "-" ||
+      character === "." ||
+      character === "_" ||
+      character === "~";
+
+    if (!allowed) {
+      if (started) pendingSeparator = true;
+      continue;
+    }
+    if (
+      !started &&
+      (character === "-" || character === "." || character === "_")
+    ) {
+      continue;
+    }
+    if (pendingSeparator) append("-");
+    pendingSeparator = false;
+    started = true;
+    append(character);
+  }
+
+  // Strip every trailing hyphen before applying npm's 214-character limit.
+  // Tracking the conceptual length preserves that ordering without an
+  // unbounded intermediate normalized string.
+  cleaned = cleaned.slice(0, Math.min(maximumLength, lastNonHyphenEnd));
   return cleaned === "" ? "agenc-project" : cleaned;
 }
 

@@ -12,7 +12,10 @@ devnet matrix lives in [./MARKETPLACE_V2_DEVNET_READINESS_MATRIX.md](./MARKETPLA
 - Rust `1.85.0` for reproducible host CI/release builds; the program crate's
   independently tested MSRV is `1.82.0`
 - Node `24.18.0` with npm `11.18.0` for reproducible CI/release builds; Node
-  `20.18.0` is the independently tested package compatibility floor
+  `22.23.1` is the independently tested package compatibility floor
+
+Node 20 is EOL and is not a supported revision-5 runtime. Production operators
+must remain on an Active or Maintenance LTS Node release.
 
 See `Anchor.toml`, `programs/agenc-coordination/Cargo.toml`, and `.github/workflows/ci.yml`.
 
@@ -61,10 +64,10 @@ Current candidate evidence, measured from the commands and built artifacts on
 | Rust restricted `mainnet-canary` | 321 tests                                                                                                                          |
 | Model/property suite             | 77 tests                                                                                                                           |
 | Compiled-program litesvm         | 408 total: 399 pass, 9 explicit canary-profile skips; separate canary run 11 pass                                                  |
-| SDK                              | 657 total: 656 pass, one environment-gated skip                                                                                    |
-| All npm workspaces               | 1,434 total: 1,432 pass, two environment-gated skips                                                                               |
+| SDK                              | 658 total: 657 pass, one environment-gated skip                                                                                    |
+| All npm workspaces               | 1,446 total: 1,444 pass, two environment-gated skips                                                                               |
 | Deployment/preflight scripts     | 239 pass                                                                                                                           |
-| Repository policy scripts        | 346 pass                                                                                                                           |
+| All `scripts/*.test.mjs`         | 355 pass (includes the deployment/preflight subset above)                                                                          |
 | Production SBF                   | 2,280,376 bytes; SHA-256 `dd8aaf65ea56169459da77ac5e50f22c05d0c128b8fe2a314fc8bf7c4d2ace24`                                        |
 | Candidate IDL                    | 98 instructions / 43 accounts / 99 events / 393 errors; SHA-256 `5ae986603626d0dfe9024c7dc180f184931622c350c0c32b4abf920a0d918f1b` |
 

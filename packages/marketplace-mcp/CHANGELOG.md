@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@tetsuo-ai/marketplace-sdk@^0.12.0`. These versions form part of the
   unreleased revision-5 package set; published MCP 0.4.0 remains current until
   the coordinated cutover.
+- Raise the runtime floor to Node 22.23.1; Node 20 is EOL and unsupported by the
+  revision-5 package train.
 - Exposed AgentCard projections inherit marketplace-tools 0.5.0's A2A v1.0
   shape. Tool count and the readonly-by-default, keyless mutation posture are
   unchanged.

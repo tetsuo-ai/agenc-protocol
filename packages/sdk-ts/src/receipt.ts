@@ -18,5 +18,7 @@ export function settlementReceiptUrl(
       "settlementReceiptUrl requires a base58 transaction signature",
     );
   }
-  return `${baseUrl.replace(/\/+$/u, "")}/${signature}`;
+  let baseEnd = baseUrl.length;
+  while (baseEnd > 0 && baseUrl.charCodeAt(baseEnd - 1) === 47) baseEnd -= 1;
+  return `${baseUrl.slice(0, baseEnd)}/${signature}`;
 }

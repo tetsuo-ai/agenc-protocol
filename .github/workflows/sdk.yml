@@ -193,6 +193,12 @@ jobs:
         run: npm run build
         working-directory: packages/sdk-ts
 
+      # agenc-cli imports the worker package's declared dist types. A clean
+      # checkout has no worker dist until this job builds it explicitly.
+      - name: Build worker workspace dependency
+        run: npm run build
+        working-directory: packages/agenc-worker
+
       # Reuse the production .so built above and the workspace SDK dist instead
       # of paying for a second SBF build solely for the worker's LiteSVM test.
       - name: Worker on-chain e2e tests (litesvm)

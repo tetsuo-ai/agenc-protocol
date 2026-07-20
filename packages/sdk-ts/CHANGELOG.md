@@ -8,9 +8,15 @@
   including the atomic release-surface stamp and hardened terminal-claim recovery.
   The published 0.11.0 package remains the client release paired with the live
   revision-4 program; publish 0.12.0 only in the coordinated revision-5 cutover.
+- Raise the runtime floor to Node 22.23.1; Node 20 is EOL and unsupported by the
+  revision-5 package train.
 
 ### Reliability and bounded reads
 
+- Blockhash-expiry classification now caps every inspected cause-chain message
+  and uses fixed-term plus single-pass line scans, so adversarial diagnostics
+  cannot trigger unbounded regular-expression work. Receipt base URLs now trim
+  trailing slashes with a reverse linear scan, including very long inputs.
 - The Node-only `./testing` subpath now imports cleanly without its optional
   native `litesvm` peer. LiteSVM helpers load the peer only when invoked and
   fail with an actionable install instruction when it is absent; clean ESM/CJS

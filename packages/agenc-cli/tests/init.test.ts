@@ -28,10 +28,23 @@ import {
   checkoutCoreModule,
   checkoutPolicyModule,
   jobSpecStoreModule,
+  npmPackageName,
   pagesCheckoutPage,
   walletFileModule,
   workerLoopMjs,
 } from "../src/templates.js";
+
+describe("npmPackageName", () => {
+  it("normalizes hostile and very long names with bounded output", () => {
+    expect(npmPackageName("  ...My Package///Name---  ")).toBe("my-package-name");
+    expect(npmPackageName("---.___")).toBe("agenc-project");
+    expect(npmPackageName(`${"a".repeat(213)} ! b`)).toBe(`${"a".repeat(213)}-`);
+    expect(npmPackageName(`${"a".repeat(213)}${"-".repeat(50)}`)).toBe(
+      "a".repeat(213),
+    );
+    expect(npmPackageName("x".repeat(1_000_000))).toHaveLength(214);
+  });
+});
 
 function nextAppDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "agenc-cli-init-"));
@@ -47,6 +60,23 @@ function workerDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "agenc-cli-init-"));
   writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "my-agent" }));
   return dir;
+}
+
+function nearestNodeModulesDir(start = process.cwd()): string {
+  let current = path.resolve(start);
+  while (true) {
+    const candidate = path.join(current, "node_modules");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`no node_modules directory found above ${start}`);
+    }
+    current = parent;
+  }
+}
+
+function moduleTempDir(prefix: string): string {
+  return mkdtempSync(path.join(nearestNodeModulesDir(), prefix));
 }
 
 function expectTypeScriptSyntax(source: string, jsx = false): void {
@@ -145,9 +175,7 @@ describe("runInit", () => {
   });
 
   it("executes generated checkout term guards and same-intent recovery failover", async () => {
-    const moduleDir = mkdtempSync(
-      path.join(process.cwd(), "node_modules", ".agenc-core-template-test-"),
-    );
+    const moduleDir = moduleTempDir(".agenc-core-template-test-");
     const savedEnv = { ...process.env };
     const originalFetch = globalThis.fetch;
     const globals = globalThis as typeof globalThis & {
@@ -645,7 +673,7 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
   });
 
   it("generates a fail-closed idempotent, rate/spend-bounded checkout policy", async () => {
-    const moduleDir = mkdtempSync(path.join(process.cwd(), "node_modules", ".agenc-policy-test-"));
+    const moduleDir = moduleTempDir(".agenc-policy-test-");
     const modulePath = path.join(moduleDir, "checkout-policy.mjs");
     const savedEnv = { ...process.env };
     try {
@@ -900,7 +928,7 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
   });
 
   it("generates an HTTPS envelope the stock worker verifies", async () => {
-    const moduleDir = mkdtempSync(path.join(process.cwd(), "node_modules", ".agenc-store-test-"));
+    const moduleDir = moduleTempDir(".agenc-store-test-");
     const storageDir = mkdtempSync(path.join(tmpdir(), "agenc-job-spec-store-"));
     const modulePath = path.join(moduleDir, "job-spec-store.mjs");
     const previousDir = process.env.AGENC_JOB_SPEC_DIR;
@@ -1024,9 +1052,7 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
   });
 
   it("executes the generated worker against linked runtime mocks", async () => {
-    const moduleDir = mkdtempSync(
-      path.join(process.cwd(), "node_modules", ".agenc-worker-template-test-"),
-    );
+    const moduleDir = moduleTempDir(".agenc-worker-template-test-");
     const writeMockPackage = (name: string, source: string): void => {
       const packageDir = path.join(moduleDir, "node_modules", ...name.split("/"));
       mkdirSync(packageDir, { recursive: true });

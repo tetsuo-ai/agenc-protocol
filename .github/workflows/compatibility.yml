@@ -25,7 +25,7 @@ jobs:
       - name: Setup minimum supported Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20.18.0
+          node-version: 22.23.1
           cache: npm
 
       - name: Pin declared npm toolchain

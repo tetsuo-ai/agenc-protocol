@@ -20,6 +20,10 @@ const IDL_DRIFT_WORKFLOW = new URL(
 );
 const CI_WORKFLOW = new URL("../.github/workflows/ci.yml", import.meta.url);
 const SDK_WORKFLOW = new URL("../.github/workflows/sdk.yml", import.meta.url);
+const REACT_FIXTURES_WORKFLOW = new URL(
+  "../.github/workflows/react-fixtures.yml",
+  import.meta.url,
+);
 const INTEGRATION_LOCKFILE = new URL(
   "../tests-integration/package-lock.json",
   import.meta.url,
@@ -130,6 +134,30 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   assert.match(releaseJob.steps[attachSbom].run, /gh release upload/);
   assert.match(releaseJob.steps[releasePublish].run, /--draft=false/);
 
+  const releaseAnchorDependencies = names.indexOf(
+    "Install Anchor native build dependencies (cache miss only)",
+  );
+  const releaseAnchorInstall = names.indexOf(
+    "Install anchor CLI (cache miss only)",
+  );
+  assert.ok(
+    releaseAnchorDependencies >= 0 &&
+      releaseAnchorDependencies < releaseAnchorInstall,
+    "protocol release must install Anchor's native dependencies before a cache-miss build",
+  );
+  assert.equal(
+    releaseJob.steps[releaseAnchorDependencies].if,
+    "startsWith(github.ref_name, 'protocol-v') && steps.cache-anchor-protocol.outputs.cache-hit != 'true'",
+  );
+  assert.match(
+    releaseJob.steps[releaseAnchorDependencies].run,
+    /libudev-dev/,
+  );
+  assert.match(
+    releaseJob.steps[releaseAnchorDependencies].run,
+    /pkg-config/,
+  );
+
   const productionBuild = names.indexOf(
     "Anchor build (protocol gate — fresh IDL/types for the drift check)",
   );
@@ -175,6 +203,12 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   const driftIntegrationInstall = driftNames.indexOf(
     "Install compiled canary integration dependencies",
   );
+  const driftAnchorDependencies = driftNames.indexOf(
+    "Install Anchor native build dependencies (cache miss only)",
+  );
+  const driftAnchorInstall = driftNames.indexOf(
+    "Install anchor CLI (cache miss only)",
+  );
   assert.ok(
     driftProductionBuild >= 0 &&
       driftProductionBuild < driftProductionArtifacts &&
@@ -195,6 +229,17 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
     driftSteps[driftCanaryCompiled].run,
     "node --test tests-integration/canary-*.test.mjs",
   );
+  assert.ok(
+    driftAnchorDependencies >= 0 &&
+      driftAnchorDependencies < driftAnchorInstall,
+    "IDL drift must install Anchor's native dependencies before a cache-miss build",
+  );
+  assert.equal(
+    driftSteps[driftAnchorDependencies].if,
+    "steps.cache-anchor.outputs.cache-hit != 'true'",
+  );
+  assert.match(driftSteps[driftAnchorDependencies].run, /libudev-dev/);
+  assert.match(driftSteps[driftAnchorDependencies].run, /pkg-config/);
 });
 
 test("release shell never directly interpolates tag-derived package outputs", async () => {
@@ -225,9 +270,10 @@ test("release shell never directly interpolates tag-derived package outputs", as
 });
 
 test("normal pull-request CI enforces deployment and compiled integration gates", async () => {
-  const [ci, sdk, release, integrationLock, integrationAuditSource] = await Promise.all([
+  const [ci, sdk, reactFixtures, release, integrationLock, integrationAuditSource] = await Promise.all([
     loadWorkflow(CI_WORKFLOW),
     loadWorkflow(SDK_WORKFLOW),
+    loadWorkflow(REACT_FIXTURES_WORKFLOW),
     loadWorkflow(RELEASE_WORKFLOW),
     readFile(INTEGRATION_LOCKFILE, "utf8").then(JSON.parse),
     readFile(INTEGRATION_AUDIT_SCRIPT, "utf8"),
@@ -337,6 +383,26 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
   );
   assert.ok(idlStageIndex > buildIndex && idlStageIndex < integrationIndex);
 
+  const workerBuild = sdkSteps.findIndex(
+    (step) => step.name === "Build worker workspace dependency",
+  );
+  const downstreamTypecheck = sdkSteps.findIndex(
+    (step) => step.name === "Downstream workspace typechecks",
+  );
+  assert.ok(
+    workerBuild >= 0 && workerBuild < downstreamTypecheck,
+    "SDK CI must build worker declarations before typechecking agenc-cli",
+  );
+
+  const fixtureBuild = reactFixtures.jobs["fixture-smoke"].steps.find(
+    (step) => step.name === "Build fixture workspace dependencies",
+  );
+  assert.ok(fixtureBuild);
+  assert.match(
+    fixtureBuild.run,
+    /marketplace-sdk[\s\S]*marketplace-react[\s\S]*agenc-worker[\s\S]*agenc-cli/,
+  );
+
   for (const workflow of [ci, release]) {
     const rejectStep = Object.values(workflow.jobs)
       .flatMap((job) => job.steps ?? [])
@@ -409,6 +475,9 @@ test("every release carries a deterministic SPDX SBOM bound to its reviewed tarb
     readFile(RELEASE_SBOM_SCRIPT, "utf8"),
   ]);
   const steps = release.jobs.release.steps;
+  const prepack = steps.find(
+    (step) => step.name === "Run reviewed package prepack lifecycle",
+  );
   const pack = steps.find((step) => step.name === "Build reviewed npm tarball");
   const generate = steps.find(
     (step) => step.name === "Generate deterministic SPDX release SBOM",
@@ -419,10 +488,14 @@ test("every release carries a deterministic SPDX SBOM bound to its reviewed tarb
   const attach = steps.find(
     (step) => step.name === "Attach required SPDX release SBOM",
   );
-  assert.ok(pack && generate && inspect && attach);
+  assert.ok(prepack && pack && generate && inspect && attach);
+  assert.ok(steps.indexOf(prepack) < steps.indexOf(pack));
   assert.ok(steps.indexOf(pack) < steps.indexOf(generate));
   assert.ok(steps.indexOf(generate) < steps.indexOf(inspect));
   assert.ok(steps.indexOf(inspect) < steps.indexOf(attach));
+  assert.equal(prepack.run, "npm run prepack --if-present");
+  assert.match(pack.run, /npm pack --ignore-scripts --json/);
+  assert.match(pack.run, />\s*"\$\{RUNNER_TEMP\}\/package-pack\.json"/);
   assert.match(generate.run, /release-sbom\.mjs generate/);
   assert.equal(inspect.env.SBOM_RELEASE_ASSET, "${{ steps.sbom.outputs.name }}");
   assert.equal(inspect.env.SBOM_RELEASE_ASSET_PATH, "${{ steps.sbom.outputs.path }}");

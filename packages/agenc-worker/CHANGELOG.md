@@ -11,6 +11,9 @@ This candidate depends on `@tetsuo-ai/marketplace-sdk@^0.12.0` and belongs to
 the coordinated revision-5 release train. Published worker 0.1.1 remains the
 current npm release while mainnet is on revision 4.
 
+This candidate raises the runtime floor to Node 22.23.1; Node 20 is EOL and
+unsupported.
+
 ### Security
 
 - Registered workers now perform a live pre-claim balance gate covering exact
@@ -40,6 +43,12 @@ current npm release while mainnet is on revision 4.
   as well as on timeout/overflow.
 - Timer templates no longer run mutable `npx` installs. The systemd unit uses
   an absolute preinstalled binary and adds host hardening directives.
+- Worker and CLI diagnostics now use bounded, linear URL detection and redact
+  credentials plus path/query/fragment material without returning ambiguous
+  suffixes. The scanner also catches every WHATWG-repaired special-scheme
+  spelling, including missing or backslash authority markers. Static AgenC URI
+  labels remain structured prose, while malformed, whitespace-bearing, and
+  punctuation-only URL secrets fail closed.
 - Claims created from a service listing are now provider-bound. The worker
   runtime reads the task's `HireRecord` before building a claim and, for the
   live revision-4 records that predate the immutable provider field, supplies

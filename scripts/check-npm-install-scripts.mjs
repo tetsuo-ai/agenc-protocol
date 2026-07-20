@@ -8,7 +8,7 @@ const ROOT = new URL("../", import.meta.url);
 const SKIPPED_DIRECTORIES = new Set([".git", "node_modules", "target"]);
 const REQUIRED_PACKAGE_MANAGER = "npm@11.18.0";
 const REQUIRED_ENGINES = Object.freeze({
-  node: ">=20.18.0",
+  node: ">=22.23.1",
   npm: "11.18.0",
 });
 const REQUIRED_NPM_CONFIG = Object.freeze({

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { formatDiagnosticError } from "../src/redact.js";
 import {
   resultDataFromHashHex,
   resultPlaceholderUri,
@@ -75,9 +76,21 @@ describe("uploadResult", () => {
   });
 
   it("rejects non-https uploader URLs", async () => {
-    await expect(
-      uploadResult({ uploaderUrl: "http://up.example", body }),
-    ).rejects.toBeInstanceOf(ResultUploadError);
+    const failure = await uploadResult({
+      uploaderUrl: "http://up.example",
+      body,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ResultUploadError);
+    expect(formatDiagnosticError(failure)).toBe(
+      "resultUploader must be a credential-free HTTPS URL",
+    );
+
+    const invalid = await uploadResult({ uploaderUrl: "not a URL", body }).catch(
+      (error: unknown) => error,
+    );
+    expect(formatDiagnosticError(invalid)).toBe(
+      "resultUploader must be an absolute HTTPS URL",
+    );
   });
 
   it("fails closed on non-2xx and on a bad response shape", async () => {

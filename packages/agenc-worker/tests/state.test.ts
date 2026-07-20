@@ -371,9 +371,15 @@ describe("exclusive state directory lock", () => {
         acquiredAt: "2000-01-01T00:00:00.000Z",
       }),
     );
-    const script = `const {acquireStateLock}=await import("./src/state.ts");
+    const script = `const {acquireStateLock,WorkerStateError}=await import("./src/state.ts");
       try { const release=acquireStateLock(process.argv[1]); console.log("ACQUIRED"); setTimeout(()=>release(),250); }
-      catch { console.log("BLOCKED"); }`;
+      catch (error) {
+        const expectedContention = error instanceof WorkerStateError &&
+          (error.message.includes("already active") ||
+            error.message.includes("being reclaimed by another process"));
+        if (!expectedContention) { console.error(error); process.exitCode=2; }
+        else { console.log("BLOCKED"); }
+      }`;
     const contenders = [0, 1].map(() =>
       spawn(
         process.execPath,
@@ -381,18 +387,30 @@ describe("exclusive state directory lock", () => {
         { stdio: ["ignore", "pipe", "pipe"] },
       ),
     );
-    const outputs = await Promise.all(
+    const results = await Promise.all(
       contenders.map(async (child) => {
         let output = "";
+        let errorOutput = "";
         child.stdout.setEncoding("utf8");
         child.stdout.on("data", (chunk: string) => {
           output += chunk;
         });
-        await once(child, "exit");
-        return output.trim();
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (chunk: string) => {
+          errorOutput += chunk;
+        });
+        // `exit` may precede the final stdout read. `close` is emitted only
+        // after the child and all stdio handles have closed.
+        const [code, signal] = await once(child, "close");
+        return { code, signal, output: output.trim(), errorOutput };
       }),
     );
 
+    expect(
+      results.every(({ code, signal }) => code === 0 && signal === null),
+      JSON.stringify(results),
+    ).toBe(true);
+    const outputs = results.map(({ output }) => output);
     expect(outputs.sort()).toEqual(["ACQUIRED", "BLOCKED"]);
     expect(
       readdirSync(stateDir).filter((name) => name.startsWith(".active.lock")),

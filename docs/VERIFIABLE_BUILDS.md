@@ -271,7 +271,7 @@ an open item below.
 
 ---
 
-## Activation checklist (P0.6 shipped — status as of 2026-07-18)
+## Activation checklist (P0.6 shipped — status as of 2026-07-19)
 
 - [ ] Uncomment the `verify-from-repo` step in `.github/workflows/verify.yml`
       (and wire `MAINNET_RPC_URL`). *(Still commented out; the manual runbook
@@ -280,11 +280,10 @@ an open item below.
       `.github/workflows/release.yml` (GitHub OIDC, public repository).
 - [x] Re-resolve the remote release tag before each external mutation and fail
       closed on a pre-existing npm version that the current run cannot verify.
-- [ ] Protect release tags from update/deletion in repository settings and enable
-      GitHub immutable releases. A read-only settings check on 2026-07-18 found no
-      inherited repository ruleset, no organization ruleset targeting repositories,
-      and immutable releases disabled. Workflow checks narrow the race window;
-      repository policy is the durable control.
+- [x] Protect release tags from update/deletion in repository settings and enable
+      GitHub immutable releases. The authenticated live-readiness check on
+      2026-07-19 verified bypass-free tag rules for every release-train family and
+      immutable releases enabled; the readiness gate continuously detects drift.
 - [x] Run `verify-from-repo` against mainnet for the live tag; create the PDA
       (export-and-multisig-sign via the Squads vault — current revision-4
       record verified 2026-07-10).

@@ -11,6 +11,8 @@
 - This package describes a pending program artifact, not the revision-4 binary
   currently on mainnet. Publish 0.4.0 only with the coordinated revision-5 program
   and SDK 0.12.0 cutover; published protocol 0.3.0 remains the live-wire artifact.
+- Raise the runtime floor to Node 22.23.1; Node 20 is EOL and unsupported by the
+  revision-5 package train.
 
 ## 0.3.0
 

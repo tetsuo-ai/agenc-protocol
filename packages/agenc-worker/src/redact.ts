@@ -2,69 +2,45 @@
 // commonly place API keys in URL credentials, query strings, or path segments;
 // errors from fetch/@solana/kit may echo the complete endpoint.
 
-const NETWORK_URL = /[a-z][a-z0-9+.-]*:\/\/[^\s<>"'`]+/giu;
-// `]` is intentionally absent: it is structural in an IPv6 URL host.
-const TRAILING_PUNCTUATION = /[),.;}]+$/u;
-const RECOVERABLE_UNICODE_BOUNDARY = /[\p{P}\p{S}]/u;
-const NON_ASCII = /[^\u0000-\u007f]/u;
+const MAX_DIAGNOSTIC_URL_CHARS = 8_192;
+const UNPARSEABLE_URL_REDACTION = "[REDACTED_URL]";
+const WHATWG_SPECIAL_SCHEMES = new Set([
+  "file",
+  "ftp",
+  "http",
+  "https",
+  "ws",
+  "wss",
+]);
+
+function isSchemeCharacter(code: number): boolean {
+  return (
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    (code >= 48 && code <= 57) ||
+    code === 43 ||
+    code === 45 ||
+    code === 46
+  );
+}
+
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
 
 function redactUrl(raw: string): string {
-  let trailing = raw.match(TRAILING_PUNCTUATION)?.[0] ?? "";
-  let candidate = trailing === "" ? raw : raw.slice(0, -trailing.length);
-  while (true) {
-    const last = Array.from(candidate).at(-1);
-    if (
-      last === undefined ||
-      !NON_ASCII.test(last) ||
-      !RECOVERABLE_UNICODE_BOUNDARY.test(last)
-    ) {
-      break;
-    }
-    candidate = candidate.slice(0, -last.length);
-    trailing = `${last}${trailing}`;
+  if (raw.length > MAX_DIAGNOSTIC_URL_CHARS) {
+    return UNPARSEABLE_URL_REDACTION;
   }
-  // A prose wrapper such as `[https://user:pass@example.test]` otherwise
-  // leaves `]` attached to the authority, causing URL parsing to fail and the
-  // credentials to pass through unchanged. Keep a final `]` only when it is
-  // the structural close of an IPv6 host with no path/query/fragment.
-  if (candidate.endsWith("]")) {
-    let structuralIpv6Close = false;
-    try {
-      const parsed = new URL(candidate);
-      structuralIpv6Close =
-        parsed.hostname.startsWith("[") && candidate.endsWith(parsed.host);
-    } catch {
-      // Removing a prose bracket below may make the URL parseable.
-    }
-    if (!structuralIpv6Close) {
-      const withoutBracket = candidate.slice(0, -1);
-      try {
-        new URL(withoutBracket);
-        candidate = withoutBracket;
-        trailing = `]${trailing}`;
-      } catch {
-        // Preserve raw text if neither form is a parseable URL.
-      }
-    }
-  }
+
   let url: URL;
-  while (true) {
-    try {
-      url = new URL(candidate);
-      break;
-    } catch {
-      // Diagnostics may wrap a URL in Unicode prose punctuation (`…`, `”`,
-      // full-width brackets, and so on). The broad URL matcher necessarily
-      // captures that suffix. Peel only punctuation/symbol code points, and
-      // only while parsing fails, so real parseable URL content is preserved.
-      const codePoints = Array.from(candidate);
-      const last = codePoints.at(-1);
-      if (last === undefined || !RECOVERABLE_UNICODE_BOUNDARY.test(last)) {
-        return raw;
-      }
-      candidate = candidate.slice(0, -last.length);
-      trailing = `${last}${trailing}`;
-    }
+  try {
+    url = new URL(raw);
+  } catch {
+    // There is no safe way to distinguish invalid trailing prose from a URL
+    // credential/path/query suffix. Returning any peeled suffix could expose a
+    // punctuation-only token, so malformed candidates are replaced wholesale.
+    return UNPARSEABLE_URL_REDACTION;
   }
 
   if (url.username !== "" || url.password !== "") {
@@ -79,12 +55,70 @@ function redactUrl(raw: string): string {
   }
   if (url.search !== "") url.search = "?REDACTED";
   if (url.hash !== "") url.hash = "#REDACTED";
-  return `${url.toString()}${trailing}`;
+  return url.toString();
 }
 
 /** Remove credentials and path/query tokens from every hierarchical URL. */
 export function redactSensitiveText(text: string): string {
-  return text.replace(NETWORK_URL, (url) => redactUrl(url));
+  const pieces: string[] = [];
+  let copiedUntil = 0;
+  let searchFrom = 0;
+
+  while (searchFrom < text.length) {
+    const separator = text.indexOf(":", searchFrom);
+    if (separator === -1) break;
+
+    let schemeStart = separator;
+    while (
+      schemeStart > copiedUntil &&
+      isSchemeCharacter(text.charCodeAt(schemeStart - 1))
+    ) {
+      schemeStart -= 1;
+    }
+    // Digits and `+.-` are legal *continuation* characters in a scheme, but
+    // never legal as its first character. A diagnostic can therefore place a
+    // valid URL immediately after one of them (`1https://...`). Preserve that
+    // prefix and redact from the first ASCII letter instead of skipping the
+    // credentialed URL altogether.
+    while (
+      schemeStart < separator &&
+      !isAsciiLetter(text.charCodeAt(schemeStart))
+    ) {
+      schemeStart += 1;
+    }
+    if (schemeStart === separator) {
+      searchFrom = separator + 1;
+      continue;
+    }
+
+    const scheme = text.slice(schemeStart, separator).toLowerCase();
+    const hasAuthorityMarker = text.startsWith("//", separator + 1);
+    // WHATWG treats file, FTP, HTTP(S), and WS(S) as special schemes and repairs
+    // missing or backslash authority markers (`https:host`, `https:/host`,
+    // `https:\\host`). They can therefore be accepted by URL/config parsing
+    // and later echoed by a transport even though they contain no literal
+    // `://`. Keep arbitrary hierarchical schemes, but also catch every spelling
+    // of the fixed special schemes before any diagnostic is emitted.
+    if (!hasAuthorityMarker && !WHATWG_SPECIAL_SCHEMES.has(scheme)) {
+      searchFrom = separator + 1;
+      continue;
+    }
+
+    // WHATWG URL parsing accepts or strips spaces, tabs, and line breaks inside
+    // credentials, paths, and queries. There is therefore no delimiter after a
+    // detected scheme that can safely prove the URL-carried secret has ended.
+    // Consume the remaining diagnostic. This intentionally sacrifices prose
+    // after the first URL rather than risk returning a credential/token suffix.
+    const end = text.length;
+    pieces.push(text.slice(copiedUntil, schemeStart));
+    pieces.push(redactUrl(text.slice(schemeStart, end)));
+    copiedUntil = end;
+    searchFrom = end;
+  }
+
+  if (pieces.length === 0) return text;
+  pieces.push(text.slice(copiedUntil));
+  return pieces.join("");
 }
 
 /** Format an unknown thrown value without leaking URL-carried RPC secrets. */

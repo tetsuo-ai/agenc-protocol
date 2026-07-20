@@ -51,6 +51,7 @@ jobs:
         run: |
           npm run build --workspace=@tetsuo-ai/marketplace-sdk
           npm run build --workspace=@tetsuo-ai/marketplace-react
+          npm run build --workspace=@tetsuo-ai/agenc-worker
           npm run build --workspace=@tetsuo-ai/agenc-cli
 
       - name: Clean-install Next SSR fixture

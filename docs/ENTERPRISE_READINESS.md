@@ -45,9 +45,10 @@ The live gate requires:
 - active, bypass-free tag rulesets that block update and deletion for every tag
   prefix in `release-train.json` (protocol, SDK, React, tools, MCP, moderation,
   worker, CLI, and CLI alias);
-- the `production-release` environment to require two reviewers, prevent
+- the `production-release` environment to name two eligible reviewers, prevent
   self-review, and accept deployments only from those exact release-train tag
-  families;
+  families (GitHub requires one eligible reviewer to approve an environment;
+  the separate branch rule requires two pull-request approvals);
 - Actions to allow GitHub-owned actions plus only `dtolnay/rust-toolchain@*`,
   with all action references still forced to full commit SHAs;
 - immutable releases, Dependabot security updates, secret scanning, push
@@ -67,13 +68,10 @@ Both of these endpoints must return active RFC 9116-style plain text:
 - `https://agenc.tech/.well-known/security.txt`
 
 Each document must name its fetched URL in `Canonical`, carry a future `Expires`
-date no more than 366 days away, link the HTTPS security policy, and expose both
-the monitored `security@agenc.tech` mailbox and GitHub's private advisory form.
-The repository's `.well-known/security.txt` intentionally remains inactive until
-both channels have been enabled and tested end to end; the checker does not make
-an unverified contact safe to publish. The checker verifies GitHub's PVR setting
-and the documents served over HTTP; it cannot send a mailbox probe. An operator
-must separately verify mailbox delivery and alerting before activation.
+date no more than 366 days away, link the HTTPS security policy, and expose the
+enabled GitHub private-advisory form. `security@agenc.tech` remains intentionally
+unadvertised until an operator verifies mailbox delivery and alerting end to end.
+The checker verifies GitHub's PVR setting and the documents served over HTTP.
 
 ## Required schema state
 

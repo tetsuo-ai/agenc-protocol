@@ -15,6 +15,12 @@ describe("settlementReceiptUrl", () => {
     expect(
       settlementReceiptUrl(SIGNATURE, "https://example-node.dev/receipt/"),
     ).toBe(`https://example-node.dev/receipt/${SIGNATURE}`);
+    expect(
+      settlementReceiptUrl(
+        SIGNATURE,
+        `https://example-node.dev/receipt${"/".repeat(100_000)}`,
+      ),
+    ).toBe(`https://example-node.dev/receipt/${SIGNATURE}`);
   });
 
   it("rejects values that are not base58 transaction signatures", () => {

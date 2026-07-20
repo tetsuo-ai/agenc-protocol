@@ -16,26 +16,18 @@ artifact storage) that integrators may optionally depend on.
 **Report privately. Do not open a public GitHub issue, PR, or discussion for a
 suspected security vulnerability.**
 
-> **Operational blocker (verified 2026-07-18): there is currently no confirmed
-> private vulnerability-intake channel.** `security@agenc.tech` has not been
-> confirmed as an active mailbox, GitHub Private Vulnerability Reporting is
-> disabled for this repository, and no PGP key is published. Do not send exploit
-> details through a public issue. If you already have a trusted private contact
-> for a maintainer, ask for a reporting channel without including vulnerability
-> details in the initial message.
+Use [GitHub Private Vulnerability Reporting](https://github.com/tetsuo-ai/agenc-protocol/security/advisories/new).
+It is enabled for this repository and keeps the report private between the
+reporter and repository administrators. Do not send exploit details through a
+public issue.
 
-Before the next release, a maintainer must enable and end-to-end test GitHub
-Private Vulnerability Reporting and/or a monitored security mailbox, then update
-this section and activate `.well-known/security.txt`. The checked-in
-`security.txt` is intentionally an invalid, inactive template until that is done;
-it must not be deployed as if it exposed a working contact. For the same reason,
-the current program candidate intentionally embeds no explorer-visible security
-contact record; add one only after its private endpoint has been verified.
-After activation, run `node scripts/enterprise-readiness.mjs`: the read-only gate
-requires PVR to be enabled and both public `security.txt` endpoints to advertise
-the configured contacts correctly. Mailbox delivery still requires a separate
-operator-run end-to-end test. See `docs/ENTERPRISE_READINESS.md`; a green mocked
-regression test does not replace live evidence.
+`security@agenc.tech` is not advertised because mailbox delivery and alerting
+have not been verified. Add it only after an operator completes an end-to-end
+test. The checked-in `.well-known/security.txt` therefore names the confirmed
+GitHub private-advisory channel as the required contact. Run
+`node scripts/enterprise-readiness.mjs` after each hosted deployment to verify
+that PVR remains enabled and both public metadata endpoints serve the exact
+active policy.
 
 - **What to include:** affected component (program instruction / SDK / hosted
   rail), program ID + cluster, a description of the impact (fund loss, fund
@@ -129,9 +121,9 @@ The on-chain program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 
 We aim to meet the following timelines once a report reaches a verified private
 channel. No professional external-audit report is currently published; internal
-adversarial work and green gates are evidence, not a substitute. The inactive
-intake described in §1 must be fixed before these targets are operationally
-credible.
+adversarial work and green gates are evidence, not a substitute. GitHub Private
+Vulnerability Reporting is the verified private channel for these targets; the
+unverified mailbox described in §1 is intentionally not advertised.
 
 | Stage                                                                   | Target                                                                                                                                                               |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -316,8 +308,9 @@ with `solana-verify verify-from-repo` — see `docs/VERIFIABLE_BUILDS.md`.
 - Program surface & PDAs: `docs/PROGRAM_SURFACE.md`
 - Mainnet source of truth: `docs/MAINNET_MAINLINE.md`
 - Local full-surface validator for reproduction: `scripts/localnet-up.mjs` (`docs/LOCALNET.md`)
-- Machine-readable contact template: `.well-known/security.txt` (**inactive and
-  intentionally invalid until a working private channel is configured**)
+- Machine-readable contact metadata: `.well-known/security.txt` (active for the
+  verified GitHub private-advisory channel; both canonical hosted copies must be
+  deployment-verified)
 - Read-only GitHub, intake, and hosted-schema readiness gate:
   `docs/ENTERPRISE_READINESS.md`
 

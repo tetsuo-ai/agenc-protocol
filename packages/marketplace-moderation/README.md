@@ -38,7 +38,7 @@ npm install @tetsuo-ai/marketplace-moderation
 ```
 
 Zero runtime dependencies (only Node's built-in `node:crypto`). Requires Node
-`>=20.18.0`.
+`>=22.23.1`.
 
 ## Usage
 
