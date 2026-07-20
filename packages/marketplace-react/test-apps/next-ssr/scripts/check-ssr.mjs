@@ -55,6 +55,37 @@ function run(cmd, cmdArgs, opts = {}) {
   });
 }
 
+function waitForClose(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    const onClose = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off("close", onClose);
+      resolve(false);
+    }, timeoutMs);
+    timer.unref();
+    child.once("close", onClose);
+  });
+}
+
+async function stopServer(server) {
+  if (server.exitCode !== null || server.signalCode !== null) return;
+
+  server.kill("SIGTERM");
+  if (await waitForClose(server, 5_000)) return;
+
+  server.kill("SIGKILL");
+  if (!(await waitForClose(server, 5_000))) {
+    throw new Error("Next production server did not stop after SIGKILL");
+  }
+}
+
 async function waitForHttp(url, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -78,7 +109,8 @@ async function main() {
   }
 
   console.log(`check-ssr: starting production server on :${args.port} ...`);
-  const server = spawn("npx", ["next", "start", "-p", String(args.port)], {
+  const nextBin = path.join(APP_DIR, "node_modules", "next", "dist", "bin", "next");
+  const server = spawn(process.execPath, [nextBin, "start", "-p", String(args.port)], {
     cwd: APP_DIR,
     stdio: ["ignore", "inherit", "inherit"],
     env: { ...process.env },
@@ -88,7 +120,7 @@ async function main() {
   try {
     html = await waitForHttp(`http://127.0.0.1:${args.port}/`);
   } finally {
-    server.kill("SIGTERM");
+    await stopServer(server);
   }
 
   // ---- SSR shell assertions on the server HTML (real <ListingGrid> markers) ----

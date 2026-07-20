@@ -53,7 +53,7 @@
       "name": "@tetsuo-ai/agenc-worker",
       "directory": "packages/agenc-worker",
       "expectedVersion": "0.2.0",
-      "expectedIntegrity": "sha512-TIa6rqB+NhNSTmXmedR3mwB8bsLFcS5sYak9j9PGTyXKH2KnW8Jfr4xH+Ox9K6GJnksnManqm2dJkmPcaAdwKg==",
+      "expectedIntegrity": "sha512-akKEpqnF5efhcOhvRmWG4R/9dan/eRkAY8eQfCOY4WykmVgQ/CQNu9XhAU1vwBe2E4MMI/XWjkhd14unTy16uQ==",
       "requires": ["sdk"]
     },
     {
