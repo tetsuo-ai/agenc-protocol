@@ -51,7 +51,7 @@
   "dependencies": {
     "@tetsuo-ai/agenc-worker": "^0.2.0",
     "@tetsuo-ai/marketplace-sdk": "^0.12.0",
-    "litesvm": "^1.1.0"
+    "litesvm": "^1.3.0"
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0"
@@ -60,7 +60,7 @@
     "@solana/kit": "6.9.0",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
-    "vitest": "4.1.8"
+    "vitest": "4.1.10"
   },
   "license": "MIT",
   "publishConfig": {
