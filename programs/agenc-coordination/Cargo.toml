@@ -51,7 +51,7 @@ spl-associated-token-account-client = { version = "=2.0.0", optional = true }
 # The host/release toolchain is Rust 1.85.0 and the declared host MSRV is 1.82.
 # Anchor's bundled Solana SBF compiler still uses rustc 1.79.0-dev; indexmap
 # 2.12.1+ requires rustc 1.82, so pin the last SBF-compatible version.
-indexmap = "=2.12.0"
+indexmap = "=2.14.0"
 
 # SHA-256 hashing is shared by the verifier journal and the full-surface bid
 # acceptance CAS. Keep it unconditional: the supported surfaces are the default
