@@ -175,6 +175,10 @@ test("guardian forwards the exact unlinked program snapshot as target fd 5", asy
   const logFd = openSync(path.join(parent, "child.log"), "a");
   let guarded;
   let reference;
+  // Static source: the destination path travels via the environment so no
+  // runtime value is ever spliced into generated code (CodeQL
+  // js/improper-code-sanitization).
+  process.env.AG_ENC_TEST_OUTPUT = outputPath;
   try {
     guarded = await startNodeGuard(
       lock,
@@ -182,7 +186,7 @@ test("guardian forwards the exact unlinked program snapshot as target fd 5", asy
       logFd,
       [
         'const fs = require("node:fs");',
-        `fs.writeFileSync(${JSON.stringify(outputPath)}, fs.readFileSync("/proc/self/fd/5"));`,
+        'fs.writeFileSync(process.env.AG_ENC_TEST_OUTPUT, fs.readFileSync("/proc/self/fd/5"));',
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       { pinnedInputFd: snapshot.fd },
@@ -190,6 +194,7 @@ test("guardian forwards the exact unlinked program snapshot as target fd 5", asy
     reference = openLinuxProcessReference(guarded.pid);
     assert.notEqual(reference, null);
   } finally {
+    delete process.env.AG_ENC_TEST_OUTPUT;
     closeSync(logFd);
     await snapshot.close();
   }
@@ -447,20 +452,26 @@ test("abort escalates and reaps a SIGTERM-resistant guarded child", async (t) =>
   );
   const readyPath = path.join(parent, "ready");
   const termPath = path.join(parent, "term-seen");
+  // Static source: paths travel via the environment so no runtime value is
+  // ever spliced into generated code (CodeQL js/improper-code-sanitization).
   const source = [
     `const fs = require("node:fs");`,
-    `process.on("SIGTERM", () => fs.writeFileSync(${JSON.stringify(termPath)}, "seen"));`,
-    `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+    'process.on("SIGTERM", () => fs.writeFileSync(process.env.AG_ENC_TEST_TERM, "seen"));',
+    'fs.writeFileSync(process.env.AG_ENC_TEST_READY, "ready");',
     "setInterval(() => {}, 1000);",
   ].join("\n");
   const lock = await acquireLocalnetLifecycleLock(stateDirectory);
   const logFd = openSync(path.join(parent, "child.log"), "a");
   let guarded;
+  process.env.AG_ENC_TEST_TERM = termPath;
+  process.env.AG_ENC_TEST_READY = readyPath;
   try {
     guarded = await startNodeGuard(lock, parent, logFd, source, {
       childTermGraceMs: 100,
     });
   } finally {
+    delete process.env.AG_ENC_TEST_TERM;
+    delete process.env.AG_ENC_TEST_READY;
     closeSync(logFd);
   }
   const reference = openLinuxProcessReference(guarded.pid);
