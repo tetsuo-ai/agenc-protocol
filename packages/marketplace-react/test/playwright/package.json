@@ -19,7 +19,7 @@
     "install-browsers": "playwright install chromium"
   },
   "devDependencies": {
-    "@playwright/test": "1.60.0",
+    "@playwright/test": "1.61.1",
     "@solana/kit": "6.9.0",
     "@tetsuo-ai/marketplace-sdk": "file:../../../sdk-ts"
   }
