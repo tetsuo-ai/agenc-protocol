@@ -2763,6 +2763,159 @@ mod tests {
         }
     }
 
+    // Coverage restored after the enumeration-machinery removal: these pure
+    // gates previously ran only through the retired competitor-pair tests.
+    #[test]
+    fn require_bid_task_enforces_type_worker_and_sol_shape() {
+        let good = Task {
+            task_type: TaskType::BidExclusive,
+            max_workers: 1,
+            ..Task::default()
+        };
+        require_bid_task(&good).unwrap();
+        let mut wrong_type = good.clone();
+        wrong_type.task_type = TaskType::Collaborative;
+        assert!(require_bid_task(&wrong_type).is_err());
+        let mut multi_worker = good.clone();
+        multi_worker.max_workers = 2;
+        assert!(require_bid_task(&multi_worker).is_err());
+        let mut token_task = good;
+        token_task.reward_mint = Some(Pubkey::new_unique());
+        assert!(require_bid_task(&token_task).is_err());
+    }
+
+    #[test]
+    fn refresh_bid_window_resets_only_on_first_use_or_expiry() {
+        let mut state = BidderMarketState::default();
+        refresh_bid_window(&mut state, 1_000);
+        assert_eq!(state.bid_window_started_at, 1_000);
+        assert_eq!(state.bids_created_in_window, 0);
+        state.bids_created_in_window = 5;
+        refresh_bid_window(&mut state, 1_000 + BID_WINDOW_SECONDS - 1);
+        assert_eq!(
+            state.bid_window_started_at, 1_000,
+            "inside the window: no reset"
+        );
+        assert_eq!(state.bids_created_in_window, 5);
+        refresh_bid_window(&mut state, 1_000 + BID_WINDOW_SECONDS);
+        assert_eq!(state.bid_window_started_at, 1_000 + BID_WINDOW_SECONDS);
+        assert_eq!(state.bids_created_in_window, 0);
+    }
+
+    #[test]
+    fn parse_matching_policy_accepts_known_policies_and_fails_closed() {
+        assert_eq!(
+            parse_matching_policy(0, 0, 0, 0, 0).unwrap().0 as u8,
+            MatchingPolicy::BestPrice as u8
+        );
+        assert_eq!(
+            parse_matching_policy(1, 0, 0, 0, 0).unwrap().0 as u8,
+            MatchingPolicy::BestEta as u8
+        );
+        let (policy, weights) = parse_matching_policy(2, 4_000, 3_000, 2_000, 1_000).unwrap();
+        assert_eq!(policy as u8, MatchingPolicy::WeightedScore as u8);
+        assert_eq!(weights.price_weight_bps, 4_000);
+        assert!(parse_matching_policy(3, 0, 0, 0, 0).is_err());
+        assert!(parse_matching_policy(2, 0, 0, 0, 0).is_err());
+    }
+
+    #[test]
+    fn bidder_eligibility_checks_every_live_gate() {
+        let task = Task {
+            required_capabilities: 1,
+            min_reputation: 100,
+            creator: Pubkey::new_unique(),
+            ..Task::default()
+        };
+        let authority = Pubkey::new_unique();
+        let bidder_key = Pubkey::new_unique();
+        let bidder = AgentRegistration {
+            authority,
+            status: AgentStatus::Active,
+            capabilities: 1,
+            reputation: 100,
+            stake: 10,
+            active_tasks: 0,
+            ..AgentRegistration::default()
+        };
+        let bid = TaskBid {
+            bidder: bidder_key,
+            bidder_authority: authority,
+            ..TaskBid::default()
+        };
+        assert!(bidder_is_currently_eligible(
+            &bidder_key,
+            &bidder,
+            &bid,
+            &task,
+            10
+        ));
+        // Each live gate flips eligibility off.
+        assert!(!bidder_is_currently_eligible(
+            &Pubkey::new_unique(),
+            &bidder,
+            &bid,
+            &task,
+            10
+        ));
+        let mut suspended = bidder.clone();
+        suspended.status = AgentStatus::Suspended;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &suspended,
+            &bid,
+            &task,
+            10
+        ));
+        let mut weak = bidder.clone();
+        weak.capabilities = 0;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &weak,
+            &bid,
+            &task,
+            10
+        ));
+        let mut poor = bidder.clone();
+        poor.reputation = 99;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &poor,
+            &bid,
+            &task,
+            10
+        ));
+        let mut understaked = bidder.clone();
+        understaked.stake = 9;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &understaked,
+            &bid,
+            &task,
+            10
+        ));
+        let mut busy = bidder.clone();
+        busy.active_tasks = MAX_ACTIVE_TASKS;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &busy,
+            &bid,
+            &task,
+            10
+        ));
+        let mut self_deal = bidder;
+        self_deal.authority = task.creator;
+        let mut self_bid = bid;
+        self_bid.bidder_authority = task.creator;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &self_deal,
+            &self_bid,
+            &task,
+            10
+        ));
+    }
+
     // The tracked best may sweeten but never retreat: for any same-key pair,
     // the update is allowed exactly when the incumbent is NOT strictly better
     // than the refreshed terms.

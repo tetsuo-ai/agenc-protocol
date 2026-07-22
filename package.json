@@ -62,6 +62,8 @@
   "overrides": {
     "tsup": {
       "esbuild": "^0.28.1"
-    }
+    },
+    "hono": "^4.12.31",
+    "@hono/node-server": "^2.0.5"
   }
 }
