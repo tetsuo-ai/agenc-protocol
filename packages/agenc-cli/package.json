@@ -58,7 +58,7 @@
     "@solana/kit": "^6.9.0"
   },
   "devDependencies": {
-    "@solana/kit": "6.9.0",
+    "@solana/kit": "7.0.0",
     "@types/semver": "^7.7.1",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
