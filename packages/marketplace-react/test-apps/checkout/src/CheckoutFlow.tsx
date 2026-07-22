@@ -93,6 +93,9 @@ export function CheckoutFlow({ config, onHired }: CheckoutFlowProps) {
       expectedVersion: BigInt(config.expectedVersion),
       reviewWindowSecs: BigInt(config.reviewWindowSecs),
       listingSpecHash: hexToBytes(config.listingSpecHashHex),
+      // Revision 5: the buyer commits the exact task job spec at hire time
+      // (kept in lockstep with the worker harness pin of [0xab; 32]).
+      taskJobSpecHash: new Uint8Array(32).fill(0xab),
       moderator: config.moderator as Address,
     } as Parameters<typeof hire.hire>[0]);
     setTaskPda(String(result.taskPda));
