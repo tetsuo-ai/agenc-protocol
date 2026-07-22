@@ -1,42 +1,45 @@
 # Program Surface
 
-This file distinguishes the live on-chain surface from the current production
-candidate owned by `programs/agenc-coordination/`.
+This file describes the live on-chain surface owned by
+`programs/agenc-coordination/`.
 
-Mainnet status (verified 2026-07-17): the program
+Mainnet status (verified 2026-07-22): the program
 (`HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`, upgradeable; Squads v4 2-of-3
-multisig custody) has run the full **99-instruction** surface since 2026-07-09
-(slot 431918664). `ProtocolConfig` is 351B with `surface_revision = 4`
-(batch-4 goods). Singleton state: `BidMarketplaceConfig`, `ModerationConfig`,
+multisig custody) has run the full **101-instruction** revision-5 surface since
+2026-07-22 (deployed executable SHA-256
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`).
+`ProtocolConfig` is 351B with `surface_revision = 5`
+(audit hardening). Singleton state: `BidMarketplaceConfig`, `ModerationConfig`,
 and `GovernanceConfig` are INITIALIZED (sane params); `ZkConfig` is NOT
 initialized, so `complete_task_private` is off and `initialize_zk_config` is
 multisig-gated (audit H-5).
 
-Candidate status (verified from `src/lib.rs`, Cargo features, and generated IDL on
-2026-07-18): default production is **101 instructions**, explicit `private-zk` is
-**101**, and `mainnet-canary` is **25**. `lib.rs` therefore contains 126 raw
-`pub fn` declarations across its mutually exclusive modules but 101 unique names;
-the canary repeats 25 full-module names. The candidate retires the three private-ZK
-entrypoints from production and adds `reclaim_orphan_task_child`; it is not live
-until an independently approved upgrade. The canonical candidate IDL contains
-**101 instructions / 43 accounts / 102 events / 405 errors**;
-`docs/reference/INSTRUCTIONS.md` is its generated instruction reference.
+Build breakdown (verified from `src/lib.rs`, Cargo features, and generated IDL):
+default production is **101 instructions**, explicit `private-zk` is **104**, and
+`mainnet-canary` is **25**. `lib.rs` therefore contains 129 raw `pub fn`
+declarations across its mutually exclusive modules but 104 unique names; the
+canary repeats 25 full-module names. Revision 5 retired the three private-ZK
+entrypoints from production and added `reclaim_orphan_task_child` and the O(1)
+bid-accept cranks. The canonical live IDL contains **101 instructions / 43
+accounts / 102 events / 405 errors**; `docs/reference/INSTRUCTIONS.md` is its
+generated instruction reference.
 
 ## Core Files
 
 - `src/lib.rs` - exports every callable instruction
 - `src/state.rs` - PDA/account structs and version constants
-- `src/errors.rs` - program error codes (394 variants in the generated candidate IDL)
+- `src/errors.rs` - program error codes (405 variants in the generated IDL)
 - `src/events.rs` - emitted event types
 - `src/instructions/*` - implementation by instruction family
 
 ## Instruction Families
 
-The families below describe the 101-instruction production candidate (the O(1) bid-accept redesign added `promote_bid`, `demote_ineligible_best`, and `settle_dispute_claim`; see docs/design/bid-accept-o1-redesign.md). The three
+The families below describe the 101-instruction live revision-5 production surface (the O(1) bid-accept redesign added `promote_bid`, `demote_ineligible_best`, and `settle_dispute_claim`; see docs/design/bid-accept-o1-redesign.md). The three
 entries explicitly marked `private-zk development build only` are shown for
 context and are excluded from that count. The batch-N subsections recall which
 milestone introduced instructions already listed under their primary family.
-Live revision 4 remains 99 instructions as described above.
+Revision 5 has been live at 101 instructions since 2026-07-22 (superseding the
+99-instruction revision 4).
 
 ### Agent lifecycle
 
@@ -150,7 +153,8 @@ floor remains unconditional. See `P1_2_OPEN_ROSTER_SPEC.md` and
 | 1 (`FULL`)         | 84 → 90 (P1.2 kept stamp 1) | Phase 9 full surface; P1.2 open roster |
 | 2 (`BATCH2`)       |                          94 | store + heartbeat + referrer legs      |
 | 3 (`BATCH3`)       |                          96 | contest                                |
-| 4 (`BATCH4`)       |                      **99** | goods (revision-gated)                 |
+| 4 (`BATCH4`)       |                          99 | goods (revision-gated)                 |
+| 5 (`AUDIT_HARDENING`) |                  **101** | audit hardening + O(1) bid-accept (LIVE 2026-07-22) |
 
 Generated per-instruction reference: [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md).
 
@@ -236,7 +240,7 @@ The complete model lives in `src/state.rs`. Important state families include:
 
 - protocol config (351B; `surface_revision` stamps the enabled surface — goods handlers enforce `surface_revision >= 4`)
 - zk config (private-ZK development build only; absent on mainnet and from the
-  production candidate IDL)
+  production IDL)
 - agent accounts
 - task and claim accounts (Task remains 466B; `_reserved[0]`/`[1]` hold batch-3 `task_schema`/`live_submissions`, `[2]` is the deferred-slash flag, and `[3..11]` is the monotonic little-endian `claim_generation` used by watchers; zero generation preserves legacy fallback behavior)
 - task validation config, attestor config, submissions, and validation votes

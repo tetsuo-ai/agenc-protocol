@@ -5,7 +5,33 @@ devnet era. Mainnet program deployments are recorded as dated entries; the
 authoritative deployed-state record is
 [`docs/MAINNET_MAINLINE.md`](./docs/MAINNET_MAINLINE.md).
 
-## 2026-07-21 — verified lookup-table resolution + candidate rebind (not deployed)
+## 2026-07-22 — revision 5 DEPLOYED to mainnet
+
+- **Mainnet upgrade executed.** Program `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
+  upgraded to the revision-5 binary through the Squads v4 2-of-3 upgrade-authority
+  vault (`Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`; loader-upgrade execute tx
+  `5iZiPGmU5pYSGEaNBHkTR1cpGhmGtffGp8ZSufD71ActwNyTSt4cFkLoGqiucFmQ3DveSRthCK5fuZHb3NB7Smh7`).
+  Preceded by a top-level legacy `ExtendProgram` of +120,384 bytes (ProgramData
+  `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` → 2,303,653 account-data bytes)
+  and an `update_launch_controls` pause/unpause bracket.
+- **Verified on-chain:** deployed executable SHA-256
+  `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2` (2,303,608
+  bytes, byte-equal to the reviewed candidate); `ProtocolConfig.surface_revision = 5`
+  (SURFACE_REVISION_AUDIT_HARDENING); 101-instruction production surface;
+  `protocol_paused = false`. Compact IDL published and `stamp_release_surface`
+  atomically stamped the revision. Sweep/init were no-ops (Task/ProtocolConfig
+  layouts unchanged; bid + moderation singletons already valid).
+- **Operator-accepted bond race:** 89 revision-4 bond-post-eligible third-party
+  tasks were live through the upload window under `AGENC_ACCEPT_BOND_RACE`; the
+  post-upgrade completion-bond inventory verified zero — the race did not
+  materialize.
+- **Package train published** to npm: protocol 0.4.0, marketplace-sdk 0.12.0,
+  marketplace-react 0.5.0, marketplace-tools/mcp 0.5.0, marketplace-moderation
+  0.2.0, agenc-worker 0.2.0, agenc-cli 0.3.0, store-core 0.6.2.
+- **Still deferred:** `ZkConfig` / `complete_task_private` remain disabled
+  pending an independently reviewed guest + mainnet verifier.
+
+## 2026-07-21 — verified lookup-table resolution + candidate rebind (superseded by the 2026-07-22 deploy)
 
 - **O(1) bid acceptance (founder-approved redesign,
   docs/design/bid-accept-o1-redesign.md):** `TaskBidBook` now incrementally

@@ -18,13 +18,17 @@ matrix below and `getDeployedSurface` do.
 
 ## 1. Support matrix
 
-### 1.1 Current compatible set (as of 2026-07-09)
+### 1.1 Current compatible set (as of 2026-07-22)
 
-The live program wire is the **full 99-instruction surface**
-(`surface_revision = 4`, batch-4 goods; last deployed 2026-07-09, slot
-431918664, via the Squads 2-of-3), with **354 program error variants
-(6000–6353)**. Its gate shapes descend from the **P1.2 hardened open roster**
-build (deployed 2026-07-03, slot 430491216): moderation-consumption gates at
+The live program wire is the **full 101-instruction revision-5 surface**
+(`surface_revision = 5`, audit hardening; deployed 2026-07-22 via the Squads
+2-of-3, executable SHA-256
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`), with **405
+program error variants (6000–6404)**. It supersedes the prior 99-instruction
+revision-4 surface (`surface_revision = 4`, batch-4 goods; live 2026-07-09 →
+2026-07-22, slot 431918664). Its gate shapes descend from the **P1.2 hardened
+open roster** build (deployed 2026-07-03, slot 430491216):
+moderation-consumption gates at
 **9/14/13 accounts** with a required trailing `moderator: Pubkey` argument.
 The **batch-2 upgrade** (2026-07-05, `surface_revision = 2`) was **additive** —
 **90 → 94 instructions** (store identity lifecycle + `moderation_heartbeat`) and
@@ -38,14 +42,18 @@ added the **goods market** (**96 → 99 instructions**: `create_goods_listing`,
 `purchase_good`, `update_goods_listing` — rivalrous direct-buy with per-unit
 `SaleReceipt` provenance and the protocol fee on every sale), fully additive;
 the goods surface is revision-gated, so pre-0.11 SDKs simply do not expose it.
-The exact live wire artifact is the deployed commit `097ded1` (99 instructions /
-46 accounts / 104 events / 354 errors). Current generated references at
+The exact live wire artifact is revision 5 (**101 instructions / 43 accounts /
+102 events / 405 errors**), canonical IDL SHA-256
+`8cfd094dc356f88678ba712a8a167a9fcd94cf3c33852ec1092a7a3ff491a82e`. Current
+generated references at
 [`reference/INSTRUCTIONS.md`](./reference/INSTRUCTIONS.md) and
-[`reference/ERRORS.md`](./reference/ERRORS.md) describe the pending
-98-instruction revision-5 candidate, not mainnet. `npm run check:idl-reference`
-keeps those candidate references aligned with the committed candidate IDL.
+[`reference/ERRORS.md`](./reference/ERRORS.md) now describe the live
+101-instruction revision-5 surface. `npm run check:idl-reference` keeps those
+references aligned with the committed IDL.
 
-**This is the wire-compatible published set today:**
+**The revision-4 published set below now fails closed against the live
+revision-5 program; the coordinated revision-5 client set is in §1.1.1. The
+prior revision-4 wire-compatible published set was:**
 
 | Package                             | Compatible range                   | Notes                                                                                                                                                                                                                            |
 | ----------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -55,8 +63,8 @@ keeps those candidate references aligned with the committed candidate IDL.
 | `@tetsuo-ai/marketplace-tools`      | **0.4.x** (latest 0.4.0)           |                                                                                                                                                                                                                                  |
 | `@tetsuo-ai/marketplace-mcp`        | **0.4.x** (latest 0.4.0)           |                                                                                                                                                                                                                                  |
 | `@tetsuo-ai/marketplace-moderation` | **0.1.x** (latest 0.1.0)           | first published alongside the roster work                                                                                                                                                                                        |
-| `@tetsuo-ai/agenc-cli`              | **0.2.x** (latest 0.2.0)           | CLI against the live 99-ix surface                                                                                                                                                                                               |
-| `@tetsuo-ai/agenc-worker`           | **0.1.x** (latest 0.1.1)           | worker daemon against the live 99-ix surface                                                                                                                                                                                     |
+| `@tetsuo-ai/agenc-cli`              | **0.2.x** (latest 0.2.0)           | CLI against the revision-4 99-ix surface                                                                                                                                                                                          |
+| `@tetsuo-ai/agenc-worker`           | **0.1.x** (latest 0.1.1)           | worker daemon against the revision-4 99-ix surface                                                                                                                                                                                |
 | `@tetsuo-ai/store-core`             | **0.5.x or exactly 0.6.0**         | 0.5.x speaks the same wire; 0.6.0 is additive; 0.6.1 crosses the revision-5 boundary despite sharing this pre-1.0 minor                                                                                                          |
 | `create-agenc-store`                | **0.5.x or exactly 0.6.0**         | scaffolds the revision-4 template pins; 0.6.1 is reserved for the coordinated revision-5 cutover                                                                                                                                 |
 
@@ -71,18 +79,18 @@ Every published major/minor **below** these ranges fails **closed** against main
 today (transactions reject at Borsh decode or account resolution — no funds at
 risk, but the flow is down). See §1.2 for exactly which upgrade broke which range.
 
-### 1.1.1 Unreleased revision-5 candidate set
+### 1.1.1 Revision-5 coordinated client set
 
-This repository contains most of the following **unreleased** coordinated
-candidates. The store-core and `create-agenc-store` candidates live in their
-separate coordinated store repositories; they are not agenc-protocol workspace
-packages. None of these candidates is evidence that revision 5 is deployed, and
-they do not replace the published/live matrix above. Publish them only with the
-reviewed revision-5 program cutover:
+This repository contains the following coordinated revision-5 clients. The
+store-core and `create-agenc-store` candidates live in their separate
+coordinated store repositories; they are not agenc-protocol workspace packages.
+The revision-5 program cutover executed on 2026-07-22, so these clients — not the
+revision-4 pins above — speak the live wire. Confirm each is published at its
+coordinated version before relying on it:
 
 | Package                                        | Unreleased candidate | Coordination note                                                                                                               |
 | ---------------------------------------------- | -------------------: | ------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`                          |            **0.4.0** | 98-instruction revision-5 IDL/types; must not be published as 0.3.0                                                             |
+| `@tetsuo-ai/protocol`                          |            **0.4.0** | 101-instruction revision-5 IDL/types; must not be published as 0.3.0                                                            |
 | `@tetsuo-ai/marketplace-sdk`                   |           **0.12.0** | revision-5 generated client; its changed hire/activation writes intentionally reject revision 4                                 |
 | `@tetsuo-ai/marketplace-react`                 |            **0.5.0** | breaking revision-5 input and SDK-peer cutover; not a patch-level peer widening                                                 |
 | `@tetsuo-ai/marketplace-tools`                 |            **0.5.0** | depends on SDK `^0.12.0`                                                                                                        |
@@ -149,7 +157,7 @@ declare compatible ranges. Revision 5 has one coordinated combination: SDK
 | 2026-07-05      | **Batch-2 store + heartbeat**                                                                    | 90 → **94 ix**, `surface_revision = 2`             | additive (no flag-day gate change)                                                                                                                                                                 | none (old pins keep working)                                                                                                               | sdk **0.9.0** additive facade                                                                                                                                                                                                                                    |
 | 2026-07-05      | **Batch-3 contest** ([`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md))     | 94 → **96 ix**, `surface_revision = 3`             | additive optional accounts                                                                                                                                                                         | none                                                                                                                                       | sdk **0.10.0** / **0.10.1** additive facade                                                                                                                                                                                                                      |
 | 2026-07-09      | **Batch-4 goods** ([`design/batch-4-goods.md`](./design/batch-4-goods.md))                       | 96 → **99 ix**, `surface_revision = 4`             | goods handlers require rev ≥ 4                                                                                                                                                                     | none for pre-goods flows; goods needs sdk **≥ 0.11.0**                                                                                     | sdk **0.11.0**, protocol **0.3.0**                                                                                                                                                                                                                               |
-| pending cutover | **Revision-5 audit hardening**                                                                   | 99 → **98 production ix**, `surface_revision = 5`  | coordinated account/argument hardening across hire, claim, settlement, cancellation, goods, staking, skills, and governance paths; the three hire/activation writes use explicit v2 discriminators | sdk **≤0.11.x** and the corresponding old first-party clients fail closed on changed writes; v2 clients also reject the revision-4 program | flag-day release: protocol **0.4.0**, sdk **0.12.0**, react **0.5.0**, tools/MCP **0.5.0**, moderation/worker **0.2.0**, CLI **0.3.0**, store-core/create **0.6.1**; every first-party writer and hosted transaction builder is staged before the paused cutover |
+| 2026-07-22      | **Revision-5 audit hardening** (executed; [`REVISION_5_CUTOVER.md`](./REVISION_5_CUTOVER.md)) | 99 → **101 production ix**, `surface_revision = 5`  | coordinated account/argument hardening across hire, claim, settlement, cancellation, goods, staking, skills, and governance paths; the three hire/activation writes use explicit v2 discriminators; the O(1) bid-accept redesign added `promote_bid` / `demote_ineligible_best` / `settle_dispute_claim` | sdk **≤0.11.x** and the corresponding old first-party clients fail closed on changed writes; v2 clients also reject the revision-4 program | flag-day release: protocol **0.4.0**, sdk **0.12.0**, react **0.5.0**, tools/MCP **0.5.0**, moderation/worker **0.2.0**, CLI **0.3.0**, store-core/create **0.6.1**; every first-party writer and hosted transaction builder staged before the paused cutover |
 
 The 2026-06-11 row is the motivating failure: a flag-day wire change shipped with
 no deprecation window while the old sdk pin was still being scaffolded by public

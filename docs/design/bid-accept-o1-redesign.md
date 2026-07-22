@@ -1,8 +1,9 @@
 # O(1) Bid Acceptance & Chunked Dispute Settlement — Long-Term Wire-Liveness Redesign
 
-Status: IMPLEMENTED 2026-07-21 (founder-approved; program + SDK landed — see
-CHANGELOG "O(1) bid acceptance + chunked dispute settlement")
-Date: 2026-07-21
+Status: DEPLOYED 2026-07-22 (founder-approved; program + SDK landed and shipped in
+the revision-5 mainnet upgrade — see CHANGELOG "O(1) bid acceptance + chunked
+dispute settlement" and docs/MAINNET_MAINLINE.md)
+Date: 2026-07-21 (implemented); 2026-07-22 (deployed)
 Closes (when implemented): `PROTOCOL-BID-WIRE-LIVENESS-001`, `PROTOCOL-DISPUTE-WIRE-LIVENESS-001` (fixme.md)
 Related: `docs/MARKETPLACE_V2_BID_PROTOCOL.md`, `docs/DISPUTE_CHALLENGE_WINDOW.md`, adversarial wire-math audit 2026-07-20
 
@@ -222,10 +223,10 @@ lands in its own transaction.
 
 ## 6. Sequencing, compatibility, gates
 
-- **Timing**: this is revision-5-candidate work — before external audit,
-  while mainnet holds **zero** bid books and the candidate is undeployed.
-  This is the cheapest this change will ever be; shipping cap-8 instead
-  means a second breaking ABI change + live-money migration after adoption.
+- **Timing**: this shipped in the revision-5 upgrade (deployed 2026-07-22)
+  while mainnet held **zero** bid books — the cheapest this change would ever
+  be; shipping cap-8 instead would have meant a second breaking ABI change +
+  live-money migration after adoption.
 - **Compatibility**: `TaskBidBook`/`Dispute` changes are append-only with
   `const_assert` + `migrate_task`-style coverage; new instructions and error
   codes append after the current ends; `accept_bid`'s remaining-accounts

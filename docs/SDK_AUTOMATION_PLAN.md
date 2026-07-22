@@ -3,10 +3,11 @@
 Status: **HISTORICAL / EXECUTED 2026-06-09** (Loops 0–5 built on branch `feat/marketplace-sdk`, local only).
 Decisions locked 2026-06-09.
 
-> Current-state note (2026-07-18): this plan is retained as implementation
-> history. Mainnet and the published SDK 0.11.0 still speak the 99-instruction
-> revision-4 wire. The workspace now contains the 98-instruction revision-5
-> candidate client, which must ship with the program upgrade. `sdk:drift` hashes
+> Current-state note (2026-07-22): this plan is retained as implementation
+> history. Mainnet now runs the 101-instruction revision-5 surface (deployed
+> 2026-07-22); the workspace SDK is the matching revision-5 client (protocol
+> 0.4.0 / SDK 0.12.0) that ships with that upgrade. The previously published SDK
+> 0.11.0 speaks the superseded 99-instruction revision-4 wire. `sdk:drift` hashes
 > the generated path/byte tree immediately before and after deterministic
 > regeneration; it no longer compares an intentionally dirty reviewed tree to
 > HEAD. The package README is the current SDK status surface.

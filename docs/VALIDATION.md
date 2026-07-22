@@ -97,24 +97,19 @@ These local gates do not substitute for protected CI, live revision-4
 compatibility simulations, consumer convergence, or the controlled mainnet
 ceremony.
 
-Current candidate identities (thrice-reproduced SBF: the 2026-07-20 close-task
-fix build, which precedes the canary-gate source edit, plus two 2026-07-21
-rebuilds that follow it — proving that edit is codegen-neutral for the
-production profile; deployment still required). The
-previously recorded `79f55a68…` identity predates the 2026-07-20 `close_task`
-repeat-cleanup fix and is superseded:
+Deployed revision-5 identities. Revision 5 was deployed 2026-07-22; the deployed
+executable is byte-equal to the reviewed revision-5 candidate (thrice-reproduced:
+the 2026-07-20 close-task fix build plus two 2026-07-21 rebuilds):
 
 | Artifact       | Current local evidence                                                                                                             |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Production SBF | superseded 2026-07-21 by the O(1) accept / chunked-settlement redesign — rebuild, twice-reproduce, and rebind (rail + docs) after its independent review; the extension rail stays fail-closed against its pinned `5112216b…` (2,303,608-byte) prior artifact |
-| Candidate IDL  | 101 instructions / 43 accounts / 102 events / 405 errors; SHA-256 `8cfd094dc356f88678ba712a8a167a9fcd94cf3c33852ec1092a7a3ff491a82e` |
+| Production SBF | SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, 2,303,608 bytes, deployed 2026-07-22; ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` |
+| Canonical IDL  | 101 instructions / 43 accounts / 102 events / 405 errors; SHA-256 `8cfd094dc356f88678ba712a8a167a9fcd94cf3c33852ec1092a7a3ff491a82e` |
 
-These are candidate facts, not a claim that this binary is deployed: mainnet
-still runs the verified revision-4 artifact at commit `097ded1` (99 instructions /
-46 accounts / 104 events / 354 errors).
-The candidate SBF hash above is local release evidence, not a deployed-program
-hash claim; re-resolve and compare ProgramData immediately before and after any
-approved upgrade.
+Mainnet now runs deployed revision 5 (executable `049a66…`, 2026-07-22); the
+superseded revision-4 artifact was commit `097ded1` (99 instructions / 46
+accounts / 104 events / 354 errors). Re-resolve and compare ProgramData against
+the deployed executable hash when in doubt.
 
 Non-test Rust builds enforce `deny(unsafe_code)`. Production account handling
 contains no lifetime transmute or unsafe block; the two remaining unsafe blocks
@@ -139,10 +134,11 @@ The matrix defines:
 
 ## Mainnet Release Scope
 
-> Historical note (2026-07-17): the first mainnet release has shipped — the full
-> 99-instruction surface (`surface_revision = 4`) is live since 2026-07-09.
-> `complete_task_private` remains deferred: `ZkConfig` is not initialized on
-> that live revision, and the pending revision-5 production build removes the
+> Historical note (updated 2026-07-22): the mainnet surface has advanced through
+> the full 99-instruction revision-4 surface (`surface_revision = 4`, live
+> 2026-07-09 → 2026-07-22) to the **live 101-instruction revision-5 surface**
+> (`surface_revision = 5`, deployed 2026-07-22). `complete_task_private` remains
+> deferred: `ZkConfig` is not initialized, and revision-5 production removes the
 > entrypoint entirely. See [./ZK_PRIVATE_FLOW.md](./ZK_PRIVATE_FLOW.md). The
 > scope bullets below are the original release-1 definition, kept for reference.
 
@@ -340,12 +336,12 @@ canonical stake and AgentRegistration PDA bindings, and each account's own rent
 plus tracked `staked_amount` backing. Fully backed nonzero stake is compatible;
 malformed state, principal without its agent identity, or a per-account deficit
 blocks deployment even when aggregate balances appear sufficient.
-The current candidate remains blocked on a separate 120,384-byte top-level
+The revision-5 upgrade (2026-07-22) required a separate 120,384-byte top-level
 legacy `ExtendProgram` action in a slot before the binary upgrade. Mainnet never
 activated checked extension, and current Agave rejects legacy extension through
-CPI, so this action cannot be a Squads vault transaction. Use the pinned
-`scripts/program-extend-mainnet.mjs` rail with official Agave CLI 4.1.0, an
-explicitly funded payer, and two independent genesis-checked RPCs.
+CPI, so this action could not be a Squads vault transaction; it was executed via
+the pinned `scripts/program-extend-mainnet.mjs` rail with official Agave CLI
+4.1.0, an explicitly funded payer, and two independent genesis-checked RPCs.
 
 The SDK drift gate snapshots a deterministic digest of every generated path and
 byte, regenerates from the current IDL, and compares the before/after trees. This

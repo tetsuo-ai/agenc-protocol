@@ -48,11 +48,11 @@ window or before the deploy is announced publicly.
   (`AGENC_ACCEPT_BOND_RACE`); the post-upgrade completion-bond inventory verified
   zero, so the race did not materialize.
 
-## Pending Revision-5 Candidate (not deployed)
+## Revision 5 (deployed 2026-07-22)
 
 The production/default `#[program]` surface contains **101 actual Rust
-entrypoints**. That number is derived from the cfg-gated source, not this
-document:
+entrypoints** — the surface now live on mainnet. That number is derived from the
+cfg-gated source, not this document:
 
 - production defaults: 101 (`spl-token-rewards`; `private-zk` off);
 - explicit development `private-zk`: 104;
@@ -212,10 +212,11 @@ terminal accounts and rent-only orphan children are inventory, not authority to
 delete them; the recovery instruction validates every canonical parent/child/
 worker binding before returning rent.
 
-This candidate is **not live**. Until a separately reviewed Squads upgrade and
-revision-5 stamp occur, mainnet remains the verified 99-instruction revision-4
-binary described above. The three Squads member key files are currently
-documented as co-located on one host, so host-level quorum compromise remains an
+This surface went **live 2026-07-22** via the Squads upgrade and revision-5
+stamp; mainnet now runs the 101-instruction revision-5 binary (executable
+`049a66e3…`), superseding the prior 99-instruction revision-4 binary. The three
+Squads member key files are currently documented as co-located on one host, so
+host-level quorum compromise remains an
 operational custody risk even though on-chain control is genuinely 2-of-3.
 
 ### Prior deployment history
@@ -256,10 +257,10 @@ document was added, the deployed mainnet source tree matched `main`, so `main`
 remains the only branch downstream integrators should treat as canonical.
 
 Historical branches may remain in the repo for auditability, but they are not
-the branch of record once `main` matches the deployed tree. At current HEAD,
-`main` is the pending revision-5 candidate; released packages and operators must
-continue to target deployed revision 4 until the coordinated upgrade is
-confirmed.
+the branch of record once `main` matches the deployed tree. As of 2026-07-22,
+`main` matches the deployed revision-5 tree; released packages and operators
+target revision 5 (surface_revision = 5), the coordinated upgrade having been
+confirmed on-chain.
 
 ## Release Discipline
 

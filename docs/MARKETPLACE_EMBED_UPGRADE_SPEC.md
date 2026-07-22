@@ -2,8 +2,9 @@
 
 > **Status: historical record (plan v3; execution complete — retained as
 > record).** The batches planned here have shipped and been surpassed: mainnet
-> runs the full 99-instruction surface (live since 2026-07-09, slot 431918664,
-> `surface_revision = 4` / batch-4 goods); the 169-task migration executed
+> runs the full 101-instruction revision-5 surface (live since 2026-07-22,
+> `surface_revision = 5`; the prior 99-ix `surface_revision = 4` batch-4-goods
+> surface was live 2026-07-09 → 2026-07-22, slot 431918664); the 169-task migration executed
 > 2026-06-11; upgrade authority is a Squads v4 2-of-3 multisig (since
 > 2026-07-03); `ZkConfig` remains NOT initialized (ZK deferred). "84-ix" / "149"
 > in the body are doc-date state. See `docs/MAINNET_MAINLINE.md` (deploy record),

@@ -50,16 +50,16 @@ The protocol covers that lifecycle plus advanced primitives:
   (fail-closed); permissionless bonded attestor roster (P1.2) — see
   [docs/PROGRAM_SURFACE.md](docs/PROGRAM_SURFACE.md).
 - **Store identity, contest tasks, goods market, bid marketplace, reputation, skills,
-  governance (multisig), and a social feed** round out the surface. The current
-  default production candidate and committed IDL contain **98 instructions**;
-  the restricted canary remains 25 and explicit private-ZK development is 101.
+  governance (multisig), and a social feed** round out the surface. The live
+  default production surface and committed IDL contain **101 instructions**;
+  the restricted canary remains 25 and explicit private-ZK development is 104.
 
-> **Build surfaces.** `lib.rs` has a default production module (98 instructions in
-> this revision-5 candidate) and a conservative **mainnet-canary** module (the
+> **Build surfaces.** `lib.rs` has a default production module (101 instructions in
+> live revision 5) and a conservative **mainnet-canary** module (the
 > frozen 25-instruction build). Enabling `private-zk` adds three quarantined
-> development instructions to production, yielding 101; deployment rails reject
-> that feature for a production release. Mainnet still runs the prior 99-instruction
-> revision-4 binary until a separately reviewed and approved upgrade occurs.
+> development instructions to production, yielding 104; deployment rails reject
+> that feature for a production release. Mainnet runs the 101-instruction
+> revision-5 binary as of 2026-07-22.
 
 ## Mainnet source of truth
 
@@ -68,16 +68,19 @@ currently deployed AgenC mainnet program. The authoritative deployed commit and 
 record are maintained in:
 [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md).
 
-> **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
-> (`surface_revision = 4` / `BATCH4`, last deployed slot **431918664**, all task types
-> enabled, bid marketplace live, store + contest + goods live, `ZkConfig` deferred so
+> **As of 2026-07-22 the full 101-instruction revision-5 surface is live on mainnet**
+> (`surface_revision = 5` / `SURFACE_REVISION_AUDIT_HARDENING`, deployed executable
+> SHA-256 `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, all task
+> types enabled, bid marketplace live, store + contest + goods live, `ZkConfig` deferred so
 > `complete_task_private` is off). Growth path: 25-ix canary → 84-ix full surface
-> (2026-06-11) → 90-ix P1.2 open roster (2026-07-03) → 94/96/99 via additive batches 2–4.
+> (2026-06-11) → 90-ix P1.2 open roster (2026-07-03) → 94/96/99 via additive batches 2–4
+> → 101-ix revision 5 (2026-07-22, O(1) bid-accept redesign).
 > Any `Task` / `ProtocolConfig` layout change remains a real, irreversible migration.
 
-- The deployed mainnet binary is still revision 4. This working tree is the pending
-  revision-5 hardening candidate and intentionally does **not** claim byte-for-byte
-  equality with the live program before an approved upgrade.
+- The deployed mainnet binary is revision 5 (executable SHA-256
+  `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`, deployed
+  2026-07-22 via the Squads v4 2-of-3 vault). Earlier working-tree candidate hashes
+  in dated evidence snapshots below predate this deployed build.
 - See [docs/MAINNET_MAINLINE.md](docs/MAINNET_MAINLINE.md),
   [docs/MAINNET_ROLLOUT_RUNBOOK.md](docs/MAINNET_ROLLOUT_RUNBOOK.md) (the completed rollout
   record), and [docs/BATCH_1_3_AUDIT_PREP.md](docs/BATCH_1_3_AUDIT_PREP.md).
@@ -121,8 +124,8 @@ surface.
 
 | Package                             | Path                              | Version                              | What                                                                                                                                                                                                                                                                  |
 | ----------------------------------- | --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@tetsuo-ai/protocol`               | `packages/protocol`               | 0.4.0 candidate (published: 0.3.0)   | Committed 98-instruction candidate IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 still contains live revision 4 and must not be overwritten.                                                                                          |
-| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **98-instruction revision-5 candidate** + ergonomic facade. The published 0.11.0 release still targets live revision 4; program and SDK must ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
+| `@tetsuo-ai/protocol`               | `packages/protocol`               | 0.4.0 candidate (published: 0.3.0)   | Committed 101-instruction revision-5 IDL + TS types + manifest, derived from `artifacts/anchor/*`. Published 0.3.0 targets the prior revision-4 wire (superseded by live revision 5).                                                                                 |
+| `@tetsuo-ai/marketplace-sdk`        | `packages/sdk-ts`                 | 0.12.0 candidate (published: 0.11.0) | Codama-generated `@solana/kit` client for the **101-instruction revision-5 surface** + ergonomic facade. The published 0.11.0 release targets the prior revision-4 wire (superseded by live revision 5); program and SDK ship together. See [packages/sdk-ts/README.md](packages/sdk-ts/README.md). |
 | `@tetsuo-ai/marketplace-react`      | `packages/marketplace-react`      | 0.5.0 candidate (published: 0.4.1)   | React hooks/components for embeddable marketplace UIs; the candidate requires the revision-5 SDK and buyer job-spec commitment.                                                                                                                                       |
 | `@tetsuo-ai/marketplace-tools`      | `packages/marketplace-tools`      | 0.5.0 candidate (published: 0.4.0)   | Discovery/prepare tool adapters (OpenAI, LangChain, CrewAI) + AgentCard helpers.                                                                                                                                                                                      |
 | `@tetsuo-ai/marketplace-mcp`        | `packages/marketplace-mcp`        | 0.5.0 candidate (published: 0.4.0)   | MCP server exposing marketplace tools.                                                                                                                                                                                                                                |
@@ -131,9 +134,10 @@ surface.
 | `agenc-cli`                         | `packages/agenc-cli-alias`        | 0.3.0 candidate (published: 0.2.0)   | Thin unscoped alias; ships with the scoped CLI.                                                                                                                                                                                                                       |
 | `@tetsuo-ai/agenc-worker`           | `packages/agenc-worker`           | 0.2.0 candidate (published: 0.1.1)   | Worker claim/submit runtime loop.                                                                                                                                                                                                                                     |
 
-Every version labeled **candidate** above is unreleased and belongs to the same
-revision-5 release train. The published versions continue to describe and support
-the revision-4 mainnet deployment until the coordinated program/package cutover.
+Every version labeled **candidate** above belongs to the coordinated revision-5
+release train that matches the live program (deployed 2026-07-22); confirm each is
+published at its coordinated version. The prior published revision-4 pins now fail
+closed against the live revision-5 program.
 
 Cross-package support matrix: [docs/VERSIONING.md](docs/VERSIONING.md).
 
@@ -240,14 +244,13 @@ Before any mainnet deploy that changes the deployed surface or account layout:
    active `.well-known/security.txt` at both canonical hosts and verify the
    plain-text responses. Do not advertise the security mailbox until delivery
    and alerting have been tested end to end.
-4. **ProgramData capacity ceremony.** The thrice-reproduced current candidate is
-   102,416 bytes too
-   large for the live allocation. Current Agave rejects both the inactive
+4. **ProgramData capacity ceremony.** A binary larger than the live allocation
+   requires a ProgramData extension first. Current Agave rejects both the inactive
    `ExtendProgramChecked` instruction and legacy `ExtendProgram` through CPI,
-   so this cannot be a Squads proposal. Before upgrade, use the pinned
-   `scripts/program-extend-mainnet.mjs` rail with official Agave CLI 4.1.0 to
-   execute the permissionless legacy extension as a top-level transaction from
-   an explicitly funded System-owned payer. The rail pins the Linux binary hash
+   so this cannot be a Squads proposal. The revision-5 upgrade (2026-07-22) used the
+   pinned `scripts/program-extend-mainnet.mjs` rail with official Agave CLI 4.1.0 to
+   execute a top-level legacy extension of 120,384 bytes (final binary 2,303,608
+   bytes) from an explicitly funded System-owned payer. The rail pins the Linux binary hash
    and one unlinked read-only payer-keypair inode for both signer uses, writes
    durable recovery evidence before broadcast, recovers the exact finalized
    signature, and proves the old payload is unchanged plus the new region is zero.
@@ -255,8 +258,9 @@ Before any mainnet deploy that changes the deployed surface or account layout:
    full capacity/rent/authority preflight. Never let deploy auto-extend.
 5. **Migration verification and revision stamp.** Run the canonical idempotent sweep after
    deployment and stamp the new surface last. The 2026-06-11 upgrade's 169-Task migration
-   is historical; revision 5 expects the already-migrated 351-byte config and 466-byte
-   Tasks and must stop on any unexpected layout drift.
+   is historical; the revision-5 upgrade (2026-07-22) verified the already-migrated
+   351-byte config and 466-byte Tasks with no layout drift and stamped
+   `surface_revision = 5` last.
 6. **SDK/client updates** for any new required accounts.
 
 ## Security & trust
@@ -264,11 +268,13 @@ Before any mainnet deploy that changes the deployed surface or account layout:
 The program custodies escrow, completion bonds, and agent stakes. Trust
 artifacts (PLAN.md Phase 8):
 
-- **Verifiable builds** — the deployed program is **OtterSec-verified against
-  this public repo**:
-  [verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK)
-  reports `is_verified: true` for deployed revision 4 at commit `097ded1`
-  (verified 2026-07-10). Every `protocol-v*` release requires a successful
+- **Verifiable builds** — the deployed program is built reproducibly from this
+  public repo. The prior OtterSec badge
+  ([verify.osec.io/status/HJsZ…](https://verify.osec.io/status/HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK))
+  reported `is_verified: true` for deployed revision 4 at commit `097ded1`
+  (verified 2026-07-10); revision 5 (deployed 2026-07-22, executable SHA-256
+  `049a66…`) needs the reusable verifiable build re-run to re-attest the new
+  bytecode. Every `protocol-v*` release requires a successful
   reusable verifiable build and records reproducible SHA-256 hashes of the program
   built in a pinned Docker image (`.github/workflows/verify.yml`); reproduce it
   yourself with `solana-verify verify-from-repo` — see
