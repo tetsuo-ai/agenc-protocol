@@ -14,24 +14,39 @@ window or before the deploy is announced publicly.
 
 ## Current Mainnet Deployment
 
-> **As of 2026-07-09 the full 99-instruction surface is live on mainnet**
-> (`surface_revision = 4` / `SURFACE_REVISION_BATCH4`, last deployed slot
-> **431918664**). Growth path: 25-ix canary → 84-ix full surface (2026-06-11) →
-> 90-ix P1.2 open roster (2026-07-03, slot 430491216) → additive batches 2–4
-> (store + moderation heartbeat → contest → goods) culminating in the current
-> binary. Verified live on 2026-07-10: on-chain `ProtocolConfig.surface_revision
-= 4` and SDK `getDeployedSurface` reports `goods: true`.
+> **As of 2026-07-22 the revision-5 surface is LIVE on mainnet**
+> (`surface_revision = 5` / `SURFACE_REVISION_AUDIT_HARDENING`). The upgrade was
+> executed through the Squads v4 2-of-3 upgrade-authority vault
+> (`Cj9dWtovMaAsHUkCFqsEeP7GAS86DouqFerh86Qxtnuf`, execute tx
+> `5iZiPGmU5pYSGEaNBHkTR1cpGhmGtffGp8ZSufD71ActwNyTSt4cFkLoGqiucFmQ3DveSRthCK5fuZHb3NB7Smh7`),
+> after a top-level ProgramData extension of +120,384 bytes and preceded/followed
+> by an `update_launch_controls` pause/unpause. Verified on-chain: deployed
+> executable SHA-256
+> `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2` (byte-equal
+> to the reviewed candidate), `ProtocolConfig.surface_revision = 5`,
+> `protocol_paused = false`. The 101-instruction compact IDL was published and
+> `stamp_release_surface` atomically stamped the revision.
+>
+> Prior state (superseded): from 2026-07-09 the 99-instruction revision-4 surface
+> (`surface_revision = 4` / BATCH4, slot 431918664) was live. Growth path:
+> 25-ix canary → 84-ix full surface (2026-06-11) → 90-ix P1.2 open roster
+> (2026-07-03) → additive batches 2–4 → revision-5 (this deploy).
 
 - Program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - Program source path: `programs/agenc-coordination/`
 - `declare_id!` location: `programs/agenc-coordination/src/lib.rs`
-- Live surface: **full 99-instruction surface** (default features),
-  `surface_revision = 4` (BATCH4)
-- Last deployed in slot: **431918664** (batch-4 / goods-enabled binary; verified
-  2026-07-10 via `solana program show`)
-- Live instruction inventory: 99 entrypoints in the verified revision-4 source
-  and deployed bytecode. Candidate artifacts are tracked separately below and
-  must not be described as live before an upgrade is confirmed.
+- Live surface: **101-instruction revision-5 surface** (default features),
+  `surface_revision = 5` (AUDIT_HARDENING)
+- Deployed executable SHA-256:
+  `049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2` (2,303,608
+  bytes); ProgramData `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw` grown to
+  2,303,653 account-data bytes.
+- Live instruction inventory: 101 entrypoints (the O(1) bid-accept redesign added
+  `promote_bid`, `demote_ineligible_best`, and `settle_dispute_claim`).
+- Post-deploy note: 89 revision-4 bond-post-eligible third-party tasks were live
+  through the upload window under an explicit operator-accepted race
+  (`AGENC_ACCEPT_BOND_RACE`); the post-upgrade completion-bond inventory verified
+  zero, so the race did not materialize.
 
 ## Pending Revision-5 Candidate (not deployed)
 

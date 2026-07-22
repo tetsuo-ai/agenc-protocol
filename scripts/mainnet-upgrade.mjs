@@ -2517,7 +2517,28 @@ export async function scanStableRevision5CompletionBondCutover(
   const taskSettlement = await scanTaskSettlement(connection);
   // Deliberately fail before the child scan. Scanning children first permits a
   // revision-4 caller to post, detach, and orphan a bond in the RPC gap.
-  assertRevision4BondEntryClosed(taskSettlement, stage);
+  //
+  // OPERATOR-ACCEPTED RACE BYPASS (2026-07-22): the deployed revision-4
+  // post_completion_bond entry is neither pause- nor mask-gated, so 89 live
+  // third-party Exclusive/SOL tasks across 35 creators remain bond-postable
+  // during the loader upload window. The task owners are the only parties who
+  // can settle these (cancel_task is creator-gated), so this cannot be cleared
+  // operationally. The founder made an informed decision to accept the bounded
+  // race: worst case is a single task that receives a window bond, which
+  // migrate_task then refuses, leaving it un-migrated and recoverable via
+  // reclaim_completion_bond — no fund loss. Set AGENC_ACCEPT_BOND_RACE=1 to
+  // proceed. EVERY OTHER cutover gate remains fully enforced.
+  if (process.env.AGENC_ACCEPT_BOND_RACE === "1") {
+    console.warn(
+      `WARNING: ${stage}: BYPASSING assertRevision4BondEntryClosed by explicit ` +
+        `operator acceptance (AGENC_ACCEPT_BOND_RACE=1). ` +
+        `${taskSettlement.revision4BondPostEligibleTaskCount} revision-4 ` +
+        `bond-post-eligible task(s) remain live during the loader upload window. ` +
+        `Monitor for a window-posted CompletionBond and reclaim/migrate it post-upgrade.`,
+    );
+  } else {
+    assertRevision4BondEntryClosed(taskSettlement, stage);
+  }
   const taskChildren = await scanChildren(connection);
   assertCompletionBondInventoryEmpty(taskChildren, stage);
   return { taskSettlement, taskChildren };
@@ -2769,7 +2790,19 @@ export function assertRevision5CutoverResults(
         "scripts/preflight-bid-contract-scan.mjs and cancel/expire every open bid before continuing.",
     );
   }
-  assertRevision4BondEntryClosed(taskSettlement, stage);
+  // Same operator-accepted race bypass as the predeploy scan (see the detailed
+  // note at the first assertRevision4BondEntryClosed call site). Founder
+  // accepted the bounded window-bond race (AGENC_ACCEPT_BOND_RACE=1); every
+  // other cutover-result gate above remains enforced.
+  if (process.env.AGENC_ACCEPT_BOND_RACE === "1") {
+    console.warn(
+      `WARNING: ${stage}: BYPASSING assertRevision4BondEntryClosed (results) by explicit ` +
+        `operator acceptance (AGENC_ACCEPT_BOND_RACE=1); ` +
+        `${taskSettlement.revision4BondPostEligibleTaskCount} bond-post-eligible task(s) remain.`,
+    );
+  } else {
+    assertRevision4BondEntryClosed(taskSettlement, stage);
+  }
 }
 
 export async function verifyRevision5CutoverState(

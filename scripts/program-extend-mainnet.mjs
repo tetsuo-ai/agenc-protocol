@@ -1671,7 +1671,14 @@ export function validateExtensionEvidence(
   ) {
     throw new Error("extension evidence preflight digest is invalid");
   }
-  assertSignatureHistory(evidence.beforeSignatures, { exactLength: true });
+  // Drift detection pins the ProgramData signature history (up to the last 25
+  // entries) and re-verifies it unchanged at postflight; it does not require a
+  // magic count. A program-data account only accrues a signature per
+  // deploy/upgrade, so mainnet legitimately holds fewer than 25 (currently 24).
+  // Requiring exactly 25 was an untested invariant that never met on-chain
+  // reality; "at most 25" is consistent with the capture-time check and
+  // preserves the exact anti-race SHA pin below.
+  assertSignatureHistory(evidence.beforeSignatures);
   const beforeSignaturesSha256 = getExtensionSignatureHistorySha256(
     evidence.beforeSignatures,
   );
