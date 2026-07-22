@@ -87,7 +87,7 @@
   },
   "peerDependencies": {
     "@solana/kit": "^6.9.0",
-    "@solana/program-client-core": "^6.4.0",
+    "@solana/program-client-core": "^7.0.0",
     "@tetsuo-ai/marketplace-sdk": "^0.12.0",
     "react": ">=18"
   },
@@ -97,7 +97,7 @@
   "devDependencies": {
     "@ladle/react": "^5.1.1",
     "@solana/kit": "6.9.0",
-    "@solana/program-client-core": "^6.4.0",
+    "@solana/program-client-core": "^7.0.0",
     "@solana/react": "6.9.0",
     "@testing-library/react": "^16.1.0",
     "@tetsuo-ai/marketplace-sdk": "file:../sdk-ts",
