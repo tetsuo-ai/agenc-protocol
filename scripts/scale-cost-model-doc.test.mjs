@@ -10,11 +10,16 @@ const SCALE_MODEL_PATH = new URL(
   "../docs/SCALE_COST_MODEL.md",
   import.meta.url,
 );
+const SDK_LIMITS_PATH = new URL(
+  "../packages/sdk-ts/src/values/protocol-limits.ts",
+  import.meta.url,
+);
 
 test("scale model documents the shipped dispute-safe worker invariant", async () => {
-  const [constants, scaleModel] = await Promise.all([
+  const [constants, scaleModel, sdkLimits] = await Promise.all([
     readFile(CONSTANTS_PATH, "utf8"),
     readFile(SCALE_MODEL_PATH, "utf8"),
+    readFile(SDK_LIMITS_PATH, "utf8"),
   ]);
 
   const capMatch = constants.match(
@@ -24,6 +29,11 @@ test("scale model documents the shipped dispute-safe worker invariant", async ()
 
   const workerCap = Number(capMatch[1]);
   assert.equal(workerCap, 4, "the shipped dispute-safe worker cap changed");
+  assert.match(
+    sdkLimits,
+    new RegExp(`DISPUTE_SAFE_MAX_WORKERS\\s*=\\s*${workerCap}\\s+as const`),
+    "the public SDK worker limit must match the Rust program",
+  );
   assert.match(
     scaleModel,
     new RegExp(`DISPUTE_SAFE_MAX_WORKERS\\s*=\\s*${workerCap}`),

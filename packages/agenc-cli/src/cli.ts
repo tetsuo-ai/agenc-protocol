@@ -45,7 +45,7 @@ FLAGS
     --force                    overwrite files whose content differs
   dev:
     --env-file <path>          explicit .localnet/env.json (beats discovery; implies --localnet)
-    --purge                    kill + re-boot the localnet stack first (implies --localnet)
+    --purge                    verified stop + ledger purge, then re-boot (implies --localnet)
     --sandbox                  force the in-process litesvm sandbox (skip localnet discovery)
     --localnet                 require the localnet stack (fail instead of falling back)
   promote:

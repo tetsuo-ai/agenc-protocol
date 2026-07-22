@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,13 +39,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const COORDINATION_STATE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([11, 232, 15, 241, 234, 143, 35, 252]);
 
 export function getCoordinationStateDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    COORDINATION_STATE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(COORDINATION_STATE_DISCRIMINATOR);
 }
 
 export type CoordinationState = {
@@ -89,10 +87,10 @@ export type CoordinationStateArgs = {
 export function getCoordinationStateEncoder(): FixedSizeEncoder<CoordinationStateArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["owner", getAddressEncoder()],
-      ["stateKey", fixEncoderSize(getBytesEncoder(), 32)],
-      ["stateValue", fixEncoderSize(getBytesEncoder(), 64)],
+      ["stateKey", getFixedBytesEncoder(32, "stateKey")],
+      ["stateValue", getFixedBytesEncoder(64, "stateValue")],
       ["lastUpdater", getAddressEncoder()],
       ["version", getU64Encoder()],
       ["updatedAt", getI64Encoder()],

@@ -1,6 +1,6 @@
 # Design: on-chain moderation gate for `create_task` (zero-trust task content)
 
-> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `../MAINNET_MAINLINE.md` for what is live and `../../TODO.MD` for the completed remediation record.
+> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `../MAINNET_MAINLINE.md` for what is live and `../audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 > Status: **design / implementation spec for review — NOT a deploy.**
 > This document contains ready-to-apply Rust, but it has **not** been compiled in this

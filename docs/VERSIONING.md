@@ -4,8 +4,8 @@
 > human-maintained source of truth for **which published package versions speak the
 > wire of the live mainnet program**, and the release contract every future breaking
 > change must follow. It complements [`VERSIONS.md`](./VERSIONS.md) (the P6.5
-> *on-chain* surface-revision mechanism — how a client detects what is deployed);
-> this file is the *off-chain* matrix — which npm versions a consumer may pin, and
+> _on-chain_ surface-revision mechanism — how a client detects what is deployed);
+> this file is the _off-chain_ matrix — which npm versions a consumer may pin, and
 > what happens to old pins when the program changes.
 
 Program: `agenc-coordination` — `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`,
@@ -47,18 +47,25 @@ keeps those candidate references aligned with the committed candidate IDL.
 
 **This is the wire-compatible published set today:**
 
-| Package | Compatible range | Notes |
-|---|---|---|
-| `@tetsuo-ai/protocol` | **0.3.x** (latest 0.3.0) | generated IDL + types for the 99-ix surface (354 error variants); 0.3.0 shipped with batch-4 |
-| `@tetsuo-ai/marketplace-sdk` | **0.8.x – 0.11.x** (latest 0.11.0) | 0.8.0 = the P1.2 wire cutover; 0.9.0 adds the additive batch-2 store surface; 0.10.0 adds the batch-3 contest facade; 0.10.1 decoder hardening; **0.11.0 adds the batch-4 goods facade + the revision-gated `goods` capability** |
-| `@tetsuo-ai/marketplace-react` | **0.4.x** (latest 0.4.1) | |
-| `@tetsuo-ai/marketplace-tools` | **0.4.x** (latest 0.4.0) | |
-| `@tetsuo-ai/marketplace-mcp` | **0.4.x** (latest 0.4.0) | |
-| `@tetsuo-ai/marketplace-moderation` | **0.1.x** (latest 0.1.0) | first published alongside the roster work |
-| `@tetsuo-ai/agenc-cli` | **0.2.x** (latest 0.2.0) | CLI against the live 99-ix surface |
-| `@tetsuo-ai/agenc-worker` | **0.1.x** (latest 0.1.1) | worker daemon against the live 99-ix surface |
-| `@tetsuo-ai/store-core` | **0.5.x – 0.6.x** (latest 0.6.0) | 0.5.x speaks the same wire; 0.6.0 is additive |
-| `create-agenc-store` | **0.5.x – 0.6.x** (latest 0.6.0) | scaffolds the template pins below |
+| Package                             | Compatible range                   | Notes                                                                                                                                                                                                                            |
+| ----------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@tetsuo-ai/protocol`               | **0.3.x** (latest 0.3.0)           | generated IDL + types for the 99-ix surface (354 error variants); 0.3.0 shipped with batch-4                                                                                                                                     |
+| `@tetsuo-ai/marketplace-sdk`        | **0.8.x – 0.11.x** (latest 0.11.0) | 0.8.0 = the P1.2 wire cutover; 0.9.0 adds the additive batch-2 store surface; 0.10.0 adds the batch-3 contest facade; 0.10.1 decoder hardening; **0.11.0 adds the batch-4 goods facade + the revision-gated `goods` capability** |
+| `@tetsuo-ai/marketplace-react`      | **0.4.x** (latest 0.4.1)           |                                                                                                                                                                                                                                  |
+| `@tetsuo-ai/marketplace-tools`      | **0.4.x** (latest 0.4.0)           |                                                                                                                                                                                                                                  |
+| `@tetsuo-ai/marketplace-mcp`        | **0.4.x** (latest 0.4.0)           |                                                                                                                                                                                                                                  |
+| `@tetsuo-ai/marketplace-moderation` | **0.1.x** (latest 0.1.0)           | first published alongside the roster work                                                                                                                                                                                        |
+| `@tetsuo-ai/agenc-cli`              | **0.2.x** (latest 0.2.0)           | CLI against the live 99-ix surface                                                                                                                                                                                               |
+| `@tetsuo-ai/agenc-worker`           | **0.1.x** (latest 0.1.1)           | worker daemon against the live 99-ix surface                                                                                                                                                                                     |
+| `@tetsuo-ai/store-core`             | **0.5.x or exactly 0.6.0**         | 0.5.x speaks the same wire; 0.6.0 is additive; 0.6.1 crosses the revision-5 boundary despite sharing this pre-1.0 minor                                                                                                          |
+| `create-agenc-store`                | **0.5.x or exactly 0.6.0**         | scaffolds the revision-4 template pins; 0.6.1 is reserved for the coordinated revision-5 cutover                                                                                                                                 |
+
+These rows are wire-admissible version buckets, not a Cartesian product.
+Installed packages must also satisfy one another's published dependency and
+peer-dependency ranges. For example, SDK 0.11 speaks the revision-4 wire by
+itself, but the published React 0.4.1 artifact declares SDK `^0.8.0`; that pair
+is not a coherent npm installation and must not pass a production-readiness
+check.
 
 Every published major/minor **below** these ranges fails **closed** against mainnet
 today (transactions reject at Borsh decode or account resolution — no funds at
@@ -66,42 +73,83 @@ risk, but the flow is down). See §1.2 for exactly which upgrade broke which ran
 
 ### 1.1.1 Unreleased revision-5 candidate set
 
-The workspace also contains the following **unreleased** coordinated candidates.
-They are not evidence that revision 5 is deployed and they do not replace the
-published/live matrix above. Publish them only with the reviewed revision-5
-program cutover:
+This repository contains most of the following **unreleased** coordinated
+candidates. The store-core and `create-agenc-store` candidates live in their
+separate coordinated store repositories; they are not agenc-protocol workspace
+packages. None of these candidates is evidence that revision 5 is deployed, and
+they do not replace the published/live matrix above. Publish them only with the
+reviewed revision-5 program cutover:
 
-| Package | Unreleased candidate | Coordination note |
-|---|---:|---|
-| `@tetsuo-ai/protocol` | **0.4.0** | 98-instruction revision-5 IDL/types; must not be published as 0.3.0 |
-| `@tetsuo-ai/marketplace-sdk` | **0.12.0** | revision-5 generated client; remains usable for existing revision-4 workflows while mainnet is still on revision 4 |
-| `@tetsuo-ai/marketplace-react` | **0.4.2** | patch candidate widening the SDK peer range through 0.12 |
-| `@tetsuo-ai/marketplace-tools` | **0.5.0** | depends on SDK `^0.12.0` |
-| `@tetsuo-ai/marketplace-mcp` | **0.5.0** | depends on tools `^0.5.0` and SDK `^0.12.0` |
-| `@tetsuo-ai/marketplace-moderation` | **0.2.0** | strict JSON canonicalization plus capability-gated complete semantic-v2 payloads; 0.1.0 remains the immutable legacy-v1 release |
-| `@tetsuo-ai/agenc-worker` | **0.2.0** | depends on SDK `^0.12.0`; security-hardening release |
-| `@tetsuo-ai/agenc-cli` / `agenc-cli` | **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`; scoped package and alias ship together |
-| `@tetsuo-ai/store-core` / `create-agenc-store` | **0.6.1** | widens the SDK/React peers and scaffolds only the revision-5 client set |
+| Package                                        | Unreleased candidate | Coordination note                                                                                                               |
+| ---------------------------------------------- | -------------------: | ------------------------------------------------------------------------------------------------------------------------------- |
+| `@tetsuo-ai/protocol`                          |            **0.4.0** | 98-instruction revision-5 IDL/types; must not be published as 0.3.0                                                             |
+| `@tetsuo-ai/marketplace-sdk`                   |           **0.12.0** | revision-5 generated client; its changed hire/activation writes intentionally reject revision 4                                 |
+| `@tetsuo-ai/marketplace-react`                 |            **0.5.0** | breaking revision-5 input and SDK-peer cutover; not a patch-level peer widening                                                 |
+| `@tetsuo-ai/marketplace-tools`                 |            **0.5.0** | depends on SDK `^0.12.0`                                                                                                        |
+| `@tetsuo-ai/marketplace-mcp`                   |            **0.5.0** | depends on tools `^0.5.0` and SDK `^0.12.0`                                                                                     |
+| `@tetsuo-ai/marketplace-moderation`            |            **0.2.0** | strict JSON canonicalization plus capability-gated complete semantic-v2 payloads; 0.1.0 remains the immutable legacy-v1 release |
+| `@tetsuo-ai/agenc-worker`                      |            **0.2.0** | depends on SDK `^0.12.0`; security-hardening release                                                                            |
+| `@tetsuo-ai/agenc-cli` / `agenc-cli`           |            **0.3.0** | pins SDK `^0.12.0` and worker `^0.2.0`; scoped package and alias ship together                                                  |
+| `@tetsuo-ai/store-core` / `create-agenc-store` |            **0.6.1** | widens the SDK/React peers and scaffolds only the revision-5 client set                                                         |
 
 Every revision-5 package requires Node **22.23.1 or newer**. Node 20 is EOL and
 is intentionally outside the new release train's support contract.
 
 The `agenc init` and `agenc promote` code in the unreleased CLI intentionally
-knows this candidate set so a source checkout does not reject its own generated
-pins. That is candidate compatibility, not a claim that those versions are
-already on npm or that revision 5 is live.
+knows this candidate set. `promote` selects it only when finalized chain evidence
+reports surface revision 5; revision 4 selects only the published set above.
+The sets are never unioned, including when a consumer directly installs the
+generated `@tetsuo-ai/protocol` IDL/types package. The source-generated
+revision-5 templates therefore remain explicitly blocked on revision 4 even
+though the published revision-4 client set is still recognized correctly.
+Candidate compatibility is not a claim that those versions are already on npm
+or that revision 5 is live.
+
+Revision-5 promotion is intentionally blocked even if an RPC reports
+`surface_revision = 5`: no revision-5 entry exists yet in the CLI's reviewed
+deployment-identity table. After the upgrade finalizes, operators must capture
+the actual ProgramData address and deployment slot, retained upgrade authority,
+executable SHA-256, and exact reviewed source commit; patch those observed values
+into the CLI; rebuild and repack it; and independently audit the resulting
+artifact before publication. A predicted slot or pre-upgrade candidate hash must
+never be inserted as if it were finalized deployment evidence.
+
+### 1.1.2 Coherent installed combinations
+
+`agenc promote` reads these relationships from the installed package manifests
+and evaluates them with npm SemVer rules. A package can be absent when the
+application does not use it. If it is present, its manifest must be readable,
+well-formed, versioned, and coherent with every required first-party dependency
+or peer:
+
+| Surface    | Installed source artifact                  | Required coherent first-party peer/dependency |
+| ---------- | ------------------------------------------ | --------------------------------------------- |
+| revision 4 | React `0.4.1`                              | SDK `^0.8.0`                                  |
+| revision 4 | tools `0.4.0`                              | SDK `^0.8.0`                                  |
+| revision 4 | MCP `0.4.0`                                | tools `^0.4.0` and SDK `^0.8.0`               |
+| revision 4 | worker `0.1.1`                             | SDK `^0.8.2 \|\| ^0.9.0`                      |
+| revision 4 | store-core `0.6.0`                         | React `^0.4.0` and SDK `^0.8.0`               |
+| revision 5 | React/tools/worker `0.5.0`/`0.5.0`/`0.2.0` | SDK `^0.12.0`                                 |
+| revision 5 | MCP `0.5.0`                                | tools `^0.5.0` and SDK `^0.12.0`              |
+| revision 5 | external store-core `0.6.1` candidate      | React `^0.5.0` and SDK `^0.12.0`              |
+
+This means a full revision-4 installation containing all published consumers
+uses SDK 0.8.2 (or another version admitted by every installed range), even
+though SDK 0.9–0.11 remain valid for applications whose installed consumers
+declare compatible ranges. Revision 5 has one coordinated combination: SDK
+0.12 with the candidate train above.
 
 ### 1.2 Break-event history (why this document exists)
 
-| Date | Event | Program surface | Gate shapes | What broke (fails closed since that date) | Deprecation window given |
-|---|---|---|---|---|---|
-| 2026-06-11 | **Full-surface upgrade** (Phase 9, [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md)) | 25 ix → **84 ix**, `surface_revision` stamped FULL | — | sdk **0.3.0** Borsh-broke; templates in the wild still scaffolded that pin | **ZERO** — no announcement preceded the deploy |
-| 2026-07-02 | **WP-A1 roster gates** | 84 ix (gate hardening) | **8/13/12** accounts | sdk **≤0.6.x**, react **≤0.2.x**, tools+mcp **≤0.2.0** | Same-day lockstep republish (sdk 0.7.0, react/tools/mcp 0.3.0, store 0.3.0); no advance notice |
-| 2026-07-03 | **P1.2 hardened open roster** ([`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md)) | 84 ix → **90 ix** | **9/14/13** accounts + required trailing `moderator` arg | sdk **0.7.x**, react/tools/mcp **0.3.x**, store-core **≤0.4.x** | Same-day lockstep republish (§2.6 runbook pattern): sdk 0.8.0, react/tools/mcp 0.4.0, store-core/create 0.4.0 |
-| 2026-07-05 | **Batch-2 store + heartbeat** | 90 → **94 ix**, `surface_revision = 2` | additive (no flag-day gate change) | none (old pins keep working) | sdk **0.9.0** additive facade |
-| 2026-07-05 | **Batch-3 contest** ([`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md)) | 94 → **96 ix**, `surface_revision = 3` | additive optional accounts | none | sdk **0.10.0** / **0.10.1** additive facade |
-| 2026-07-09 | **Batch-4 goods** ([`design/batch-4-goods.md`](./design/batch-4-goods.md)) | 96 → **99 ix**, `surface_revision = 4` | goods handlers require rev ≥ 4 | none for pre-goods flows; goods needs sdk **≥ 0.11.0** | sdk **0.11.0**, protocol **0.3.0** |
-| pending cutover | **Revision-5 audit hardening** | 99 → **98 production ix**, `surface_revision = 5` | coordinated account/argument hardening across hire, claim, settlement, cancellation, goods, staking, skills, and governance paths | sdk **≤0.11.x** and the corresponding old first-party clients fail closed on changed writes | flag-day release: protocol **0.4.0**, sdk **0.12.0**, react **0.4.2**, tools/MCP **0.5.0**, moderation/worker **0.2.0**, CLI **0.3.0**, store-core/create **0.6.1**; every first-party writer is staged before the paused cutover |
+| Date            | Event                                                                                            | Program surface                                    | Gate shapes                                                                                                                                                                                        | What broke (fails closed since that date)                                                                                                  | Deprecation window given                                                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-06-11      | **Full-surface upgrade** (Phase 9, [`MAINNET_ROLLOUT_RUNBOOK.md`](./MAINNET_ROLLOUT_RUNBOOK.md)) | 25 ix → **84 ix**, `surface_revision` stamped FULL | —                                                                                                                                                                                                  | sdk **0.3.0** Borsh-broke; templates in the wild still scaffolded that pin                                                                 | **ZERO** — no announcement preceded the deploy                                                                                                                                                                                                                   |
+| 2026-07-02      | **WP-A1 roster gates**                                                                           | 84 ix (gate hardening)                             | **8/13/12** accounts                                                                                                                                                                               | sdk **≤0.6.x**, react **≤0.2.x**, tools+mcp **≤0.2.0**                                                                                     | Same-day lockstep republish (sdk 0.7.0, react/tools/mcp 0.3.0, store 0.3.0); no advance notice                                                                                                                                                                   |
+| 2026-07-03      | **P1.2 hardened open roster** ([`P1_2_OPEN_ROSTER_SPEC.md`](./P1_2_OPEN_ROSTER_SPEC.md))         | 84 ix → **90 ix**                                  | **9/14/13** accounts + required trailing `moderator` arg                                                                                                                                           | sdk **0.7.x**, react/tools/mcp **0.3.x**, store-core **≤0.4.x**                                                                            | Same-day lockstep republish (§2.6 runbook pattern): sdk 0.8.0, react/tools/mcp 0.4.0, store-core/create 0.4.0                                                                                                                                                    |
+| 2026-07-05      | **Batch-2 store + heartbeat**                                                                    | 90 → **94 ix**, `surface_revision = 2`             | additive (no flag-day gate change)                                                                                                                                                                 | none (old pins keep working)                                                                                                               | sdk **0.9.0** additive facade                                                                                                                                                                                                                                    |
+| 2026-07-05      | **Batch-3 contest** ([`design/batch-3-contest-tasks.md`](./design/batch-3-contest-tasks.md))     | 94 → **96 ix**, `surface_revision = 3`             | additive optional accounts                                                                                                                                                                         | none                                                                                                                                       | sdk **0.10.0** / **0.10.1** additive facade                                                                                                                                                                                                                      |
+| 2026-07-09      | **Batch-4 goods** ([`design/batch-4-goods.md`](./design/batch-4-goods.md))                       | 96 → **99 ix**, `surface_revision = 4`             | goods handlers require rev ≥ 4                                                                                                                                                                     | none for pre-goods flows; goods needs sdk **≥ 0.11.0**                                                                                     | sdk **0.11.0**, protocol **0.3.0**                                                                                                                                                                                                                               |
+| pending cutover | **Revision-5 audit hardening**                                                                   | 99 → **98 production ix**, `surface_revision = 5`  | coordinated account/argument hardening across hire, claim, settlement, cancellation, goods, staking, skills, and governance paths; the three hire/activation writes use explicit v2 discriminators | sdk **≤0.11.x** and the corresponding old first-party clients fail closed on changed writes; v2 clients also reject the revision-4 program | flag-day release: protocol **0.4.0**, sdk **0.12.0**, react **0.5.0**, tools/MCP **0.5.0**, moderation/worker **0.2.0**, CLI **0.3.0**, store-core/create **0.6.1**; every first-party writer and hosted transaction builder is staged before the paused cutover |
 
 The 2026-06-11 row is the motivating failure: a flag-day wire change shipped with
 no deprecation window while the old sdk pin was still being scaffolded by public

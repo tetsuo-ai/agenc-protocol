@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**393 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
+**405 error codes**, sorted by code. Anchor custom errors start at 6000 (0x1770).
 
 | Code | Hex | Name | Message |
 |---|---|---|---|
@@ -37,7 +37,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6023 | 0x1787 | `InvalidCreator` | Invalid creator |
 | 6024 | 0x1788 | `InvalidTaskId` | Invalid task ID: cannot be zero |
 | 6025 | 0x1789 | `InvalidDescription` | Invalid description: cannot be empty |
-| 6026 | 0x178a | `InvalidMaxWorkers` | Invalid max workers: must be between 1 and 100 |
+| 6026 | 0x178a | `InvalidMaxWorkers` | Invalid max workers: must be between 1 and 4 |
 | 6027 | 0x178b | `InvalidTaskType` | Invalid task type |
 | 6028 | 0x178c | `TaskNotBidExclusive` | Task is not a Marketplace V2 bid-exclusive task |
 | 6029 | 0x178d | `BidExclusiveRequiresSingleWorker` | Bid-exclusive tasks must use max_workers = 1 |
@@ -404,3 +404,15 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 | 6390 | 0x18f6 | `ReleaseBoundaryDigestMismatch` | A release-boundary account data digest changed before the atomic stamp |
 | 6391 | 0x18f7 | `ReleaseProgramDataNotSettled` | The reviewed ProgramData upgrade slot has not settled before the release stamp |
 | 6392 | 0x18f8 | `ReleaseUnpauseRequiresCurrentSurface` | The full production protocol can only be unpaused after the current release surface is atomically stamped |
+| 6393 | 0x18f9 | `HiredTaskJobSpecMismatch` | The job specification does not match the commitment selected at hire time |
+| 6394 | 0x18fa | `BidNotBookBest` | Acceptance requires the bid book's tracked best bid |
+| 6395 | 0x18fb | `BidRepromotionGraceActive` | The bid book's re-promotion grace window has not elapsed |
+| 6396 | 0x18fc | `BidLeaderRetreat` | The tracked best bid can only update to equal-or-better terms |
+| 6397 | 0x18fd | `BidWinnerStillEligible` | The tracked best bid is still valid and eligible |
+| 6398 | 0x18fe | `BidBookCacheMismatch` | The bid book's cached winner terms do not match the bid account |
+| 6399 | 0x18ff | `BidNotBetterThanTrackedBest` | The presented bid does not beat the bid book's tracked best |
+| 6400 | 0x1900 | `BidBookScoreWindowInvalid` | The bid book requires a positive frozen scoring window |
+| 6401 | 0x1901 | `DisputePeerBundlesRetired` | Dispute rulings no longer accept peer worker bundles; use settle_dispute_claim |
+| 6402 | 0x1902 | `DisputeSettlementNotPending` | The dispute has no deferred worker settlement pending |
+| 6403 | 0x1903 | `DisputeDefendantNotPeer` | The defendant claim settles through the ruling, not peer settlement |
+| 6404 | 0x1904 | `DisputeTerminalStatusCorrupt` | The dispute's recorded terminal status is invalid |

@@ -16,13 +16,11 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -45,6 +43,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -54,9 +54,7 @@ export const AGENT_VERIFICATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([128, 155, 95, 241, 66, 207, 166, 59]);
 
 export function getAgentVerificationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    AGENT_VERIFICATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(AGENT_VERIFICATION_DISCRIMINATOR);
 }
 
 export type AgentVerification = {
@@ -106,7 +104,7 @@ export type AgentVerificationArgs = {
 export function getAgentVerificationEncoder(): Encoder<AgentVerificationArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["agent", getAddressEncoder()],
       [
         "verifiedDomain",
@@ -118,7 +116,7 @@ export function getAgentVerificationEncoder(): Encoder<AgentVerificationArgs> {
       ["expiresAt", getI64Encoder()],
       ["revoked", getBooleanEncoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["reserved", getFixedBytesEncoder(32, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: AGENT_VERIFICATION_DISCRIMINATOR }),
   );

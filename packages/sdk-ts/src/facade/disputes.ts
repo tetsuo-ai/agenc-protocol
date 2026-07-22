@@ -16,6 +16,7 @@ import {
   // model is gone; a threshold-approved authority or threshold-seated resolver decides.
   getResolveDisputeInstructionAsync,
   getExpireDisputeInstructionAsync,
+  getSettleDisputeClaimInstructionAsync,
   getCancelDisputeInstructionAsync,
   getApplyDisputeSlashInstructionAsync,
   getApplyInitiatorSlashInstructionAsync,
@@ -29,6 +30,7 @@ import {
   type InitiateDisputeAsyncInput,
   type ResolveDisputeAsyncInput,
   type ExpireDisputeAsyncInput,
+  type SettleDisputeClaimAsyncInput,
   type CancelDisputeAsyncInput,
   type ApplyDisputeSlashAsyncInput,
   type ApplyInitiatorSlashAsyncInput,
@@ -43,7 +45,16 @@ import {
   findBidBookPda,
   AGENC_COORDINATION_PROGRAM_ADDRESS,
 } from "../generated/index.js";
-import { appendMultisigSignerMetas } from "./wire.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import { snapshotFixedBytes } from "../values/fixed-bytes.js";
+import {
+  snapshotDenseStructuredArray,
+  snapshotStructuredClone,
+} from "../values/structured-clone.js";
+import {
+  appendMultisigSignerMetas,
+  snapshotMultisigFacadeInput,
+} from "./wire.js";
 
 export {
   findDisputePda,
@@ -57,16 +68,26 @@ export {
  * and initiator-claim PDAs all auto-derive from the supplied ids/accounts.
  */
 export async function initiateDispute(input: InitiateDisputeAsyncInput) {
-  return getInitiateDisputeInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getInitiateDisputeInstructionAsync({
+    ...stableInput,
+    disputeId: snapshotFixedBytes(
+      stableInput.disputeId,
+      32,
+      "initiateDispute: disputeId",
+    ),
+    taskId: snapshotFixedBytes(
+      stableInput.taskId,
+      32,
+      "initiateDispute: taskId",
+    ),
+    evidenceHash: snapshotFixedBytes(
+      stableInput.evidenceHash,
+      32,
+      "initiateDispute: evidenceHash",
+    ),
+  });
 }
-
-/** One exact additional-worker bundle consumed by both dispute exit handlers. */
-export type DisputePeerWorkerAccounts = {
-  claim: Address;
-  worker: Address;
-  /** Defaults to the canonical [task_submission, claim] PDA. */
-  taskSubmission?: Address;
-};
 
 /** Frozen accepted-bid state appended to every BidExclusive dispute exit. */
 export type DisputeBidSettlement = {
@@ -76,21 +97,19 @@ export type DisputeBidSettlement = {
   bidderMarketState: Address;
 };
 
-type DisputeRemainingAccounts = {
+export type DisputeRemainingAccounts = {
   /** Canonical parent prefix; required when the Rust dependency gate applies. */
   dependencyParent?: Address;
-  /** Exactly current_workers - 1 peer bundles, in deterministic worker order. */
-  peerWorkers?: readonly DisputePeerWorkerAccounts[];
   /** Required for every BidExclusive dispute exit. */
   bidSettlement?: DisputeBidSettlement;
 };
 
-type RequiredMultisigApprovals = {
+export type RequiredMultisigApprovals = {
   /** ProtocolConfig owner approvals appended as readonly-signer remaining accounts. */
   readonly multisigSigners: readonly TransactionSigner[];
 };
 
-type ResolveDisputeAuthorization =
+export type ResolveDisputeAuthorization =
   | {
       /** Roster PDA proving the signer is an assigned resolver. */
       resolverAssignment: Address;
@@ -117,16 +136,6 @@ async function appendDisputeRemainingAccounts<
       address: remaining.dependencyParent,
       role: AccountRole.READONLY,
     });
-  }
-  for (const peer of remaining.peerWorkers ?? []) {
-    const submission =
-      peer.taskSubmission ??
-      (await findTaskSubmissionPda({ claim: peer.claim }))[0];
-    accounts.push(
-      { address: peer.claim, role: AccountRole.WRITABLE },
-      { address: peer.worker, role: AccountRole.WRITABLE },
-      { address: submission, role: AccountRole.WRITABLE },
-    );
   }
   if (remaining.bidSettlement) {
     const bidBook =
@@ -208,17 +217,28 @@ export type ResolveDisputeInput = Omit<
   ResolveDisputeAuthorization;
 
 export async function resolveDispute(input: ResolveDisputeInput) {
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"], {
+      multisigRequired: false,
+    });
   const {
     workerBondAuthority,
     creatorCompletionBond,
     workerCompletionBond,
     taskSubmission,
     dependencyParent,
-    peerWorkers,
     bidSettlement,
-    multisigSigners = [],
     ...rest
-  } = input;
+  } = generatedInput;
+  const stableBidSettlement =
+    bidSettlement === undefined
+      ? undefined
+      : snapshotStructuredClone(bidSettlement, "resolveDispute: bidSettlement");
+  const stableRationaleHash = snapshotFixedBytes(
+    rest.rationaleHash,
+    32,
+    "resolveDispute: rationaleHash",
+  );
 
   const workerAuthority =
     workerBondAuthority ?? (rest.workerWallet as Address | undefined);
@@ -250,20 +270,23 @@ export async function resolveDispute(input: ResolveDisputeInput) {
     (await findTaskSubmissionPda({ claim: rest.workerClaim }))[0];
   const instruction = await getResolveDisputeInstructionAsync({
     ...rest,
+    rationaleHash: stableRationaleHash,
     creatorCompletionBond: creatorBond,
     workerCompletionBond: workerBond,
     taskSubmission: submission,
   });
   const withSettlementAccounts = await appendDisputeRemainingAccounts(
     instruction,
-    input.task,
+    rest.task,
     {
       dependencyParent,
-      peerWorkers,
-      bidSettlement,
+      bidSettlement: stableBidSettlement,
     },
   );
-  return appendMultisigSignerMetas(withSettlementAccounts, multisigSigners);
+  return appendMultisigSignerMetas(
+    withSettlementAccounts,
+    stableMultisigSigners,
+  );
 }
 
 /**
@@ -298,16 +321,20 @@ export type ExpireDisputeInput = Omit<
 } & DisputeRemainingAccounts;
 
 export async function expireDispute(input: ExpireDisputeInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   const {
     workerBondAuthority,
     creatorCompletionBond,
     workerCompletionBond,
     taskSubmission,
     dependencyParent,
-    peerWorkers,
     bidSettlement,
     ...rest
-  } = input;
+  } = stableInput;
+  const stableBidSettlement =
+    bidSettlement === undefined
+      ? undefined
+      : snapshotStructuredClone(bidSettlement, "expireDispute: bidSettlement");
 
   const workerAuthority =
     workerBondAuthority ?? (rest.workerWallet as Address | undefined);
@@ -343,10 +370,36 @@ export async function expireDispute(input: ExpireDisputeInput) {
     workerCompletionBond: workerBond,
     taskSubmission: submission,
   });
-  return appendDisputeRemainingAccounts(instruction, input.task, {
+  return appendDisputeRemainingAccounts(instruction, rest.task, {
     dependencyParent,
-    peerWorkers,
-    bidSettlement,
+    bidSettlement: stableBidSettlement,
+  });
+}
+
+/**
+ * Permissionlessly settle one deferred collaborative peer claim after a
+ * dispute ruling (chunked settlement). One worker per transaction; the
+ * dispute reaches its recorded terminal status when the last peer settles.
+ * The defendant is excluded — its claim settles through the ruling and the
+ * slash finalizers. `taskSubmission` defaults to the canonical
+ * [task_submission, claim] PDA.
+ */
+export type SettleDisputeClaimInput = Omit<
+  SettleDisputeClaimAsyncInput,
+  "taskSubmission"
+> & {
+  taskSubmission?: Address;
+};
+
+export async function settleDisputeClaim(input: SettleDisputeClaimInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const { taskSubmission, ...rest } = stableInput;
+  const submission =
+    taskSubmission ??
+    (await findTaskSubmissionPda({ claim: rest.claim as Address }))[0];
+  return getSettleDisputeClaimInstructionAsync({
+    ...rest,
+    taskSubmission: submission,
   });
 }
 
@@ -369,7 +422,8 @@ export type CancelDisputeInput = CancelDisputeAsyncInput & {
 };
 
 export async function cancelDispute(input: CancelDisputeInput) {
-  const { defendant, taskValidationConfig, ...generatedInput } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const { defendant, taskValidationConfig, ...generatedInput } = stableInput;
   const instruction = await getCancelDisputeInstructionAsync(generatedInput);
   return {
     ...instruction,
@@ -398,7 +452,7 @@ export async function cancelDispute(input: CancelDisputeInput) {
  * the optional token-program slot to Anchor's None placeholder; Codama's SPL default
  * would otherwise signal a partial settlement and fail on-chain.
  */
-type ApplyDisputeSlashBase = Omit<
+export type ApplyDisputeSlashBase = Omit<
   ApplyDisputeSlashAsyncInput,
   | "escrow"
   | "tokenEscrowAta"
@@ -408,7 +462,7 @@ type ApplyDisputeSlashBase = Omit<
   | "creator"
 >;
 
-type ApplyDisputeSlashWithoutTokenSettlement = {
+export type ApplyDisputeSlashWithoutTokenSettlement = {
   /** Required for every token task, even when its reserve is already closed. */
   escrow?: Address;
   tokenEscrowAta?: never;
@@ -418,7 +472,7 @@ type ApplyDisputeSlashWithoutTokenSettlement = {
   creator?: never;
 };
 
-type ApplyDisputeSlashWithTokenSettlement = {
+export type ApplyDisputeSlashWithTokenSettlement = {
   escrow: Address;
   tokenEscrowAta: Address;
   treasuryTokenAccount: Address;
@@ -436,23 +490,24 @@ export type ApplyDisputeSlashInput = ApplyDisputeSlashBase &
   );
 
 export async function applyDisputeSlash(input: ApplyDisputeSlashInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   const settlementValues = [
-    input.tokenEscrowAta,
-    input.treasuryTokenAccount,
-    input.rewardMint,
-    input.tokenProgram,
-    input.creator,
+    stableInput.tokenEscrowAta,
+    stableInput.treasuryTokenAccount,
+    stableInput.rewardMint,
+    stableInput.tokenProgram,
+    stableInput.creator,
   ];
   const settlementRequested = settlementValues.some(
     (value) => value !== undefined,
   );
   if (
     settlementRequested &&
-    (!input.escrow ||
-      !input.tokenEscrowAta ||
-      !input.treasuryTokenAccount ||
-      !input.rewardMint ||
-      !input.creator)
+    (!stableInput.escrow ||
+      !stableInput.tokenEscrowAta ||
+      !stableInput.treasuryTokenAccount ||
+      !stableInput.rewardMint ||
+      !stableInput.creator)
   ) {
     throw new Error(
       "applyDisputeSlash: token settlement requires escrow, tokenEscrowAta, treasuryTokenAccount, rewardMint, and creator",
@@ -464,9 +519,9 @@ export async function applyDisputeSlash(input: ApplyDisputeSlashInput) {
   // settlement attempt. Force Anchor's program-id placeholder on the no-settlement
   // path so SOL/finalize-only calls do not spuriously fail MissingTokenAccounts.
   return getApplyDisputeSlashInstructionAsync({
-    ...input,
+    ...stableInput,
     tokenProgram: settlementRequested
-      ? input.tokenProgram
+      ? stableInput.tokenProgram
       : AGENC_COORDINATION_PROGRAM_ADDRESS,
   });
 }
@@ -475,7 +530,9 @@ export async function applyDisputeSlash(input: ApplyDisputeSlashInput) {
 export async function applyInitiatorSlash(
   input: ApplyInitiatorSlashAsyncInput,
 ) {
-  return getApplyInitiatorSlashInstructionAsync(input);
+  return getApplyInitiatorSlashInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /**
@@ -489,10 +546,11 @@ export type ResolveRejectFrozenInput = ResolveRejectFrozenAsyncInput & {
 };
 
 export async function resolveRejectFrozen(input: ResolveRejectFrozenInput) {
-  const { multisigSigners, ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
   const instruction =
     await getResolveRejectFrozenInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
@@ -502,7 +560,9 @@ export async function resolveRejectFrozen(input: ResolveRejectFrozenInput) {
 export type ExpireRejectFrozenInput = ExpireRejectFrozenAsyncInput;
 
 export async function expireRejectFrozen(input: ExpireRejectFrozenInput) {
-  return getExpireRejectFrozenInstructionAsync(input);
+  return getExpireRejectFrozenInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /**
@@ -520,10 +580,11 @@ export type AssignDisputeResolverInput = AssignDisputeResolverAsyncInput &
   RequiredMultisigApprovals;
 
 export async function assignDisputeResolver(input: AssignDisputeResolverInput) {
-  const { multisigSigners, ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
   const instruction =
     await getAssignDisputeResolverInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
@@ -546,8 +607,11 @@ export type RevokeDisputeResolverInput = Omit<
 } & RequiredMultisigApprovals;
 
 export async function revokeDisputeResolver(input: RevokeDisputeResolverInput) {
-  const { resolver, disputeResolver, multisigSigners, ...generatedInput } =
-    input;
+  const {
+    generatedInput: stableInput,
+    multisigSigners: stableMultisigSigners,
+  } = snapshotMultisigFacadeInput(input, ["authority"]);
+  const { resolver, disputeResolver, ...generatedInput } = stableInput;
   let roster = disputeResolver;
   if (!roster) {
     if (!resolver) {
@@ -561,5 +625,5 @@ export async function revokeDisputeResolver(input: RevokeDisputeResolverInput) {
     ...generatedInput,
     disputeResolver: roster,
   });
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }

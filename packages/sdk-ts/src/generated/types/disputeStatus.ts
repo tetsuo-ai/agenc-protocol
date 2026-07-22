@@ -21,6 +21,7 @@ export enum DisputeStatus {
   Resolved,
   Expired,
   Cancelled,
+  SettlementPending,
 }
 
 export type DisputeStatusArgs = DisputeStatus;

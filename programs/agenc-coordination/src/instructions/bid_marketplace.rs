@@ -7,11 +7,12 @@ use solana_sha256_hasher::hashv;
 use crate::errors::CoordinationError;
 use crate::events::{
     BidAccepted, BidBookInitialized, BidCancelled, BidCreated, BidExpired,
-    BidMarketplaceInitialized, BidUpdated, TaskClaimed,
+    BidMarketplaceInitialized, BidPromoted, BidUpdated, BidWinnerDemoted, TaskClaimed,
 };
 use crate::instructions::claim_task::has_required_assignment_stake;
 use crate::instructions::completion_helpers::validate_task_dependency_for_assignment;
 use crate::instructions::launch_controls::require_task_type_enabled;
+use crate::instructions::migrate::is_valid_surface_revision;
 use crate::instructions::moderation_gate_helpers::require_content_not_blocked;
 use crate::state::{
     AgentRegistration, AgentStatus, BidBookState, BidMarketplaceConfig, BidderMarketState,
@@ -19,7 +20,10 @@ use crate::state::{
     TaskJobSpec, TaskStatus, TaskType, WeightedScoreWeights,
 };
 use crate::utils::multisig::{require_multisig_threshold, unique_account_infos};
-use crate::utils::version::{check_version_compatible, check_version_compatible_for_exit};
+use crate::utils::version::{
+    check_version_compatible, check_version_compatible_for_bootstrap,
+    check_version_compatible_for_exit,
+};
 
 const BID_WINDOW_SECONDS: i64 = 86_400;
 const COMPLETION_BUFFER: i64 = 3_600;
@@ -29,14 +33,18 @@ const BID_TERMS_HASH_DOMAIN: &[u8] = b"agenc:bid-terms:v1";
 const MAX_BID_BOND_LAMPORTS: u64 = 1_000_000_000;
 const MAX_BID_CREATION_COOLDOWN_SECS: i64 = BID_WINDOW_SECONDS;
 const MAX_BIDS_PER_24H: u16 = 1_000;
-/// `accept_bid` enumerates all other live bids in the transaction. Twenty is
-/// the largest supported book and keeps the account list transaction-feasible.
+/// Pure spam/state bound on simultaneous live bids per book. Acceptance is
+/// O(1) in accounts (the book tracks its policy winner incrementally), so this
+/// cap has NO wire-size consequence and can be raised by config alone.
 const MAX_ACTIVE_BIDS_PER_TASK: u16 = 20;
 const MAX_BID_LIFETIME_SECS: i64 = 7 * BID_WINDOW_SECONDS;
-const BID_COMPETITOR_ACCOUNT_STRIDE: usize = 2;
-const ACCEPT_BID_TYPED_ACCOUNT_COUNT: usize = 11;
-const ACCEPT_BID_AUXILIARY_PROGRAM_KEYS: usize = 2;
-const MAX_TRANSACTION_ACCOUNT_KEYS: usize = 64;
+/// After the tracked winner is removed (cancel/expiry/demotion), acceptance is
+/// blocked until this grace elapses so every remaining bidder has a fair,
+/// permissionless window to `promote_bid` before the creator can accept.
+#[cfg(not(feature = "validation-timings"))]
+const BID_REPROMOTION_GRACE_SECS: i64 = 300; // 5 minutes
+#[cfg(feature = "validation-timings")]
+const BID_REPROMOTION_GRACE_SECS: i64 = 5; // short grace for timing tests
 
 fn validate_bid_marketplace_config_values(
     min_bid_bond_lamports: u64,
@@ -46,17 +54,32 @@ fn validate_bid_marketplace_config_values(
     max_bid_lifetime_secs: i64,
     accepted_no_show_slash_bps: u16,
 ) -> Result<()> {
-    let accept_account_keys =
-        accept_bid_account_key_budget(max_active_bids_per_task, true).unwrap_or(usize::MAX);
     require!(
         (1..=MAX_BID_BOND_LAMPORTS).contains(&min_bid_bond_lamports)
             && (0..=MAX_BID_CREATION_COOLDOWN_SECS).contains(&bid_creation_cooldown_secs)
             && (1..=MAX_BIDS_PER_24H).contains(&max_bids_per_24h)
             && (1..=MAX_ACTIVE_BIDS_PER_TASK).contains(&max_active_bids_per_task)
             && (1..=MAX_BID_LIFETIME_SECS).contains(&max_bid_lifetime_secs)
-            && accepted_no_show_slash_bps <= MAX_CONFIDENCE_BPS
-            && accept_account_keys <= MAX_TRANSACTION_ACCOUNT_KEYS,
+            && accepted_no_show_slash_bps <= MAX_CONFIDENCE_BPS,
         CoordinationError::InvalidBidMarketplaceConfig
+    );
+    Ok(())
+}
+
+/// A fresh production deployment is deliberately paused and unstamped until
+/// every release singleton exists and `stamp_release_surface` binds their exact
+/// account images. `BidMarketplaceConfig` is itself one of those required
+/// singletons, so its one-time multisig-gated initializer must be able to run
+/// during that frozen bootstrap window.
+///
+/// Keep this check local to the initializer. It preserves every protocol-version
+/// invariant and rejects unknown surface bytes, but deliberately does not waive
+/// the pause gate for bid entry or later config updates.
+fn check_bid_marketplace_bootstrap_compatible(config: &ProtocolConfig) -> Result<()> {
+    check_version_compatible_for_bootstrap(config)?;
+    require!(
+        is_valid_surface_revision(config.surface_revision),
+        CoordinationError::InvalidSurfaceRevision
     );
     Ok(())
 }
@@ -198,11 +221,68 @@ fn validate_stored_matching_policy(bid_book: &TaskBidBook) -> Result<()> {
     Ok(())
 }
 
+/// Deterministic score of one set of bid terms against a task budget and the
+/// book's FROZEN eta-normalization window. Pure function of its arguments —
+/// the same routine scores live bid accounts and the book's cached winner
+/// components, so the two can never disagree. Returns `None` when the eta
+/// does not fit the frozen window (such terms are never installable).
+fn weighted_terms_score(
+    requested_reward_lamports: u64,
+    eta_seconds: u32,
+    confidence_bps: u16,
+    reputation_snapshot_bps: u16,
+    task_budget: u64,
+    window_secs: u32,
+    weights: &WeightedScoreWeights,
+) -> Result<Option<u128>> {
+    require!(
+        task_budget > 0 && window_secs > 0,
+        CoordinationError::BidBookScoreWindowInvalid
+    );
+    let budget = u128::from(task_budget);
+    let window = u128::from(window_secs);
+    let price_score = u128::from(
+        task_budget
+            .checked_sub(requested_reward_lamports)
+            .ok_or(CoordinationError::ArithmeticOverflow)?,
+    )
+    .checked_mul(u128::from(MAX_CONFIDENCE_BPS))
+    .and_then(|value| value.checked_div(budget))
+    .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let Some(eta_headroom) = window.checked_sub(u128::from(eta_seconds)) else {
+        return Ok(None);
+    };
+    let eta_score = eta_headroom
+        .checked_mul(u128::from(MAX_CONFIDENCE_BPS))
+        .and_then(|value| value.checked_div(window))
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let weighted_score = price_score
+        .checked_mul(u128::from(weights.price_weight_bps))
+        .and_then(|value| {
+            value.checked_add(eta_score.checked_mul(u128::from(weights.eta_weight_bps))?)
+        })
+        .and_then(|value| {
+            value.checked_add(
+                u128::from(confidence_bps)
+                    .checked_mul(u128::from(weights.confidence_weight_bps))?,
+            )
+        })
+        .and_then(|value| {
+            value.checked_add(
+                u128::from(reputation_snapshot_bps)
+                    .checked_mul(u128::from(weights.reliability_weight_bps))?,
+            )
+        })
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    Ok(Some(weighted_score))
+}
+
 fn bid_candidate(
     key: Pubkey,
     bid: &TaskBid,
     task: &Task,
     now: i64,
+    window_secs: u32,
     weights: &WeightedScoreWeights,
 ) -> Result<Option<BidCandidate>> {
     require!(
@@ -235,44 +315,18 @@ fn bid_candidate(
         return Ok(None);
     }
 
-    let task_budget = u128::from(task.reward_amount);
-    let remaining_secs = u128::try_from(task.deadline.saturating_sub(now))
-        .map_err(|_| CoordinationError::ArithmeticOverflow)?;
-    require!(
-        task_budget > 0 && remaining_secs > 0,
-        CoordinationError::InvalidInput
-    );
-    let price_score = u128::from(
-        task.reward_amount
-            .checked_sub(bid.requested_reward_lamports)
-            .ok_or(CoordinationError::ArithmeticOverflow)?,
-    )
-    .checked_mul(u128::from(MAX_CONFIDENCE_BPS))
-    .and_then(|value| value.checked_div(task_budget))
-    .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let eta_score = remaining_secs
-        .checked_sub(u128::from(bid.eta_seconds))
-        .and_then(|value| value.checked_mul(u128::from(MAX_CONFIDENCE_BPS)))
-        .and_then(|value| value.checked_div(remaining_secs))
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    let weighted_score = price_score
-        .checked_mul(u128::from(weights.price_weight_bps))
-        .and_then(|value| {
-            value.checked_add(eta_score.checked_mul(u128::from(weights.eta_weight_bps))?)
-        })
-        .and_then(|value| {
-            value.checked_add(
-                u128::from(bid.confidence_bps)
-                    .checked_mul(u128::from(weights.confidence_weight_bps))?,
-            )
-        })
-        .and_then(|value| {
-            value.checked_add(
-                u128::from(bid.reputation_snapshot_bps)
-                    .checked_mul(u128::from(weights.reliability_weight_bps))?,
-            )
-        })
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    let Some(weighted_score) = weighted_terms_score(
+        bid.requested_reward_lamports,
+        bid.eta_seconds,
+        bid.confidence_bps,
+        bid.reputation_snapshot_bps,
+        task.reward_amount,
+        window_secs,
+        weights,
+    )?
+    else {
+        return Ok(None);
+    };
 
     Ok(Some(BidCandidate {
         key,
@@ -282,6 +336,70 @@ fn bid_candidate(
         reputation_snapshot_bps: bid.reputation_snapshot_bps,
         weighted_score,
     }))
+}
+
+/// Rebuild the tracked winner's `BidCandidate` from the book's cached score
+/// components. `None` when the book tracks no winner. The cached components
+/// were validated when installed, so a scoring failure here is cache
+/// corruption and fails closed.
+fn cached_best_candidate(book: &TaskBidBook, task: &Task) -> Result<Option<BidCandidate>> {
+    if book.best_bid == Pubkey::default() {
+        return Ok(None);
+    }
+    let weighted_score = weighted_terms_score(
+        book.best_reward_lamports,
+        book.best_eta_seconds,
+        book.best_confidence_bps,
+        book.best_reputation_bps,
+        task.reward_amount,
+        book.score_window_secs,
+        &book.weights,
+    )?
+    .ok_or(CoordinationError::BidBookCacheMismatch)?;
+    Ok(Some(BidCandidate {
+        key: book.best_bid,
+        requested_reward_lamports: book.best_reward_lamports,
+        eta_seconds: book.best_eta_seconds,
+        confidence_bps: book.best_confidence_bps,
+        reputation_snapshot_bps: book.best_reputation_bps,
+        weighted_score,
+    }))
+}
+
+fn install_best(book: &mut TaskBidBook, candidate: &BidCandidate) {
+    book.best_bid = candidate.key;
+    book.best_reward_lamports = candidate.requested_reward_lamports;
+    book.best_eta_seconds = candidate.eta_seconds;
+    book.best_confidence_bps = candidate.confidence_bps;
+    book.best_reputation_bps = candidate.reputation_snapshot_bps;
+}
+
+/// Remove the tracked winner and open the re-promotion grace window.
+fn clear_best(book: &mut TaskBidBook, now: i64) {
+    book.best_bid = Pubkey::default();
+    book.best_reward_lamports = 0;
+    book.best_eta_seconds = 0;
+    book.best_confidence_bps = 0;
+    book.best_reputation_bps = 0;
+    book.winner_stale_since = now;
+}
+
+/// Install `candidate` as the tracked winner when the book has none or the
+/// candidate strictly beats the cached incumbent under the book's policy.
+/// Returns whether the candidate was installed.
+fn maybe_install_better(
+    book: &mut TaskBidBook,
+    task: &Task,
+    candidate: &BidCandidate,
+) -> Result<bool> {
+    let installed = match cached_best_candidate(book, task)? {
+        None => true,
+        Some(incumbent) => candidate_is_better(candidate, &incumbent, book.policy),
+    };
+    if installed {
+        install_best(book, candidate);
+    }
+    Ok(installed)
 }
 
 fn lower_price_tie_break(candidate: &BidCandidate, incumbent: &BidCandidate) -> bool {
@@ -328,68 +446,6 @@ fn candidate_is_better(
     }
 }
 
-fn validate_bid_account(
-    account: &AccountInfo<'_>,
-    task_key: &Pubkey,
-    bid_book_key: &Pubkey,
-    program_id: &Pubkey,
-) -> Result<TaskBid> {
-    require!(
-        account.owner == program_id && !account.executable && account.data_len() == TaskBid::SIZE,
-        CoordinationError::InvalidAccountOwner
-    );
-    let data = account.try_borrow_data()?;
-    let bid = TaskBid::try_deserialize(&mut &data[..])
-        .map_err(|_| CoordinationError::BidBookEnumerationMismatch)?;
-    require!(
-        bid.task == *task_key && bid.bid_book == *bid_book_key && bid.state.is_open(),
-        CoordinationError::BidBookEnumerationMismatch
-    );
-    let bump = [bid.bump];
-    let canonical_key = Pubkey::create_program_address(
-        &[b"bid", task_key.as_ref(), bid.bidder.as_ref(), &bump],
-        program_id,
-    )
-    .map_err(|_| CoordinationError::BidBookEnumerationMismatch)?;
-    require!(
-        canonical_key == *account.key,
-        CoordinationError::BidBookEnumerationMismatch
-    );
-    require!(
-        account.lamports() >= bid.bond_lamports,
-        CoordinationError::BidBookEnumerationMismatch
-    );
-    Ok(bid)
-}
-
-fn validate_bidder_account(
-    account: &AccountInfo<'_>,
-    expected_bidder_key: &Pubkey,
-    expected_bidder_authority: &Pubkey,
-    program_id: &Pubkey,
-) -> Result<AgentRegistration> {
-    require!(
-        account.owner == program_id
-            && !account.executable
-            && account.data_len() == AgentRegistration::SIZE,
-        CoordinationError::InvalidAccountOwner
-    );
-    let data = account.try_borrow_data()?;
-    let bidder = AgentRegistration::try_deserialize(&mut &data[..])
-        .map_err(|_| CoordinationError::BidBookEnumerationMismatch)?;
-    let bump = [bidder.bump];
-    let canonical_key =
-        Pubkey::create_program_address(&[b"agent", bidder.agent_id.as_ref(), &bump], program_id)
-            .map_err(|_| CoordinationError::BidBookEnumerationMismatch)?;
-    require!(
-        canonical_key == *account.key
-            && canonical_key == *expected_bidder_key
-            && bidder.authority == *expected_bidder_authority,
-        CoordinationError::BidBookEnumerationMismatch
-    );
-    Ok(bidder)
-}
-
 fn bidder_is_currently_eligible(
     bidder_key: &Pubkey,
     bidder: &AgentRegistration,
@@ -407,99 +463,52 @@ fn bidder_is_currently_eligible(
         && bidder.active_tasks < MAX_ACTIVE_TASKS
 }
 
-fn accept_bid_account_key_budget(active_bids: u16, has_dependency: bool) -> Result<usize> {
-    let competing_bids = usize::from(
-        active_bids
-            .checked_sub(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?,
-    );
-    ACCEPT_BID_TYPED_ACCOUNT_COUNT
-        .checked_add(usize::from(has_dependency))
-        .and_then(|value| {
-            value.checked_add(competing_bids.checked_mul(BID_COMPETITOR_ACCOUNT_STRIDE)?)
-        })
-        .and_then(|value| value.checked_add(ACCEPT_BID_AUXILIARY_PROGRAM_KEYS))
-        .ok_or_else(|| CoordinationError::ArithmeticOverflow.into())
-}
-
-/// Enforce the bid book's declared policy from an exact enumeration of all other
-/// open bids. Each competitor is an exact `[TaskBid, AgentRegistration]` pair.
-/// The program-maintained `active_bids` counter makes omission or duplication
-/// fail closed, while canonical PDA checks prevent account substitution.
-fn validate_matching_policy_selection(
-    task_key: &Pubkey,
-    bid_key: &Pubkey,
+/// O(1) policy enforcement: the selected bid must be the book's incrementally
+/// tracked winner, its live account fields must match the cached score
+/// components exactly (any drift fails closed), and — when a previous winner
+/// was removed — the permissionless re-promotion grace must have elapsed so
+/// every remaining bidder had a fair window to `promote_bid` first.
+fn validate_cached_winner_selection(
     task: &Task,
-    bid_book_key: &Pubkey,
     bid_book: &TaskBidBook,
+    bid_key: &Pubkey,
     selected_bid: &TaskBid,
-    other_bid_accounts: &[AccountInfo<'_>],
     now: i64,
-    min_agent_stake: u64,
-    program_id: &Pubkey,
 ) -> Result<()> {
     validate_stored_matching_policy(bid_book)?;
     require!(
-        (1..=MAX_ACTIVE_BIDS_PER_TASK).contains(&bid_book.active_bids),
-        CoordinationError::BidBookEnumerationMismatch
+        bid_book.best_bid != Pubkey::default() && bid_book.best_bid == *bid_key,
+        CoordinationError::BidNotBookBest
     );
-    let expected_other_bids = usize::from(
-        bid_book
-            .active_bids
-            .checked_sub(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?,
-    );
-    let expected_other_accounts = expected_other_bids
-        .checked_mul(BID_COMPETITOR_ACCOUNT_STRIDE)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
     require!(
-        other_bid_accounts.len() == expected_other_accounts,
-        CoordinationError::BidBookEnumerationMismatch
+        bid_book.best_reward_lamports == selected_bid.requested_reward_lamports
+            && bid_book.best_eta_seconds == selected_bid.eta_seconds
+            && bid_book.best_confidence_bps == selected_bid.confidence_bps
+            && bid_book.best_reputation_bps == selected_bid.reputation_snapshot_bps,
+        CoordinationError::BidBookCacheMismatch
     );
-
-    let mut best = bid_candidate(*bid_key, selected_bid, task, now, &bid_book.weights)?
-        .ok_or(CoordinationError::BidDoesNotSatisfyMatchingPolicy)?;
-    let mut seen = Vec::with_capacity(expected_other_bids.saturating_add(1));
-    seen.push(*bid_key);
-    let mut seen_bidders = Vec::with_capacity(expected_other_bids.saturating_add(1));
-    seen_bidders.push(selected_bid.bidder);
-
-    for pair in other_bid_accounts.chunks_exact(BID_COMPETITOR_ACCOUNT_STRIDE) {
-        let bid_account = &pair[0];
-        let bidder_account = &pair[1];
+    if bid_book.winner_stale_since > 0 {
+        let grace_over = bid_book
+            .winner_stale_since
+            .checked_add(BID_REPROMOTION_GRACE_SECS)
+            .ok_or(CoordinationError::ArithmeticOverflow)?;
         require!(
-            !seen.iter().any(|key| key == bid_account.key)
-                && !seen_bidders.iter().any(|key| key == bidder_account.key),
-            CoordinationError::BidBookEnumerationMismatch
+            now >= grace_over,
+            CoordinationError::BidRepromotionGraceActive
         );
-        let other_bid = validate_bid_account(bid_account, task_key, bid_book_key, program_id)?;
-        let other_bidder = validate_bidder_account(
-            bidder_account,
-            &other_bid.bidder,
-            &other_bid.bidder_authority,
-            program_id,
-        )?;
-        let other_candidate =
-            bid_candidate(*bid_account.key, &other_bid, task, now, &bid_book.weights)?;
-        seen.push(*bid_account.key);
-        seen_bidders.push(*bidder_account.key);
-        if bidder_is_currently_eligible(
-            bidder_account.key,
-            &other_bidder,
-            &other_bid,
-            task,
-            min_agent_stake,
-        ) {
-            if let Some(candidate) = other_candidate {
-                if candidate_is_better(&candidate, &best, bid_book.policy) {
-                    best = candidate;
-                }
-            }
-        }
     }
-
+    // The selected bid must still be a valid candidate under the frozen
+    // window at acceptance time (live state, not expired, deadline-feasible).
+    let candidate = bid_candidate(
+        *bid_key,
+        selected_bid,
+        task,
+        now,
+        bid_book.score_window_secs,
+        &bid_book.weights,
+    )?;
     require!(
-        best.key == *bid_key,
+        candidate.is_some(),
         CoordinationError::BidDoesNotSatisfyMatchingPolicy
     );
     Ok(())
@@ -659,7 +668,7 @@ pub fn initialize_bid_marketplace_handler(
         ctx.accounts.bid_marketplace.key(),
         CoordinationError::InvalidInput
     );
-    check_version_compatible(&ctx.accounts.protocol_config)?;
+    check_bid_marketplace_bootstrap_compatible(&ctx.accounts.protocol_config)?;
     let unique_signers = unique_account_infos(ctx.remaining_accounts);
     require_multisig_threshold(&ctx.accounts.protocol_config, &unique_signers)?;
     validate_bid_marketplace_config_values(
@@ -843,6 +852,17 @@ pub fn initialize_bid_book_handler(
         reliability_weight_bps,
     )?;
     let now = Clock::get()?.unix_timestamp;
+    // Freeze the WeightedScore eta-normalization window at book creation so
+    // every policy ordering is a pure function of immutable bid fields — the
+    // winner cannot depend on when the creator later calls accept.
+    let score_window_secs = ctx
+        .accounts
+        .task
+        .deadline
+        .checked_sub(now)
+        .filter(|window| *window > 0)
+        .and_then(|window| u32::try_from(window).ok())
+        .ok_or(CoordinationError::BidBookScoreWindowInvalid)?;
 
     let bid_book = &mut ctx.accounts.bid_book;
     bid_book.task = ctx.accounts.task.key();
@@ -856,6 +876,13 @@ pub fn initialize_bid_book_handler(
     bid_book.created_at = now;
     bid_book.updated_at = now;
     bid_book.bump = ctx.bumps.bid_book;
+    bid_book.best_bid = Pubkey::default();
+    bid_book.best_reward_lamports = 0;
+    bid_book.best_eta_seconds = 0;
+    bid_book.best_confidence_bps = 0;
+    bid_book.best_reputation_bps = 0;
+    bid_book.winner_stale_since = 0;
+    bid_book.score_window_secs = score_window_secs;
 
     emit!(BidBookInitialized {
         task: ctx.accounts.task.key(),
@@ -1137,6 +1164,34 @@ pub fn create_bid_handler(
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
 
+    // Incremental winner tracking (O(1) accept): a freshly funded bid takes
+    // the tracked-winner slot when the book tracks none or it beats the
+    // cached incumbent under the declared policy.
+    let window_secs = ctx.accounts.bid_book.score_window_secs;
+    let weights = ctx.accounts.bid_book.weights;
+    let candidate = bid_candidate(
+        bid_key,
+        ctx.accounts.bid.as_ref(),
+        ctx.accounts.task.as_ref(),
+        now,
+        window_secs,
+        &weights,
+    )?;
+    if let Some(candidate) = candidate {
+        let bid_book = &mut ctx.accounts.bid_book;
+        if maybe_install_better(bid_book, ctx.accounts.task.as_ref(), &candidate)? {
+            emit!(BidPromoted {
+                task: task_key,
+                bid: bid_key,
+                bidder: bidder_key,
+                bid_book: bid_book_key,
+                book_version: ctx.accounts.bid_book.version,
+                timestamp: now,
+            });
+        }
+    }
+
+    let bid_book = &mut ctx.accounts.bid_book;
     emit!(BidCreated {
         task: task_key,
         bid: bid_key,
@@ -1297,6 +1352,15 @@ pub fn update_bid_handler(
     let bidder_key = ctx.accounts.bidder.key();
     let bid_book_key = ctx.accounts.bid_book.key();
 
+    // Snapshot the tracked-winner view BEFORE mutating: the leader-retreat
+    // rule compares the new terms against the incumbent cache.
+    let was_leader = ctx.accounts.bid_book.best_bid == bid_key;
+    let incumbent = if was_leader {
+        cached_best_candidate(ctx.accounts.bid_book.as_ref(), ctx.accounts.task.as_ref())?
+    } else {
+        None
+    };
+
     let bid = ctx.accounts.bid.as_mut();
     bid.requested_reward_lamports = requested_reward_lamports;
     bid.eta_seconds = eta_seconds;
@@ -1315,6 +1379,53 @@ pub fn update_bid_handler(
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
 
+    // Incremental winner tracking. The tracked best may only update to
+    // equal-or-better terms (it may sweeten, never retreat — retreating would
+    // silently invalidate the cache against bids the book cannot see). A
+    // leader that wants out cancels instead, which opens the re-promotion
+    // grace window for everyone else.
+    let window_secs = ctx.accounts.bid_book.score_window_secs;
+    let weights = ctx.accounts.bid_book.weights;
+    let candidate = bid_candidate(
+        bid_key,
+        ctx.accounts.bid.as_ref(),
+        ctx.accounts.task.as_ref(),
+        now,
+        window_secs,
+        &weights,
+    )?;
+    if was_leader {
+        let incumbent = incumbent.ok_or(CoordinationError::BidBookCacheMismatch)?;
+        let refreshed = candidate.ok_or(CoordinationError::BidLeaderRetreat)?;
+        require!(
+            !candidate_is_better(&incumbent, &refreshed, ctx.accounts.bid_book.policy),
+            CoordinationError::BidLeaderRetreat
+        );
+        let bid_book = ctx.accounts.bid_book.as_mut();
+        install_best(bid_book, &refreshed);
+        emit!(BidPromoted {
+            task: task_key,
+            bid: bid_key,
+            bidder: bidder_key,
+            bid_book: bid_book_key,
+            book_version: ctx.accounts.bid_book.version,
+            timestamp: now,
+        });
+    } else if let Some(candidate) = candidate {
+        let bid_book = ctx.accounts.bid_book.as_mut();
+        if maybe_install_better(bid_book, ctx.accounts.task.as_ref(), &candidate)? {
+            emit!(BidPromoted {
+                task: task_key,
+                bid: bid_key,
+                bidder: bidder_key,
+                bid_book: bid_book_key,
+                book_version: ctx.accounts.bid_book.version,
+                timestamp: now,
+            });
+        }
+    }
+
+    let bid_book = ctx.accounts.bid_book.as_mut();
     emit!(BidUpdated {
         task: task_key,
         bid: bid_key,
@@ -1407,6 +1518,20 @@ pub fn cancel_bid_handler(ctx: Context<CancelBid>) -> Result<()> {
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
+    // A cancelling tracked winner opens the re-promotion grace window: the
+    // book cannot know the runner-up, so acceptance is blocked until every
+    // remaining bidder had a fair chance to promote.
+    if bid_book.best_bid == bid_key {
+        clear_best(bid_book, now);
+        emit!(BidWinnerDemoted {
+            task: task_key,
+            bid: bid_key,
+            bid_book: bid_book_key,
+            book_version: bid_book.version,
+            winner_stale_since: now,
+            timestamp: now,
+        });
+    }
 
     let bidder_state = ctx.accounts.bidder_market_state.as_mut();
     bidder_state.active_bid_count = bidder_state
@@ -1524,17 +1649,17 @@ pub fn accept_bid_handler(
         ctx.accounts.task_job_spec.as_ref(),
         &ctx.accounts.moderation_block.to_account_info(),
     )?;
-    // A dependent task consumes exactly one prefix account for its parent. Every
-    // remaining account after that prefix must be an exact repeating
-    // [competing TaskBid, matching AgentRegistration] pair.
+    // A dependent task consumes exactly one prefix account for its parent.
+    // Acceptance is O(1) in accounts: the book tracks its policy winner
+    // incrementally, so NO competitor enumeration exists and any extra
+    // remaining account is rejected outright.
     let dependency_account_count =
         usize::from(ctx.accounts.task.dependency_type != crate::state::DependencyType::None);
     require!(
-        ctx.remaining_accounts.len() >= dependency_account_count,
+        ctx.remaining_accounts.len() == dependency_account_count,
         CoordinationError::ParentTaskAccountRequired
     );
-    let (dependency_accounts, other_bid_accounts) =
-        ctx.remaining_accounts.split_at(dependency_account_count);
+    let (dependency_accounts, _) = ctx.remaining_accounts.split_at(dependency_account_count);
     validate_task_dependency_for_assignment(
         ctx.accounts.task.as_ref(),
         dependency_accounts,
@@ -1611,18 +1736,11 @@ pub fn accept_bid_handler(
         bidder.active_tasks < MAX_ACTIVE_TASKS,
         CoordinationError::MaxActiveTasksReached
     );
-    validate_matching_policy_selection(
-        &task.key(),
-        &bid.key(),
-        task,
-        &bid_book.key(),
-        bid_book,
-        bid,
-        other_bid_accounts,
-        now,
-        config.min_agent_stake,
-        ctx.program_id,
-    )?;
+    require!(
+        bid_book.active_bids >= 1,
+        CoordinationError::BidBookEnumerationMismatch
+    );
+    validate_cached_winner_selection(task, bid_book, &bid.key(), bid, now)?;
 
     let expires_at = if task.deadline > 0 {
         task.deadline
@@ -1660,6 +1778,7 @@ pub fn accept_bid_handler(
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
+    bid_book.winner_stale_since = 0;
 
     task.current_workers = 1;
     task.status = TaskStatus::InProgress;
@@ -1785,6 +1904,19 @@ pub fn expire_bid_handler(ctx: Context<ExpireBid>) -> Result<()> {
         .checked_add(1)
         .ok_or(CoordinationError::ArithmeticOverflow)?;
     bid_book.updated_at = now;
+    // An expiring tracked winner opens the re-promotion grace window exactly
+    // like a cancelling one.
+    if bid_book.best_bid == bid_key {
+        clear_best(bid_book, now);
+        emit!(BidWinnerDemoted {
+            task: task_key,
+            bid: bid_key,
+            bid_book: bid_book_key,
+            book_version: bid_book.version,
+            winner_stale_since: now,
+            timestamp: now,
+        });
+    }
 
     let bidder_state = &mut ctx.accounts.bidder_market_state;
     bidder_state.active_bid_count = bidder_state
@@ -1804,10 +1936,288 @@ pub fn expire_bid_handler(ctx: Context<ExpireBid>) -> Result<()> {
     Ok(())
 }
 
+/// Permissionless winner promotion: present any live, eligible, bond-backed
+/// bid; it becomes the book's tracked winner when it beats the cached
+/// incumbent (or the book tracks none). Rational bidders promote themselves
+/// the moment a leader exits; indexer bots can crank it for anyone.
+#[derive(Accounts)]
+pub struct PromoteBid<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
+    #[account(
+        seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
+        bump = task.bump
+    )]
+    pub task: Box<Account<'info, Task>>,
+
+    #[account(
+        mut,
+        seeds = [b"bid_book", task.key().as_ref()],
+        bump = bid_book.bump,
+        constraint = bid_book.task == task.key() @ CoordinationError::InvalidInput
+    )]
+    pub bid_book: Box<Account<'info, TaskBidBook>>,
+
+    #[account(
+        seeds = [b"bid", task.key().as_ref(), bidder.key().as_ref()],
+        bump = bid.bump,
+        constraint = bid.task == task.key() @ CoordinationError::InvalidInput,
+        constraint = bid.bid_book == bid_book.key() @ CoordinationError::InvalidInput,
+        constraint = bid.bidder == bidder.key() @ CoordinationError::InvalidInput
+    )]
+    pub bid: Box<Account<'info, TaskBid>>,
+
+    #[account(
+        seeds = [b"agent", bidder.agent_id.as_ref()],
+        bump = bidder.bump
+    )]
+    pub bidder: Box<Account<'info, AgentRegistration>>,
+
+    pub authority: Signer<'info>,
+}
+
+pub fn promote_bid_handler(ctx: Context<PromoteBid>) -> Result<()> {
+    check_version_compatible(&ctx.accounts.protocol_config)?;
+    require_bid_task(&ctx.accounts.task)?;
+    require!(
+        ctx.accounts.task.status == TaskStatus::Open,
+        CoordinationError::TaskNotOpen
+    );
+    require!(
+        ctx.accounts.bid_book.state == BidBookState::Open,
+        CoordinationError::BidBookNotOpen
+    );
+    require!(
+        ctx.accounts.bid.state.is_open(),
+        CoordinationError::BidNotActive
+    );
+    let now = Clock::get()?.unix_timestamp;
+    // The presented bid must be everything the retired competitor enumeration
+    // demanded of a winner: live terms, a currently eligible bidder, and a
+    // fully bond-backed account.
+    require!(
+        bidder_is_currently_eligible(
+            &ctx.accounts.bidder.key(),
+            ctx.accounts.bidder.as_ref(),
+            ctx.accounts.bid.as_ref(),
+            ctx.accounts.task.as_ref(),
+            ctx.accounts.protocol_config.min_agent_stake,
+        ),
+        CoordinationError::BidDoesNotSatisfyMatchingPolicy
+    );
+    require!(
+        ctx.accounts.bid.to_account_info().lamports() >= ctx.accounts.bid.bond_lamports,
+        CoordinationError::BidBookEnumerationMismatch
+    );
+    let window_secs = ctx.accounts.bid_book.score_window_secs;
+    let weights = ctx.accounts.bid_book.weights;
+    let bid_key = ctx.accounts.bid.key();
+    let candidate = bid_candidate(
+        bid_key,
+        ctx.accounts.bid.as_ref(),
+        ctx.accounts.task.as_ref(),
+        now,
+        window_secs,
+        &weights,
+    )?
+    .ok_or(CoordinationError::BidDoesNotSatisfyMatchingPolicy)?;
+
+    let installed = maybe_install_better(
+        ctx.accounts.bid_book.as_mut(),
+        ctx.accounts.task.as_ref(),
+        &candidate,
+    )?;
+    require!(installed, CoordinationError::BidNotBetterThanTrackedBest);
+
+    let bid_book = ctx.accounts.bid_book.as_mut();
+    bid_book.version = bid_book
+        .version
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    bid_book.updated_at = now;
+
+    emit!(BidPromoted {
+        task: ctx.accounts.task.key(),
+        bid: bid_key,
+        bidder: ctx.accounts.bidder.key(),
+        bid_book: ctx.accounts.bid_book.key(),
+        book_version: ctx.accounts.bid_book.version,
+        timestamp: now,
+    });
+
+    Ok(())
+}
+
+/// Permissionless demotion of a provably dead tracked winner (expired,
+/// withdrawn terms, deadline-infeasible, bond-drained, or ineligible bidder).
+/// Without this, a dead leader would block the book: the creator cannot
+/// accept it (acceptance revalidates the winner) and nothing worse can
+/// displace it. Demotion opens the same re-promotion grace as a cancel.
+#[derive(Accounts)]
+pub struct DemoteIneligibleBest<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_config.bump
+    )]
+    pub protocol_config: Box<Account<'info, ProtocolConfig>>,
+
+    #[account(
+        seeds = [b"task", task.creator.as_ref(), task.task_id.as_ref()],
+        bump = task.bump
+    )]
+    pub task: Box<Account<'info, Task>>,
+
+    #[account(
+        mut,
+        seeds = [b"bid_book", task.key().as_ref()],
+        bump = bid_book.bump,
+        constraint = bid_book.task == task.key() @ CoordinationError::InvalidInput
+    )]
+    pub bid_book: Box<Account<'info, TaskBidBook>>,
+
+    #[account(
+        seeds = [b"bid", task.key().as_ref(), bidder.key().as_ref()],
+        bump = bid.bump,
+        constraint = bid.task == task.key() @ CoordinationError::InvalidInput,
+        constraint = bid.bid_book == bid_book.key() @ CoordinationError::InvalidInput,
+        constraint = bid.bidder == bidder.key() @ CoordinationError::InvalidInput
+    )]
+    pub bid: Box<Account<'info, TaskBid>>,
+
+    #[account(
+        seeds = [b"agent", bidder.agent_id.as_ref()],
+        bump = bidder.bump
+    )]
+    pub bidder: Box<Account<'info, AgentRegistration>>,
+
+    pub authority: Signer<'info>,
+}
+
+pub fn demote_ineligible_best_handler(ctx: Context<DemoteIneligibleBest>) -> Result<()> {
+    // Exit-gated cleanup: like expire_bid, unblocking a book must stay
+    // available while the protocol is paused.
+    check_version_compatible_for_exit(&ctx.accounts.protocol_config)?;
+    require_bid_task(&ctx.accounts.task)?;
+    require!(
+        ctx.accounts.bid_book.state == BidBookState::Open,
+        CoordinationError::BidBookNotOpen
+    );
+    let bid_key = ctx.accounts.bid.key();
+    require!(
+        ctx.accounts.bid_book.best_bid == bid_key,
+        CoordinationError::BidNotBookBest
+    );
+    let now = Clock::get()?.unix_timestamp;
+    // The winner is demotable only when it is provably dead. A scoring error
+    // on corrupt cached/account state also counts as dead — the book must
+    // never stay blocked behind an unacceptable leader.
+    let window_secs = ctx.accounts.bid_book.score_window_secs;
+    let weights = ctx.accounts.bid_book.weights;
+    let candidate_alive = ctx.accounts.bid.state.is_open()
+        && bid_candidate(
+            bid_key,
+            ctx.accounts.bid.as_ref(),
+            ctx.accounts.task.as_ref(),
+            now,
+            window_secs,
+            &weights,
+        )
+        .ok()
+        .flatten()
+        .is_some();
+    let bond_backed =
+        ctx.accounts.bid.to_account_info().lamports() >= ctx.accounts.bid.bond_lamports;
+    let eligible = bidder_is_currently_eligible(
+        &ctx.accounts.bidder.key(),
+        ctx.accounts.bidder.as_ref(),
+        ctx.accounts.bid.as_ref(),
+        ctx.accounts.task.as_ref(),
+        ctx.accounts.protocol_config.min_agent_stake,
+    );
+    require!(
+        !(candidate_alive && bond_backed && eligible),
+        CoordinationError::BidWinnerStillEligible
+    );
+
+    let bid_book = ctx.accounts.bid_book.as_mut();
+    clear_best(bid_book, now);
+    bid_book.version = bid_book
+        .version
+        .checked_add(1)
+        .ok_or(CoordinationError::ArithmeticOverflow)?;
+    bid_book.updated_at = now;
+
+    emit!(BidWinnerDemoted {
+        task: ctx.accounts.task.key(),
+        bid: bid_key,
+        bid_book: ctx.accounts.bid_book.key(),
+        book_version: ctx.accounts.bid_book.version,
+        winner_stale_since: now,
+        timestamp: now,
+    });
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::{moderation_block_status, ModerationBlock};
+
+    fn paused_bootstrap_config(surface_revision: u16) -> ProtocolConfig {
+        ProtocolConfig {
+            protocol_paused: true,
+            surface_revision,
+            protocol_version: crate::state::CURRENT_PROTOCOL_VERSION,
+            min_supported_version: crate::state::MIN_SUPPORTED_VERSION,
+            ..ProtocolConfig::default()
+        }
+    }
+
+    #[test]
+    fn paused_bid_marketplace_bootstrap_accepts_known_compatible_surfaces() {
+        for surface_revision in [
+            0,
+            ProtocolConfig::SURFACE_REVISION_FULL,
+            ProtocolConfig::SURFACE_REVISION_BATCH2,
+            ProtocolConfig::SURFACE_REVISION_BATCH3,
+            ProtocolConfig::SURFACE_REVISION_BATCH4,
+            ProtocolConfig::SURFACE_REVISION_CURRENT,
+        ] {
+            let config = paused_bootstrap_config(surface_revision);
+            assert!(check_bid_marketplace_bootstrap_compatible(&config).is_ok());
+        }
+    }
+
+    #[test]
+    fn paused_bid_marketplace_bootstrap_rejects_incompatible_version_or_surface() {
+        let mut too_new = paused_bootstrap_config(0);
+        too_new.protocol_version = crate::state::CURRENT_PROTOCOL_VERSION.saturating_add(1);
+        assert!(check_bid_marketplace_bootstrap_compatible(&too_new).is_err());
+
+        let mut invalid_minimum = paused_bootstrap_config(0);
+        invalid_minimum.min_supported_version =
+            crate::state::CURRENT_PROTOCOL_VERSION.saturating_add(1);
+        assert!(check_bid_marketplace_bootstrap_compatible(&invalid_minimum).is_err());
+
+        let unknown_surface =
+            paused_bootstrap_config(ProtocolConfig::SURFACE_REVISION_CURRENT.saturating_add(1));
+        assert!(check_bid_marketplace_bootstrap_compatible(&unknown_surface).is_err());
+    }
+
+    #[test]
+    fn paused_bootstrap_does_not_relax_the_bid_entry_gate() {
+        let config = paused_bootstrap_config(0);
+        assert!(check_bid_marketplace_bootstrap_compatible(&config).is_ok());
+        assert!(
+            check_version_compatible(&config).is_err(),
+            "ordinary bid entry must remain blocked while the protocol is paused"
+        );
+    }
 
     fn sample_job_spec() -> TaskJobSpec {
         let mut spec = TaskJobSpec {
@@ -1846,39 +2256,6 @@ mod tests {
         }
     }
 
-    fn leaked_account_info<T: AccountSerialize>(
-        key: Pubkey,
-        value: &T,
-        size: usize,
-        lamports: u64,
-    ) -> AccountInfo<'static> {
-        let mut data = Vec::new();
-        value.try_serialize(&mut data).unwrap();
-        data.resize(size, 0);
-        AccountInfo::new(
-            Box::leak(Box::new(key)),
-            false,
-            false,
-            Box::leak(Box::new(lamports)),
-            Box::leak(data.into_boxed_slice()),
-            &crate::ID,
-            false,
-            0,
-        )
-    }
-
-    fn competitor_pair(
-        bid_key: Pubkey,
-        bid: &TaskBid,
-        bidder_key: Pubkey,
-        bidder: &AgentRegistration,
-    ) -> [AccountInfo<'static>; BID_COMPETITOR_ACCOUNT_STRIDE] {
-        [
-            leaked_account_info(bid_key, bid, TaskBid::SIZE, 1_000_000),
-            leaked_account_info(bidder_key, bidder, AgentRegistration::SIZE, 1_000_000),
-        ]
-    }
-
     // Revert-sensitive guard test for the bid-path self-deal fix (#831).
     // `ensure_not_self_bid` is the single source of the guard, called by both
     // create_bid_handler (signer authority) and accept_bid_handler (stored
@@ -1895,30 +2272,6 @@ mod tests {
         let bidder_authority = Pubkey::new_unique();
         let task_creator = Pubkey::new_unique();
         assert!(ensure_not_self_bid(bidder_authority, task_creator).is_ok());
-    }
-
-    #[test]
-    fn competitor_agent_pair_rejects_identity_or_authority_substitution() {
-        let agent_id = [41u8; 32];
-        let authority = Pubkey::new_unique();
-        let (agent_key, bump) = Pubkey::find_program_address(&[b"agent", &agent_id], &crate::ID);
-        let agent = AgentRegistration {
-            agent_id,
-            authority,
-            bump,
-            ..AgentRegistration::default()
-        };
-        let account = leaked_account_info(agent_key, &agent, AgentRegistration::SIZE, 1_000_000);
-
-        validate_bidder_account(&account, &agent_key, &authority, &crate::ID).unwrap();
-        assert!(
-            validate_bidder_account(&account, &Pubkey::new_unique(), &authority, &crate::ID,)
-                .is_err()
-        );
-        assert!(
-            validate_bidder_account(&account, &agent_key, &Pubkey::new_unique(), &crate::ID,)
-                .is_err()
-        );
     }
 
     #[test]
@@ -2201,25 +2554,11 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn matching_requires_every_other_open_bid_and_rejects_a_better_bid() {
-        let task_key = Pubkey::new_unique();
-        let bid_book_key = Pubkey::new_unique();
-        let task = Task {
-            reward_amount: 100_000,
-            deadline: 10_000,
-            ..Task::default()
-        };
-
-        let selected_key = Pubkey::new_unique();
-        let mut selected = sample_bid(task_key, bid_book_key);
-        selected.requested_reward_lamports = 40_000;
-        selected.expires_at = 9_000;
-
-        let mut book = TaskBidBook {
+    fn cached_book(task_key: Pubkey, policy: MatchingPolicy) -> TaskBidBook {
+        TaskBidBook {
             task: task_key,
             state: BidBookState::Open,
-            policy: MatchingPolicy::BestPrice,
+            policy,
             weights: WeightedScoreWeights::default(),
             accepted_bid: None,
             version: 99,
@@ -2228,225 +2567,416 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             bump: 0,
-        };
-
-        assert!(validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
-            &task,
-            &bid_book_key,
-            &book,
-            &selected,
-            &[],
-            1_000,
-            0,
-            &crate::ID,
-        )
-        .is_err());
-
-        let mut other = sample_bid(task_key, bid_book_key);
-        let other_agent_id = [31u8; 32];
-        let (other_bidder_key, other_bidder_bump) =
-            Pubkey::find_program_address(&[b"agent", &other_agent_id], &crate::ID);
-        let other_authority = Pubkey::new_unique();
-        let mut other_bidder = AgentRegistration {
-            agent_id: other_agent_id,
-            authority: other_authority,
-            capabilities: 1,
-            status: AgentStatus::Active,
-            reputation: 8_000,
-            bump: other_bidder_bump,
-            ..AgentRegistration::default()
-        };
-        other.bidder = other_bidder_key;
-        other.bidder_authority = other_authority;
-        other.requested_reward_lamports = 50_000;
-        other.expires_at = 9_000;
-        let (other_key, other_bump) = Pubkey::find_program_address(
-            &[b"bid", task_key.as_ref(), other.bidder.as_ref()],
-            &crate::ID,
-        );
-        other.bump = other_bump;
-        let pair = competitor_pair(other_key, &other, other_bidder_key, &other_bidder);
-        validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
-            &task,
-            &bid_book_key,
-            &book,
-            &selected,
-            &pair,
-            1_000,
-            0,
-            &crate::ID,
-        )
-        .unwrap();
-
-        other.requested_reward_lamports = 30_000;
-        let pair = competitor_pair(other_key, &other, other_bidder_key, &other_bidder);
-        assert!(validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
-            &task,
-            &bid_book_key,
-            &book,
-            &selected,
-            &pair,
-            1_000,
-            0,
-            &crate::ID,
-        )
-        .is_err());
-
-        other_bidder.status = AgentStatus::Inactive;
-        let pair = competitor_pair(other_key, &other, other_bidder_key, &other_bidder);
-        validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
-            &task,
-            &bid_book_key,
-            &book,
-            &selected,
-            &pair,
-            1_000,
-            0,
-            &crate::ID,
-        )
-        .unwrap();
-
-        other_bidder.status = AgentStatus::Active;
-        other_bidder.stake = 99;
-        let pair = competitor_pair(other_key, &other, other_bidder_key, &other_bidder);
-        validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
-            &task,
-            &bid_book_key,
-            &book,
-            &selected,
-            &pair,
-            1_000,
-            100,
-            &crate::ID,
-        )
-        .unwrap();
-        assert!(validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
-            &task,
-            &bid_book_key,
-            &book,
-            &selected,
-            &pair,
-            1_000,
-            99,
-            &crate::ID,
-        )
-        .is_err());
-
-        book.active_bids = 1;
-        validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
-            &task,
-            &bid_book_key,
-            &book,
-            &selected,
-            &[],
-            1_000,
-            0,
-            &crate::ID,
-        )
-        .unwrap();
+            score_window_secs: 9_999,
+            ..TaskBidBook::default()
+        }
     }
 
+    // Revert-sensitive O(1)-accept guard: acceptance must enforce (a) exact
+    // tracked-winner identity, (b) exact cached-component match against the
+    // live bid account, (c) the re-promotion grace after a winner exit, and
+    // (d) live candidate validity. Weakening any arm turns this red.
     #[test]
-    fn max_bid_book_pair_enumeration_stays_within_account_and_data_budget() {
+    fn cached_winner_selection_enforces_best_match_grace_and_validity() {
         let task_key = Pubkey::new_unique();
         let bid_book_key = Pubkey::new_unique();
         let task = Task {
-            creator: Pubkey::new_unique(),
-            required_capabilities: 1,
-            min_reputation: 5_000,
             reward_amount: 100_000,
             deadline: 10_000,
             ..Task::default()
         };
-
         let selected_key = Pubkey::new_unique();
         let mut selected = sample_bid(task_key, bid_book_key);
-        selected.requested_reward_lamports = 100;
+        selected.requested_reward_lamports = 40_000;
         selected.expires_at = 9_000;
-        let book = TaskBidBook {
-            task: task_key,
-            state: BidBookState::Open,
-            policy: MatchingPolicy::BestPrice,
-            weights: WeightedScoreWeights::default(),
-            accepted_bid: None,
-            version: u64::MAX,
-            total_bids: u32::from(MAX_ACTIVE_BIDS_PER_TASK),
-            active_bids: MAX_ACTIVE_BIDS_PER_TASK,
-            created_at: 1,
-            updated_at: 1,
-            bump: 0,
-        };
 
-        let mut remaining = Vec::with_capacity(
-            usize::from(MAX_ACTIVE_BIDS_PER_TASK.saturating_sub(1)) * BID_COMPETITOR_ACCOUNT_STRIDE,
+        let mut book = cached_book(task_key, MatchingPolicy::BestPrice);
+
+        // No tracked winner: nothing is acceptable.
+        assert!(
+            validate_cached_winner_selection(&task, &book, &selected_key, &selected, 1_000)
+                .is_err()
         );
-        for marker in 1u8..MAX_ACTIVE_BIDS_PER_TASK as u8 {
-            let agent_id = [marker; 32];
-            let (bidder_key, bidder_bump) =
-                Pubkey::find_program_address(&[b"agent", &agent_id], &crate::ID);
-            let authority = Pubkey::new_from_array([marker.saturating_add(100); 32]);
-            let bidder = AgentRegistration {
-                agent_id,
-                authority,
-                capabilities: 1,
-                status: AgentStatus::Active,
-                reputation: 8_000,
-                bump: bidder_bump,
-                ..AgentRegistration::default()
-            };
-            let mut bid = sample_bid(task_key, bid_book_key);
-            bid.bidder = bidder_key;
-            bid.bidder_authority = authority;
-            bid.requested_reward_lamports = 1_000 + u64::from(marker);
-            bid.expires_at = 9_000;
-            let (bid_key, bid_bump) = Pubkey::find_program_address(
-                &[b"bid", task_key.as_ref(), bidder_key.as_ref()],
-                &crate::ID,
-            );
-            bid.bump = bid_bump;
-            remaining.push(leaked_account_info(bid_key, &bid, TaskBid::SIZE, 1_000_000));
-            remaining.push(leaked_account_info(
-                bidder_key,
-                &bidder,
-                AgentRegistration::SIZE,
-                1_000_000,
-            ));
-        }
 
-        validate_matching_policy_selection(
-            &task_key,
-            &selected_key,
+        // Tracked winner with exactly matching components: accepted.
+        book.best_bid = selected_key;
+        book.best_reward_lamports = selected.requested_reward_lamports;
+        book.best_eta_seconds = selected.eta_seconds;
+        book.best_confidence_bps = selected.confidence_bps;
+        book.best_reputation_bps = selected.reputation_snapshot_bps;
+        validate_cached_winner_selection(&task, &book, &selected_key, &selected, 1_000).unwrap();
+
+        // A different bid than the tracked winner: rejected.
+        assert!(validate_cached_winner_selection(
             &task,
-            &bid_book_key,
             &book,
+            &Pubkey::new_unique(),
             &selected,
-            &remaining,
-            1_000,
-            0,
-            &crate::ID,
+            1_000
+        )
+        .is_err());
+
+        // Cached components drifting from the live account: fail closed.
+        book.best_reward_lamports = selected.requested_reward_lamports + 1;
+        assert!(
+            validate_cached_winner_selection(&task, &book, &selected_key, &selected, 1_000)
+                .is_err()
+        );
+        book.best_reward_lamports = selected.requested_reward_lamports;
+
+        // Winner-exit grace: blocked inside the window, allowed after it.
+        // Times derive from the (feature-dependent) grace constant.
+        book.winner_stale_since = 900;
+        assert!(validate_cached_winner_selection(
+            &task,
+            &book,
+            &selected_key,
+            &selected,
+            900 + BID_REPROMOTION_GRACE_SECS - 1,
+        )
+        .is_err());
+        validate_cached_winner_selection(
+            &task,
+            &book,
+            &selected_key,
+            &selected,
+            900 + BID_REPROMOTION_GRACE_SECS,
         )
         .unwrap();
-        assert_eq!(accept_bid_account_key_budget(20, true).unwrap(), 52);
-        assert!(accept_bid_account_key_budget(20, true).unwrap() <= MAX_TRANSACTION_ACCOUNT_KEYS);
+        book.winner_stale_since = 0;
+
+        // An expired tracked winner is not acceptable.
         assert!(
-            usize::from(MAX_ACTIVE_BIDS_PER_TASK.saturating_sub(1))
-                * (TaskBid::SIZE + AgentRegistration::SIZE)
-                <= 16 * 1_024
+            validate_cached_winner_selection(&task, &book, &selected_key, &selected, 9_500)
+                .is_err()
         );
+    }
+
+    // Equivalence guard for the incremental argmax: over a mutation sequence,
+    // the cache must always equal a full rescan of live candidates under the
+    // frozen scoring window. Reverting incremental maintenance (or thawing
+    // the window back to `deadline - now`) turns this red.
+    #[test]
+    fn incremental_cache_matches_full_rescan_argmax() {
+        let task_key = Pubkey::new_unique();
+        let bid_book_key = Pubkey::new_unique();
+        let task = Task {
+            reward_amount: 100_000,
+            deadline: 10_000,
+            ..Task::default()
+        };
+        for policy in [
+            MatchingPolicy::BestPrice,
+            MatchingPolicy::BestEta,
+            MatchingPolicy::WeightedScore,
+        ] {
+            let mut book = cached_book(task_key, policy);
+            book.weights = WeightedScoreWeights {
+                price_weight_bps: 4_000,
+                eta_weight_bps: 3_000,
+                confidence_weight_bps: 2_000,
+                reliability_weight_bps: 1_000,
+            };
+            let mut live: Vec<(Pubkey, TaskBid)> = Vec::new();
+            // Deterministic pseudo-random mutation schedule.
+            let mut seed = 0x9e3779b97f4a7c15u64;
+            for step in 0..60u64 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(step);
+                let arrival_now = 1_000 + i64::try_from(step).unwrap();
+                if live.len() > 2 && seed % 5 == 0 {
+                    // Remove a live bid; demote the cache when it was best.
+                    let victim = usize::try_from(seed % (live.len() as u64)).unwrap();
+                    let (gone_key, _) = live.remove(victim);
+                    if book.best_bid == gone_key {
+                        clear_best(&mut book, arrival_now);
+                    }
+                } else {
+                    let mut bid = sample_bid(task_key, bid_book_key);
+                    bid.requested_reward_lamports = 1 + (seed % 99_999);
+                    bid.eta_seconds = 1 + u32::try_from(seed % 7_000).unwrap();
+                    bid.confidence_bps = u16::try_from(seed % 10_001).unwrap();
+                    bid.reputation_snapshot_bps = u16::try_from((seed >> 17) % 10_001).unwrap();
+                    bid.expires_at = 9_999;
+                    let key = Pubkey::new_unique();
+                    if let Some(candidate) = bid_candidate(
+                        key,
+                        &bid,
+                        &task,
+                        arrival_now,
+                        book.score_window_secs,
+                        &book.weights,
+                    )
+                    .unwrap()
+                    {
+                        maybe_install_better(&mut book, &task, &candidate).unwrap();
+                        live.push((key, bid));
+                    }
+                }
+                // Full rescan of everything still live at a FIXED later time:
+                // frozen-window scores make the ordering time-invariant.
+                let mut rescan_best: Option<BidCandidate> = None;
+                for (key, bid) in &live {
+                    if let Some(candidate) = bid_candidate(
+                        *key,
+                        bid,
+                        &task,
+                        1_000,
+                        book.score_window_secs,
+                        &book.weights,
+                    )
+                    .unwrap()
+                    {
+                        rescan_best = match rescan_best {
+                            None => Some(candidate),
+                            Some(incumbent) => {
+                                if candidate_is_better(&candidate, &incumbent, book.policy) {
+                                    Some(candidate)
+                                } else {
+                                    Some(incumbent)
+                                }
+                            }
+                        };
+                    }
+                }
+                match (&rescan_best, book.best_bid == Pubkey::default()) {
+                    // A removal can legitimately leave the cache empty while
+                    // live bids remain — that is exactly the stale state the
+                    // permissionless promote crank repairs. Model it.
+                    (Some(best), true) => {
+                        maybe_install_better(&mut book, &task, best).unwrap();
+                        assert_eq!(book.best_bid, best.key);
+                    }
+                    (Some(best), false) => {
+                        // The cache may hold a bid that was since removed from
+                        // `live` only in the same step it was cleared; here a
+                        // non-empty cache must be the true argmax.
+                        assert_eq!(
+                            book.best_bid, best.key,
+                            "cache diverged from full rescan under policy {}",
+                            book.policy as u8
+                        );
+                    }
+                    (None, true) => {}
+                    (None, false) => panic!("cache tracks a winner but no live candidate exists"),
+                }
+            }
+        }
+    }
+
+    // Coverage restored after the enumeration-machinery removal: these pure
+    // gates previously ran only through the retired competitor-pair tests.
+    #[test]
+    fn require_bid_task_enforces_type_worker_and_sol_shape() {
+        let good = Task {
+            task_type: TaskType::BidExclusive,
+            max_workers: 1,
+            ..Task::default()
+        };
+        require_bid_task(&good).unwrap();
+        let mut wrong_type = good.clone();
+        wrong_type.task_type = TaskType::Collaborative;
+        assert!(require_bid_task(&wrong_type).is_err());
+        let mut multi_worker = good.clone();
+        multi_worker.max_workers = 2;
+        assert!(require_bid_task(&multi_worker).is_err());
+        let mut token_task = good;
+        token_task.reward_mint = Some(Pubkey::new_unique());
+        assert!(require_bid_task(&token_task).is_err());
+    }
+
+    #[test]
+    fn refresh_bid_window_resets_only_on_first_use_or_expiry() {
+        let mut state = BidderMarketState::default();
+        refresh_bid_window(&mut state, 1_000);
+        assert_eq!(state.bid_window_started_at, 1_000);
+        assert_eq!(state.bids_created_in_window, 0);
+        state.bids_created_in_window = 5;
+        refresh_bid_window(&mut state, 1_000 + BID_WINDOW_SECONDS - 1);
+        assert_eq!(
+            state.bid_window_started_at, 1_000,
+            "inside the window: no reset"
+        );
+        assert_eq!(state.bids_created_in_window, 5);
+        refresh_bid_window(&mut state, 1_000 + BID_WINDOW_SECONDS);
+        assert_eq!(state.bid_window_started_at, 1_000 + BID_WINDOW_SECONDS);
+        assert_eq!(state.bids_created_in_window, 0);
+    }
+
+    #[test]
+    fn parse_matching_policy_accepts_known_policies_and_fails_closed() {
+        assert_eq!(
+            parse_matching_policy(0, 0, 0, 0, 0).unwrap().0 as u8,
+            MatchingPolicy::BestPrice as u8
+        );
+        assert_eq!(
+            parse_matching_policy(1, 0, 0, 0, 0).unwrap().0 as u8,
+            MatchingPolicy::BestEta as u8
+        );
+        let (policy, weights) = parse_matching_policy(2, 4_000, 3_000, 2_000, 1_000).unwrap();
+        assert_eq!(policy as u8, MatchingPolicy::WeightedScore as u8);
+        assert_eq!(weights.price_weight_bps, 4_000);
+        assert!(parse_matching_policy(3, 0, 0, 0, 0).is_err());
+        assert!(parse_matching_policy(2, 0, 0, 0, 0).is_err());
+    }
+
+    #[test]
+    fn bidder_eligibility_checks_every_live_gate() {
+        let task = Task {
+            required_capabilities: 1,
+            min_reputation: 100,
+            creator: Pubkey::new_unique(),
+            ..Task::default()
+        };
+        let authority = Pubkey::new_unique();
+        let bidder_key = Pubkey::new_unique();
+        let bidder = AgentRegistration {
+            authority,
+            status: AgentStatus::Active,
+            capabilities: 1,
+            reputation: 100,
+            stake: 10,
+            active_tasks: 0,
+            ..AgentRegistration::default()
+        };
+        let bid = TaskBid {
+            bidder: bidder_key,
+            bidder_authority: authority,
+            ..TaskBid::default()
+        };
+        assert!(bidder_is_currently_eligible(
+            &bidder_key,
+            &bidder,
+            &bid,
+            &task,
+            10
+        ));
+        // Each live gate flips eligibility off.
+        assert!(!bidder_is_currently_eligible(
+            &Pubkey::new_unique(),
+            &bidder,
+            &bid,
+            &task,
+            10
+        ));
+        let mut suspended = bidder.clone();
+        suspended.status = AgentStatus::Suspended;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &suspended,
+            &bid,
+            &task,
+            10
+        ));
+        let mut weak = bidder.clone();
+        weak.capabilities = 0;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &weak,
+            &bid,
+            &task,
+            10
+        ));
+        let mut poor = bidder.clone();
+        poor.reputation = 99;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &poor,
+            &bid,
+            &task,
+            10
+        ));
+        let mut understaked = bidder.clone();
+        understaked.stake = 9;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &understaked,
+            &bid,
+            &task,
+            10
+        ));
+        let mut busy = bidder.clone();
+        busy.active_tasks = MAX_ACTIVE_TASKS;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &busy,
+            &bid,
+            &task,
+            10
+        ));
+        let mut self_deal = bidder;
+        self_deal.authority = task.creator;
+        let mut self_bid = bid;
+        self_bid.bidder_authority = task.creator;
+        assert!(!bidder_is_currently_eligible(
+            &bidder_key,
+            &self_deal,
+            &self_bid,
+            &task,
+            10
+        ));
+    }
+
+    // The tracked best may sweeten but never retreat: for any same-key pair,
+    // the update is allowed exactly when the incumbent is NOT strictly better
+    // than the refreshed terms.
+    #[test]
+    fn leader_retreat_comparator_is_equal_or_better() {
+        let key = Pubkey::new_unique();
+        let old = BidCandidate {
+            key,
+            requested_reward_lamports: 50_000,
+            eta_seconds: 100,
+            confidence_bps: 5_000,
+            reputation_snapshot_bps: 5_000,
+            weighted_score: 100,
+        };
+        let same = old;
+        assert!(!candidate_is_better(&old, &same, MatchingPolicy::BestPrice));
+        let mut better = old;
+        better.requested_reward_lamports = 49_999;
+        assert!(!candidate_is_better(
+            &old,
+            &better,
+            MatchingPolicy::BestPrice
+        ));
+        let mut worse = old;
+        worse.requested_reward_lamports = 50_001;
+        assert!(candidate_is_better(&old, &worse, MatchingPolicy::BestPrice));
+    }
+
+    // Frozen-window scoring: the weighted ordering between two candidates
+    // must not depend on the clock. Under the retired `deadline - now`
+    // normalization this assertion flips as `now` advances — revert-sensitive
+    // against thawing the window.
+    #[test]
+    fn weighted_ordering_is_time_invariant_under_frozen_window() {
+        let weights = WeightedScoreWeights {
+            price_weight_bps: 5_000,
+            eta_weight_bps: 5_000,
+            confidence_weight_bps: 0,
+            reliability_weight_bps: 0,
+        };
+        let score = |reward: u64, eta: u32, window: u32| {
+            weighted_terms_score(reward, eta, 0, 0, 100_000, window, &weights)
+                .unwrap()
+                .unwrap()
+        };
+        // Cheap-but-slow vs pricier-but-fast under the SAME frozen window:
+        // whichever wins, wins at every evaluation time.
+        let window = 20_000;
+        let a = score(10_000, 8_000, window);
+        let b = score(60_000, 100, window);
+        assert_eq!(
+            a > b,
+            score(10_000, 8_000, window) > score(60_000, 100, window)
+        );
+        // The retired normalization used `deadline - now` as the window; with
+        // time passing (a shrinking window) the SAME pair flips order — which
+        // is exactly what freezing forbids. Prove the flip exists so this
+        // test fails if scoring ever keys on the clock again.
+        let early = score(10_000, 8_000, 20_000) > score(60_000, 100, 20_000);
+        let late = score(10_000, 8_000, 9_999) > score(60_000, 100, 9_999);
+        assert_ne!(early, late, "chosen pair must be window-sensitive");
     }
 
     #[test]

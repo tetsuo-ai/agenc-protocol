@@ -161,6 +161,8 @@ pub mod set_default_trust_list;
 pub mod set_service_listing_state;
 pub mod set_task_job_spec;
 #[cfg(not(feature = "mainnet-canary"))]
+pub mod settle_dispute_claim;
+#[cfg(not(feature = "mainnet-canary"))]
 pub mod stake_reputation;
 #[cfg(not(feature = "mainnet-canary"))]
 pub mod stamp_release_surface;
@@ -369,6 +371,9 @@ pub use set_default_trust_list::*;
 pub use set_service_listing_state::*;
 #[allow(ambiguous_glob_reexports)]
 pub use set_task_job_spec::*;
+#[cfg(not(feature = "mainnet-canary"))]
+#[allow(ambiguous_glob_reexports)]
+pub use settle_dispute_claim::*;
 #[cfg(not(feature = "mainnet-canary"))]
 #[allow(ambiguous_glob_reexports)]
 pub use stake_reputation::*;

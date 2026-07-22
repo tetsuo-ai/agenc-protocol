@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -43,13 +41,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const BIDDER_MARKET_STATE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([169, 198, 7, 111, 52, 32, 197, 88]);
 
 export function getBidderMarketStateDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    BIDDER_MARKET_STATE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(BIDDER_MARKET_STATE_DISCRIMINATOR);
 }
 
 export type BidderMarketState = {
@@ -79,7 +77,7 @@ export type BidderMarketStateArgs = {
 export function getBidderMarketStateEncoder(): FixedSizeEncoder<BidderMarketStateArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["bidder", getAddressEncoder()],
       ["lastBidCreatedAt", getI64Encoder()],
       ["bidWindowStartedAt", getI64Encoder()],

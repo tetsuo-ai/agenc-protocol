@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -53,9 +53,7 @@ export const ACCEPT_TASK_RESULT_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([89, 230, 51, 25, 0, 219, 5, 137]);
 
 export function getAcceptTaskResultDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    ACCEPT_TASK_RESULT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(ACCEPT_TASK_RESULT_DISCRIMINATOR);
 }
 
 export type AcceptTaskResultInstruction<
@@ -164,7 +162,9 @@ export type AcceptTaskResultInstructionDataArgs = {};
 
 export function getAcceptTaskResultInstructionDataEncoder(): FixedSizeEncoder<AcceptTaskResultInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: ACCEPT_TASK_RESULT_DISCRIMINATOR }),
   );
 }

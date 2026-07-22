@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
-import { resolveReleaseTag } from "./release-policy.mjs";
+import {
+  resolveReleaseTag,
+  validateReleaseWorkflowGateIds,
+  validateReleaseWorkflowGateIdentities,
+  validateReleaseWorkflowTagGlobs,
+} from "./release-policy.mjs";
 
 const RELEASE_WORKFLOW = new URL(
   "../.github/workflows/release.yml",
@@ -38,7 +46,10 @@ const TAG_BINDING_SCRIPT = new URL(
 );
 const RELEASE_POLICY_SCRIPT = new URL("./release-policy.mjs", import.meta.url);
 const RELEASE_STATE_SCRIPT = new URL("./release-state.mjs", import.meta.url);
-const NPM_PROVENANCE_SCRIPT = new URL("./verify-npm-provenance.mjs", import.meta.url);
+const NPM_PROVENANCE_SCRIPT = new URL(
+  "./verify-npm-provenance.mjs",
+  import.meta.url,
+);
 const RELEASE_SBOM_SCRIPT = new URL("./release-sbom.mjs", import.meta.url);
 const RUST_SUPPLY_WORKFLOW = new URL(
   "../.github/workflows/rust-supply-chain.yml",
@@ -71,13 +82,36 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   assert.ok(Object.hasOwn(verify.on, "workflow_call"));
   assert.equal(release.permissions.contents, "read");
 
+  const resolver = release.jobs.resolve_release;
+  assert.equal(resolver.outputs.id, "${{ steps.pkg.outputs.id }}");
+  const resolverStep = resolver.steps.find(
+    (step) => step.name === "Resolve package identity before routed jobs",
+  );
+  const resolverCoverage = resolver.steps.find(
+    (step) => step.name === "Require exact package gate coverage",
+  );
+  assert.ok(resolverStep && resolverCoverage);
+  assert.equal(resolverStep.id, "pkg");
+  assert.equal(resolverStep.run, "node scripts/release-policy.mjs resolve");
+  assert.equal(resolverCoverage.run, "node scripts/release-policy.mjs gates");
+  assert.equal(
+    resolverCoverage.env.RESOLVED_PACKAGE_ID,
+    "${{ steps.pkg.outputs.id }}",
+  );
+
   const verifier = release.jobs.protocol_verifiable_build;
   assert.equal(verifier.uses, "./.github/workflows/verify.yml");
-  assert.match(verifier.if, /protocol-v/);
+  assert.equal(verifier.needs, "resolve_release");
+  assert.equal(verifier.if, "needs.resolve_release.outputs.id == 'protocol'");
   assert.equal(verifier.permissions.contents, "read");
 
   const releaseJob = release.jobs.release;
-  assert.deepEqual(releaseJob.needs, ["protocol_verifiable_build", "rust_supply_chain"]);
+  assert.deepEqual(releaseJob.needs, [
+    "resolve_release",
+    "protocol_verifiable_build",
+    "rust_supply_chain",
+  ]);
+  assert.match(releaseJob.if, /needs\.resolve_release\.result == 'success'/);
   assert.match(releaseJob.if, /protocol_verifiable_build\.result == 'success'/);
   assert.match(releaseJob.if, /rust_supply_chain\.result == 'success'/);
   assert.ok(Object.hasOwn(rustSupply.on, "workflow_call"));
@@ -101,9 +135,15 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   const attach = names.indexOf("Attach required verifiable-build hashes");
   const sbom = names.indexOf("Generate deterministic SPDX release SBOM");
   const attachSbom = names.indexOf("Attach required SPDX release SBOM");
-  const cutover = names.indexOf("Require finalized mainnet cutover for stable releases");
-  const inspect = names.indexOf("Inspect resumable release state before mutation");
-  const npmPublish = names.indexOf("Publish reviewed tarball to npm staging tag");
+  const cutover = names.indexOf(
+    "Require finalized mainnet cutover for stable releases",
+  );
+  const inspect = names.indexOf(
+    "Inspect resumable release state before mutation",
+  );
+  const npmPublish = names.indexOf(
+    "Publish reviewed tarball to npm staging tag",
+  );
   const npmVerify = names.indexOf(
     "Verify npm integrity and provenance before changing public dist-tags",
   );
@@ -147,16 +187,10 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   );
   assert.equal(
     releaseJob.steps[releaseAnchorDependencies].if,
-    "startsWith(github.ref_name, 'protocol-v') && steps.cache-anchor-protocol.outputs.cache-hit != 'true'",
+    "steps.pkg.outputs.id == 'protocol' && steps.cache-anchor-protocol.outputs.cache-hit != 'true'",
   );
-  assert.match(
-    releaseJob.steps[releaseAnchorDependencies].run,
-    /libudev-dev/,
-  );
-  assert.match(
-    releaseJob.steps[releaseAnchorDependencies].run,
-    /pkg-config/,
-  );
+  assert.match(releaseJob.steps[releaseAnchorDependencies].run, /libudev-dev/);
+  assert.match(releaseJob.steps[releaseAnchorDependencies].run, /pkg-config/);
 
   const productionBuild = names.indexOf(
     "Anchor build (protocol gate — fresh IDL/types for the drift check)",
@@ -183,8 +217,9 @@ test("protocol publication is fail-closed on the reusable verifiable build", asy
   );
   assert.equal(releaseJob.steps[canaryCompiled].env.AGENC_CANARY_LITESVM, "1");
   assert.equal(
-    releaseJob.steps[canaryCompiled].run,
-    "node --test tests-integration/canary-*.test.mjs",
+    releaseJob.steps[canaryCompiled].run.trim(),
+    "node --test tests-integration/canary-*.test.mjs\n" +
+      "node scripts/release-policy.mjs complete-gate",
   );
 
   const driftSteps = idlDrift.jobs["idl-drift"].steps;
@@ -270,7 +305,14 @@ test("release shell never directly interpolates tag-derived package outputs", as
 });
 
 test("normal pull-request CI enforces deployment and compiled integration gates", async () => {
-  const [ci, sdk, reactFixtures, release, integrationLock, integrationAuditSource] = await Promise.all([
+  const [
+    ci,
+    sdk,
+    reactFixtures,
+    release,
+    integrationLock,
+    integrationAuditSource,
+  ] = await Promise.all([
     loadWorkflow(CI_WORKFLOW),
     loadWorkflow(SDK_WORKFLOW),
     loadWorkflow(REACT_FIXTURES_WORKFLOW),
@@ -292,7 +334,8 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
   assert.equal(ciPreflightInstall["working-directory"], "tests-integration");
   assert.match(ciPreflightInstall.run, /^npm ci$/);
   const ciPreflightAudit = ciSteps.find(
-    (step) => step.name === "Audit independent deployment/preflight dependencies",
+    (step) =>
+      step.name === "Audit independent deployment/preflight dependencies",
   );
   assert.ok(ciPreflightAudit);
   assert.match(ciPreflightAudit.run, /audit:tests-integration/);
@@ -314,13 +357,17 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
     releasePreflightInstall["working-directory"],
     "tests-integration",
   );
-  assert.match(releasePreflightInstall.if, /protocol-v/);
+  assert.equal(
+    releasePreflightInstall.if,
+    "steps.pkg.outputs.id == 'protocol'",
+  );
   assert.match(releasePreflightInstall.run, /^npm ci$/);
   const releasePreflightAudit = releaseSteps.find(
-    (step) => step.name === "Audit independent deployment/preflight dependencies",
+    (step) =>
+      step.name === "Audit independent deployment/preflight dependencies",
   );
   assert.ok(releasePreflightAudit);
-  assert.match(releasePreflightAudit.if, /protocol-v/);
+  assert.equal(releasePreflightAudit.if, "steps.pkg.outputs.id == 'protocol'");
   assert.match(releasePreflightAudit.run, /audit:tests-integration/);
   assert.ok(
     releaseSteps.indexOf(releasePreflightInstall) <
@@ -333,7 +380,10 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
   const integration = sdkSteps.find(
     (step) => step.name === "Root compiled-program integration suite",
   );
-  assert.ok(integration, "normal SDK PR CI must run the root compiled integration suite");
+  assert.ok(
+    integration,
+    "normal SDK PR CI must run the root compiled integration suite",
+  );
   assert.match(integration.run, /tests-integration\/\*\.test\.mjs/);
   const integrationInstall = sdkSteps.find(
     (step) => step.name === "Install compiled-program integration dependencies",
@@ -363,7 +413,8 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
   assert.match(integrationAuditSource, /report\.error !== undefined/);
   assert.match(integrationAuditSource, /require\("@solana\/web3\.js"\)/);
   const idlStage = sdkSteps.find(
-    (step) => step.name === "Stage committed IDL for compiled integration harness",
+    (step) =>
+      step.name === "Stage committed IDL for compiled integration harness",
   );
   assert.ok(idlStage, "compiled integration CI must stage its reviewed IDL");
   assert.match(
@@ -409,15 +460,26 @@ test("normal pull-request CI enforces deployment and compiled integration gates"
       .find((step) => step.name === "Reject mixed release surfaces");
     assert.ok(rejectStep);
     assert.match(rejectStep.run, /--no-default-features/);
-    assert.match(rejectStep.run, /full protocol surface requires spl-token-rewards/);
+    assert.match(
+      rejectStep.run,
+      /full protocol surface requires spl-token-rewards/,
+    );
   }
 });
 
 test("package resolver accepts only canonical semver and covers every release route", async () => {
-  const train = JSON.parse(await readFile(RELEASE_TRAIN, "utf8"));
+  const [train, release] = await Promise.all([
+    readFile(RELEASE_TRAIN, "utf8").then(JSON.parse),
+    loadWorkflow(RELEASE_WORKFLOW),
+  ]);
   const valid = resolveReleaseTag("sdk-v1.2.3-rc.1", train);
   assert.deepEqual(
-    { name: valid.name, directory: valid.directory, version: valid.version, distTag: valid.distTag },
+    {
+      name: valid.name,
+      directory: valid.directory,
+      version: valid.version,
+      distTag: valid.distTag,
+    },
     {
       name: "@tetsuo-ai/marketplace-sdk",
       directory: "packages/sdk-ts",
@@ -437,19 +499,280 @@ test("package resolver accepts only canonical semver and covers every release ro
     () => resolveReleaseTag("sdk-v1.2.3\nname=attacker-controlled", train),
     /invalid semantic version/,
   );
+  assert.equal(
+    validateReleaseWorkflowTagGlobs(train, release.on.push.tags),
+    true,
+  );
+
+  const releaseSteps = release.jobs.release.steps;
+  const earlyCoverage = release.jobs.resolve_release.steps.find(
+    (step) => step.name === "Require exact package gate coverage",
+  );
+  const releaseCoverage = releaseSteps.find(
+    (step) => step.name === "Reconfirm exact package gate coverage",
+  );
+  assert.ok(earlyCoverage && releaseCoverage);
+  const gates = JSON.parse(release.env.RELEASE_PACKAGE_GATES_JSON);
+  assert.equal(validateReleaseWorkflowGateIdentities(train, gates), true);
+  const gateEnvironment = {
+    ...process.env,
+    GITHUB_REF_NAME: "sdk-v0.12.0",
+    RESOLVED_PACKAGE_ID: "sdk",
+    RELEASE_PACKAGE_GATES_JSON: JSON.stringify(gates),
+  };
+  const gateBoundary = spawnSync(
+    process.execPath,
+    [fileURLToPath(RELEASE_POLICY_SCRIPT), "gates"],
+    { encoding: "utf8", env: gateEnvironment },
+  );
+  assert.equal(gateBoundary.status, 0, gateBoundary.stderr);
+  const mismatchedGateBoundary = spawnSync(
+    process.execPath,
+    [fileURLToPath(RELEASE_POLICY_SCRIPT), "gates"],
+    {
+      encoding: "utf8",
+      env: { ...gateEnvironment, RESOLVED_PACKAGE_ID: "tools" },
+    },
+  );
+  assert.notEqual(mismatchedGateBoundary.status, 0);
+  assert.match(mismatchedGateBoundary.stderr, /not bound to the release tag/);
+
+  const runnerTemp = await mkdtemp(join(tmpdir(), "agenc-workflow-gate-"));
+  try {
+    const completionBoundary = spawnSync(
+      process.execPath,
+      [fileURLToPath(RELEASE_POLICY_SCRIPT), "complete-gate"],
+      {
+        encoding: "utf8",
+        env: {
+          ...gateEnvironment,
+          RELEASE_COMPLETES_PACKAGE_ID: "sdk",
+          RUNNER_TEMP: runnerTemp,
+        },
+      },
+    );
+    assert.equal(completionBoundary.status, 0, completionBoundary.stderr);
+    const verificationBoundary = spawnSync(
+      process.execPath,
+      [fileURLToPath(RELEASE_POLICY_SCRIPT), "verify-gate"],
+      {
+        encoding: "utf8",
+        env: { ...gateEnvironment, RUNNER_TEMP: runnerTemp },
+      },
+    );
+    assert.equal(verificationBoundary.status, 0, verificationBoundary.stderr);
+  } finally {
+    await rm(runnerTemp, { recursive: true, force: true });
+  }
+
+  const routedGateSteps = releaseSteps.filter(
+    (step) =>
+      typeof step.env?.RELEASE_COMPLETES_PACKAGE_ID === "string" &&
+      step.env.RELEASE_COMPLETES_PACKAGE_ID.length > 0,
+  );
+  const routedGateIds = routedGateSteps.map(
+    (step) => step.env.RELEASE_COMPLETES_PACKAGE_ID,
+  );
+  assert.equal(validateReleaseWorkflowGateIds(train, routedGateIds), true);
+  const routedGates = new Map(
+    routedGateSteps.map((step) => {
+      const id = step.env.RELEASE_COMPLETES_PACKAGE_ID;
+      const identity = gates.find((gate) => gate.id === id);
+      assert.ok(identity, `${step.name} has an undeclared release gate id`);
+      assert.equal(typeof step.if, "string", `${step.name} must be routed`);
+      assert.match(
+        step.if,
+        new RegExp(
+          `(?:^|\\|\\| )steps\\.pkg\\.outputs\\.id == '${id}'(?:$| \\|\\|)`,
+        ),
+        `${step.name} must route from its declared package id`,
+      );
+      assert.match(
+        step.run,
+        /release-policy\.mjs"? complete-gate/,
+        `${step.name} must emit completion only after its commands succeed`,
+      );
+      assert.match(
+        step.run.trim(),
+        /release-policy\.mjs"? complete-gate(?:\nfi)?$/,
+        `${step.name} must claim completion only at the end of its successful gate`,
+      );
+      assert.ok(
+        step.run.slice(0, step.run.lastIndexOf("complete-gate")).trim().length >
+          0,
+        `${step.name} must perform gate work before claiming completion`,
+      );
+      assert.ok(
+        step["working-directory"] === identity.directory ||
+          (id === "protocol" && step["working-directory"] === undefined),
+        `${step.name} must execute against the resolved package identity`,
+      );
+      return [id, step];
+    }),
+  );
+  const completionCalls = releaseSteps.filter(
+    (step) =>
+      typeof step.run === "string" &&
+      /release-policy\.mjs"? complete-gate/.test(step.run),
+  );
   assert.deepEqual(
-    new Set(train.packages.map(({ tagPrefix }) => tagPrefix)),
-    new Set([
-      "protocol-v",
-      "sdk-v",
-      "react-v",
-      "tools-v",
-      "mcp-v",
-      "moderation-v",
-      "worker-v",
-      "cli-v",
-      "cli-alias-v",
+    completionCalls,
+    routedGateSteps,
+    "every gate completion call must carry one statically validated package id",
+  );
+  const completionVerifiers = releaseSteps.filter(
+    (step) => step.name === "Require completed routed package gate",
+  );
+  assert.equal(
+    completionVerifiers.length,
+    1,
+    "the release must have exactly one gate-proof barrier",
+  );
+  const [completionVerifier] = completionVerifiers;
+  const prepack = releaseSteps.find(
+    (step) => step.name === "Run reviewed package prepack lifecycle",
+  );
+  assert.ok(completionVerifier && prepack);
+  assert.equal(
+    completionVerifier.run,
+    "node scripts/release-policy.mjs verify-gate",
+  );
+  assert.equal(completionVerifier.if, undefined);
+  assert.notEqual(completionVerifier["continue-on-error"], true);
+  assert.deepEqual(
+    releaseSteps.filter(
+      (step) =>
+        typeof step.run === "string" &&
+        /release-policy\.mjs verify-gate/.test(step.run),
+    ),
+    [completionVerifier],
+    "the validated proof barrier must be the only verification call",
+  );
+  assert.ok(
+    Math.max(...routedGateSteps.map((step) => releaseSteps.indexOf(step))) <
+      releaseSteps.indexOf(completionVerifier) &&
+      releaseSteps.indexOf(completionVerifier) < releaseSteps.indexOf(prepack),
+    "the selected package gate proof must be verified before packaging",
+  );
+  for (const step of releaseSteps) {
+    if (typeof step.if === "string") {
+      assert.doesNotMatch(
+        step.if,
+        /github\.ref_name|startsWith\s*\(/,
+        `${step.name} must route from the resolved package id`,
+      );
+    }
+  }
+
+  const swappedPrefixes = structuredClone(train);
+  const swappedSdk = swappedPrefixes.packages.find(({ id }) => id === "sdk");
+  const swappedTools = swappedPrefixes.packages.find(
+    ({ id }) => id === "tools",
+  );
+  [swappedSdk.tagPrefix, swappedTools.tagPrefix] = [
+    swappedTools.tagPrefix,
+    swappedSdk.tagPrefix,
+  ];
+  assert.equal(
+    validateReleaseWorkflowTagGlobs(swappedPrefixes, release.on.push.tags),
+    true,
+  );
+  assert.equal(
+    validateReleaseWorkflowGateIdentities(swappedPrefixes, gates),
+    true,
+  );
+  const sdkPrefixResolution = resolveReleaseTag(
+    `sdk-v${swappedTools.expectedVersion}`,
+    swappedPrefixes,
+  );
+  assert.equal(sdkPrefixResolution.id, "tools");
+  assert.doesNotMatch(routedGates.get("sdk").if, /id == 'tools'/);
+  assert.match(routedGates.get("tools").if, /id == 'tools'/);
+
+  const protocolPrefixSwap = structuredClone(train);
+  const prefixSwappedProtocol = protocolPrefixSwap.packages.find(
+    ({ id }) => id === "protocol",
+  );
+  const prefixSwappedSdk = protocolPrefixSwap.packages.find(
+    ({ id }) => id === "sdk",
+  );
+  [prefixSwappedProtocol.tagPrefix, prefixSwappedSdk.tagPrefix] = [
+    prefixSwappedSdk.tagPrefix,
+    prefixSwappedProtocol.tagPrefix,
+  ];
+  assert.equal(
+    resolveReleaseTag(
+      `sdk-v${prefixSwappedProtocol.expectedVersion}`,
+      protocolPrefixSwap,
+    ).id,
+    "protocol",
+  );
+  assert.equal(
+    release.jobs.protocol_verifiable_build.if,
+    "needs.resolve_release.outputs.id == 'protocol'",
+  );
+
+  const swappedIds = structuredClone(train);
+  const idSwappedSdk = swappedIds.packages.find(({ id }) => id === "sdk");
+  const idSwappedTools = swappedIds.packages.find(({ id }) => id === "tools");
+  [idSwappedSdk.id, idSwappedTools.id] = [idSwappedTools.id, idSwappedSdk.id];
+  for (const entry of swappedIds.packages) {
+    entry.requires = entry.requires.map((id) =>
+      id === "sdk" ? "tools" : id === "tools" ? "sdk" : id,
+    );
+  }
+  assert.throws(
+    () => validateReleaseWorkflowGateIdentities(swappedIds, gates),
+    /package gates must exactly cover the release train identities/,
+  );
+
+  const expandedTrain = structuredClone(train);
+  expandedTrain.packages.push({
+    id: "future",
+    tagPrefix: "future-v",
+    name: "@tetsuo-ai/future-marketplace",
+    directory: "packages/future-marketplace",
+    expectedVersion: "0.1.0",
+    expectedIntegrity: `sha512-${Buffer.alloc(64, 7).toString("base64")}`,
+    requires: [],
+  });
+  assert.equal(
+    validateReleaseWorkflowTagGlobs(expandedTrain, [
+      ...release.on.push.tags,
+      "future-v*",
     ]),
+    true,
+  );
+  const expandedGates = [
+    ...gates,
+    {
+      id: "future",
+      name: "@tetsuo-ai/future-marketplace",
+      directory: "packages/future-marketplace",
+    },
+  ];
+  assert.equal(
+    validateReleaseWorkflowGateIdentities(expandedTrain, expandedGates),
+    true,
+    "a self-declared identity list alone is not proof of an implemented gate",
+  );
+  assert.throws(
+    () => validateReleaseWorkflowGateIds(expandedTrain, routedGateIds),
+    /routed gate ids must exactly cover the release train/,
+    "a future train package without a real routed workflow step must fail closed",
+  );
+
+  const missingRoute = structuredClone(release.on.push.tags);
+  missingRoute.pop();
+  assert.throws(
+    () => validateReleaseWorkflowTagGlobs(train, missingRoute),
+    /exactly match the release train/,
+  );
+  const mistypedRoute = structuredClone(release.on.push.tags);
+  mistypedRoute[0] = `${mistypedRoute[0]}-typo`;
+  assert.throws(
+    () => validateReleaseWorkflowTagGlobs(train, mistypedRoute),
+    /exactly match the release train/,
   );
 });
 
@@ -497,8 +820,14 @@ test("every release carries a deterministic SPDX SBOM bound to its reviewed tarb
   assert.match(pack.run, /npm pack --ignore-scripts --json/);
   assert.match(pack.run, />\s*"\$\{RUNNER_TEMP\}\/package-pack\.json"/);
   assert.match(generate.run, /release-sbom\.mjs generate/);
-  assert.equal(inspect.env.SBOM_RELEASE_ASSET, "${{ steps.sbom.outputs.name }}");
-  assert.equal(inspect.env.SBOM_RELEASE_ASSET_PATH, "${{ steps.sbom.outputs.path }}");
+  assert.equal(
+    inspect.env.SBOM_RELEASE_ASSET,
+    "${{ steps.sbom.outputs.name }}",
+  );
+  assert.equal(
+    inspect.env.SBOM_RELEASE_ASSET_PATH,
+    "${{ steps.sbom.outputs.path }}",
+  );
   assert.match(sbomSource, /SPDX-2\.3/);
   assert.match(sbomSource, /npm pack integrity\/shasum/);
   assert.match(sbomSource, /Source commit/);
@@ -517,7 +846,10 @@ test("release rechecks expiring npm license exceptions before publication", asyn
     (step) => step.name === "Publish reviewed tarball to npm staging tag",
   );
   assert.ok(install && policy && publish);
-  assert.match(install.run, /npm ci --prefix tests-integration --ignore-scripts/);
+  assert.match(
+    install.run,
+    /npm ci --prefix tests-integration --ignore-scripts/,
+  );
   assert.match(policy.run, /check-npm-licenses\.mjs/);
   assert.ok(steps.indexOf(install) < steps.indexOf(policy));
   assert.ok(steps.indexOf(policy) < steps.indexOf(publish));
@@ -599,16 +931,25 @@ test("an existing npm version resumes only after exact integrity and provenance 
     (step) => step.name === "Advance reviewed npm dist-tag",
   );
   const finalize = steps.find(
-    (step) => step.name === "Reinspect every immutable release surface before finalization",
+    (step) =>
+      step.name ===
+      "Reinspect every immutable release surface before finalization",
   );
-  const publishRelease = steps.find((step) => step.name === "Publish GitHub Release");
-  assert.ok(inspect && publish && verify && distTag && finalize && publishRelease);
+  const publishRelease = steps.find(
+    (step) => step.name === "Publish GitHub Release",
+  );
+  assert.ok(
+    inspect && publish && verify && distTag && finalize && publishRelease,
+  );
   assert.match(inspect.run, /release-state\.mjs inspect/);
   assert.match(publish.if, /publish_npm == 'true'/);
   assert.match(publish.run, /--provenance --tag agenc-staging/);
   assert.match(verify.run, /release-state\.mjs verify-npm/);
   assert.match(distTag.run, /remove_staging_tag/);
-  assert.match(distTag.run, /npm dist-tag rm "\$\{PACKAGE_NAME\}" agenc-staging/);
+  assert.match(
+    distTag.run,
+    /npm dist-tag rm "\$\{PACKAGE_NAME\}" agenc-staging/,
+  );
   assert.match(distTag.if, /remove_staging_tag == 'true'/);
   assert.ok(steps.indexOf(inspect) < steps.indexOf(publish));
   assert.ok(steps.indexOf(publish) < steps.indexOf(verify));
@@ -623,7 +964,10 @@ test("an existing npm version resumes only after exact integrity and provenance 
   assert.match(provenanceSource, /--include-attestations/);
   assert.match(provenanceSource, /https:\/\/slsa\.dev\/provenance\/v1/);
   assert.match(provenanceSource, /resolvedDependencies/);
-  assert.match(stateSource, /perAssetState\[required\.name\] =.*"matching" : "mismatch"/s);
+  assert.match(
+    stateSource,
+    /perAssetState\[required\.name\] =.*"matching" : "mismatch"/s,
+  );
   assert.match(stateSource, /missingAssets = Object\.entries\(perAssetState\)/);
   assert.match(stateSource, /registryResponse\.status !== 404/);
   assert.match(stateSource, /refusing to move npm \$\{distTag\} backwards/);

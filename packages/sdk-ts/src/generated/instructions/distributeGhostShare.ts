@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -50,9 +50,7 @@ export const DISTRIBUTE_GHOST_SHARE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([238, 29, 21, 234, 93, 251, 101, 47]);
 
 export function getDistributeGhostShareDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    DISTRIBUTE_GHOST_SHARE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(DISTRIBUTE_GHOST_SHARE_DISCRIMINATOR);
 }
 
 export type DistributeGhostShareInstruction<
@@ -132,7 +130,9 @@ export type DistributeGhostShareInstructionDataArgs = {};
 
 export function getDistributeGhostShareInstructionDataEncoder(): FixedSizeEncoder<DistributeGhostShareInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: DISTRIBUTE_GHOST_SHARE_DISCRIMINATOR,

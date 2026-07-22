@@ -6,9 +6,25 @@ function localPath(path: string): string {
   return fileURLToPath(new URL(path, import.meta.url));
 }
 
+function vendorChunk(id: string): string | undefined {
+  const normalized = id.replaceAll("\\", "/");
+  if (normalized.includes("/node_modules/@solana/")) return "solana";
+  if (normalized.includes("/node_modules/@tetsuo-ai/")) return "agenc";
+  if (
+    normalized.includes("/node_modules/react/") ||
+    normalized.includes("/node_modules/react-dom/") ||
+    normalized.includes("/node_modules/scheduler/") ||
+    normalized.includes("/node_modules/@tanstack/")
+  ) {
+    return "react";
+  }
+  return undefined;
+}
+
 export default defineConfig({
   build: {
     rollupOptions: {
+      output: { manualChunks: vendorChunk },
       onwarn(warning, warn) {
         const normalized = warning.id?.replaceAll("\\", "/") ?? "";
         if (

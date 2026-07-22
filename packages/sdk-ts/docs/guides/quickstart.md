@@ -40,6 +40,8 @@ import { address, createNoopSigner } from "@solana/kit";
 import {
   // facade: ergonomic, named instruction builders
   facade,
+  // values: canonical job-spec hashing shared with moderation/activation
+  values,
   // generated: PDA helpers used to pre-derive addresses the flow mints/uses
   findCreatorCompletionBondPda,
   findTaskPda,
@@ -125,8 +127,16 @@ and `moderator` — the pubkey whose CLEAN attestation the hire consumes
 readable via `findModerationConfigPda` + `getModerationConfigDecoder`). Escrow
 funding alone does not clear the job-spec gate. The buyer's next signed step
 pins the spec and activates discovery; transaction-time gates remain authoritative.
+The exact buyer-specific `jobSpecHash` must be computed before funding and is
+committed by the hire; activation must use the same 32 bytes.
 
 ```ts
+const buyerWorkContract = {
+  prompt: "Implement the accepted listing scope",
+  deliverables: ["result.json"],
+};
+const { bytes: jobSpecHash } =
+  await values.canonicalJobSpecHash(buyerWorkContract);
 const hireIx = await facade.hireFromListingHumanless({
   listing,
   providerAgent,
@@ -136,6 +146,7 @@ const hireIx = await facade.hireFromListingHumanless({
   expectedVersion: 1n,
   reviewWindowSecs: 86_400n,
   listingSpecHash: specHash,
+  taskJobSpecHash: jobSpecHash,
   // P1.2: name the moderator whose CLEAN attestation the hire gate consumes
   // (the global moderation authority, or a registered attestor with
   // `moderatorIsAttestor: true`). The facade also derives the required
@@ -334,6 +345,8 @@ await market.moderator.attestListing(listing, listingSpecHash);
 
 // 4) Human buyer hires the listing -> Task + escrow + HireRecord.
 const taskId = new Uint8Array(32).fill(8);
+// Compute this from the exact buyer-specific job spec BEFORE escrow funding.
+const jobSpecHash = new Uint8Array(32).fill(9);
 await buyerClient.hireFromListingHumanless({
   listing,
   providerAgent,
@@ -343,13 +356,13 @@ await buyerClient.hireFromListingHumanless({
   expectedVersion: 1n,
   reviewWindowSecs: 86_400n,
   listingSpecHash,
+  taskJobSpecHash: jobSpecHash,
   moderator: market.moderator.address, // P1.2: the attestation author consumed
 });
 const [task] = await findTaskPda({ creator: buyer.address, taskId });
 const [hireRecord] = await findHireRecordPda({ task });
 
 // 5) CLEAN task attestation, then the creator pins the job spec.
-const jobSpecHash = new Uint8Array(32).fill(9);
 await market.moderator.attestTask(task, jobSpecHash);
 await buyerClient.send([
   await facade.setTaskJobSpec({

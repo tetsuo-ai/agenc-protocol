@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU8Decoder,
@@ -35,6 +33,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -45,9 +45,7 @@ export const MIGRATE_PROTOCOL_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([182, 254, 253, 220, 0, 144, 234, 250]);
 
 export function getMigrateProtocolDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    MIGRATE_PROTOCOL_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(MIGRATE_PROTOCOL_DISCRIMINATOR);
 }
 
 export type MigrateProtocolInstruction<
@@ -90,7 +88,7 @@ export type MigrateProtocolInstructionDataArgs = { targetVersion: number };
 export function getMigrateProtocolInstructionDataEncoder(): FixedSizeEncoder<MigrateProtocolInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["targetVersion", getU8Encoder()],
     ]),
     (value) => ({ ...value, discriminator: MIGRATE_PROTOCOL_DISCRIMINATOR }),

@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -36,6 +34,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -53,9 +53,7 @@ export const SUBMIT_TASK_RESULT_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([39, 108, 74, 4, 66, 125, 157, 7]);
 
 export function getSubmitTaskResultDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    SUBMIT_TASK_RESULT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(SUBMIT_TASK_RESULT_DISCRIMINATOR);
 }
 
 export type SubmitTaskResultInstruction<
@@ -117,9 +115,9 @@ export type SubmitTaskResultInstructionDataArgs = {
 export function getSubmitTaskResultInstructionDataEncoder(): Encoder<SubmitTaskResultInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["proofHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["resultData", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 64))],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["proofHash", getFixedBytesEncoder(32, "proofHash")],
+      ["resultData", getOptionEncoder(getFixedBytesEncoder(64))],
     ]),
     (value) => ({ ...value, discriminator: SUBMIT_TASK_RESULT_DISCRIMINATOR }),
   );

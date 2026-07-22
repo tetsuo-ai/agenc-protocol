@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -36,6 +34,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -48,9 +48,7 @@ export const DELEGATE_REPUTATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([195, 86, 46, 27, 29, 166, 147, 66]);
 
 export function getDelegateReputationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    DELEGATE_REPUTATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(DELEGATE_REPUTATION_DISCRIMINATOR);
 }
 
 export type DelegateReputationInstruction<
@@ -100,7 +98,7 @@ export type DelegateReputationInstructionDataArgs = {
 export function getDelegateReputationInstructionDataEncoder(): FixedSizeEncoder<DelegateReputationInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["amount", getU16Encoder()],
       ["expiresAt", getI64Encoder()],
     ]),

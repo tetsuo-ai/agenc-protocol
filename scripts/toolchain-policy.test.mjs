@@ -8,6 +8,7 @@ const RELEASE_NODE = "24.18.0";
 const MINIMUM_NODE = "22.23.1";
 const RELEASE_RUST = "1.85.0";
 const PROGRAM_MSRV = "1.82.0";
+const NODE_22_COMPATIBLE_LITESVM = "1.1.0";
 
 async function json(path) {
   return JSON.parse(await readFile(new URL(path, ROOT), "utf8"));
@@ -108,6 +109,17 @@ test("advertised minimum runtimes have explicit compatibility jobs", async () =>
       .filter((step) => step.run)
       .every((step) => !String(step.run).includes("cargo ") || String(step.run).includes("+1.82.0")),
   );
+});
+
+test("LiteSVM stays on the release compatible with the advertised Node minimum", async () => {
+  const [sdk, cli] = await Promise.all([
+    json("packages/sdk-ts/package.json"),
+    json("packages/agenc-cli/package.json"),
+  ]);
+
+  assert.equal(sdk.peerDependencies?.litesvm, NODE_22_COMPATIBLE_LITESVM);
+  assert.equal(sdk.devDependencies?.litesvm, NODE_22_COMPATIBLE_LITESVM);
+  assert.equal(cli.dependencies?.litesvm, NODE_22_COMPATIBLE_LITESVM);
 });
 
 test("every GitHub-hosted workflow job pins the Ubuntu 24.04 runner family", async () => {

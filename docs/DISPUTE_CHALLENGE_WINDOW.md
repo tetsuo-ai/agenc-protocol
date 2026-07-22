@@ -1,6 +1,6 @@
 # Dispute challenge window + resolver stake (P6.4 step 3)
 
-> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for the completed remediation record.
+> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 > Status: **DESIGN ONLY — [HUMAN: approve challenge-window + resolver-stake design before build]**.
 > Nothing in this document is implemented. P6.4 steps (1)+(2) — the required reasoned

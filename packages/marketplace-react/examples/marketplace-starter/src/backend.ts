@@ -1,12 +1,8 @@
 import type { Address } from "@solana/kit";
 import { values } from "@tetsuo-ai/marketplace-sdk";
+import type { StarterJobSpec } from "./job-spec.js";
 
-export interface StarterJobSpec {
-  title: string;
-  deliverables: string[];
-  acceptanceCriteria: string[];
-  notes?: string;
-}
+export type { StarterJobSpec } from "./job-spec.js";
 
 export interface HostedModeratedJobSpec {
   jobSpecHash: Uint8Array;
@@ -39,7 +35,9 @@ export class BackendAdapterError extends Error {
 
 function parseHex32(hex: string): Uint8Array {
   if (!/^[0-9a-f]{64}$/i.test(hex)) {
-    throw new BackendAdapterError("Backend returned an invalid 32-byte jobSpecHashHex.");
+    throw new BackendAdapterError(
+      "Backend returned an invalid 32-byte jobSpecHashHex.",
+    );
   }
   return values.hexToBytes(hex.toLowerCase());
 }
@@ -49,7 +47,9 @@ function parseHex32(hex: string): Uint8Array {
  * call agenc.ag same-origin write routes as a hosted write API. Deploy your own
  * route with this contract, or replace this adapter with your platform backend.
  */
-export function createHttpBackendAdapter(baseUrl: string): MarketplaceBackendAdapter {
+export function createHttpBackendAdapter(
+  baseUrl: string,
+): MarketplaceBackendAdapter {
   const root = baseUrl.replace(/\/+$/, "");
   if (!root) {
     return {
@@ -71,21 +71,22 @@ export function createHttpBackendAdapter(baseUrl: string): MarketplaceBackendAda
           spec: input.spec,
         }),
       });
-      const body = (await response.json().catch(() => null)) as
-        | {
-            jobSpecHashHex?: string;
-            jobSpecUri?: string;
-            moderationAttested?: boolean;
-            error?: string;
-          }
-        | null;
+      const body = (await response.json().catch(() => null)) as {
+        jobSpecHashHex?: string;
+        jobSpecUri?: string;
+        moderationAttested?: boolean;
+        error?: string;
+      } | null;
       if (!response.ok || !body) {
         throw new BackendAdapterError(
-          body?.error ?? `Backend activation request failed (${response.status}).`,
+          body?.error ??
+            `Backend activation request failed (${response.status}).`,
         );
       }
       if (!body.jobSpecHashHex || !body.jobSpecUri) {
-        throw new BackendAdapterError("Backend response is missing job spec hash or URI.");
+        throw new BackendAdapterError(
+          "Backend response is missing job spec hash or URI.",
+        );
       }
       return {
         jobSpecHashHex: body.jobSpecHashHex.toLowerCase(),

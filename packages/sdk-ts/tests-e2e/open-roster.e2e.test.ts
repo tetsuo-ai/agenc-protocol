@@ -7,13 +7,7 @@
 // re-opens it). Runs the actual compiled program in litesvm — real signatures,
 // decoded on-chain state.
 import { describe, it, expect } from "vitest";
-import {
-  AccountRole,
-  lamports,
-  type Address,
-  type Instruction,
-  type KeyPairSigner,
-} from "@solana/kit";
+import { lamports, type Address, type KeyPairSigner } from "@solana/kit";
 import type { LiteSVM } from "litesvm";
 import {
   facade,
@@ -103,24 +97,6 @@ async function seedProtocolConfigWithMultisig(
     space: BigInt(data.length),
   });
   return pda;
-}
-
-/** Append multisig co-signer approvals as remaining accounts on a built instruction. */
-function withCoSigners(
-  ix: Instruction,
-  coSigners: KeyPairSigner[],
-): Instruction {
-  return {
-    ...ix,
-    accounts: [
-      ...(ix.accounts ?? []),
-      ...coSigners.map((signer) => ({
-        address: signer.address,
-        role: AccountRole.READONLY_SIGNER,
-        signer,
-      })),
-    ],
-  } as Instruction;
 }
 
 /** Register an agent + create an Auto task; returns the task PDA. */
@@ -267,7 +243,9 @@ describe("e2e: P1.2 open roster — register, attest, consume, bonded exit", () 
     advanceClockBy(svm, ATTESTOR_EXIT_COOLDOWN + 1n);
     svm.expireBlockhash(); // the retry is byte-identical to the rejected attempt
     const balBeforeFinalize = bal(svm, attestor.address);
-    await send(svm, attestor, [await facade.finalizeAttestorExit({ attestor })]);
+    await send(svm, attestor, [
+      await facade.finalizeAttestorExit({ attestor }),
+    ]);
     expect(accountData(svm, rosterPda)).toBeNull();
     // Delta = rent + bond - tx fee, so strictly more than the bond alone.
     expect(bal(svm, attestor.address) - balBeforeFinalize).toBeGreaterThan(
@@ -308,15 +286,13 @@ describe("e2e: P1.2 BLOCK floor — multisig set/clear hard-gates set_task_job_s
     // 1) set_moderation_block (2-of-3 co-signers via remaining accounts).
     const rationaleHash = new Uint8Array(32).fill(56);
     await send(svm, admin, [
-      withCoSigners(
-        await facade.setModerationBlock({
-          authority: admin,
-          contentHash: jobSpecHash,
-          rationaleHash,
-          rationaleUri: "ipfs://takedown-rationale",
-        }),
-        [co1, co2],
-      ),
+      await facade.setModerationBlock({
+        authority: admin,
+        multisigSigners: [co1, co2],
+        contentHash: jobSpecHash,
+        rationaleHash,
+        rationaleUri: "ipfs://takedown-rationale",
+      }),
     ]);
     const [blockPda] = await findModerationBlockPda({
       contentHash: jobSpecHash,
@@ -344,13 +320,11 @@ describe("e2e: P1.2 BLOCK floor — multisig set/clear hard-gates set_task_job_s
     // 3) clear_moderation_block (same multisig convention): the account stays
     //    open as audit trail, but the gate re-opens.
     await send(svm, admin, [
-      withCoSigners(
-        await facade.clearModerationBlock({
-          authority: admin,
-          contentHash: jobSpecHash,
-        }),
-        [co1, co2],
-      ),
+      await facade.clearModerationBlock({
+        authority: admin,
+        multisigSigners: [co1, co2],
+        contentHash: jobSpecHash,
+      }),
     ]);
     expect(accountData(svm, blockPda)).not.toBeNull(); // audit trail kept
 

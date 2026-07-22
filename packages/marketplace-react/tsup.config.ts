@@ -19,6 +19,9 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
+  // Keep CJS subpaths split too: flattening the shared multi-entry graph makes
+  // Rollup see entry-irrelevant external bindings and emit false unused-import warnings.
+  splitting: true,
   treeshake: true,
   // The SDK, its kit peers, React, and TanStack Query stay external so the
   // consumer's single copy is used (avoids duplicate React / context drift).

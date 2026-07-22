@@ -35,9 +35,9 @@ npm test                          # boots sandbox, serves checkout (vite dev), d
   params from chain, and writes both the checkout SPA's
   `public/sandbox-config.json` (the browser adopts the buyer key via the mock
   embedded wallet) and `.playwright-sandbox.json` (the spec's Node-side worker
-  context, with the same buyer key). The bootstrap's explicit
-  `--unsafe-unpaused-fixture` mode genesis-injects an unpaused current-surface
-  ProtocolConfig for this test only; production still requires atomic stamping.
+  context, with the same buyer key). The bootstrap uses explicit `--dev-ready`
+  mode to genesis-inject an unpaused current-surface ProtocolConfig for this
+  disposable test only; production still requires atomic stamping.
 - `global-teardown.mjs` stops the validator (`AGENC_KEEP_SANDBOX=1` to keep it).
 - `AGENC_SANDBOX_PORT=<rpc-port>` gives the disposable validator an isolated
   RPC/WebSocket/faucet/gossip range. Parallel runs also need separate worktrees,

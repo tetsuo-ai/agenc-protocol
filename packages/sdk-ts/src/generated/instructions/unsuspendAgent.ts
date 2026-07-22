@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -44,9 +44,7 @@ export const UNSUSPEND_AGENT_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getUnsuspendAgentDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UNSUSPEND_AGENT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UNSUSPEND_AGENT_DISCRIMINATOR);
 }
 
 export type UnsuspendAgentInstruction<
@@ -81,7 +79,9 @@ export type UnsuspendAgentInstructionDataArgs = {};
 
 export function getUnsuspendAgentInstructionDataEncoder(): FixedSizeEncoder<UnsuspendAgentInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: UNSUSPEND_AGENT_DISCRIMINATOR }),
   );
 }

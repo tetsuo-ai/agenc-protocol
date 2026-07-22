@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { address, type Address, type TransactionSigner } from "@solana/kit";
 import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
   AgentStatus,
   AgencError,
   DependencyType,
@@ -29,6 +30,7 @@ import {
   type TaskArgs,
 } from "@tetsuo-ai/marketplace-sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { AccountSnapshot } from "../src/account-reader.js";
 import {
   CLAIM_ACCOUNT_SIZE,
   CONTEST_ENTRY_DEPOSIT_LAMPORTS,
@@ -44,21 +46,14 @@ import {
   type WorkerLogEvent,
 } from "../src/runtime.js";
 import { resultDataFromHashHex, sha256Hex } from "../src/result.js";
-import {
-  bytesToHex,
-  emptyState,
-  loadState,
-  saveState,
-} from "../src/state.js";
+import { bytesToHex, emptyState, loadState, saveState } from "../src/state.js";
 
 const TASK = address("F1qYyDAYYS1sLxq5nDprfNknnwGPo7ssyKvhScv6f8Uc");
 const CREATOR = address("7Y9dRMi8ZtyDjLdSpzUCsxDgHooZTfp3RyYs2eZWmL39");
 const WORKER = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK");
 const WALLET = address("E5NfNsr4SxWf8wJtVH5m7WpujYzxT6f17CFqN6c51dWm");
 const PARENT = address("11111111111111111111111111111111");
-const LEGACY_LISTING = address(
-  "SysvarRent111111111111111111111111111111111",
-);
+const LEGACY_LISTING = address("SysvarRent111111111111111111111111111111111");
 const REWARD = 4_200_000n;
 const SPEC_URI = "https://specs.example/task.json";
 
@@ -238,12 +233,96 @@ const agent: WorkerAgent = {
   justRegistered: false,
 };
 
+async function attemptFreshClaimWithHireSnapshot(
+  snapshot: AccountSnapshot,
+): Promise<{
+  outcome: Awaited<ReturnType<typeof processCandidate>>;
+  claimTaskWithJobSpec: ReturnType<typeof vi.fn>;
+  fetchUri: ReturnType<typeof vi.fn>;
+  getBalance: ReturnType<typeof vi.fn>;
+  getMinimumBalanceForRentExemption: ReturnType<typeof vi.fn>;
+  stateDir: string;
+}> {
+  const stateDir = mkdtempSync(
+    path.join(tmpdir(), "agenc-worker-hire-account-metadata-"),
+  );
+  const payload = { title: "direct task", summary: "classify hire account" };
+  const digest = await values.canonicalJobSpecHash(payload);
+  const body = new TextEncoder().encode(
+    JSON.stringify({
+      integrity: {
+        algorithm: "sha256",
+        canonicalization: "json-stable-v1",
+        payloadHash: digest.hex,
+      },
+      payload,
+    }),
+  );
+  const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+  const [hireRecordPda] = await findHireRecordPda({ task: TASK });
+  const accounts = new Map<Address, Uint8Array>([
+    [TASK, taskData(TaskStatus.Open)],
+    [
+      jobSpecPda,
+      new Uint8Array(
+        getTaskJobSpecEncoder().encode({
+          task: TASK,
+          creator: CREATOR,
+          jobSpecHash: digest.bytes,
+          jobSpecUri: SPEC_URI,
+          createdAt: 1n,
+          updatedAt: 1n,
+          bump: 248,
+          reserved: new Uint8Array(7),
+        }),
+      ),
+    ],
+  ]);
+  const claimTaskWithJobSpec = vi.fn(async (_input: unknown) => {
+    throw new AgencError("stop after inspecting claim", { signature: null });
+  });
+  const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
+  const fetchUri = vi.fn(async () => body);
+  const getBalance = vi.fn(async () => 1_000_000_000n);
+  const getMinimumBalanceForRentExemption = vi.fn(async (space: number) => {
+    if (space === CLAIM_ACCOUNT_SIZE) return 2_000_000n;
+    if (space === SUBMISSION_ACCOUNT_SIZE) return 3_000_000n;
+    throw new Error(`unexpected fresh-claim account size ${space}`);
+  });
+  ctx.readAccountInfo = async (account) => {
+    if (account !== hireRecordPda) {
+      throw new Error(`unexpected metadata read ${account}`);
+    }
+    return snapshot;
+  };
+  ctx.fetchUri = fetchUri;
+  ctx.getBalance = getBalance;
+  ctx.getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemption;
+
+  const outcome = await processCandidate(ctx, agent, {
+    task: TASK,
+    creator: CREATOR,
+    rewardAmount: REWARD,
+    rewardMint: null,
+    requiredCapabilities: 1n,
+    parentTask: PARENT,
+  });
+  return {
+    outcome,
+    claimTaskWithJobSpec,
+    fetchUri,
+    getBalance,
+    getMinimumBalanceForRentExemption,
+    stateDir,
+  };
+}
+
 describe("transaction-boundary recovery", () => {
-  it("supplies the stored listing when claiming a pre-revision-5 hire", async () => {
+  it("treats a dusted empty canonical hire PDA as a direct task", async () => {
     const stateDir = mkdtempSync(
-      path.join(tmpdir(), "agenc-worker-legacy-hire-"),
+      path.join(tmpdir(), "agenc-worker-dusted-direct-hire-pda-"),
     );
-    const payload = { title: "legacy hire", summary: "preserve existing work" };
+    const payload = { title: "direct task", summary: "ignore system dust" };
     const digest = await values.canonicalJobSpecHash(payload);
     const body = new TextEncoder().encode(
       JSON.stringify({
@@ -274,6 +353,218 @@ describe("transaction-boundary recovery", () => {
           }),
         ),
       ],
+      // A permissionless lamport transfer creates a System-owned, empty
+      // account at an otherwise-unused PDA. The program accepts this as the
+      // direct-task sentinel; the worker must not decode it as a HireRecord.
+      [hireRecordPda, new Uint8Array()],
+    ]);
+    const claimTaskWithJobSpec = vi.fn(async (_input: unknown) => {
+      throw new AgencError("stop after inspecting claim", { signature: null });
+    });
+    const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
+    ctx.readAccountInfo = async (account) =>
+      account === hireRecordPda
+        ? { data: new Uint8Array(), owner: PARENT, executable: false }
+        : null;
+    ctx.fetchUri = async () => body;
+
+    await expect(
+      processCandidate(ctx, agent, {
+        task: TASK,
+        creator: CREATOR,
+        rewardAmount: REWARD,
+        rewardMint: null,
+        requiredCapabilities: 1n,
+        parentTask: PARENT,
+      }),
+    ).resolves.toMatchObject({ status: "claim-failed", task: TASK });
+    expect(claimTaskWithJobSpec).toHaveBeenCalledTimes(1);
+    expect(claimTaskWithJobSpec.mock.calls[0]?.[0]).not.toHaveProperty(
+      "legacyListing",
+    );
+  });
+
+  it.each([
+    {
+      label: "non-empty System Program data",
+      snapshot: {
+        data: new Uint8Array([1]),
+        owner: PARENT,
+        executable: false,
+      },
+      reason: /System Program-owned but has non-empty data/u,
+    },
+    {
+      label: "a wrong owner",
+      snapshot: {
+        data: new Uint8Array(),
+        owner: CREATOR,
+        executable: false,
+      },
+      reason: /unexpected owner/u,
+    },
+    {
+      label: "an executable account",
+      snapshot: {
+        data: new Uint8Array(),
+        owner: AGENC_COORDINATION_PROGRAM_ADDRESS,
+        executable: true,
+      },
+      reason: /is executable/u,
+    },
+    {
+      label: "truncated program data",
+      snapshot: {
+        data: new Uint8Array([1, 2, 3]),
+        owner: AGENC_COORDINATION_PROGRAM_ADDRESS,
+        executable: false,
+      },
+      reason: /invalid data length/u,
+    },
+    {
+      label: "a malformed HireRecord discriminator",
+      snapshot: {
+        data: new Uint8Array(
+          getHireRecordEncoder().encode({
+            task: TASK,
+            listing: LEGACY_LISTING,
+            operator: PARENT,
+            operatorFeeBps: 0,
+            bump: 247,
+            designatedProvider: WORKER,
+            referrer: PARENT,
+            referrerFeeBps: 0,
+          }),
+        ).fill(0, 0, 8),
+        owner: AGENC_COORDINATION_PROGRAM_ADDRESS,
+        executable: false,
+      },
+      reason: /invalid HireRecord discriminator/u,
+    },
+  ] satisfies Array<{
+    label: string;
+    snapshot: AccountSnapshot;
+    reason: RegExp;
+  }>)("$label", async ({ snapshot, reason }) => {
+    const { outcome, claimTaskWithJobSpec, stateDir } =
+      await attemptFreshClaimWithHireSnapshot(snapshot);
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      task: TASK,
+      reason: expect.stringMatching(reason),
+    });
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(stateDir).openClaim).toBeNull();
+  });
+
+  it("recognizes only an exact program-owned HireRecord as a hire", async () => {
+    const [, expectedBump] = await findHireRecordPda({ task: TASK });
+    const snapshot: AccountSnapshot = {
+      data: new Uint8Array(
+        getHireRecordEncoder().encode({
+          task: TASK,
+          listing: LEGACY_LISTING,
+          operator: PARENT,
+          operatorFeeBps: 0,
+          bump: expectedBump,
+          designatedProvider: WORKER,
+          referrer: PARENT,
+          referrerFeeBps: 0,
+        }),
+      ),
+      owner: AGENC_COORDINATION_PROGRAM_ADDRESS,
+      executable: false,
+    };
+    const { outcome, claimTaskWithJobSpec } =
+      await attemptFreshClaimWithHireSnapshot(snapshot);
+
+    expect(outcome).toEqual({
+      status: "skipped",
+      task: TASK,
+      reason: "hired-job-spec-commitment-mismatch",
+    });
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+  });
+
+  it("skips a hire designated to another provider before content, funding, WAL, or send", async () => {
+    const [, expectedBump] = await findHireRecordPda({ task: TASK });
+    const snapshot: AccountSnapshot = {
+      data: new Uint8Array(
+        getHireRecordEncoder().encode({
+          task: TASK,
+          listing: LEGACY_LISTING,
+          operator: PARENT,
+          operatorFeeBps: 0,
+          bump: expectedBump,
+          designatedProvider: CREATOR,
+          referrer: PARENT,
+          referrerFeeBps: 0,
+        }),
+      ),
+      owner: AGENC_COORDINATION_PROGRAM_ADDRESS,
+      executable: false,
+    };
+    const {
+      outcome,
+      claimTaskWithJobSpec,
+      fetchUri,
+      getBalance,
+      getMinimumBalanceForRentExemption,
+      stateDir,
+    } = await attemptFreshClaimWithHireSnapshot(snapshot);
+
+    expect(outcome).toEqual({
+      status: "skipped",
+      task: TASK,
+      reason: "not-designated-provider",
+    });
+    expect(fetchUri).not.toHaveBeenCalled();
+    expect(getBalance).not.toHaveBeenCalled();
+    expect(getMinimumBalanceForRentExemption).not.toHaveBeenCalled();
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(stateDir).openClaim).toBeNull();
+  });
+
+  it("refuses a fresh claim for a pre-revision-5 hire without a buyer commitment", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-legacy-hire-"),
+    );
+    const payload = { title: "legacy hire", summary: "preserve existing work" };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const [hireRecordPda, hireRecordBump] = await findHireRecordPda({
+      task: TASK,
+    });
+    const legacyDescription = new Uint8Array(64);
+    legacyDescription.fill(0x41, 0, 32);
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Open, { description: legacyDescription })],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
       [
         hireRecordPda,
         new Uint8Array(
@@ -282,8 +573,92 @@ describe("transaction-boundary recovery", () => {
             listing: LEGACY_LISTING,
             operator: PARENT,
             operatorFeeBps: 0,
-            bump: 247,
+            bump: hireRecordBump,
             designatedProvider: PARENT,
+            referrer: PARENT,
+            referrerFeeBps: 0,
+          }),
+        ),
+      ],
+    ]);
+    const claimTaskWithJobSpec = vi.fn();
+    const events: WorkerLogEvent[] = [];
+    const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, events);
+    ctx.fetchUri = async () => body;
+
+    await expect(
+      processCandidate(ctx, agent, {
+        task: TASK,
+        creator: CREATOR,
+        rewardAmount: REWARD,
+        rewardMint: null,
+        requiredCapabilities: 1n,
+        parentTask: PARENT,
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      task: TASK,
+      reason: "legacy-hire-requires-rehire",
+    });
+    expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
+    expect(loadState(stateDir).openClaim).toBeNull();
+    expect(events).toContainEqual({
+      event: "task.skipped",
+      task: TASK,
+      reason: "legacy-hire-requires-rehire",
+    });
+  });
+
+  it("claims a revision-5 hire only with its exact committed task hash", async () => {
+    const stateDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-worker-revision-5-hire-"),
+    );
+    const payload = { title: "bound hire", summary: "exact buyer contract" };
+    const digest = await values.canonicalJobSpecHash(payload);
+    const body = new TextEncoder().encode(
+      JSON.stringify({
+        integrity: {
+          algorithm: "sha256",
+          canonicalization: "json-stable-v1",
+          payloadHash: digest.hex,
+        },
+        payload,
+      }),
+    );
+    const description = new Uint8Array(64);
+    description.fill(0x41, 0, 32);
+    description.set(digest.bytes, 32);
+    const [jobSpecPda] = await findTaskJobSpecPda({ task: TASK });
+    const [hireRecordPda, hireRecordBump] = await findHireRecordPda({
+      task: TASK,
+    });
+    const accounts = new Map<Address, Uint8Array>([
+      [TASK, taskData(TaskStatus.Open, { description })],
+      [
+        jobSpecPda,
+        new Uint8Array(
+          getTaskJobSpecEncoder().encode({
+            task: TASK,
+            creator: CREATOR,
+            jobSpecHash: digest.bytes,
+            jobSpecUri: SPEC_URI,
+            createdAt: 1n,
+            updatedAt: 1n,
+            bump: 248,
+            reserved: new Uint8Array(7),
+          }),
+        ),
+      ],
+      [
+        hireRecordPda,
+        new Uint8Array(
+          getHireRecordEncoder().encode({
+            task: TASK,
+            listing: LEGACY_LISTING,
+            operator: PARENT,
+            operatorFeeBps: 0,
+            bump: hireRecordBump,
+            designatedProvider: WORKER,
             referrer: PARENT,
             referrerFeeBps: 0,
           }),
@@ -297,7 +672,9 @@ describe("transaction-boundary recovery", () => {
         jobSpecHash: Uint8Array;
         legacyListing?: Address;
       }) => {
-        throw new AgencError("stop after inspecting claim", { signature: null });
+        throw new AgencError("stop after inspecting claim", {
+          signature: null,
+        });
       },
     );
     const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
@@ -314,14 +691,10 @@ describe("transaction-boundary recovery", () => {
       }),
     ).resolves.toMatchObject({ status: "claim-failed", task: TASK });
     expect(claimTaskWithJobSpec).toHaveBeenCalledTimes(1);
-    expect(claimTaskWithJobSpec.mock.calls[0]?.[0]).toMatchObject({
-      task: TASK,
-      worker: WORKER,
-      legacyListing: LEGACY_LISTING,
-    });
-    expect(claimTaskWithJobSpec.mock.calls[0]?.[0].jobSpecHash).toEqual(
-      digest.bytes,
-    );
+    const claimInput = claimTaskWithJobSpec.mock.calls[0]?.[0];
+    expect(claimInput).toMatchObject({ task: TASK, worker: WORKER });
+    expect(claimInput).not.toHaveProperty("legacyListing");
+    expect(claimInput?.jobSpecHash).toEqual(digest.bytes);
   });
 
   it("does not open the claim WAL when the legacy hire read fails before broadcast", async () => {
@@ -375,7 +748,11 @@ describe("transaction-boundary recovery", () => {
         requiredCapabilities: 1n,
         parentTask: PARENT,
       }),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({
+      status: "skipped",
+      task: TASK,
+      reason: expect.stringMatching(/^hire binding error:/u),
+    });
     expect(claimTaskWithJobSpec).not.toHaveBeenCalled();
     expect(loadState(stateDir).openClaim).toBeNull();
   });
@@ -514,12 +891,7 @@ describe("transaction-boundary recovery", () => {
     const claimTaskWithJobSpec = vi.fn(async () => ({
       signature: "must-not-claim",
     }));
-    const ctx = context(
-      stateDir,
-      accounts,
-      { claimTaskWithJobSpec },
-      [],
-    );
+    const ctx = context(stateDir, accounts, { claimTaskWithJobSpec }, []);
     ctx.fetchUri = async () => body;
     const claimRent = 2_000_000n;
     const submissionRent = 3_000_000n;
@@ -535,8 +907,7 @@ describe("transaction-boundary recovery", () => {
       throw new Error(`unexpected recurring-worker account size ${space}`);
     });
     ctx.getBalance = getBalance;
-    ctx.getMinimumBalanceForRentExemption =
-      getMinimumBalanceForRentExemption;
+    ctx.getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemption;
 
     const candidate = {
       task: TASK,
@@ -575,14 +946,13 @@ describe("transaction-boundary recovery", () => {
     expect(loadState(stateDir).openClaim).toBeNull();
 
     ctx.getBalance = async () => required;
-    ctx.getMinimumBalanceForRentExemption =
-      getMinimumBalanceForRentExemption;
+    ctx.getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemption;
     claimTaskWithJobSpec.mockRejectedValueOnce(
       new AgencError("expected post-gate claim stop", { signature: null }),
     );
-    await expect(processCandidate(ctx, agent, candidate)).resolves.toMatchObject(
-      { status: "claim-failed", task: TASK },
-    );
+    await expect(
+      processCandidate(ctx, agent, candidate),
+    ).resolves.toMatchObject({ status: "claim-failed", task: TASK });
     expect(claimTaskWithJobSpec).toHaveBeenCalledTimes(1);
     expect(loadState(stateDir).openClaim).toBeNull();
   });
@@ -655,8 +1025,7 @@ describe("transaction-boundary recovery", () => {
       throw new Error("fresh-claim rent gate must not run during recovery");
     });
     ctx.getBalance = getBalance;
-    ctx.getMinimumBalanceForRentExemption =
-      getMinimumBalanceForRentExemption;
+    ctx.getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemption;
 
     const result = await runTickOnce(ctx);
 

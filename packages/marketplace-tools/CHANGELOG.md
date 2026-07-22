@@ -40,6 +40,12 @@ EOL and unsupported.
 - New exports: `A2A_AGENC_PROTOCOL_BINDING`, `A2A_AGENC_EXTENSION_URI`, and
   the `AgentCardA2AInterface` / `AgentCardA2ASkill` /
   `AgentCardA2AExtension` / `AgentCardA2ACapabilities` types.
+- The two hire prepares now require `taskJobSpecHash` (non-zero 32-byte hex)
+  before funding. `prepare_set_task_job_spec` appends the canonical HireRecord
+  proof account. Revision-5 shape pins are 10 accounts for set, 15 for
+  registered hire, and 14 for humanless hire; serialized hire arguments now
+  include the buyer-specific hash and all three writes use their v2
+  discriminators. Old and new wires intentionally reject one another.
 
 ### Fixed
 

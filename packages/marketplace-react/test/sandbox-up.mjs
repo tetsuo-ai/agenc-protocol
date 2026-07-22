@@ -3,18 +3,21 @@
  * sandbox-up.mjs — the committed deterministic local-validator bootstrap for
  * the `@tetsuo-ai/marketplace-react` browser e2e (PLAN_2 A3 Done-when, the
  * "local solana-test-validator loaded with the repo-built .so plus injected
- * ProtocolConfig/ModerationConfig via a committed bootstrap script" path).
+ * ProtocolConfig/ModerationConfig/BidMarketplaceConfig via a committed
+ * bootstrap script" path).
  *
  * It does NOT re-implement the boot/init/seed logic — it REUSES the repo's
  * canonical localnet stack so the browser e2e runs against EXACTLY the same
  * on-chain state the rest of the codebase tests against:
  *
- *   1. <repo>/scripts/localnet-up.mjs
+ *   1. <repo>/scripts/localnet-up.mjs --dev-ready
  *        boots solana-test-validator with the REAL program id genesis-loaded as
  *        an UPGRADEABLE program (real ProgramData PDA + upgrade authority),
- *        establishes ProtocolConfig + ModerationConfig through the published
- *        SDK/local fixture mode, and writes <repo>/.localnet/env.json.
+ *        establishes ProtocolConfig + ModerationConfig + BidMarketplaceConfig
+ *        through the published SDK/local fixture mode, and writes
+ *        <repo>/.localnet/env.json.
  *   2. packages/sdk-ts/scripts/seed-devnet-sandbox.mjs --env-file <env.json>
+ *        --moderator-keypair <env.keypairs.moderator>
  *        registers the 10 sandbox provider agents, creates one Active
  *        ServiceListing each, attests every listing CLEAN (so the fail-closed
  *        moderation gate lets hires through), and writes the env file's
@@ -34,8 +37,9 @@
  *   await stop();                   // stops the validator (localnet-down.mjs)
  *
  * CLI:
- *   node test/sandbox-up.mjs up      # boot + init + seed (idempotent; converges)
- *   node test/sandbox-up.mjs up --unsafe-unpaused-fixture  # disposable browser fixture
+ *   node test/sandbox-up.mjs up      # dev-ready boot + init + seed (idempotent)
+ *   node test/sandbox-up.mjs up --production-frozen --no-seed  # paused rehearsal
+ *   node test/sandbox-up.mjs up --production-frozen --no-seed --keep-ledger  # paused restart
  *   node test/sandbox-up.mjs down    # stop the validator
  *   node test/sandbox-up.mjs down --purge   # stop + wipe the ledger
  *   node test/sandbox-up.mjs env     # print the resolved sandbox env JSON
@@ -200,22 +204,23 @@ export async function readSandboxEnv(envFile = ENV_FILE) {
 }
 
 /**
- * Boot the deterministic local sandbox: validator + protocol/moderation config
- * (localnet-up.mjs), then seed the 10 sandbox listings attested CLEAN
+ * Boot the deterministic local sandbox: validator + protocol, moderation, and
+ * bid-marketplace configs (localnet-up.mjs), then seed the 10 sandbox listings
+ * attested CLEAN
  * (seed-devnet-sandbox.mjs). Idempotent — re-running converges.
  *
  * @param {object} [options]
  * @param {number} [options.port=8899]   RPC port for the validator.
  * @param {boolean} [options.keepLedger=false]  Pass --keep-ledger to localnet-up
- *                                               (do not reset the ledger).
+ *   (do not reset the ledger). Valid only with devReady=false and seed=false.
  * @param {boolean} [options.seed=true]  Run the seed step after boot.
  * @param {boolean} [options.quiet=false]  Suppress child stdout (stderr kept).
  * @param {boolean} [options.disposable=false]  This caller first established
  *   exclusive ownership of a fresh fixture and authorizes full cleanup if any
  *   bootstrap stage fails. Never inferred for an idempotently reused sandbox.
- * @param {boolean} [options.unsafeUnpausedFixture=false]  On a fresh disposable
- *   ledger, genesis-inject the current unpaused ProtocolConfig required by the
- *   browser fixture. Bypasses the production release-stamp ceremony; test only.
+ * @param {boolean} [options.devReady=true]  Boot the explicit disposable,
+ *   current-surface, unpaused marketplace fixture. Set false only for a paused
+ *   production-initialization rehearsal, which cannot be seeded.
  * @returns {Promise<object>} the resolved sandbox env (see readSandboxEnv).
  */
 export async function start(options = {}, dependencies = {}) {
@@ -224,7 +229,7 @@ export async function start(options = {}, dependencies = {}) {
     keepLedger = false,
     seed = true,
     quiet = false,
-    unsafeUnpausedFixture = false,
+    devReady = true,
     disposable = false,
   } = options;
 
@@ -233,19 +238,30 @@ export async function start(options = {}, dependencies = {}) {
       "a disposable sandbox cannot preserve a caller-owned ledger",
     );
   }
+  if (devReady && keepLedger) {
+    throw new Error(
+      "a dev-ready sandbox requires fresh genesis and cannot preserve a ledger",
+    );
+  }
+  if (!devReady && seed) {
+    throw new Error(
+      "a production-frozen sandbox cannot be seeded; use devReady or disable seeding",
+    );
+  }
 
   await (dependencies.assertPrereqs ?? assertPrereqs)();
 
   const upArgs = ["--port", String(port)];
   if (keepLedger) upArgs.push("--keep-ledger");
-  if (unsafeUnpausedFixture) upArgs.push("--unsafe-unpaused-fixture");
+  if (devReady) upArgs.push("--dev-ready");
   return runSandboxBootstrap(
     {
       up: dependencies.up ?? (() => runNode(LOCALNET_UP, upArgs, { quiet })),
       readEnv: dependencies.readEnv ?? (() => readLocalnetEnv(ENV_FILE)),
       seed:
         dependencies.seed ??
-        (() => runNode(SEED_SCRIPT, ["--env-file", ENV_FILE], { quiet })),
+        ((env) =>
+          runNode(SEED_SCRIPT, localSeederArgs(env, ENV_FILE), { quiet })),
       resolve: dependencies.resolve ?? (() => readSandboxEnv(ENV_FILE)),
       cleanup:
         dependencies.cleanup ??
@@ -279,7 +295,7 @@ export async function runSandboxBootstrap(
       );
     }
 
-    if (seed) await runSeed();
+    if (seed) await runSeed(env);
 
     const resolved = await resolve();
     if (resolved === null) {
@@ -305,6 +321,21 @@ export async function runSandboxBootstrap(
     }
     throw error;
   }
+}
+
+/**
+ * Build the deterministic local seeder arguments. The explicit moderator key
+ * intentionally overrides/suppresses any stale attestor URL preserved in the
+ * env file from an earlier optional attestor process.
+ */
+export function localSeederArgs(env, envFile = ENV_FILE) {
+  const moderator = env?.keypairs?.moderator;
+  if (typeof moderator !== "string" || moderator.length === 0) {
+    throw new Error(
+      "local sandbox env is missing keypairs.moderator; cannot seed CLEAN listings",
+    );
+  }
+  return ["--env-file", envFile, "--moderator-keypair", moderator];
 }
 
 /**
@@ -344,18 +375,52 @@ async function assertPrereqs() {
 }
 
 // ---------------------------------------------------------------------- CLI
+export function parseSandboxCliArgs(argv) {
+  const [rawCommand, ...rest] = argv;
+  const command = rawCommand ?? "up";
+  const allowedByCommand = new Map([
+    ["up", new Set(["--keep-ledger", "--no-seed", "--production-frozen"])],
+    ["down", new Set(["--purge"])],
+    ["env", new Set()],
+  ]);
+  const allowed = allowedByCommand.get(command);
+  if (allowed === undefined) {
+    throw new Error(
+      `unknown command "${command}". Use: up [--production-frozen --no-seed [--keep-ledger]] | down [--purge] | env`,
+    );
+  }
+  const seen = new Set();
+  for (const arg of rest) {
+    if (!allowed.has(arg)) {
+      throw new Error(`unknown argument for ${command}: ${arg}`);
+    }
+    if (seen.has(arg)) {
+      throw new Error(`duplicate argument for ${command}: ${arg}`);
+    }
+    seen.add(arg);
+  }
+  if (command === "up") {
+    return {
+      command,
+      keepLedger: seen.has("--keep-ledger"),
+      seed: !seen.has("--no-seed"),
+      devReady: !seen.has("--production-frozen"),
+    };
+  }
+  if (command === "down") {
+    return { command, purge: seen.has("--purge") };
+  }
+  return { command };
+}
+
 async function cli() {
-  const [cmd, ...rest] = process.argv.slice(2);
-  switch (cmd) {
-    case "up":
-    case undefined: {
-      const keepLedger = rest.includes("--keep-ledger");
-      const noSeed = rest.includes("--no-seed");
-      const unsafeUnpausedFixture = rest.includes("--unsafe-unpaused-fixture");
+  const args = parseSandboxCliArgs(process.argv.slice(2));
+  switch (args.command) {
+    case "up": {
       const env = await start({
-        keepLedger,
-        seed: !noSeed,
-        unsafeUnpausedFixture,
+        keepLedger: args.keepLedger,
+        seed: args.seed,
+        devReady: args.devReady,
       });
       console.log("\nsandbox-up: ready.");
       console.log(`  rpc:       ${env.rpcUrl}`);
@@ -369,8 +434,7 @@ async function cli() {
       break;
     }
     case "down": {
-      const purge = rest.includes("--purge");
-      await stop({ purge });
+      await stop({ purge: args.purge });
       break;
     }
     case "env": {
@@ -378,11 +442,6 @@ async function cli() {
       console.log(JSON.stringify(env, null, 2));
       break;
     }
-    default:
-      console.error(
-        `sandbox-up: unknown command "${cmd}". Use: up [--unsafe-unpaused-fixture] | down [--purge] | env`,
-      );
-      process.exit(1);
   }
 }
 

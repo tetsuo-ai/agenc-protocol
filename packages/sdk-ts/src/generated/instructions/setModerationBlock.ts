@@ -11,9 +11,7 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
@@ -37,6 +35,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -53,9 +53,7 @@ export const SET_MODERATION_BLOCK_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([212, 41, 81, 152, 230, 234, 217, 101]);
 
 export function getSetModerationBlockDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    SET_MODERATION_BLOCK_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(SET_MODERATION_BLOCK_DISCRIMINATOR);
 }
 
 export type SetModerationBlockInstruction<
@@ -103,9 +101,9 @@ export type SetModerationBlockInstructionDataArgs = {
 export function getSetModerationBlockInstructionDataEncoder(): Encoder<SetModerationBlockInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["rationaleHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["contentHash", getFixedBytesEncoder(32, "contentHash")],
+      ["rationaleHash", getFixedBytesEncoder(32, "rationaleHash")],
       [
         "rationaleUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),

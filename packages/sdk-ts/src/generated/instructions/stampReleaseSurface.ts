@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -42,6 +40,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -57,9 +57,7 @@ export const STAMP_RELEASE_SURFACE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([20, 228, 18, 239, 43, 249, 247, 119]);
 
 export function getStampReleaseSurfaceDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    STAMP_RELEASE_SURFACE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(STAMP_RELEASE_SURFACE_DISCRIMINATOR);
 }
 
 export type StampReleaseSurfaceInstruction<
@@ -136,19 +134,34 @@ export type StampReleaseSurfaceInstructionDataArgs = {
 export function getStampReleaseSurfaceInstructionDataEncoder(): FixedSizeEncoder<StampReleaseSurfaceInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["disabledTaskTypeMask", getU8Encoder()],
       ["surfaceRevision", getU16Encoder()],
-      ["expectedProtocolConfigHash", fixEncoderSize(getBytesEncoder(), 32)],
+      [
+        "expectedProtocolConfigHash",
+        getFixedBytesEncoder(32, "expectedProtocolConfigHash"),
+      ],
       ["expectedProgramDataSlot", getU64Encoder()],
       ["expectedProgramDataPayloadLen", getU32Encoder()],
       ["expectedUpgradeAuthority", getAddressEncoder()],
-      ["expectedBidConfigHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["expectedModerationConfigHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["expectedIdlAccountHash", fixEncoderSize(getBytesEncoder(), 32)],
+      [
+        "expectedBidConfigHash",
+        getFixedBytesEncoder(32, "expectedBidConfigHash"),
+      ],
+      [
+        "expectedModerationConfigHash",
+        getFixedBytesEncoder(32, "expectedModerationConfigHash"),
+      ],
+      [
+        "expectedIdlAccountHash",
+        getFixedBytesEncoder(32, "expectedIdlAccountHash"),
+      ],
       ["expectedCustodyAddress", getAddressEncoder()],
       ["expectedCustodyOwner", getAddressEncoder()],
-      ["expectedCustodyAccountHash", fixEncoderSize(getBytesEncoder(), 32)],
+      [
+        "expectedCustodyAccountHash",
+        getFixedBytesEncoder(32, "expectedCustodyAccountHash"),
+      ],
     ]),
     (value) => ({
       ...value,

@@ -220,8 +220,8 @@ const MAX_MODERATION_LIVENESS_WINDOW_SECS = 34_560_000;
 // invariants, not documentation: preflight independently derives each surface
 // from the cfg-gated Rust #[program] modules and refuses any drift.
 const SURFACE_REVISION_CURRENT = 5;
-export const PRODUCTION_INSTRUCTION_COUNT = 98;
-export const PRIVATE_ZK_INSTRUCTION_COUNT = 101;
+export const PRODUCTION_INSTRUCTION_COUNT = 101;
+export const PRIVATE_ZK_INSTRUCTION_COUNT = 104;
 export const CANARY_INSTRUCTION_COUNT = 25;
 export const PRIVATE_ZK_INSTRUCTION_NAMES = Object.freeze([
   "complete_task_private",
@@ -2868,6 +2868,9 @@ export async function verifyRevision5CutoverState(
           `capacity_overcounted=${hireProviders.overcountedListingCount}, ` +
           `open_jobs_deficit=${hireProviders.openJobsDeficitTotal}, ` +
           `open_jobs_excess=${hireProviders.openJobsExcessTotal}, ` +
+          `cancel_rehire=${hireProviders.cancelRehireCount}, ` +
+          `settlement_only=${hireProviders.settlementOnlyCount}, ` +
+          `committed=${hireProviders.committedCount}, ` +
           `blockers=${hireProviders.blockers.length}`,
       );
       const jobSpecBlocks = await scanActiveJobSpecBlocks(connection);
@@ -3118,7 +3121,7 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
     `private-task release cutover passed (${cutover.privateTasks.manualValidationSentinelCount} manual-review sentinel task(s), zero real nonterminal private constraints, ZK ${cutover.privateTasks.zkConfigState})`,
   );
   pf.checks.push(
-    `hired-task provider/capacity binding passed (${cutover.hireProviders.boundCount} direct binding(s), ${cutover.hireProviders.backfillCount} canonical legacy fallback(s), ${cutover.hireProviders.listingCount} listing counter(s), zero undercount)`,
+    `hired-task provider/spec/capacity binding passed (${cutover.hireProviders.boundCount} direct provider binding(s), ${cutover.hireProviders.committedCount} v2 spec commitment(s), ${cutover.hireProviders.cancelRehireCount} legacy Open cancel+re-hire action(s), ${cutover.hireProviders.settlementOnlyCount} assigned legacy settlement-only obligation(s), ${cutover.hireProviders.listingCount} listing counter(s), zero undercount)`,
   );
   pf.checks.push(
     `active job-spec moderation containment passed (${cutover.jobSpecBlocks.blockedUnassignedCount} blocked/unassigned, ${cutover.jobSpecBlocks.blockedWithWorkersCount} blocked/with-workers)`,
@@ -3179,9 +3182,10 @@ async function preflight(args, connection, selectedSteps = ALL_STEPS) {
     die(
       `(a) approved .so (${soBytes} bytes) exceeds live ProgramData payload capacity ` +
         `(${capacity.capacityBytes} bytes) by ${capacity.shortfallBytes} bytes. ` +
-        `Before the binary upgrade, separately review and execute a loader ` +
-        `ExtendProgramChecked instruction through the pinned upgrade authority for ` +
-        `at least ${capacity.extensionBytes} additional bytes, then re-run this preflight. ` +
+        `Before the binary upgrade, separately review and execute a top-level legacy loader ` +
+        `ExtendProgram instruction with an explicitly funded payer for exactly ` +
+        `${capacity.extensionBytes} additional bytes via scripts/program-extend-mainnet.mjs, ` +
+        `then re-run this preflight. Current Agave rejects this operation through CPI. ` +
         `This rail intentionally refuses implicit auto-extension.`,
     );
   }

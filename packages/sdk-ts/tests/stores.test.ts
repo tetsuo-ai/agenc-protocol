@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { address, createNoopSigner, none, some } from "@solana/kit";
+import {
+  address,
+  createNoopSigner,
+  none,
+  some,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   getRegisterStoreInstructionDataDecoder,
   getUpdateStoreInstructionDataDecoder,
@@ -34,6 +41,27 @@ const owner = createNoopSigner(
   address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
 );
 const operator = address("9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM");
+
+function mutableSigner(initialAddress: Address): {
+  signer: TransactionSigner;
+  setAddress(nextAddress: Address): void;
+} {
+  let liveAddress = initialAddress;
+  const signer = {
+    ...createNoopSigner(initialAddress),
+  } as TransactionSigner;
+  Object.defineProperty(signer, "address", {
+    configurable: true,
+    enumerable: true,
+    get: () => liveAddress,
+  });
+  return {
+    signer,
+    setAddress(nextAddress) {
+      liveAddress = nextAddress;
+    },
+  };
+}
 
 describe("store handle codec (values)", () => {
   it("encodes a valid handle NUL-padded to exactly 32 bytes and round-trips", () => {
@@ -121,6 +149,32 @@ describe("registerStore (facade)", () => {
     // 0.05 SOL, mirror of the program's STORE_REGISTRATION_BOND_LAMPORTS.
     expect(STORE_REGISTRATION_BOND_LAMPORTS).toBe(50_000_000n);
   });
+
+  it("detaches raw handle/manifest bytes and locks owner before PDA derivation", async () => {
+    const mutableOwner = mutableSigner(owner.address);
+    const rawHandle = encodeStoreHandle("stable-store");
+    const metadataHash = new Uint8Array(32).fill(17);
+    const pending = registerStore({
+      ...input,
+      owner: mutableOwner.signer,
+      handle: rawHandle,
+      metadataHash,
+    });
+    rawHandle.fill(99);
+    metadataHash.fill(98);
+    mutableOwner.setAddress(operator);
+
+    const ix = await pending;
+    const decoded = getRegisterStoreInstructionDataDecoder().decode(ix.data);
+    expect(decodeStoreHandle(new Uint8Array(decoded.handle))).toBe(
+      "stable-store",
+    );
+    expect(decoded.metadataHash).toEqual(new Uint8Array(32).fill(17));
+    expect(ix.accounts[1]).toMatchObject({
+      address: owner.address,
+      signer: mutableOwner.signer,
+    });
+  });
 });
 
 describe("updateStore (facade)", () => {
@@ -152,6 +206,58 @@ describe("updateStore (facade)", () => {
     expect(decoded.operatorFeeBps).toBe(150);
     expect(decoded.domain).toBe("v2.acme.example");
   });
+
+  it("detaches update bytes before the default store derivation yields", async () => {
+    const handle = encodeStoreHandle("update-stable");
+    const metadataHash = new Uint8Array(32).fill(27);
+    const pending = updateStore({
+      owner,
+      handle,
+      metadataHash,
+      metadataUri: "https://acme.example/stable.json",
+      referrerFeeBps: 0,
+      operator: address("11111111111111111111111111111111"),
+      operatorFeeBps: 0,
+      domain: "",
+    });
+    handle.fill(97);
+    metadataHash.fill(96);
+
+    const decoded = getUpdateStoreInstructionDataDecoder().decode(
+      (await pending).data,
+    );
+    expect(decodeStoreHandle(new Uint8Array(decoded.handle))).toBe(
+      "update-stable",
+    );
+    expect(decoded.metadataHash).toEqual(new Uint8Array(32).fill(27));
+  });
+
+  it("rejects wrong-width raw handle and manifest values", async () => {
+    await expect(
+      updateStore({
+        owner,
+        handle: new Uint8Array(31),
+        metadataHash: new Uint8Array(32),
+        metadataUri: "",
+        referrerFeeBps: 0,
+        operator: address("11111111111111111111111111111111"),
+        operatorFeeBps: 0,
+        domain: "",
+      }),
+    ).rejects.toThrow(/exactly 32 bytes/u);
+    await expect(
+      updateStore({
+        owner,
+        handle: encodeStoreHandle("valid-store"),
+        metadataHash: new Uint8Array(31),
+        metadataUri: "",
+        referrerFeeBps: 0,
+        operator: address("11111111111111111111111111111111"),
+        operatorFeeBps: 0,
+        domain: "",
+      }),
+    ).rejects.toThrow(/exactly 32 bytes/u);
+  });
 });
 
 describe("closeStore (facade)", () => {
@@ -169,6 +275,25 @@ describe("closeStore (facade)", () => {
     expect(Array.from(ix.data)).toEqual(Array.from(CLOSE_STORE_DISCRIMINATOR));
     // And it still round-trips through the decoder.
     getCloseStoreInstructionDataDecoder().decode(ix.data);
+  });
+
+  it("binds owner before hostile whole-input reflection can switch it", async () => {
+    const mutableOwner = mutableSigner(owner.address);
+    const input = new Proxy(
+      { owner: mutableOwner.signer },
+      {
+        ownKeys(target) {
+          mutableOwner.setAddress(operator);
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    const ix = await closeStore(input);
+    expect(ix.accounts[1]).toMatchObject({
+      address: owner.address,
+      signer: mutableOwner.signer,
+    });
   });
 });
 
@@ -205,5 +330,26 @@ describe("moderationHeartbeat (facade)", () => {
       ix.data,
     );
     expect(decoded.newWindowSecs).toEqual(none());
+  });
+
+  it("detaches an explicit window Option and locks authority before derivation", async () => {
+    const mutableAuthority = mutableSigner(authority.address);
+    const newWindowSecs = { __option: "Some" as const, value: 172_800 };
+    const pending = moderationHeartbeat({
+      authority: mutableAuthority.signer,
+      newWindowSecs,
+    });
+    newWindowSecs.value = 259_200;
+    mutableAuthority.setAddress(operator);
+
+    const ix = await pending;
+    expect(
+      getModerationHeartbeatInstructionDataDecoder().decode(ix.data)
+        .newWindowSecs,
+    ).toEqual(some(172_800));
+    expect(ix.accounts[1]).toMatchObject({
+      address: authority.address,
+      signer: mutableAuthority.signer,
+    });
   });
 });

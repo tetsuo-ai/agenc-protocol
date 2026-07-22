@@ -64,6 +64,7 @@ import {
   validateSeedConfig,
 } from "../scripts/seed-devnet-sandbox.mjs";
 import { LISTING_CATEGORIES } from "../src/values/index.js";
+import { parseLocalnetFirstHireKeypair } from "../examples/localnet-first-hire.js";
 
 const execFileAsync = promisify(execFile);
 const SCRIPTS_DIR = path.resolve(
@@ -123,6 +124,22 @@ describe("SANDBOX_FIXTURES", () => {
     expect(sandboxListings(seeded)).toHaveLength(1);
     expect(sandboxProviders(seeded)).toHaveLength(1);
     expect(() => assertSandboxSeeded(seeded)).not.toThrow();
+  });
+});
+
+describe("localnet-first-hire keypair fallback", () => {
+  it("never reflects malformed secret input", () => {
+    const secret = "raw-moderator-secret-that-must-not-reach-logs";
+    expect(() =>
+      parseLocalnetFirstHireKeypair(secret, "/tmp/moderator.json"),
+    ).toThrow("expected a solana-keygen JSON array of 64 bytes");
+    try {
+      parseLocalnetFirstHireKeypair(secret, "/tmp/moderator.json");
+      expect.unreachable("malformed key material must be rejected");
+    } catch (error) {
+      expect((error as Error).message).not.toContain(secret);
+      expect((error as Error).message).not.toContain("Unexpected token");
+    }
   });
 });
 
@@ -753,6 +770,20 @@ describe("seed-devnet-sandbox script", () => {
     expect(parseSeedArgs(["--help"]).errors).toEqual([]);
   });
 
+  it("parseSeedArgs rejects two explicit attestation mechanisms", () => {
+    const args = parseSeedArgs([
+      "--keypair",
+      "/tmp/funder.json",
+      "--attestor-url",
+      "https://attestor.example/attest",
+      "--moderator-keypair",
+      "/tmp/moderator.json",
+    ]);
+    expect(args.errors).toContain(
+      "--attestor-url and --moderator-keypair are mutually exclusive",
+    );
+  });
+
   it("blueprints: ~10 providers, unique names, canonical categories, >= 5 distinct", () => {
     expect(SANDBOX_PROVIDER_BLUEPRINTS).toHaveLength(10);
     const names = new Set(SANDBOX_PROVIDER_BLUEPRINTS.map((b) => b.name));
@@ -1239,6 +1270,18 @@ describe("seed-devnet-sandbox --env-file seam", () => {
         "/x/env.json",
       ),
     ).toThrow("rpcUrl");
+    for (const malformed of [
+      { ...LOCALNET_ENV_FILE, attestorUrl: "" },
+      { ...LOCALNET_ENV_FILE, fixturesPath: "   " },
+      {
+        ...LOCALNET_ENV_FILE,
+        keypairs: { ...LOCALNET_ENV_FILE.keypairs, moderator: "" },
+      },
+    ]) {
+      expect(() =>
+        parseEnvFile(JSON.stringify(malformed), "/x/env.json"),
+      ).toThrow(/non-empty/u);
+    }
   });
 
   it("mergeEnvFileConfig: CLI flags beat env-file values beat defaults", () => {
@@ -1276,6 +1319,7 @@ describe("seed-devnet-sandbox --env-file seam", () => {
     expect(overridden.rpc).toBe("http://127.0.0.1:9999");
     expect(overridden.keypair).toBe("/tmp/keys/other-seeder.json");
     expect(overridden.attestorUrl).toBe("http://127.0.0.1:7779/attest");
+    expect(overridden.moderatorKeypair).toBeNull();
     // ...and with no env file the legacy defaults hold.
     const legacy = mergeEnvFileConfig({
       args: parseSeedArgs([
@@ -1289,6 +1333,41 @@ describe("seed-devnet-sandbox --env-file seam", () => {
     expect(legacy.cluster).toBe("devnet");
     expect(legacy.rpc).toBe("https://api.devnet.solana.com");
     expect(legacy.fixturesPath).toBeNull();
+  });
+
+  it("mergeEnvFileConfig lets an explicit mechanism suppress stale inherited routing", () => {
+    const staleAttestorEnv = parseEnvFile(
+      JSON.stringify({
+        ...LOCALNET_ENV_FILE,
+        attestorUrl: "http://127.0.0.1:7779/attest",
+      }),
+      "/x/env.json",
+    );
+    const directModerator = mergeEnvFileConfig({
+      args: parseSeedArgs([
+        "--env-file",
+        "/x/env.json",
+        "--moderator-keypair",
+        "/tmp/keys/explicit-moderator.json",
+      ]),
+      envFile: staleAttestorEnv,
+    });
+    expect(directModerator.attestorUrl).toBeNull();
+    expect(directModerator.moderatorKeypair).toBe(
+      "/tmp/keys/explicit-moderator.json",
+    );
+
+    const explicitAttestor = mergeEnvFileConfig({
+      args: parseSeedArgs([
+        "--env-file",
+        "/x/env.json",
+        "--attestor-url",
+        "http://127.0.0.1:7780/attest",
+      ]),
+      envFile: parseEnvFile(JSON.stringify(LOCALNET_ENV_FILE), "/x/env.json"),
+    });
+    expect(explicitAttestor.attestorUrl).toBe("http://127.0.0.1:7780/attest");
+    expect(explicitAttestor.moderatorKeypair).toBeNull();
   });
 
   it("validateSeedConfig enforces the merged requirements + cluster rules", () => {
@@ -1317,6 +1396,22 @@ describe("seed-devnet-sandbox --env-file seam", () => {
     expect(
       validateSeedConfig({ ...good, fixturesPath: null }).join("\n"),
     ).toContain("fixturesPath");
+    expect(
+      validateSeedConfig({
+        ...good,
+        attestorUrl: "http://127.0.0.1:7779/attest",
+      }).join("\n"),
+    ).toContain("mutually exclusive");
+    expect(
+      validateSeedConfig({
+        ...good,
+        attestorUrl: "",
+        moderatorKeypair: null,
+      }).join("\n"),
+    ).toContain("attestorUrl must be a non-empty string");
+    expect(validateSeedConfig({ ...good, rpc: "" }).join("\n")).toContain(
+      "RPC endpoint must be a non-empty string",
+    );
   });
 
   it("resolveFixturesOutPath: localnet writes fixturesPath, NEVER the shipped file", () => {

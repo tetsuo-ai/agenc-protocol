@@ -29,7 +29,8 @@
 // localnet stack runs the REAL full-surface program at the REAL program id, so
 // every instruction and SDK call here is identical to devnet/mainnet.
 //
-// Prereqs: node scripts/localnet-up.mjs is up (writes .localnet/env.json);
+// Prereqs: node scripts/localnet-up.mjs --dev-ready is up (writes
+// .localnet/env.json);
 // the full-surface .so + built SDK dist exist (the up script checks both).
 // This script does NOT need the seeder or any attestor process.
 //
@@ -44,7 +45,7 @@ import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 // Audit F-19: RPC/indexer URLs routinely embed provider API keys (Helius
 // `?api-key=`, Alchemy `/v2/<key>`, QuickNode `/<token>/`). Redact to the bare
 // origin before ANY output (stdout logs and the persisted --json proof record).
-function redactUrl(raw) {
+export function redactUrl(raw) {
   if (!raw) return "none";
   try {
     return new URL(raw).origin;
@@ -94,6 +95,67 @@ function fail(message) {
   process.exit(1);
 }
 
+const KEYPAIR_FORMAT_ERROR = "expected a solana-keygen JSON array of 64 bytes";
+
+export function parseCredibleExitEnvironment(raw, filePath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`env file ${filePath} is not valid JSON`);
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    typeof parsed.rpcUrl !== "string" ||
+    parsed.rpcUrl.trim() === "" ||
+    typeof parsed.programId !== "string" ||
+    parsed.programId.trim() === ""
+  ) {
+    throw new Error(`env file ${filePath} is missing rpcUrl/programId`);
+  }
+  return parsed;
+}
+
+export function parseCredibleExitKeypair(raw, filePath, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `invalid ${label} keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`,
+    );
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 64 ||
+    !parsed.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+  ) {
+    throw new Error(
+      `invalid ${label} keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`,
+    );
+  }
+  return Uint8Array.from(parsed);
+}
+
+async function loadKeypairSigner(kit, filePath, label) {
+  let raw;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch {
+    throw new Error(`could not read ${label} keypair file ${filePath}`);
+  }
+  const bytes = parseCredibleExitKeypair(raw, filePath, label);
+  try {
+    return await kit.createKeyPairSignerFromBytes(bytes);
+  } catch {
+    throw new Error(
+      `invalid ${label} keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`,
+    );
+  }
+}
+
 // descriptionHash(s) = sha256(utf8(NFC(s))) — the SDK's on-chain hash
 // convention (packages/sdk-ts/src/values/hash.ts), reimplemented with WebCrypto
 // so this script depends on nothing but the public SDK + node builtins.
@@ -126,23 +188,30 @@ async function main() {
 
   // ---------------------------------------------------------- env + SDK
   let env;
+  let envBody;
   try {
-    env = JSON.parse(await readFile(args.envFile, "utf8"));
-  } catch (e) {
+    envBody = await readFile(args.envFile, "utf8");
+  } catch {
     fail(
-      `could not read env file ${args.envFile}: ${e.message}\n` +
-        `  Boot the stack first: node scripts/localnet-up.mjs`,
+      `could not read env file ${args.envFile}\n` +
+        `  Boot the stack first: node scripts/localnet-up.mjs --dev-ready`,
     );
   }
-  if (!env.rpcUrl || !env.programId) {
-    fail(`env file ${args.envFile} is missing rpcUrl/programId`);
+  try {
+    env = parseCredibleExitEnvironment(envBody, args.envFile);
+  } catch (error) {
+    fail(error.message);
   }
   const kit = await import("@solana/kit");
   const sdk = await import(pathToFileURL(SDK_DIST).href).catch((e) =>
-    fail(`could not import built SDK at ${SDK_DIST}: ${e.message}\n  Build it: cd packages/sdk-ts && npm run build`),
+    fail(
+      `could not import built SDK at ${SDK_DIST}: ${e.message}\n  Build it: cd packages/sdk-ts && npm run build`,
+    ),
   );
   if (sdk.AGENC_COORDINATION_PROGRAM_ADDRESS !== env.programId) {
-    fail(`SDK program ${sdk.AGENC_COORDINATION_PROGRAM_ADDRESS} != env ${env.programId}`);
+    fail(
+      `SDK program ${sdk.AGENC_COORDINATION_PROGRAM_ADDRESS} != env ${env.programId}`,
+    );
   }
 
   const rpc = kit.createSolanaRpc(env.rpcUrl);
@@ -151,12 +220,18 @@ async function main() {
   }
 
   log("=".repeat(72));
-  log("AgenC credible-exit walkthrough (P8.6): hire -> settle, ZERO hosted deps");
+  log(
+    "AgenC credible-exit walkthrough (P8.6): hire -> settle, ZERO hosted deps",
+  );
   log("=".repeat(72));
-  log(`(a) OWN RPC          : ${redactUrl(env.rpcUrl)}  [cluster=${env.cluster}]`);
+  log(
+    `(a) OWN RPC          : ${redactUrl(env.rpcUrl)}  [cluster=${env.cluster}]`,
+  );
   log(`    program          : ${env.programId} (real id, upgradeable)`);
   log(`    hosted indexer    : NOT USED (discovery via SDK gPA path)`);
-  log(`    hosted attestor   : NOT USED (own P6.8 attestor; env.attestorUrl=${redactUrl(env.attestorUrl)})`);
+  log(
+    `    hosted attestor   : NOT USED (own P6.8 attestor; env.attestorUrl=${redactUrl(env.attestorUrl)})`,
+  );
   log(`    hosted storage    : NOT USED (artifacts are local file:// hashes)`);
   log("");
 
@@ -178,25 +253,42 @@ async function main() {
   // authority-gated). The buyer, provider, and attestor below are all fresh
   // throwaway keys this process generates.
   if (!env.keypairs?.authority) {
-    fail("env.keypairs.authority is required (the operator's own protocol authority key)");
+    fail(
+      "env.keypairs.authority is required (the operator's own protocol authority key)",
+    );
   }
-  const authoritySigner = await kit.createKeyPairSignerFromBytes(
-    Uint8Array.from(JSON.parse(await readFile(env.keypairs.authority, "utf8"))),
+  const authoritySigner = await loadKeypairSigner(
+    kit,
+    env.keypairs.authority,
+    "authority",
   );
 
   // ------------------------------------------------- read the protocol config
   // via a plain RPC fetch through the public SDK decoder (no hosted API).
   const [protocolConfigPda] = await sdk.findProtocolConfigPda();
   const protocol = await sdk.fetchMaybeProtocolConfig(rpc, protocolConfigPda);
-  if (!protocol.exists) fail(`ProtocolConfig ${protocolConfigPda} not found — run localnet-up`);
+  if (!protocol.exists)
+    fail(
+      `ProtocolConfig ${protocolConfigPda} not found — run localnet-up --dev-ready`,
+    );
   const stakeAmount = protocol.data.minAgentStake;
   const treasury = protocol.data.treasury;
-  log(`ProtocolConfig: minAgentStake=${stakeAmount} treasury=${treasury} feeBps=${protocol.data.protocolFeeBps}`);
+  log(
+    `ProtocolConfig: minAgentStake=${stakeAmount} treasury=${treasury} feeBps=${protocol.data.protocolFeeBps}`,
+  );
 
   const [moderationConfigPda] = await sdk.findModerationConfigPda();
-  const moderation = await sdk.fetchMaybeModerationConfig(rpc, moderationConfigPda);
-  if (!moderation.exists) fail(`ModerationConfig ${moderationConfigPda} not found — run localnet-up`);
-  log(`ModerationConfig: authority=${moderation.data.authority} moderationAuthority=${moderation.data.moderationAuthority} enabled=${moderation.data.enabled}`);
+  const moderation = await sdk.fetchMaybeModerationConfig(
+    rpc,
+    moderationConfigPda,
+  );
+  if (!moderation.exists)
+    fail(
+      `ModerationConfig ${moderationConfigPda} not found — run localnet-up --dev-ready`,
+    );
+  log(
+    `ModerationConfig: authority=${moderation.data.authority} moderationAuthority=${moderation.data.moderationAuthority} enabled=${moderation.data.enabled}`,
+  );
   if (moderation.data.authority !== authoritySigner.address) {
     fail(
       `assign_moderation_attestor requires the signer == ModerationConfig.authority\n` +
@@ -216,10 +308,14 @@ async function main() {
   // is: the operator runs their own moderation_authority and signs CLEAN
   // locally — no hosted attestor service.
   if (!env.keypairs?.moderator) {
-    fail("env.keypairs.moderator is required (the operator's own moderation_authority key)");
+    fail(
+      "env.keypairs.moderator is required (the operator's own moderation_authority key)",
+    );
   }
-  const moderatorSigner = await kit.createKeyPairSignerFromBytes(
-    Uint8Array.from(JSON.parse(await readFile(env.keypairs.moderator, "utf8"))),
+  const moderatorSigner = await loadKeypairSigner(
+    kit,
+    env.keypairs.moderator,
+    "moderator",
   );
   if (moderatorSigner.address !== moderation.data.moderationAuthority) {
     fail(
@@ -227,7 +323,10 @@ async function main() {
         `ModerationConfig.moderationAuthority ${moderation.data.moderationAuthority}`,
     );
   }
-  const moderatorClient = sdk.createMarketplaceClient({ rpcUrl: env.rpcUrl, signer: moderatorSigner });
+  const moderatorClient = sdk.createMarketplaceClient({
+    rpcUrl: env.rpcUrl,
+    signer: moderatorSigner,
+  });
 
   // ============================================================= STEP 1
   // (c) Register the operator's OWN moderation attestor (P6.8 registry MECHANISM).
@@ -247,13 +346,22 @@ async function main() {
   // global-authority path throughout: the operator holds the
   // moderation_authority key on a self-hosted deploy and consumes its own
   // records. We demonstrate both write paths below.
-  log("STEP 1  register OWN moderation attestor (P6.8 registry) — no hosted attestor");
+  log(
+    "STEP 1  register OWN moderation attestor (P6.8 registry) — no hosted attestor",
+  );
   const ownAttestor = await kit.generateKeyPairSigner();
   await airdropTo(rpc, kit, ownAttestor.address, AIRDROP); // pays its own tx fees
-  const authorityClient = sdk.createMarketplaceClient({ rpcUrl: env.rpcUrl, signer: authoritySigner });
-  const [attestorRosterPda] = await sdk.facade.findModerationAttestorPda({ attestor: ownAttestor.address });
+  const authorityClient = sdk.createMarketplaceClient({
+    rpcUrl: env.rpcUrl,
+    signer: authoritySigner,
+  });
+  const [attestorRosterPda] = await sdk.facade.findModerationAttestorPda({
+    attestor: ownAttestor.address,
+  });
 
-  const existingRoster = await rpc.getAccountInfo(attestorRosterPda, { encoding: "base64" }).send();
+  const existingRoster = await rpc
+    .getAccountInfo(attestorRosterPda, { encoding: "base64" })
+    .send();
   if (existingRoster.value) {
     log(`   roster entry already exists at ${attestorRosterPda} (converging)`);
   } else {
@@ -270,7 +378,9 @@ async function main() {
   proof.accounts.ownAttestor = ownAttestor.address;
   proof.accounts.attestorRoster = attestorRosterPda;
   proof.accounts.moderationAuthority = moderatorSigner.address;
-  log(`   moderation_authority (consumption-gate key, operator-held): ${moderatorSigner.address}`);
+  log(
+    `   moderation_authority (consumption-gate key, operator-held): ${moderatorSigner.address}`,
+  );
   log("");
 
   // Two funded throwaway actors. A hired task can only be claimed/settled by the
@@ -279,16 +389,27 @@ async function main() {
   const provider = await kit.generateKeyPairSigner();
   await airdropTo(rpc, kit, buyer.address, AIRDROP);
   await airdropTo(rpc, kit, provider.address, AIRDROP);
-  const buyerClient = sdk.createMarketplaceClient({ rpcUrl: env.rpcUrl, signer: buyer });
-  const providerClient = sdk.createMarketplaceClient({ rpcUrl: env.rpcUrl, signer: provider });
-  const attestorClient = sdk.createMarketplaceClient({ rpcUrl: env.rpcUrl, signer: ownAttestor });
+  const buyerClient = sdk.createMarketplaceClient({
+    rpcUrl: env.rpcUrl,
+    signer: buyer,
+  });
+  const providerClient = sdk.createMarketplaceClient({
+    rpcUrl: env.rpcUrl,
+    signer: provider,
+  });
+  const attestorClient = sdk.createMarketplaceClient({
+    rpcUrl: env.rpcUrl,
+    signer: ownAttestor,
+  });
   log(`actors: buyer=${buyer.address} provider=${provider.address}`);
   log("");
 
   // ============================================================= STEP 2
   // Provider registers an agent and creates a listing. (d) The listing's spec
   // is committed as the hash of a LOCAL file — self-chosen storage, file:// URI.
-  log("STEP 2  provider registers agent + lists a service (artifact = LOCAL file)");
+  log(
+    "STEP 2  provider registers agent + lists a service (artifact = LOCAL file)",
+  );
   const workDir = await mkdtemp(path.join(tmpdir(), "agenc-credible-exit-"));
   const listingSpecPath = path.join(workDir, "listing-spec.txt");
   const listingSpecText =
@@ -327,12 +448,17 @@ async function main() {
     operator: null,
     operatorFeeBps: 0,
   });
-  const [listing] = await sdk.facade.findListingPda({ providerAgent, listingId });
+  const [listing] = await sdk.facade.findListingPda({
+    providerAgent,
+    listingId,
+  });
   proof.accounts.listing = listing;
   proof.accounts.providerAgent = providerAgent;
   log(`   provider agent ${providerAgent}`);
   log(`   listing        ${listing}`);
-  log(`   spec artifact  ${listingSpecUri}  (sha256 ${hex(listingSpecHash).slice(0, 16)}…)`);
+  log(
+    `   spec artifact  ${listingSpecUri}  (sha256 ${hex(listingSpecHash).slice(0, 16)}…)`,
+  );
   log("");
 
   // ============================================================= STEP 3
@@ -340,11 +466,20 @@ async function main() {
   // listActiveListings(rpc, ...) issues getProgramAccounts straight against the
   // bring-your-own RPC and decodes on the client.
   log("STEP 3  discover the listing via SDK gPA reads (NO hosted indexer)");
-  const activeListings = await sdk.listActiveListings(rpc, { provider: providerAgent });
+  const activeListings = await sdk.listActiveListings(rpc, {
+    provider: providerAgent,
+  });
   const found = activeListings.find(({ address }) => address === listing);
-  if (!found) fail(`gPA listActiveListings did not return the just-created listing ${listing}`);
-  log(`   listActiveListings(rpc) -> ${activeListings.length} Active listing(s); ours present`);
-  log(`   decoded price=${found.account.price} state=${found.account.state} (gPA, not hosted)`);
+  if (!found)
+    fail(
+      `gPA listActiveListings did not return the just-created listing ${listing}`,
+    );
+  log(
+    `   listActiveListings(rpc) -> ${activeListings.length} Active listing(s); ours present`,
+  );
+  log(
+    `   decoded price=${found.account.price} state=${found.account.state} (gPA, not hosted)`,
+  );
   log("");
 
   // ============================================================= STEP 4
@@ -353,7 +488,9 @@ async function main() {
   // STEP 5 names this key as its `moderator` (P1.2: the consumer picks whose
   // attestation it consumes — see STEP 1 boundary note), so this is the
   // attestation that actually unlocks the hire.
-  log("STEP 4  attest listing CLEAN with OWN moderation_authority (NO hosted attestor)");
+  log(
+    "STEP 4  attest listing CLEAN with OWN moderation_authority (NO hosted attestor)",
+  );
   const cleanArgs = {
     status: 0, // CLEAN
     riskScore: 0,
@@ -382,7 +519,9 @@ async function main() {
   }
   proof.accounts.listingModeration = listingModeration;
   log(`   recordListingModeration signed by OWN moderation_authority`);
-  log(`   ListingModeration ${listingModeration} status=CLEAN  sig ${listingAttestSig.signature}`);
+  log(
+    `   ListingModeration ${listingModeration} status=CLEAN  sig ${listingAttestSig.signature}`,
+  );
   log("");
 
   // ----- P6.8/P1.2 roster demonstration (HONEST): the own ROSTER attestor CAN
@@ -393,7 +532,9 @@ async function main() {
   // moderation_authority's record above. The write lands on a throwaway
   // listing-spec hash (and the v2 PDA is moderator-keyed anyway), so it never
   // collides with the consumed attestation.
-  const rosterDemoHash = await descriptionHash("p6.8 roster-attestor write demonstration");
+  const rosterDemoHash = await descriptionHash(
+    "p6.8 roster-attestor write demonstration",
+  );
   const rosterDemoSig = await attestorClient.send([
     await sdk.facade.recordListingModeration({
       moderator: ownAttestor, // the P6.8 ROSTER attestor signs
@@ -404,8 +545,12 @@ async function main() {
     }),
   ]);
   proof.signatures.rosterAttestorWriteDemo = rosterDemoSig.signature;
-  log(`   [P6.8] roster attestor WROTE a record (sig ${rosterDemoSig.signature.slice(0, 12)}…)`);
-  log(`   [P1.2] gates consume whichever moderator the caller names; this proof names the moderation_authority`);
+  log(
+    `   [P6.8] roster attestor WROTE a record (sig ${rosterDemoSig.signature.slice(0, 12)}…)`,
+  );
+  log(
+    `   [P1.2] gates consume whichever moderator the caller names; this proof names the moderation_authority`,
+  );
   log("");
 
   // ============================================================= STEP 5
@@ -423,6 +568,11 @@ async function main() {
   });
   const [buyerAgent] = await sdk.findAgentPda({ agentId: buyerAgentId });
 
+  // The buyer-specific work contract must be hashed before funding so the v2
+  // hire commits the exact content that STEP 6 later hosts and activates.
+  const jobSpecText =
+    'AgenC credible-exit job spec\nInput: "escrow" -> Output: "worcse". Plain text.\n';
+  const jobSpecHash = await descriptionHash(jobSpecText);
   const taskId = randomId32();
   const hireResult = await buyerClient.hireFromListing({
     listing,
@@ -433,6 +583,7 @@ async function main() {
     expectedPrice: price,
     expectedVersion: 1n,
     listingSpecHash,
+    taskJobSpecHash: jobSpecHash,
     // P1.2 §4.4: the hirer names WHICH attestor's verdict it consumes. We name
     // the operator's own moderation_authority (the STEP 4 record). This is the
     // global-authority path, so no roster entry (`moderatorIsAttestor`) is needed.
@@ -452,12 +603,12 @@ async function main() {
   // is gated on both the task attestation and the pinned job spec — and, like
   // the hire gate, set_task_job_spec consumes the attestation of the `moderator`
   // the creator explicitly names (P1.2); here that is the moderation_authority.
-  log("STEP 6  attest task CLEAN (OWN moderation_authority) + pin job-spec (LOCAL file)");
+  log(
+    "STEP 6  attest task CLEAN (OWN moderation_authority) + pin job-spec (LOCAL file)",
+  );
   const jobSpecPath = path.join(workDir, "job-spec.txt");
-  const jobSpecText = "AgenC credible-exit job spec\nInput: \"escrow\" -> Output: \"worcse\". Plain text.\n";
   await writeFile(jobSpecPath, jobSpecText);
   const jobSpecUri = pathToFileURL(jobSpecPath).href;
-  const jobSpecHash = await descriptionHash(jobSpecText);
 
   const taskAttestSig = await moderatorClient.send([
     await sdk.facade.recordTaskModeration({
@@ -474,7 +625,8 @@ async function main() {
     moderator: moderatorSigner.address, // P1.2: the v2 record PDA is moderator-keyed
   });
   const tmod = await sdk.fetchMaybeTaskModeration(rpc, taskModeration);
-  if (!tmod.exists || tmod.data.status !== 0) fail(`TaskModeration ${taskModeration} not CLEAN`);
+  if (!tmod.exists || tmod.data.status !== 0)
+    fail(`TaskModeration ${taskModeration} not CLEAN`);
   proof.accounts.taskModeration = taskModeration;
 
   const pinSig = await buyerClient.send([
@@ -490,7 +642,9 @@ async function main() {
     }),
   ]);
   proof.signatures.setTaskJobSpec = pinSig.signature;
-  log(`   TaskModeration ${taskModeration} status=CLEAN  sig ${taskAttestSig.signature}`);
+  log(
+    `   TaskModeration ${taskModeration} status=CLEAN  sig ${taskAttestSig.signature}`,
+  );
   log(`   job spec pinned ${jobSpecUri}  sig ${pinSig.signature}`);
   log("");
 
@@ -499,12 +653,18 @@ async function main() {
   // listOpenTasks + listPinnedJobSpecTasks, the candidate set a worker would
   // discover with no hosted indexer. The STEP 7 transaction remains
   // authoritative for the other on-chain claim gates.
-  log("STEP 6b verify task is discoverable as an open+pinned candidate via gPA");
+  log(
+    "STEP 6b verify task is discoverable as an open+pinned candidate via gPA",
+  );
   const openTasks = await sdk.listOpenTasks(rpc, { creator: buyer.address });
   const pinned = await sdk.listPinnedJobSpecTasks(rpc);
-  const discoverable = openTasks.some(({ address }) => address === task) && pinned.has(task);
-  if (!discoverable) fail(`task ${task} not discoverable as an open+pinned candidate via gPA`);
-  log(`   listOpenTasks(rpc) sees the task AND listPinnedJobSpecTasks(rpc) confirms a pinned spec`);
+  const discoverable =
+    openTasks.some(({ address }) => address === task) && pinned.has(task);
+  if (!discoverable)
+    fail(`task ${task} not discoverable as an open+pinned candidate via gPA`);
+  log(
+    `   listOpenTasks(rpc) sees the task AND listPinnedJobSpecTasks(rpc) confirms a pinned spec`,
+  );
   log(`   STEP 7's claim transaction proves final on-chain eligibility`);
   log("");
 
@@ -512,16 +672,24 @@ async function main() {
   // Provider claims and settles. complete_task pays the worker + the protocol
   // fee to the on-chain treasury. We measure the real balance deltas as proof
   // the worker actually got paid.
-  log("STEP 7  provider claims + completes — worker paid on-chain (escrow settled)");
-  const providerBalBefore = BigInt((await rpc.getBalance(provider.address).send()).value);
-  const treasuryBalBefore = BigInt((await rpc.getBalance(treasury).send()).value);
+  log(
+    "STEP 7  provider claims + completes — worker paid on-chain (escrow settled)",
+  );
+  const providerBalBefore = BigInt(
+    (await rpc.getBalance(provider.address).send()).value,
+  );
+  const treasuryBalBefore = BigInt(
+    (await rpc.getBalance(treasury).send()).value,
+  );
 
   await providerClient.claimTaskWithJobSpec({
     task,
     worker: providerAgent,
     authority: provider,
   });
-  await sdk.waitForTaskStatus(rpc, task, sdk.TaskStatus.InProgress, { timeoutMs: 90_000 });
+  await sdk.waitForTaskStatus(rpc, task, sdk.TaskStatus.InProgress, {
+    timeoutMs: 90_000,
+  });
   log(`   provider claimed (task InProgress)`);
 
   const [hireRecord] = await sdk.findHireRecordPda({ task });
@@ -538,7 +706,9 @@ async function main() {
       resultData: null,
     }),
   ]);
-  await sdk.waitForTaskStatus(rpc, task, sdk.TaskStatus.Completed, { timeoutMs: 90_000 });
+  await sdk.waitForTaskStatus(rpc, task, sdk.TaskStatus.Completed, {
+    timeoutMs: 90_000,
+  });
   proof.signatures.completeTask = completeResult.signature;
   log(`   provider completed  sig ${completeResult.signature}`);
 
@@ -547,8 +717,12 @@ async function main() {
   if (!finalTask.exists) fail(`task ${task} vanished after completion`);
   const status = finalTask.data.status;
   const reward = finalTask.data.rewardAmount;
-  const providerBalAfter = BigInt((await rpc.getBalance(provider.address).send()).value);
-  const treasuryBalAfter = BigInt((await rpc.getBalance(treasury).send()).value);
+  const providerBalAfter = BigInt(
+    (await rpc.getBalance(provider.address).send()).value,
+  );
+  const treasuryBalAfter = BigInt(
+    (await rpc.getBalance(treasury).send()).value,
+  );
   const providerDelta = providerBalAfter - providerBalBefore;
   const treasuryDelta = treasuryBalAfter - treasuryBalBefore;
   const expectedFee = (reward * BigInt(protocol.data.protocolFeeBps)) / 10_000n;
@@ -565,27 +739,41 @@ async function main() {
     workerPaid: providerDelta > 0n,
   };
 
-  if (status !== sdk.TaskStatus.Completed) fail(`task status ${status} != Completed`);
+  if (status !== sdk.TaskStatus.Completed)
+    fail(`task status ${status} != Completed`);
   if (treasuryDelta !== expectedFee) {
-    fail(`treasury delta ${treasuryDelta} != expected protocol fee ${expectedFee}`);
+    fail(
+      `treasury delta ${treasuryDelta} != expected protocol fee ${expectedFee}`,
+    );
   }
-  if (providerDelta <= 0n) fail(`provider was not paid (delta ${providerDelta})`);
+  if (providerDelta <= 0n)
+    fail(`provider was not paid (delta ${providerDelta})`);
 
   log("");
   log("-".repeat(72));
   log(`RESULT: task ${task}`);
   log(`  status               = ${proof.finalState.taskStatusName} (on-chain)`);
   log(`  reward               = ${reward} lamports`);
-  log(`  treasury delta       = ${treasuryDelta} lamports (= ${protocol.data.protocolFeeBps} bps fee, matches)`);
-  log(`  provider net delta   = ${providerDelta} lamports (payout minus its own tx fees)`);
+  log(
+    `  treasury delta       = ${treasuryDelta} lamports (= ${protocol.data.protocolFeeBps} bps fee, matches)`,
+  );
+  log(
+    `  provider net delta   = ${providerDelta} lamports (payout minus its own tx fees)`,
+  );
   log(`  worker paid          = YES`);
   log("-".repeat(72));
   log("");
   log("ZERO tetsuo-hosted dependencies used:");
-  log(`  RPC      : own (${env.rpcUrl})`);
-  log(`  reads    : SDK gPA (listActiveListings / listOpenTasks / listPinnedJobSpecTasks)`);
-  log(`  moderation: own moderation_authority (${moderatorSigner.address}) + own P6.8`);
-  log(`             roster attestor (${ownAttestor.address}); NO HTTP attestor service`);
+  log(`  RPC      : own (${redactUrl(env.rpcUrl)})`);
+  log(
+    `  reads    : SDK gPA (listActiveListings / listOpenTasks / listPinnedJobSpecTasks)`,
+  );
+  log(
+    `  moderation: own moderation_authority (${moderatorSigner.address}) + own P6.8`,
+  );
+  log(
+    `             roster attestor (${ownAttestor.address}); NO HTTP attestor service`,
+  );
   log(`  artifacts: local file:// (${workDir})`);
   log(`  settlement: on-chain escrow -> claim -> complete`);
   log("");
@@ -599,7 +787,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`\ncredible-exit: ERROR: ${error?.stack ?? error}\n`);
-  process.exit(1);
-});
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    process.stderr.write(`\ncredible-exit: ERROR: ${error?.stack ?? error}\n`);
+    process.exit(1);
+  });
+}

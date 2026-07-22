@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -38,6 +36,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -55,7 +55,7 @@ export const RATE_SKILL_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getRateSkillDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(RATE_SKILL_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(RATE_SKILL_DISCRIMINATOR);
 }
 
 export type RateSkillInstruction<
@@ -117,9 +117,9 @@ export type RateSkillInstructionDataArgs = {
 export function getRateSkillInstructionDataEncoder(): Encoder<RateSkillInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["rating", getU8Encoder()],
-      ["reviewHash", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32))],
+      ["reviewHash", getOptionEncoder(getFixedBytesEncoder(32))],
     ]),
     (value) => ({ ...value, discriminator: RATE_SKILL_DISCRIMINATOR }),
   );

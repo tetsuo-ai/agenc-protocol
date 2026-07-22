@@ -203,6 +203,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
 
     // 4) buyer hires the listing (named convenience) -> Task + escrow + HireRecord.
     const taskId = new Uint8Array(32).fill(44);
+    const jobSpecHash = new Uint8Array(32).fill(55);
     await buyerClient.hireFromListing({
       listing,
       providerAgent,
@@ -213,12 +214,12 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedPrice: price,
       expectedVersion: 1n,
       listingSpecHash,
+      taskJobSpecHash: jobSpecHash,
       moderator: moderator.address,
     });
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
 
     // 5) CLEAN task moderation + job-spec pin (claim is gated on both).
-    const jobSpecHash = new Uint8Array(32).fill(55);
     await moderatorClient.send([
       await facade.recordTaskModeration({
         moderator,
@@ -375,6 +376,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     ]);
 
     const taskId = new Uint8Array(32).fill(56);
+    const jobSpecHash = new Uint8Array(32).fill(57);
     await buyerClient.hireFromListingHumanless({
       listing,
       providerAgent,
@@ -384,6 +386,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: 1n,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      taskJobSpecHash: jobSpecHash,
       moderator: moderator.address,
       referrer: referrer.address,
       referrerFeeBps: 250,
@@ -440,6 +443,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         expectedVersion: decodedListing.version,
         reviewWindowSecs: 3600n,
         listingSpecHash,
+        taskJobSpecHash: jobSpecHash,
         moderator: moderator.address,
       })
       .catch((error: unknown) => error);
@@ -477,7 +481,6 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     expect(decodedTask.currentWorkers).toBe(0);
     expect(accountData(svm, claim)).toBeNull();
 
-    const jobSpecHash = new Uint8Array(32).fill(57);
     const jobSpecUri = "agenc://job-spec/sha256/humanless-task";
     await moderatorClient.send([
       await facade.recordTaskModeration({
@@ -690,6 +693,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: decodedListing.version,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      taskJobSpecHash: listingSpecHash,
       moderator: moderator.address,
     });
     decodedListing = getServiceListingDecoder().decode(
@@ -776,6 +780,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: 1n,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      taskJobSpecHash: listingSpecHash,
       moderator: moderator.address,
     });
 
@@ -830,6 +835,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
         expectedVersion: decodedListing.version,
         reviewWindowSecs: 3600n,
         listingSpecHash,
+        taskJobSpecHash: listingSpecHash,
         moderator: moderator.address,
       })
       .catch((error: unknown) => error);
@@ -863,6 +869,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: decodedListing.version,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      taskJobSpecHash: listingSpecHash,
       moderator: moderator.address,
     });
     decodedListing = getServiceListingDecoder().decode(
@@ -1264,6 +1271,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     ]);
 
     const taskId = new Uint8Array(32).fill(126);
+    const jobSpecHash = new Uint8Array(32).fill(127);
     await buyerClient.hireFromListingHumanless({
       listing,
       providerAgent,
@@ -1273,6 +1281,7 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
       expectedVersion: 1n,
       reviewWindowSecs: 10n,
       listingSpecHash,
+      taskJobSpecHash: jobSpecHash,
       moderator: moderator.address,
       referrer: referrer.address,
       referrerFeeBps: 250,
@@ -1282,7 +1291,6 @@ describe("e2e: createMarketplaceClient drives the real program end-to-end", () =
     const [hireRecord] = await findHireRecordPda({ task });
     const [claim] = await findClaimPda({ task, bidder: providerAgent });
 
-    const jobSpecHash = new Uint8Array(32).fill(127);
     await moderatorClient.send([
       await facade.recordTaskModeration({
         moderator,

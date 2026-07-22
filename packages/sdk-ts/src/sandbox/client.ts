@@ -58,7 +58,9 @@ export type SandboxAirdropRpc = {
  * work against `sandbox.rpc` directly). A kit `createSolanaRpc(...)` client
  * for a non-mainnet URL satisfies all three.
  */
-export type SandboxRpc = RpcTransportRpc & SandboxAirdropRpc & WaitForTaskStatusRpc;
+export type SandboxRpc = RpcTransportRpc &
+  SandboxAirdropRpc &
+  WaitForTaskStatusRpc;
 
 /** Options for {@link createSandboxClient}. */
 export interface CreateSandboxClientOptions {
@@ -66,7 +68,7 @@ export interface CreateSandboxClientOptions {
    * HTTP RPC endpoint. Defaults through the environment seam
    * (`resolveSandboxEnvironment`): `AGENC_SANDBOX_RPC_URL` /
    * `AGENC_SANDBOX_CLUSTER` when set, otherwise the localnet default
-   * ({@link SANDBOX_LOCALNET_RPC_URL} — the `scripts/localnet-up.mjs`
+   * ({@link SANDBOX_LOCALNET_RPC_URL} — the `scripts/localnet-up.mjs --dev-ready`
    * stack). Must look devnet/local — hostname containing `"devnet"`, or
    * localhost/127.0.0.1/::1 — unless `allowCustomRpc` is set; anything else
    * is refused with {@link SandboxClusterError} before any key generation or
@@ -244,7 +246,7 @@ async function fundViaAirdrop(
  *
  * Endpoint defaults flow through the environment seam
  * (`resolveSandboxEnvironment`): the shipped default is the documented
- * localnet stack (`scripts/localnet-up.mjs` at the repo root, RPC
+ * localnet stack (`scripts/localnet-up.mjs --dev-ready` at the repo root, RPC
  * 127.0.0.1:8899); with `AGENC_SANDBOX_CLUSTER=devnet` (or
  * `AGENC_SANDBOX_RPC_URL`) the same call targets public devnet instead —
  * localhost URLs pass the cluster guard via the localhost allowlist.

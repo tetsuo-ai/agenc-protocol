@@ -59,7 +59,19 @@ Framework-detects the **current** repo (never greenfield-only):
   total-wallet-debit controls before launch. The development route also requires
   explicit per-checkout/hourly/transaction-fee debit budgets, validates the live
   listing/provider/operator/fee/deadline/capability/version terms, and stores then reads back a canonical
-  worker-verifiable envelope before signing the hire. Set
+  worker-verifiable envelope before signing the hire. A post-send recovery is
+  bound to the same idempotency key only when the SDK returns a genuine typed
+  recovery token. The route requires the SDK's stable hire-intent digest and a
+  canonical attributable transaction signature where the token carries one
+  (decoded to exactly 64 bytes, including valid shorter leading-zero encodings),
+  then resumes through the SDK's transaction-proof reconciliation rail. It
+  never fabricates recovery from bare account state, and generic preflight
+  errors release the key for a clean retry. If finalized transaction evidence
+  proves an atomic execution failure, the stale recovery and its debit
+  reservation are explicitly discarded so the key can be retried safely. An
+  invalid terminal proof is never treated as retry-safe: the key and its
+  conservative debit reservation remain permanently blocked for manual review.
+  Set
   `AGENC_MODERATOR` to the separate wallet funded by the local attestor (the
   checkout signer is deliberately rejected so external moderation rent/fees
   cannot escape its wallet-debit reservation),
@@ -128,13 +140,14 @@ Then, all with throwaway funded wallets:
 Flags: `--sandbox` (force the in-process litesvm mode, skip localnet
 discovery), `--localnet` (require the localnet stack — fail with setup
 instructions instead of falling back), `--env-file <path>` (explicit
-`.localnet/env.json`; implies `--localnet`), `--purge` (kill + re-boot the
-stack via the sdk tooling first; implies `--localnet`).
+`.localnet/env.json`; implies `--localnet`), `--purge` (run the SDK tooling's
+verified stop-and-ledger-purge rail to completion, then re-boot; implies
+`--localnet`).
 
 Optional localnet setup, for the full-validator experience (from an
 [agenc-protocol](https://github.com/tetsuo-ai/agenc-protocol) clone):
 `anchor build`, `(cd packages/sdk-ts && npm install && npm run build)`, then
-`node scripts/localnet-up.mjs`. On a warm stack the bot loop lands in well
+`node scripts/localnet-up.mjs --dev-ready`. On a warm stack the bot loop lands in well
 under a minute (~9s typical); the in-process fallback needs none of this and
 lands in seconds.
 
@@ -147,14 +160,33 @@ RPC configured (and not localhost; inject secret-bearing provider URLs with
 `.localnet` throwaway key, installed `@tetsuo-ai/*` pins inside the
 [`docs/VERSIONING.md`](https://github.com/tetsuo-ai/agenc-protocol/blob/main/docs/VERSIONING.md)
 support matrix (a package may have multiple compatible minor lines — sdk
-0.8.x through 0.11.x all speak the live wire (see `docs/VERSIONING.md` §1.1); genuinely stale pins fail closed
-against the live mainnet program), a fee-leg rent-exemption advisory, and the
-receipts surface. Chain evidence is finalized and pinned to one minimum context
-slot; it verifies the upgradeable Program/ProgramData relationship, reviewed
-ProgramData address/deployment slot, retained upgrade authority, executable
-SHA-256, and reviewed source commit in addition to ProtocolConfig ownership and
-surface revision. Broad wire compatibility is checked separately from the
-newer SDK/runtime APIs required by generated templates.
+0.8.x through 0.11.x all speak the revision-4 wire (see `docs/VERSIONING.md`
+§1.1); revision 5 instead requires the coordinated SDK 0.12.x / React 0.5.x
+client train, and a directly installed `@tetsuo-ai/protocol` artifact must be
+0.3.x for revision 4 or 0.4.x for revision 5). Those version buckets are not a
+permissive Cartesian product: `promote` also reads each installed first-party
+manifest and checks its actual npm dependency/peer ranges against the installed
+SDK and other first-party packages. A truly absent optional package is ignored;
+a present but missing, malformed, unreadable, or mutually incompatible manifest
+fails closed. See `docs/VERSIONING.md` §1.1.2 for coherent combinations.
+`promote` selects exactly one package set from the finalized on-chain surface
+revision and rejects both directions of client/program skew; it never treats the
+revision-4 and revision-5 sets as one permissive union. Project-local
+CLI/scaffolder packages are not used as evidence for the version of a command
+that may be running from npx, a global install, or an embedding process. It also
+checks a fee-leg rent-exemption advisory and the receipts surface. Chain
+evidence is finalized and pinned to one minimum context slot; it verifies the
+upgradeable Program/ProgramData relationship, reviewed ProgramData
+address/deployment slot, retained upgrade authority, executable SHA-256, and
+reviewed source commit in addition to ProtocolConfig ownership and surface
+revision. Broad wire compatibility is checked separately from the newer
+SDK/runtime APIs required by generated templates.
+
+Revision-5 promotion deliberately remains blocked after the surface byte first
+changes. Operators must capture the actual finalized post-upgrade deployment
+identity, patch it into the CLI's reviewed release table, rebuild/repack the CLI,
+and independently re-audit that artifact before publishing it. Candidate or
+predicted deployment values are never accepted as release evidence.
 
 `promote` deliberately cannot return production-ready for a generated checkout
 or worker based on local files alone. It reports an explicit blocker until an

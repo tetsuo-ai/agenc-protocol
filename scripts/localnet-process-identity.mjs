@@ -7,10 +7,16 @@ import {
   open,
   readFile,
   readlink,
+  rename,
   unlink,
 } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import {
+  openLinuxProcessReference,
+  signalProcessReference,
+} from "./localnet-process-signal.mjs";
+import { LOCALNET_PROGRAM_LOAD_METHOD } from "./localnet-program-binding.mjs";
 
 const COMMON_KEYS = [
   "schemaVersion",
@@ -23,8 +29,16 @@ const COMMON_KEYS = [
   "argvSha256",
   "recordedAt",
 ];
-const VALIDATOR_KEYS = ["rpcPort", "programSha256", "programSize"];
+const VALIDATOR_KEYS = [
+  "rpcPort",
+  "programSha256",
+  "programSize",
+  "programLoadMethod",
+];
 const MAX_IDENTITY_FILE_BYTES = 16 * 1024;
+// Linux proc_pid_stat(5): Z is zombie; X/x are dead process states.
+// https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html
+const DEAD_LINUX_PROCESS_STATES = new Set(["Z", "X", "x"]);
 
 export class ProcessIdentityError extends Error {
   constructor(message) {
@@ -77,7 +91,7 @@ export function parseProcessIdentityRecord(body, label = "pid file") {
     label,
   );
   if (
-    value.schemaVersion !== 1 ||
+    value.schemaVersion !== (role === "validator" ? 2 : 1) ||
     !Number.isSafeInteger(value.pid) ||
     value.pid <= 1 ||
     !Number.isSafeInteger(value.uid) ||
@@ -99,52 +113,81 @@ export function parseProcessIdentityRecord(body, label = "pid file") {
       value.rpcPort > 65_535 ||
       !/^[0-9a-f]{64}$/.test(value.programSha256 ?? "") ||
       !Number.isSafeInteger(value.programSize) ||
-      value.programSize <= 0)
+      value.programSize <= 0 ||
+      value.programLoadMethod !== LOCALNET_PROGRAM_LOAD_METHOD)
   ) {
     fail(`${label} contains malformed validator binding fields`);
   }
   return Object.freeze(value);
 }
 
-export async function observeLinuxProcess(pid) {
+export async function observeLinuxProcess(pid, { processReference } = {}) {
   if (process.platform !== "linux" || typeof process.getuid !== "function") {
     fail(
       "strong process identity verification is unavailable on this platform",
     );
   }
+  const referencePid = processReference?.pid;
+  const referenceFd = processReference?.fd;
+  if (
+    processReference !== undefined &&
+    (processReference === null ||
+      referencePid !== pid ||
+      !Number.isSafeInteger(referenceFd) ||
+      referenceFd < 0)
+  ) {
+    fail(`invalid stable process reference for pid ${pid}`);
+  }
+  const procRoot =
+    processReference === undefined
+      ? `/proc/${pid}`
+      : `/proc/self/fd/${referenceFd}`;
   try {
-    const [status, statBody, executable, cwd, argvBytes] = await Promise.all([
-      readFile(`/proc/${pid}/status`, "utf8"),
-      readFile(`/proc/${pid}/stat`, "utf8"),
-      readlink(`/proc/${pid}/exe`),
-      readlink(`/proc/${pid}/cwd`),
-      readFile(`/proc/${pid}/cmdline`),
-    ]);
-    const uid = Number(/^Uid:\s+(\d+)/mu.exec(status)?.[1]);
-    const commEnd = statBody.lastIndexOf(")");
-    const fields =
-      commEnd < 0
-        ? []
-        : statBody
-            .slice(commEnd + 1)
-            .trim()
-            .split(/\s+/u);
-    const processStartTicks = fields[19];
-    if (
-      !Number.isSafeInteger(uid) ||
-      !/^[1-9][0-9]*$/.test(processStartTicks ?? "") ||
-      argvBytes.length === 0
-    ) {
+    // Linux can expose an empty cmdline in the tiny live-to-zombie transition
+    // before a concurrently-read stat reports Z. Resample that incomplete
+    // transition through the same stable proc descriptor; never classify an
+    // indefinitely empty live cmdline as absence.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const [status, statBody, executable, cwd, argvBytes] = await Promise.all([
+        readFile(`${procRoot}/status`, "utf8"),
+        readFile(`${procRoot}/stat`, "utf8"),
+        readlink(`${procRoot}/exe`),
+        readlink(`${procRoot}/cwd`),
+        readFile(`${procRoot}/cmdline`),
+      ]);
+      const uid = Number(/^Uid:\s+(\d+)/mu.exec(status)?.[1]);
+      const commEnd = statBody.lastIndexOf(")");
+      const fields =
+        commEnd < 0
+          ? []
+          : statBody
+              .slice(commEnd + 1)
+              .trim()
+              .split(/\s+/u);
+      const processState = fields[0];
+      const processStartTicks = fields[19];
+      if (DEAD_LINUX_PROCESS_STATES.has(processState)) return null;
+      if (
+        Number.isSafeInteger(uid) &&
+        /^[1-9][0-9]*$/.test(processStartTicks ?? "") &&
+        argvBytes.length > 0
+      ) {
+        return Object.freeze({
+          uid,
+          processStartTicks,
+          executable,
+          cwd,
+          argvSha256: createHash("sha256").update(argvBytes).digest("hex"),
+          argv: argvBytes.toString("utf8").split("\0").filter(Boolean),
+        });
+      }
+      if (argvBytes.length === 0 && attempt < 7) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        continue;
+      }
       fail(`could not read complete identity for pid ${pid}`);
     }
-    return Object.freeze({
-      uid,
-      processStartTicks,
-      executable,
-      cwd,
-      argvSha256: createHash("sha256").update(argvBytes).digest("hex"),
-      argv: argvBytes.toString("utf8").split("\0").filter(Boolean),
-    });
+    fail(`could not read complete identity for pid ${pid}`);
   } catch (error) {
     if (error?.code === "ENOENT" || error?.code === "ESRCH") return null;
     if (error instanceof ProcessIdentityError) throw error;
@@ -152,13 +195,18 @@ export async function observeLinuxProcess(pid) {
   }
 }
 
-export async function captureProcessIdentity(pid, role, extra = {}) {
-  const observed = await observeLinuxProcess(pid);
+export async function captureProcessIdentity(
+  pid,
+  role,
+  extra = {},
+  { processReference } = {},
+) {
+  const observed = await observeLinuxProcess(pid, { processReference });
   if (!observed)
     fail(`${role} pid ${pid} exited before its identity was recorded`);
   return parseProcessIdentityRecord(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: role === "validator" ? 2 : 1,
       role,
       pid,
       uid: observed.uid,
@@ -211,7 +259,7 @@ export function assertRecordedProcessIdentity(record, observed, expected = {}) {
   return true;
 }
 
-async function openPrivateStateDirectory(
+export async function openPrivateStateDirectory(
   directory,
   { create = false, repairPermissions = false, missingOk = false } = {},
 ) {
@@ -324,6 +372,54 @@ export async function publishProcessIdentityFile(file, record) {
   }
 }
 
+/**
+ * Atomically turn a verified live-process record into a durable stopped marker.
+ * Both leaves remain inside the same private state directory; a pre-existing
+ * marker must itself be a valid private record before it can be replaced.
+ */
+export async function archiveProcessIdentityFile(file, archivedFile, role) {
+  const directory = path.dirname(file);
+  if (
+    path.dirname(archivedFile) !== directory ||
+    path.basename(file) === path.basename(archivedFile)
+  ) {
+    fail("process identity archive must use distinct leaves in one directory");
+  }
+  const record = await readProcessIdentityFile(file, role);
+  if (record === null) fail(`${file} disappeared before it could be archived`);
+  // Refuse to overwrite an attacker-controlled or corrupted leaf. A valid old
+  // marker is replaceable because the directory is a current-user-only 0700
+  // trust boundary and rename is atomic within it.
+  await readProcessIdentityFile(archivedFile, role);
+
+  const directoryHandle = await openPrivateStateDirectory(directory);
+  const source = anchoredLeaf(directory, directoryHandle, path.basename(file));
+  const target = anchoredLeaf(
+    directory,
+    directoryHandle,
+    path.basename(archivedFile),
+  );
+  try {
+    const sourceMetadata = await lstat(source);
+    if (
+      !sourceMetadata.isFile() ||
+      sourceMetadata.isSymbolicLink() ||
+      typeof process.getuid !== "function" ||
+      sourceMetadata.uid !== process.getuid() ||
+      sourceMetadata.nlink !== 1 ||
+      (sourceMetadata.mode & 0o077) !== 0 ||
+      sourceMetadata.size > MAX_IDENTITY_FILE_BYTES
+    ) {
+      fail(`${file} is no longer a valid private process identity file`);
+    }
+    await rename(source, target);
+    await directoryHandle.sync();
+    return record;
+  } finally {
+    await directoryHandle.close();
+  }
+}
+
 /** Capture and durably publish a just-spawned child, or terminate that child. */
 export async function captureAndPublishSpawnedProcess(
   child,
@@ -335,88 +431,125 @@ export async function captureAndPublishSpawnedProcess(
   if (!child || !Number.isSafeInteger(child.pid) || child.pid <= 1) {
     fail(`cannot record ${role}: spawned child has no valid pid`);
   }
+  const openProcessReference =
+    cleanupOptions.openProcessReference ?? openLinuxProcessReference;
+  if (typeof openProcessReference !== "function") {
+    fail("openProcessReference must be a function");
+  }
+  // This call occurs synchronously before the first await in the default
+  // implementation, while the freshly spawned child is still represented by
+  // its unreaped ChildProcess. The resulting proc descriptor remains bound to
+  // that exact child throughout capture, publication, and any cleanup.
+  const processReference = await openProcessReference(child.pid);
+  if (processReference === null) {
+    fail(`${role} pid ${child.pid} exited before its identity was recorded`);
+  }
+  const referencePid = processReference?.pid;
+  const closeProcessReference = processReference?.close;
+  if (
+    referencePid !== child.pid ||
+    typeof closeProcessReference !== "function"
+  ) {
+    await closeProcessReference?.call(processReference);
+    fail("process-reference provider returned an invalid or mismatched handle");
+  }
+
   let identity;
   try {
-    identity = await captureProcessIdentity(child.pid, role, extra);
+    identity = await captureProcessIdentity(child.pid, role, extra, {
+      processReference,
+    });
     await publishProcessIdentityFile(file, identity);
     return identity;
   } catch (error) {
     try {
-      await stopFailedSpawn(child, identity, cleanupOptions);
+      await stopFailedSpawn(child, identity, cleanupOptions, processReference);
     } catch (cleanupError) {
       throw new ProcessIdentityError(
         `${role} identity publication failed (${error.message}) and exact child cleanup failed (${cleanupError.message})`,
       );
     }
     throw error;
+  } finally {
+    await closeProcessReference.call(processReference);
   }
 }
 
-async function stopFailedSpawn(child, identity, options) {
+async function stopFailedSpawn(child, identity, options, processReference) {
   const termGraceMs = options.termGraceMs ?? 10_000;
   const killGraceMs = options.killGraceMs ?? 5_000;
-  const pollMs = options.pollMs ?? 100;
-  for (const [label, value] of Object.entries({
-    termGraceMs,
-    killGraceMs,
-    pollMs,
-  })) {
+  const sendSignal = options.sendSignal ?? signalProcessReference;
+  for (const [label, value] of Object.entries({ termGraceMs, killGraceMs })) {
     if (!Number.isSafeInteger(value) || value < 1 || value > 60_000) {
       fail(`${label} must be an integer in 1..60000`);
     }
   }
 
   const exactChildAlive = async () => {
-    if (identity === undefined) {
-      return child.exitCode === null && child.signalCode === null;
-    }
-    const observed = await observeLinuxProcess(child.pid);
+    if (child.exitCode !== null || child.signalCode !== null) return false;
+    const observed = await observeLinuxProcess(child.pid, { processReference });
     if (observed === null) return false;
-    assertRecordedProcessIdentity(identity, observed);
+    if (identity !== undefined) {
+      assertRecordedProcessIdentity(identity, observed);
+    }
     return true;
   };
-  const waitGone = async (timeoutMs) => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (!(await exactChildAlive())) return true;
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-    }
-    return !(await exactChildAlive());
-  };
-  const awaitChildExit = async (timeoutMs) => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise((resolve, reject) => {
+  const waitForChildExit = async (timeoutMs) => {
+    if (child.exitCode !== null || child.signalCode !== null) return true;
+    return await new Promise((resolve) => {
+      let timer;
       const onExit = () => {
         clearTimeout(timer);
-        resolve();
+        resolve(true);
       };
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         child.removeListener("exit", onExit);
-        reject(
-          new Error(
-            `child pid ${child.pid} exited but did not settle its handle`,
-          ),
-        );
+        resolve(false);
       }, timeoutMs);
       child.once("exit", onExit);
     });
   };
 
-  if (!(await exactChildAlive())) return;
-  child.kill("SIGTERM");
-  if (await waitGone(termGraceMs)) {
-    await awaitChildExit(killGraceMs);
+  if (!(await exactChildAlive())) {
+    if (!(await waitForChildExit(killGraceMs))) {
+      fail(`child pid ${child.pid} disappeared but did not settle its handle`);
+    }
     return;
   }
+  const signalExactChild = async (signal) => {
+    try {
+      return (await sendSignal(processReference, signal)) !== false;
+    } catch (error) {
+      if (error?.code === "ESRCH") return false;
+      throw error;
+    }
+  };
 
-  // Re-verification in waitGone immediately precedes escalation. A reused or
-  // otherwise changed PID throws and is never signalled.
-  if (!(await exactChildAlive())) return;
-  child.kill("SIGKILL");
-  if (!(await waitGone(killGraceMs))) {
+  if (!(await signalExactChild("SIGTERM"))) {
+    if (!(await waitForChildExit(killGraceMs))) {
+      fail(`child pid ${child.pid} disappeared but did not settle its handle`);
+    }
+    return;
+  }
+  if (await waitForChildExit(termGraceMs)) return;
+
+  // Verification and escalation both use the same stable proc descriptor.
+  // Numeric PID reuse can neither redirect this check nor the following send.
+  if (!(await exactChildAlive())) {
+    if (!(await waitForChildExit(killGraceMs))) {
+      fail(`child pid ${child.pid} disappeared but did not settle its handle`);
+    }
+    return;
+  }
+  if (!(await signalExactChild("SIGKILL"))) {
+    if (!(await waitForChildExit(killGraceMs))) {
+      fail(`child pid ${child.pid} disappeared but did not settle its handle`);
+    }
+    return;
+  }
+  if (!(await waitForChildExit(killGraceMs))) {
     fail(`${identity?.role ?? "spawned"} pid ${child.pid} survived SIGKILL`);
   }
-  await awaitChildExit(killGraceMs);
 }
 
 export async function readProcessIdentityFile(file, role) {
@@ -452,6 +585,9 @@ export async function readProcessIdentityFile(file, role) {
     ) {
       fail(`${file} is not owned by the current user`);
     }
+    if (metadata.nlink !== 1) {
+      fail(`${file} must have exactly one hard link`);
+    }
     if ((metadata.mode & 0o077) !== 0) {
       fail(`${file} must not be accessible by group or other users`);
     }
@@ -468,6 +604,7 @@ export async function readProcessIdentityFile(file, role) {
       opened.dev !== metadata.dev ||
       opened.ino !== metadata.ino ||
       opened.uid !== metadata.uid ||
+      opened.nlink !== 1 ||
       opened.size > MAX_IDENTITY_FILE_BYTES
     ) {
       fail(`${file} changed while its identity record was being opened`);

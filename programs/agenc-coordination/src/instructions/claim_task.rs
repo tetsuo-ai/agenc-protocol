@@ -10,6 +10,8 @@ use crate::instructions::constants::{
 use crate::instructions::launch_controls::require_task_type_enabled;
 #[cfg(not(feature = "mainnet-canary"))]
 use crate::instructions::moderation_gate_helpers::require_content_not_blocked;
+#[cfg(not(feature = "mainnet-canary"))]
+use crate::instructions::set_task_job_spec::validate_hired_spec_commitment;
 use crate::instructions::task_validation_helpers::{
     is_contest_configured_task, is_manual_validation_task,
 };
@@ -153,6 +155,8 @@ pub fn handler_with_job_spec(ctx: Context<ClaimTaskWithJobSpec>) -> Result<()> {
                 .as_ref()
                 .map(|listing| listing.to_account_info()),
             &ctx.accounts.task.key(),
+            ctx.accounts.task.as_ref(),
+            &ctx.accounts.task_job_spec.job_spec_hash,
             &ctx.accounts.worker.key(),
         )?;
     }
@@ -213,6 +217,8 @@ fn validate_hired_provider(
     hire_info: &AccountInfo,
     legacy_listing_info: Option<AccountInfo>,
     task: &Pubkey,
+    task_data: &Task,
+    job_spec_hash: &[u8; 32],
     worker: &Pubkey,
 ) -> Result<()> {
     let (expected, expected_bump) =
@@ -230,6 +236,11 @@ fn validate_hired_provider(
             hire.task == *task && hire.bump == expected_bump,
             CoordinationError::InvalidHireRecord
         );
+        // A pre-v2 hire has no buyer-specific commitment. It remains fully
+        // refundable through cancel_task, but cannot admit new work after the
+        // security upgrade. Existing InProgress tasks use settlement exits and
+        // never re-enter this assignment gate.
+        validate_hired_spec_commitment(task_data, job_spec_hash)?;
         if hire.designated_provider == Pubkey::default() {
             let listing_info = legacy_listing_info
                 .as_ref()

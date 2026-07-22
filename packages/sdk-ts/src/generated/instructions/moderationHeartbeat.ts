@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -37,6 +35,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -48,9 +48,7 @@ export const MODERATION_HEARTBEAT_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([215, 182, 250, 219, 71, 134, 198, 0]);
 
 export function getModerationHeartbeatDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    MODERATION_HEARTBEAT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(MODERATION_HEARTBEAT_DISCRIMINATOR);
 }
 
 export type ModerationHeartbeatInstruction<
@@ -85,7 +83,7 @@ export type ModerationHeartbeatInstructionDataArgs = {
 export function getModerationHeartbeatInstructionDataEncoder(): Encoder<ModerationHeartbeatInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["newWindowSecs", getOptionEncoder(getU32Encoder())],
     ]),
     (value) => ({

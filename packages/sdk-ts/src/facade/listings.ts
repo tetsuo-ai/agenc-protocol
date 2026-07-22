@@ -26,16 +26,32 @@ import {
   type HireFromListingHumanlessAsyncInput,
   type RateHireAsyncInput,
 } from "../generated/index.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import { snapshotDenseStructuredArray } from "../values/structured-clone.js";
 import {
   LISTING_CATEGORIES,
   isListingCategory,
   encodeListingName,
   encodeListingCategory,
   encodeListingTags,
+  assertCanonicalHash32,
+  snapshotFixedBytes,
+  snapshotOptionalFixedBytes,
+  snapshotOptionOrNullable,
+  snapshotOptionalAddress,
   type ListingCategory,
 } from "../values/index.js";
 
 export { findListingPda, findListingModerationPda };
+
+const arrayIsArray = Array.isArray;
+
+/** Whether a snapshotted OptionOrNullable value will encode as `Some`. */
+function optionContainsValue(value: unknown): boolean {
+  if (value === null) return false;
+  if (typeof value !== "object" || ArrayBuffer.isView(value)) return true;
+  return Object.getOwnPropertyDescriptor(value, "__option")?.value === "Some";
+}
 
 /**
  * Friendly input for {@link createServiceListing}. Identical to the generated
@@ -61,7 +77,7 @@ export type CreateServiceListingInput = Omit<
 function isTagStrings(
   tags: CreateServiceListingInput["tags"],
 ): tags is readonly string[] {
-  return Array.isArray(tags);
+  return arrayIsArray(tags);
 }
 
 /**
@@ -114,19 +130,51 @@ function isTagStrings(
  * ```
  */
 export async function createServiceListing(input: CreateServiceListingInput) {
-  const { name, category, tags, ...rest } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const { listingId, name, category, tags, specHash, ...rest } = stableInput;
   if (typeof category === "string" && !isListingCategory(category)) {
     throw new TypeError(
       `listing category: ${JSON.stringify(category)} is not a canonical ` +
         `LISTING_METADATA v1 category (expected one of: ${LISTING_CATEGORIES.join(", ")})`,
     );
   }
+  // The 64-byte comma-joined wire can hold at most 32 non-empty one-byte tags
+  // (31 separators). Snapshot that exact finite domain without consulting a
+  // caller-owned iterator, join method, holes, or accessors.
+  const stableTags = isTagStrings(tags)
+    ? snapshotDenseStructuredArray(tags, "createServiceListing: tags", 32)
+    : undefined;
   return getCreateServiceListingInstructionAsync({
     ...rest,
-    name: typeof name === "string" ? encodeListingName(name) : name,
+    listingId: snapshotFixedBytes(
+      listingId,
+      32,
+      "createServiceListing: listingId",
+    ),
+    name:
+      typeof name === "string"
+        ? encodeListingName(name)
+        : snapshotFixedBytes(name, 32, "createServiceListing: name"),
     category:
-      typeof category === "string" ? encodeListingCategory(category) : category,
-    tags: isTagStrings(tags) ? encodeListingTags(tags) : tags,
+      typeof category === "string"
+        ? encodeListingCategory(category)
+        : snapshotFixedBytes(category, 32, "createServiceListing: category"),
+    tags: stableTags
+      ? encodeListingTags(stableTags)
+      : snapshotFixedBytes(tags, 64, "createServiceListing: tags"),
+    specHash: snapshotFixedBytes(
+      specHash,
+      32,
+      "createServiceListing: specHash",
+    ),
+    priceMint: snapshotOptionalAddress(
+      rest.priceMint,
+      "createServiceListing: priceMint",
+    ),
+    operator: snapshotOptionalAddress(
+      rest.operator,
+      "createServiceListing: operator",
+    ),
   });
 }
 
@@ -149,14 +197,57 @@ export type UpdateServiceListingInput = Omit<
   );
 
 export async function updateServiceListing(input: UpdateServiceListingInput) {
-  const hasHash = input.specHash !== null;
-  const hasUri = input.specUri !== null;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const specHash = snapshotOptionalFixedBytes(
+    stableInput.specHash,
+    32,
+    "updateServiceListing: specHash",
+  );
+  const specUri = snapshotOptionOrNullable(
+    stableInput.specUri,
+    "updateServiceListing: specUri",
+  );
+  const hasHash = optionContainsValue(specHash);
+  const hasUri = optionContainsValue(specUri);
   if (hasHash !== hasUri) {
     throw new Error(
       "updateServiceListing: specHash and specUri must be updated together",
     );
   }
-  return getUpdateServiceListingInstructionAsync(input);
+  return getUpdateServiceListingInstructionAsync({
+    ...stableInput,
+    price: snapshotOptionOrNullable(
+      stableInput.price,
+      "updateServiceListing: price",
+    ),
+    specHash,
+    specUri,
+    tags: snapshotOptionalFixedBytes(
+      stableInput.tags,
+      64,
+      "updateServiceListing: tags",
+    ),
+    requiredCapabilities: snapshotOptionOrNullable(
+      stableInput.requiredCapabilities,
+      "updateServiceListing: requiredCapabilities",
+    ),
+    defaultDeadlineSecs: snapshotOptionOrNullable(
+      stableInput.defaultDeadlineSecs,
+      "updateServiceListing: defaultDeadlineSecs",
+    ),
+    maxOpenJobs: snapshotOptionOrNullable(
+      stableInput.maxOpenJobs,
+      "updateServiceListing: maxOpenJobs",
+    ),
+    operator: snapshotOptionalAddress(
+      stableInput.operator,
+      "updateServiceListing: operator",
+    ),
+    operatorFeeBps: snapshotOptionOrNullable(
+      stableInput.operatorFeeBps,
+      "updateServiceListing: operatorFeeBps",
+    ),
+  });
 }
 
 /** Listing lifecycle states (matches the on-chain `newState` u8 enum). */
@@ -181,12 +272,18 @@ export async function setServiceListingState(
      * three-account revision-4 wire and ignore this compatibility field.
      */
     providerAgent?: Address;
-  } &
-    ({ newState: number } | { state: ListingStateName }),
+  } & ({ newState: number } | { state: ListingStateName }),
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   const newState =
-    "state" in input ? ListingState[input.state] : input.newState;
-  const { state: _state, providerAgent, ...rest } = input as {
+    "state" in stableInput
+      ? ListingState[stableInput.state]
+      : stableInput.newState;
+  const {
+    state: _state,
+    providerAgent,
+    ...rest
+  } = stableInput as {
     state?: ListingStateName;
     providerAgent?: Address;
   } & Omit<SetServiceListingStateAsyncInput, "newState">;
@@ -216,7 +313,7 @@ export async function setServiceListingState(
  * listing's pinned `spec_hash`, so callers pass the hash they already know
  * instead of computing PDAs.
  */
-type HireModerationInputs = {
+export type HireModerationInputs = {
   /**
    * The listing's pinned `spec_hash` (32 bytes). Used to derive BOTH:
    * `listingModeration` (the v2 record `["listing_moderation_v2", listing,
@@ -328,27 +425,61 @@ export type HireFromListingInput = Omit<
  * the REQUIRED `moderationBlock` BLOCK-floor PDA from it.
  */
 export async function hireFromListing(input: HireFromListingInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+    "creator",
+  ] as const);
   const {
     listingSpecHash,
     moderatorIsAttestor,
     referrer,
     referrerFeeBps,
     ...rest
-  } = input;
+  } = stableInput;
+  const taskId = snapshotFixedBytes(rest.taskId, 32, "hireFromListing: taskId");
+  const taskJobSpecHash = snapshotFixedBytes(
+    rest.taskJobSpecHash,
+    32,
+    "hireFromListing: taskJobSpecHash",
+  );
+  const stableListingSpecHash =
+    listingSpecHash === undefined
+      ? undefined
+      : snapshotFixedBytes(
+          listingSpecHash,
+          32,
+          "hireFromListing: listingSpecHash",
+        );
+  assertCanonicalHash32(taskJobSpecHash, "hireFromListing: taskJobSpecHash");
+  if (stableListingSpecHash !== undefined) {
+    assertCanonicalHash32(
+      stableListingSpecHash,
+      "hireFromListing: listingSpecHash",
+    );
+  }
+  const stableRest = {
+    ...rest,
+    taskId,
+    taskJobSpecHash,
+  };
+  const stableReferrer = snapshotOptionalAddress(
+    referrer ?? null,
+    "hireFromListing: referrer",
+  );
   const moderation = await resolveHireModerationAccounts({
     wrapper: "hireFromListing",
-    listing: rest.listing,
-    moderator: rest.moderator,
-    listingSpecHash,
-    listingModeration: rest.listingModeration,
-    moderationAttestor: rest.moderationAttestor,
-    moderationBlock: rest.moderationBlock,
+    listing: stableRest.listing,
+    moderator: stableRest.moderator,
+    listingSpecHash: stableListingSpecHash,
+    listingModeration: stableRest.listingModeration,
+    moderationAttestor: stableRest.moderationAttestor,
+    moderationBlock: stableRest.moderationBlock,
     moderatorIsAttestor,
   });
   return getHireFromListingInstructionAsync({
-    ...rest,
+    ...stableRest,
     ...moderation,
-    referrer: referrer ?? null,
+    referrer: stableReferrer,
     referrerFeeBps: referrerFeeBps ?? 0,
   });
 }
@@ -388,27 +519,67 @@ export type HireFromListingHumanlessInput = Omit<
 export async function hireFromListingHumanless(
   input: HireFromListingHumanlessInput,
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "creator",
+  ] as const);
   const {
     listingSpecHash,
     moderatorIsAttestor,
     referrer,
     referrerFeeBps,
     ...rest
-  } = input;
+  } = stableInput;
+  const taskId = snapshotFixedBytes(
+    rest.taskId,
+    32,
+    "hireFromListingHumanless: taskId",
+  );
+  const taskJobSpecHash = snapshotFixedBytes(
+    rest.taskJobSpecHash,
+    32,
+    "hireFromListingHumanless: taskJobSpecHash",
+  );
+  const stableListingSpecHash =
+    listingSpecHash === undefined
+      ? undefined
+      : snapshotFixedBytes(
+          listingSpecHash,
+          32,
+          "hireFromListingHumanless: listingSpecHash",
+        );
+  assertCanonicalHash32(
+    taskJobSpecHash,
+    "hireFromListingHumanless: taskJobSpecHash",
+  );
+  if (stableListingSpecHash !== undefined) {
+    assertCanonicalHash32(
+      stableListingSpecHash,
+      "hireFromListingHumanless: listingSpecHash",
+    );
+  }
+  const stableRest = {
+    ...rest,
+    taskId,
+    taskJobSpecHash,
+  };
+  const stableReferrer = snapshotOptionalAddress(
+    referrer ?? null,
+    "hireFromListingHumanless: referrer",
+  );
   const moderation = await resolveHireModerationAccounts({
     wrapper: "hireFromListingHumanless",
-    listing: rest.listing,
-    moderator: rest.moderator,
-    listingSpecHash,
-    listingModeration: rest.listingModeration,
-    moderationAttestor: rest.moderationAttestor,
-    moderationBlock: rest.moderationBlock,
+    listing: stableRest.listing,
+    moderator: stableRest.moderator,
+    listingSpecHash: stableListingSpecHash,
+    listingModeration: stableRest.listingModeration,
+    moderationAttestor: stableRest.moderationAttestor,
+    moderationBlock: stableRest.moderationBlock,
     moderatorIsAttestor,
   });
   return getHireFromListingHumanlessInstructionAsync({
-    ...rest,
+    ...stableRest,
     ...moderation,
-    referrer: referrer ?? null,
+    referrer: stableReferrer,
     referrerFeeBps: referrerFeeBps ?? 0,
   });
 }
@@ -435,9 +606,14 @@ export async function rateHire(
     reviewUri?: RateHireAsyncInput["reviewUri"];
   },
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["buyer"]);
   return getRateHireInstructionAsync({
-    reviewHash: null,
     reviewUri: "",
-    ...input,
+    ...stableInput,
+    reviewHash: snapshotOptionalFixedBytes(
+      stableInput.reviewHash ?? null,
+      32,
+      "rateHire: reviewHash",
+    ),
   });
 }

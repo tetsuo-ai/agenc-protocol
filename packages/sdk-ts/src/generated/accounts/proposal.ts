@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -42,6 +40,8 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getProposalStatusDecoder,
   getProposalStatusEncoder,
@@ -58,7 +58,7 @@ export const PROPOSAL_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getProposalDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(PROPOSAL_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(PROPOSAL_DISCRIMINATOR);
 }
 
 export type Proposal = {
@@ -154,14 +154,14 @@ export type ProposalArgs = {
 export function getProposalEncoder(): FixedSizeEncoder<ProposalArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["proposer", getAddressEncoder()],
       ["proposerAuthority", getAddressEncoder()],
       ["nonce", getU64Encoder()],
       ["proposalType", getProposalTypeEncoder()],
-      ["titleHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["descriptionHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["payload", fixEncoderSize(getBytesEncoder(), 64)],
+      ["titleHash", getFixedBytesEncoder(32, "titleHash")],
+      ["descriptionHash", getFixedBytesEncoder(32, "descriptionHash")],
+      ["payload", getFixedBytesEncoder(64, "payload")],
       ["status", getProposalStatusEncoder()],
       ["createdAt", getI64Encoder()],
       ["votingDeadline", getI64Encoder()],
@@ -172,7 +172,7 @@ export function getProposalEncoder(): FixedSizeEncoder<ProposalArgs> {
       ["totalVoters", getU16Encoder()],
       ["quorum", getU64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 64)],
+      ["reserved", getFixedBytesEncoder(64, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: PROPOSAL_DISCRIMINATOR }),
   );

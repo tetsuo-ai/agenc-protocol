@@ -14,13 +14,11 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -43,12 +41,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const TASK_CLAIM_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   115, 77, 242, 98, 7, 81, 209, 137,
 ]);
 
 export function getTaskClaimDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(TASK_CLAIM_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(TASK_CLAIM_DISCRIMINATOR);
 }
 
 export type TaskClaim = {
@@ -106,14 +106,14 @@ export type TaskClaimArgs = {
 export function getTaskClaimEncoder(): FixedSizeEncoder<TaskClaimArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["worker", getAddressEncoder()],
       ["claimedAt", getI64Encoder()],
       ["expiresAt", getI64Encoder()],
       ["completedAt", getI64Encoder()],
-      ["proofHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["resultData", fixEncoderSize(getBytesEncoder(), 64)],
+      ["proofHash", getFixedBytesEncoder(32, "proofHash")],
+      ["resultData", getFixedBytesEncoder(64, "resultData")],
       ["isCompleted", getBooleanEncoder()],
       ["isValidated", getBooleanEncoder()],
       ["rewardPaid", getU64Encoder()],

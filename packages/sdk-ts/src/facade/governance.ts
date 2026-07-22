@@ -9,7 +9,14 @@
 // Rust counts that owner's approval.
 //
 // Never import from generated/ internals other than its public exports.
-import type { TransactionSigner } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  getAddressEncoder,
+  getProgramDerivedAddress,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   // proposals
   getCreateProposalInstructionAsync,
@@ -26,6 +33,7 @@ import {
   getUpdateStateInstructionAsync,
   getUpdateLaunchControlsInstructionAsync,
   getInitializeProtocolInstructionAsync,
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
   // migrations
   getMigrateTaskInstruction,
   getMigrateProtocolInstruction,
@@ -51,7 +59,19 @@ import {
   type MigrateTaskInput as GeneratedMigrateTaskInput,
   type MigrateProtocolInput as GeneratedMigrateProtocolInput,
 } from "../generated/index.js";
-import { appendMultisigSignerMetas } from "./wire.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import { snapshotFixedBytes } from "../values/fixed-bytes.js";
+import { snapshotDenseStructuredArray } from "../values/structured-clone.js";
+import {
+  appendMultisigSignerMetas,
+  snapshotMultisigFacadeInput,
+  snapshotMultisigSigners,
+} from "./wire.js";
+
+const UPGRADEABLE_LOADER_PROGRAM_ADDRESS = address(
+  "BPFLoaderUpgradeab1e11111111111111111111111",
+);
+const DEFAULT_PUBLIC_KEY = address("11111111111111111111111111111111");
 
 export {
   findProposalPda,
@@ -87,7 +107,25 @@ type WithOptionalMultisigSigners<T> = Omit<T, "multisigSigners"> & {
  * (proposer, nonce); protocolConfig and governanceConfig default to their PDAs.
  */
 export async function createProposal(input: CreateProposalAsyncInput) {
-  return getCreateProposalInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getCreateProposalInstructionAsync({
+    ...stableInput,
+    titleHash: snapshotFixedBytes(
+      stableInput.titleHash,
+      32,
+      "createProposal: titleHash",
+    ),
+    descriptionHash: snapshotFixedBytes(
+      stableInput.descriptionHash,
+      32,
+      "createProposal: descriptionHash",
+    ),
+    payload: snapshotFixedBytes(
+      stableInput.payload,
+      64,
+      "createProposal: payload",
+    ),
+  });
 }
 
 /**
@@ -96,7 +134,9 @@ export async function createProposal(input: CreateProposalAsyncInput) {
  * supplied (no canonical seed for it here).
  */
 export async function voteProposal(input: VoteProposalAsyncInput) {
-  return getVoteProposalInstructionAsync(input);
+  return getVoteProposalInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /**
@@ -104,7 +144,9 @@ export async function voteProposal(input: VoteProposalAsyncInput) {
  * PDA derivation): pass the proposal address and the cancelling authority signer.
  */
 export function cancelProposal(input: CancelProposalInput) {
-  return getCancelProposalInstruction(input);
+  return getCancelProposalInstruction(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /**
@@ -114,14 +156,17 @@ export function cancelProposal(input: CancelProposalInput) {
  * FeeChange and RateLimitChange additionally require the current ProtocolConfig
  * threshold in `multisigSigners`; other proposal kinds may omit it.
  */
-export type ExecuteProposalInput = WithOptionalMultisigSigners<
-  ExecuteProposalAsyncInput
->;
+export type ExecuteProposalInput =
+  WithOptionalMultisigSigners<ExecuteProposalAsyncInput>;
 
 export async function executeProposal(input: ExecuteProposalInput) {
-  const { multisigSigners = [], ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"], {
+      multisigRequired: false,
+      optionalSignerKeys: ["treasury"],
+    });
   const instruction = await getExecuteProposalInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +180,9 @@ export async function executeProposal(input: ExecuteProposalInput) {
 export async function initializeGovernance(
   input: InitializeGovernanceAsyncInput,
 ) {
-  return getInitializeGovernanceInstructionAsync(input);
+  return getInitializeGovernanceInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /**
@@ -143,14 +190,21 @@ export async function initializeGovernance(
  * the proposed new owner set to sign, so include both approval sets (deduplicated)
  * in `multisigSigners` when rotating keys.
  */
-export type UpdateMultisigInput = WithRequiredMultisigSigners<
-  UpdateMultisigAsyncInput
->;
+export type UpdateMultisigInput =
+  WithRequiredMultisigSigners<UpdateMultisigAsyncInput>;
 
 export async function updateMultisig(input: UpdateMultisigInput) {
-  const { multisigSigners, ...generatedInput } = input;
-  const instruction = await getUpdateMultisigInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
+  const instruction = await getUpdateMultisigInstructionAsync({
+    ...generatedInput,
+    newOwners: snapshotDenseStructuredArray(
+      generatedInput.newOwners,
+      "updateMultisig: newOwners",
+      5,
+    ),
+  });
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 export type UpdateTreasuryInput = Omit<
@@ -163,42 +217,44 @@ export type UpdateTreasuryInput = Omit<
 
 /** Build update_treasury with custody consent plus current M-of-N approval. */
 export async function updateTreasury(input: UpdateTreasuryInput) {
-  const { multisigSigners, ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["newTreasury", "authority"]);
   const instruction = await getUpdateTreasuryInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /** Build an update_protocol_fee instruction. protocolConfig defaults to its PDA. */
-export type UpdateProtocolFeeInput = WithRequiredMultisigSigners<
-  UpdateProtocolFeeAsyncInput
->;
+export type UpdateProtocolFeeInput =
+  WithRequiredMultisigSigners<UpdateProtocolFeeAsyncInput>;
 
 export async function updateProtocolFee(input: UpdateProtocolFeeInput) {
-  const { multisigSigners, ...generatedInput } = input;
-  const instruction = await getUpdateProtocolFeeInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
+  const instruction =
+    await getUpdateProtocolFeeInstructionAsync(generatedInput);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /** Build an update_rate_limits instruction. protocolConfig defaults to its PDA. */
-export type UpdateRateLimitsInput = WithRequiredMultisigSigners<
-  UpdateRateLimitsAsyncInput
->;
+export type UpdateRateLimitsInput =
+  WithRequiredMultisigSigners<UpdateRateLimitsAsyncInput>;
 
 export async function updateRateLimits(input: UpdateRateLimitsInput) {
-  const { multisigSigners, ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
   const instruction = await getUpdateRateLimitsInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /** Build an update_min_version instruction. protocolConfig defaults to its PDA. */
-export type UpdateMinVersionInput = WithRequiredMultisigSigners<
-  UpdateMinVersionAsyncInput
->;
+export type UpdateMinVersionInput =
+  WithRequiredMultisigSigners<UpdateMinVersionAsyncInput>;
 
 export async function updateMinVersion(input: UpdateMinVersionInput) {
-  const { multisigSigners, ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
   const instruction = await getUpdateMinVersionInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
@@ -207,29 +263,153 @@ export async function updateMinVersion(input: UpdateMinVersionInput) {
  * supplied (the agent record authorizing the state write).
  */
 export async function updateState(input: UpdateStateAsyncInput) {
-  return getUpdateStateInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getUpdateStateInstructionAsync({
+    ...stableInput,
+    stateKey: snapshotFixedBytes(
+      stableInput.stateKey,
+      32,
+      "updateState: stateKey",
+    ),
+    stateValue: snapshotFixedBytes(
+      stableInput.stateValue,
+      64,
+      "updateState: stateValue",
+    ),
+  });
 }
 
 /** Build update_launch_controls with current ProtocolConfig M-of-N approval. */
-export type UpdateLaunchControlsInput = WithRequiredMultisigSigners<
-  UpdateLaunchControlsAsyncInput
->;
+export type UpdateLaunchControlsInput =
+  WithRequiredMultisigSigners<UpdateLaunchControlsAsyncInput>;
 
-export async function updateLaunchControls(
-  input: UpdateLaunchControlsInput,
-) {
-  const { multisigSigners, ...generatedInput } = input;
+export async function updateLaunchControls(input: UpdateLaunchControlsInput) {
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["authority"]);
   const instruction =
     await getUpdateLaunchControlsInstructionAsync(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
+/** Derive the canonical loader-v3 ProgramData PDA for the AgenC program. */
+export async function findAgencProgramDataPda(): Promise<Address> {
+  return (
+    await getProgramDerivedAddress({
+      programAddress: UPGRADEABLE_LOADER_PROGRAM_ADDRESS,
+      seeds: [
+        getAddressEncoder().encode(AGENC_COORDINATION_PROGRAM_ADDRESS),
+      ],
+    })
+  )[0];
+}
+
+export type InitializeProtocolInput = InitializeProtocolAsyncInput & {
+  /**
+   * Additional configured owner wallets needed when `multisigThreshold` is
+   * greater than two. `authority` and `secondSigner` are already counted by
+   * the program and must not be repeated here.
+   */
+  readonly additionalMultisigSigners?: readonly TransactionSigner[];
+};
+
 /**
- * Build an initialize_protocol instruction. protocolConfig defaults to its PDA.
- * Requires two signers (authority + secondSigner) to prevent single-party setup.
+ * Build an initialize_protocol instruction. `protocolConfig` defaults to its
+ * PDA and the canonical loader-v3 ProgramData account is derived automatically.
+ * `authority` and `secondSigner` provide the mandatory two-party bootstrap;
+ * include at most two additional configured owner wallets when the requested
+ * threshold is three or four.
  */
-export async function initializeProtocol(input: InitializeProtocolAsyncInput) {
-  return getInitializeProtocolInstructionAsync(input);
+export async function initializeProtocol(input: InitializeProtocolInput) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "treasury",
+    "authority",
+    "secondSigner",
+  ]);
+  const { additionalMultisigSigners, ...generatedInput } = stableInput;
+  const multisigOwners = snapshotDenseStructuredArray(
+    stableInput.multisigOwners,
+    "initializeProtocol: multisigOwners",
+    5,
+  );
+  if (
+    !Number.isInteger(stableInput.multisigThreshold) ||
+    stableInput.multisigThreshold < 2 ||
+    stableInput.multisigThreshold >= multisigOwners.length
+  ) {
+    throw new RangeError(
+      "initializeProtocol: multisigThreshold must be an integer of at least two and less than the owner count",
+    );
+  }
+  const ownerAddresses = new Set<Address>();
+  for (const owner of multisigOwners) {
+    if (owner === DEFAULT_PUBLIC_KEY) {
+      throw new Error(
+        "initializeProtocol: multisigOwners must not contain the default public key",
+      );
+    }
+    if (ownerAddresses.has(owner)) {
+      throw new Error(
+        `initializeProtocol: duplicate multisig owner ${owner}`,
+      );
+    }
+    ownerAddresses.add(owner);
+  }
+  if (stableInput.authority.address === stableInput.secondSigner.address) {
+    throw new Error(
+      "initializeProtocol: authority and secondSigner must be distinct",
+    );
+  }
+  for (const [label, signer] of [
+    ["authority", stableInput.authority],
+    ["secondSigner", stableInput.secondSigner],
+  ] as const) {
+    if (!ownerAddresses.has(signer.address)) {
+      throw new Error(
+        `initializeProtocol: ${label} must be present in multisigOwners`,
+      );
+    }
+  }
+
+  const stableAdditionalSigners = snapshotMultisigSigners(
+    additionalMultisigSigners ?? [],
+    [stableInput.authority, stableInput.secondSigner],
+  );
+  const requiredAdditionalSigners = stableInput.multisigThreshold - 2;
+  if (stableAdditionalSigners.length !== requiredAdditionalSigners) {
+    throw new TypeError(
+      `initializeProtocol: additionalMultisigSigners must contain exactly ${requiredAdditionalSigners} approval${requiredAdditionalSigners === 1 ? "" : "s"} for threshold ${stableInput.multisigThreshold}`,
+    );
+  }
+  for (const signer of stableAdditionalSigners) {
+    if (
+      signer.address === stableInput.authority.address ||
+      signer.address === stableInput.secondSigner.address
+    ) {
+      throw new Error(
+        `initializeProtocol: additionalMultisigSigners must not repeat named signer ${signer.address}`,
+      );
+    }
+    if (!ownerAddresses.has(signer.address)) {
+      throw new Error(
+        `initializeProtocol: additional signer ${signer.address} must be present in multisigOwners`,
+      );
+    }
+  }
+  const programData = await findAgencProgramDataPda();
+  const instruction = await getInitializeProtocolInstructionAsync({
+    ...generatedInput,
+    multisigOwners,
+  });
+  return appendMultisigSignerMetas(
+    {
+      ...instruction,
+      accounts: [
+        ...instruction.accounts,
+        { address: programData, role: AccountRole.READONLY },
+      ],
+    },
+    stableAdditionalSigners,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -246,14 +426,14 @@ export async function initializeProtocol(input: InitializeProtocolAsyncInput) {
  * `migrate_task` order-independent vs `migrate_protocol`. Rust gates both
  * migrations with the current ProtocolConfig M-of-N.
  */
-export type MigrateTaskInput = WithRequiredMultisigSigners<
-  GeneratedMigrateTaskInput
->;
+export type MigrateTaskInput =
+  WithRequiredMultisigSigners<GeneratedMigrateTaskInput>;
 
 export function migrateTask(input: MigrateTaskInput) {
-  const { multisigSigners, ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["payer", "authority"]);
   const instruction = getMigrateTaskInstruction(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }
 
 /**
@@ -266,12 +446,12 @@ export function migrateTask(input: MigrateTaskInput) {
  * handler, not passed as an arg. `multisigSigners` supplies the required current
  * ProtocolConfig threshold.
  */
-export type MigrateProtocolInput = WithRequiredMultisigSigners<
-  GeneratedMigrateProtocolInput
->;
+export type MigrateProtocolInput =
+  WithRequiredMultisigSigners<GeneratedMigrateProtocolInput>;
 
 export function migrateProtocol(input: MigrateProtocolInput) {
-  const { multisigSigners, ...generatedInput } = input;
+  const { generatedInput, multisigSigners: stableMultisigSigners } =
+    snapshotMultisigFacadeInput(input, ["payer", "authority"]);
   const instruction = getMigrateProtocolInstruction(generatedInput);
-  return appendMultisigSignerMetas(instruction, multisigSigners);
+  return appendMultisigSignerMetas(instruction, stableMultisigSigners);
 }

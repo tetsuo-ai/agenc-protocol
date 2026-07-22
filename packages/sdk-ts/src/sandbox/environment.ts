@@ -236,7 +236,7 @@ async function readSandboxFixturesFile(
     throw new Error(
       `could not read sandbox fixtures file ${filePath} (from ` +
         `AGENC_SANDBOX_FIXTURES) — does the file exist? For localnet, run ` +
-        `the localnet stack (scripts/localnet-up.mjs at the repo root) so ` +
+        `the localnet stack (scripts/localnet-up.mjs --dev-ready at the repo root) so ` +
         `the seeding step writes it.`,
       { cause },
     );
@@ -276,7 +276,7 @@ async function readSandboxFixturesFile(
  * 3. **Shipped defaults**: cluster `"localnet"` on the
  *    `solana-test-validator` ports ({@link SANDBOX_LOCALNET_RPC_URL} /
  *    {@link SANDBOX_LOCALNET_RPC_SUBSCRIPTIONS_URL} — the documented
- *    one-command stack, `scripts/localnet-up.mjs` at the repo root) and the
+ *    one-command stack, `scripts/localnet-up.mjs --dev-ready` at the repo root) and the
  *    shipped {@link SANDBOX_FIXTURES}. Cluster `"devnet"` gets the public
  *    devnet RPC endpoints instead. The attestor endpoint (`attestorUrl`) and
  *    the moderation-scan endpoint (`moderationUrl`) have NO shipped default
@@ -291,7 +291,7 @@ async function readSandboxFixturesFile(
  *
  * | Stage             | How to point the SDK at it                                                                                                              |
  * | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
- * | **localnet (the shipped default)** | Run the one-command localnet stack (`scripts/localnet-up.mjs`, repo root) + the seeder; consume `.localnet/env.json` — export the `AGENC_SANDBOX_*` variables from it (localhost RPC, local attestor or `null`, `AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json`), or run `examples/localnet-first-hire.ts`, which reads the file itself. |
+ * | **localnet (the shipped default)** | Run the one-command operational localnet stack (`scripts/localnet-up.mjs --dev-ready`, repo root) + the seeder; consume `.localnet/env.json` — export the `AGENC_SANDBOX_*` variables from it (localhost RPC, local attestor or `null`, `AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json`), or run `examples/localnet-first-hire.ts`, which reads the file itself. |
  * | **devnet (when seeded)** | Export `AGENC_SANDBOX_CLUSTER=devnet` (public devnet RPC + the shipped fixtures take over) and point `AGENC_SANDBOX_ATTESTOR_URL` at a live attestor. No code change. |
  * | **hosted (later)** | Export `AGENC_SANDBOX_RPC_URL` / `AGENC_SANDBOX_ATTESTOR_URL` (or pass options) pointing at the hosted endpoints — a one-file env change, never a refactor. |
  *
@@ -312,7 +312,8 @@ async function readSandboxFixturesFile(
  *
  * @example
  * ```ts
- * // Local stack running (scripts/localnet-up.mjs)? The shipped defaults
+ * // Operational local stack running (scripts/localnet-up.mjs --dev-ready)?
+ * // The shipped defaults
  * // already point here — no exports needed:
  * const env = await resolveSandboxEnvironment();
  * const sandbox = await createSandboxClient({ rpcUrl: env.rpcUrl });

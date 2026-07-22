@@ -13,11 +13,8 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { address } from "@solana/kit";
-import {
-  getTaskJobSpecEncoder,
-  values,
-} from "@tetsuo-ai/marketplace-sdk";
+import { address, getBase58Decoder } from "@solana/kit";
+import { getTaskJobSpecEncoder, values } from "@tetsuo-ai/marketplace-sdk";
 import { fetchAndVerifyJobSpec } from "@tetsuo-ai/agenc-worker";
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
@@ -36,9 +33,13 @@ import {
 
 describe("npmPackageName", () => {
   it("normalizes hostile and very long names with bounded output", () => {
-    expect(npmPackageName("  ...My Package///Name---  ")).toBe("my-package-name");
+    expect(npmPackageName("  ...My Package///Name---  ")).toBe(
+      "my-package-name",
+    );
     expect(npmPackageName("---.___")).toBe("agenc-project");
-    expect(npmPackageName(`${"a".repeat(213)} ! b`)).toBe(`${"a".repeat(213)}-`);
+    expect(npmPackageName(`${"a".repeat(213)} ! b`)).toBe(
+      `${"a".repeat(213)}-`,
+    );
     expect(npmPackageName(`${"a".repeat(213)}${"-".repeat(50)}`)).toBe(
       "a".repeat(213),
     );
@@ -58,7 +59,10 @@ function nextAppDir(): string {
 
 function workerDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "agenc-cli-init-"));
-  writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "my-agent" }));
+  writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: "my-agent" }),
+  );
   return dir;
 }
 
@@ -93,16 +97,24 @@ function expectTypeScriptSyntax(source: string, jsx = false): void {
 
 describe("runInit", () => {
   it("keeps generated debit allocations and finality gates pinned", () => {
-    const core = checkoutCoreModule(defaultConfig("checkout-size-test", "checkout"));
+    const core = checkoutCoreModule(
+      defaultConfig("checkout-size-test", "checkout"),
+    );
     const programState = readFileSync(
-      new URL("../../../programs/agenc-coordination/src/state.rs", import.meta.url),
+      new URL(
+        "../../../programs/agenc-coordination/src/state.rs",
+        import.meta.url,
+      ),
       "utf8",
     );
     const pinnedSize = (account: string): string => {
       const match = programState.match(
         new RegExp(`assert!\\(${account}::SIZE == (\\d+)\\)`),
       );
-      expect(match, account + " must have an exact compile-time size pin").not.toBeNull();
+      expect(
+        match,
+        account + " must have an exact compile-time size pin",
+      ).not.toBeNull();
       return match![1]!;
     };
 
@@ -116,16 +128,18 @@ describe("runInit", () => {
     expect(core).toContain(
       'getMinimumBalanceForRentExemption(size, { commitment: "finalized" })',
     );
-    expect(core).toContain(
-      'fetchMaybeTask(rpc, taskPda, { commitment: "finalized" })',
-    );
+    expect(core).not.toContain("fetchMaybeTask(");
     expect(core).toContain(
       'fetchServiceListing(rpc, listing, { commitment: "finalized" })',
     );
     expect(core).not.toContain("getSignaturesForAddress");
-    expect(core).toContain(
-      'return { phase: "moderating", taskPda, hireSignature: "", hireReconciled: true }',
-    );
+    expect(core).not.toContain('hireSignature: "", hireReconciled: true');
+    expect(core).toContain("isCanonicalTransactionSignature");
+    expect(core).toContain("value.length === 0");
+    expect(core).not.toContain("value.length < 80");
+    expect(core).toContain("isIntentDigest");
+    expect(core).toContain("admission.block(");
+    expect(core).not.toContain("moderation: progress.moderation");
     expect(core).toContain('hireSignature: result.hireSignature === "" ? null');
     expect(core).toContain("creator: signer.address");
     expect(core).toContain("clusterIdentity,");
@@ -135,23 +149,36 @@ describe("runInit", () => {
     expect(core).toContain("signer.address === moderator");
     expect(core).toContain("separate attestor-funded wallet");
     expect(core).toContain('new URL("/v1/info", endpoint)');
-    expect(core).toContain("await verifyAttestorModerator(attestorUrl, moderator)");
-    expect(core).toContain("local attestor identity does not match AGENC_MODERATOR");
+    expect(core).toContain(
+      "await verifyAttestorModerator(attestorUrl, moderator)",
+    );
+    expect(core).toContain(
+      "local attestor identity does not match AGENC_MODERATOR",
+    );
     expect(core).toContain('operator = parsedAddress("AGENC_OPERATOR")');
     expect(core).toContain("live.operatorFeeBps !== EXPECTED_OPERATOR_FEE_BPS");
-    expect(core).toContain("live.defaultDeadlineSecs !== EXPECTED_DEFAULT_DEADLINE_SECS");
-    expect(core).toContain("live.requiredCapabilities !== EXPECTED_REQUIRED_CAPABILITIES");
-    expect(core).toContain(': await storeJobSpec(jobSpec);');
-    expect(core).toContain("a committed hire exists, but job-spec readback failed");
-    expect(core).toContain("the hire outcome remains ambiguous and job-spec readback failed");
+    expect(core).toContain(
+      "live.defaultDeadlineSecs !== EXPECTED_DEFAULT_DEADLINE_SECS",
+    );
+    expect(core).toContain(
+      "live.requiredCapabilities !== EXPECTED_REQUIRED_CAPABILITIES",
+    );
+    expect(core).toContain(": await storeJobSpec(jobSpec);");
+    expect(core).toContain(
+      "saved post-send recovery exists, but job-spec readback failed",
+    );
     expect(core).toContain('commitment: "finalized" });');
-    expect(core).toContain("error instanceof AgencError && error.signature === null");
-    expect(core).toContain("hire was not submitted; fix the RPC/signing failure");
-    expect(core).toContain("if (!admission.checkpoint(recovery()))");
+    expect(core).not.toContain("error instanceof AgencError");
+    expect(core).toContain("error instanceof HireAndActivateFinalizedFailure");
+    expect(core).toContain("admission.discardRecovery()");
+    expect(core).toContain("hire was not submitted; fix the preflight failure");
+    expect(core).toContain("if (!admission.checkpoint())");
     expect(core).toContain("checkout ownership expired before hire submission");
-    expect(core).toContain("hire committed but moderation/activation is incomplete");
-    expect(core).toContain("generated local-only checkout refuses public Solana cluster");
-    expect(core).toContain("validRecoveryKind");
+    expect(core).toContain("hire committed but activation is incomplete");
+    expect(core).toContain(
+      "generated local-only checkout refuses public Solana cluster",
+    );
+    expect(core).not.toContain("validRecoveryKind");
     expect(core).toContain(
       'fetchMaybeTaskJobSpec(rpc, jobSpecPda, { commitment: "finalized" })',
     );
@@ -165,7 +192,10 @@ describe("runInit", () => {
     const zeroFees = defaultConfig("zero-fees", "checkout");
     zeroFees.listing.operatorFeeBps = 0;
     zeroFees.listing.referrerFeeBps = 0;
-    for (const page of [appCheckoutPage(zeroFees), pagesCheckoutPage(zeroFees)]) {
+    for (const page of [
+      appCheckoutPage(zeroFees),
+      pagesCheckoutPage(zeroFees),
+    ]) {
       expect(page).toContain(
         "Settlement pays the worker and applies the current on-chain protocol fee terms.",
       );
@@ -191,14 +221,17 @@ describe("runInit", () => {
       __agencCoreAttestationCalls?: number;
       __agencCoreModeration?: Record<string, unknown>;
       __agencCoreInfoModerator?: string;
-      __agencCoreTaskExists?: boolean;
     };
     const writePackage = (
       name: string,
       files: Record<string, string>,
       exports: string | Record<string, string> = "./index.js",
     ): void => {
-      const packageDir = path.join(moduleDir, "node_modules", ...name.split("/"));
+      const packageDir = path.join(
+        moduleDir,
+        "node_modules",
+        ...name.split("/"),
+      );
       mkdirSync(packageDir, { recursive: true });
       writeFileSync(
         path.join(packageDir, "package.json"),
@@ -213,12 +246,35 @@ describe("runInit", () => {
     const LISTING = "SysvarRent111111111111111111111111111111111";
     const PROVIDER = "Vote111111111111111111111111111111111111111";
     const OPERATOR = "SysvarC1ock11111111111111111111111111111111";
+    const TASK_PDA = "BPFLoaderUpgradeab1e11111111111111111111111";
+    const validSignatureBytes = new Uint8Array(64);
+    validSignatureBytes[63] = 1;
+    const VALID_SIGNATURE = getBase58Decoder().decode(validSignatureBytes);
+    expect(VALID_SIGNATURE.length).toBeLessThan(80);
+    const INTENT_DIGEST = "ab".repeat(32);
     const SPEC_HEX = "09".repeat(32);
     try {
       writePackage("@solana/kit", {
-        "index.js": `export function address(value) {
+        "index.js": `const VALID_SIGNATURE = ${JSON.stringify(VALID_SIGNATURE)};
+export function address(value) {
   if (typeof value !== "string" || value.length === 0) throw new TypeError("invalid address");
   return value;
+}
+export function getBase58Encoder() {
+  return { encode(value) {
+    if (value !== VALID_SIGNATURE) throw new TypeError("invalid base58 signature");
+    const bytes = new Uint8Array(64);
+    bytes[63] = 1;
+    return bytes;
+  } };
+}
+export function getBase58Decoder() {
+  return { decode(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length !== 64 || bytes.some((byte, index) => byte !== (index === 63 ? 1 : 0))) {
+      throw new TypeError("invalid signature bytes");
+    }
+    return VALID_SIGNATURE;
+  } };
 }
 export function isNone(value) { return value === null; }
 export async function createKeyPairSignerFromBytes() { return { address: globalThis.__agencCoreSigner }; }
@@ -239,17 +295,14 @@ export class AgencError extends Error {
   constructor(message, options = {}) { super(message); this.signature = options.signature ?? null; }
 }
 export class HireAndActivateError extends Error {
-  constructor(progress) { super("post-hire failure"); this.progress = progress; }
+  constructor(message, options) { super(message, { cause: options.cause }); this.progress = options.progress; }
+}
+export class HireAndActivateFinalizedFailure extends Error {
+  constructor(signature) { super("finalized failure"); this.signature = signature; this.retrySafe = true; }
 }
 export function createMarketplaceClient(input) { return { ...input }; }
 export async function fetchServiceListing() { return { data: globalThis.__agencCoreLiveListing }; }
-export async function fetchMaybeTask() {
-  return globalThis.__agencCoreTaskExists
-    ? { exists: true, data: { creator: globalThis.__agencCoreSigner, taskId: new Uint8Array(32).fill(7), rewardAmount: 1000000n, referrerFeeBps: 0 } }
-    : { exists: false };
-}
 export async function fetchMaybeTaskJobSpec() { return { exists: false }; }
-export async function findTaskPda() { return ["task-pda"]; }
 export async function findTaskJobSpecPda() { return ["job-spec-pda"]; }
 export async function findTaskModerationPda() { return ["task-moderation-pda"]; }
 export function getAuthorityRateLimitSize() { return 67; }
@@ -266,21 +319,40 @@ export async function hireAndActivate(_client, input) {
   if (globalThis.__agencCoreMode === "pre-submit") {
     throw new AgencError("blockhash unavailable", { signature: null });
   }
-  if (globalThis.__agencCoreMode === "unknown-after-send") {
-    throw new Error("transport outcome unknown");
+  if (globalThis.__agencCoreMode === "generic-preflight") {
+    throw new Error("configuration unavailable before submission");
+  }
+  if (globalThis.__agencCoreMode === "invalid-finalized-fresh") {
+    throw new HireAndActivateFinalizedFailure("not-a-signature");
+  }
+  if (globalThis.__agencCoreMode === "fail-hiring") {
+    throw new HireAndActivateError("ambiguous hire", { progress: {
+      phase: "hiring",
+      taskPda: ${JSON.stringify(TASK_PDA)},
+      candidateSignature: ${JSON.stringify(VALID_SIGNATURE)},
+      hireIntentDigest: ${JSON.stringify(INTENT_DIGEST)},
+    }, cause: new Error("transport") });
   }
   if (globalThis.__agencCoreMode === "fail-moderating") {
-    throw new HireAndActivateError({ phase: "moderating", taskPda: "task-pda", hireSignature: "sig-hire" });
+    throw new HireAndActivateError("moderation failed", { progress: {
+      phase: "moderating",
+      taskPda: ${JSON.stringify(TASK_PDA)},
+      hireSignature: ${JSON.stringify(VALID_SIGNATURE)},
+      hireIntentDigest: ${JSON.stringify(INTENT_DIGEST)},
+    }, cause: new Error("moderation") });
   }
-  const moderation = await input.hostAndModerateJobSpec({ taskPda: "task-pda" });
+  const moderation = await input.hostAndModerateJobSpec({ taskPda: ${JSON.stringify(TASK_PDA)} });
   globalThis.__agencCoreModeration = moderation;
-  return { taskPda: "task-pda", hireSignature: "sig-hire", activationSignature: "sig-activate", activationReconciled: false, moderation: moderation.moderation };
+  return { taskPda: ${JSON.stringify(TASK_PDA)}, hireSignature: ${JSON.stringify(VALID_SIGNATURE)}, activationSignature: ${JSON.stringify(VALID_SIGNATURE)}, activationReconciled: false, moderation: moderation.moderation };
 }
 export async function resumeHireAndActivate(_client, input, progress) {
   globalThis.__agencCoreResumeCalls += 1;
+  if (globalThis.__agencCoreMode === "finalized-failure" || globalThis.__agencCoreMode === "invalid-finalized-failure") {
+    throw new HireAndActivateFinalizedFailure(globalThis.__agencCoreMode === "finalized-failure" ? ${JSON.stringify(VALID_SIGNATURE)} : "not-a-signature");
+  }
   const moderation = await input.hostAndModerateJobSpec({ taskPda: progress.taskPda });
   globalThis.__agencCoreModeration = moderation;
-  return { taskPda: progress.taskPda, hireSignature: progress.hireSignature, hireReconciled: progress.hireReconciled, activationSignature: "sig-activate", activationReconciled: false, moderation: moderation.moderation };
+  return { taskPda: progress.taskPda, hireSignature: progress.phase === "hiring" ? progress.candidateSignature : progress.hireSignature, activationSignature: ${JSON.stringify(VALID_SIGNATURE)}, activationReconciled: false, moderation: moderation.moderation };
 }
 `,
           "sandbox.js": `export async function requestSandboxAttestation() {
@@ -345,7 +417,6 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       globals.__agencCoreResumeCalls = 0;
       globals.__agencCoreAttestationCalls = 0;
       globals.__agencCoreInfoModerator = MODERATOR;
-      globals.__agencCoreTaskExists = false;
       const reviewedListing = {
         providerAgent: PROVIDER,
         operator: OPERATOR,
@@ -375,9 +446,17 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
         recovery: unknown = undefined,
         bind: (fingerprint: string) => boolean = () => true,
       ) => {
-        const state: { recovery: unknown; completed?: Record<string, unknown>; aborted: number } = {
+        const state: {
+          recovery: unknown;
+          completed?: Record<string, unknown>;
+          aborted: number;
+          discarded: number;
+          blocked: number;
+        } = {
           recovery,
           aborted: 0,
+          discarded: 0,
+          blocked: 0,
         };
         return {
           state,
@@ -385,10 +464,26 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
             ok: true,
             recovery,
             bindIntent: bind,
-            checkpoint(value: unknown) { state.recovery = value; return true; },
-            preserve(value: unknown) { state.recovery = value; },
-            complete(value: Record<string, unknown>) { state.completed = value; },
-            abort() { state.aborted += 1; },
+            checkpoint() {
+              return true;
+            },
+            preserve(value: unknown) {
+              state.recovery = value;
+            },
+            block() {
+              state.recovery = undefined;
+              state.blocked += 1;
+            },
+            discardRecovery() {
+              state.recovery = undefined;
+              state.discarded += 1;
+            },
+            complete(value: Record<string, unknown>) {
+              state.completed = value;
+            },
+            abort() {
+              state.aborted += 1;
+            },
           },
         };
       };
@@ -396,10 +491,16 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       globals.__agencCoreGenesis = null;
       const malformedCluster = makeAdmission();
       await expect(
-        core.executeCheckout("reject malformed genesis", "", malformedCluster.admission),
+        core.executeCheckout(
+          "reject malformed genesis",
+          "",
+          malformedCluster.admission,
+        ),
       ).resolves.toMatchObject({
         status: 503,
-        body: { error: expect.stringContaining("identity could not be verified") },
+        body: {
+          error: expect.stringContaining("identity could not be verified"),
+        },
       });
       expect(malformedCluster.state.aborted).toBe(1);
       expect(globals.__agencCoreHireCalls).toBe(0);
@@ -419,9 +520,13 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
 
       globals.__agencCoreSigner = MODERATOR;
       const split = makeAdmission();
-      await expect(core.executeCheckout("work", "", split.admission)).resolves.toMatchObject({
+      await expect(
+        core.executeCheckout("work", "", split.admission),
+      ).resolves.toMatchObject({
         status: 503,
-        body: { error: expect.stringContaining("separate attestor-funded wallet") },
+        body: {
+          error: expect.stringContaining("separate attestor-funded wallet"),
+        },
       });
       expect(split.state.aborted).toBe(1);
       globals.__agencCoreSigner = CREATOR;
@@ -444,7 +549,11 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       const staleOwnership = makeAdmission();
       staleOwnership.admission.checkpoint = () => false;
       await expect(
-        core.executeCheckout("stale pre-broadcast owner", "", staleOwnership.admission),
+        core.executeCheckout(
+          "stale pre-broadcast owner",
+          "",
+          staleOwnership.admission,
+        ),
       ).resolves.toMatchObject({
         status: 409,
         body: { error: expect.stringContaining("no transaction was sent") },
@@ -454,38 +563,197 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       globals.__agencCoreMode = "pre-submit";
       const preSubmit = makeAdmission();
       await expect(
-        core.executeCheckout("retryable pre-submit failure", "", preSubmit.admission),
+        core.executeCheckout(
+          "retryable pre-submit failure",
+          "",
+          preSubmit.admission,
+        ),
       ).resolves.toMatchObject({
         status: 503,
-        body: { error: expect.stringContaining("hire was not submitted") },
+        body: { error: expect.stringContaining("preflight failure") },
       });
       expect(preSubmit.state.aborted).toBe(1);
+      expect(preSubmit.state.recovery).toBeUndefined();
       expect(globals.__agencCoreHireCalls).toBe(1);
       globals.__agencCoreStoreCalls = [];
       globals.__agencCoreVerifyCalls = [];
 
-      globals.__agencCoreMode = "unknown-after-send";
-      globals.__agencCoreTaskExists = true;
-      const reconciledHire = makeAdmission();
+      globals.__agencCoreMode = "generic-preflight";
+      const genericFailure = makeAdmission();
       await expect(
-        core.executeCheckout("reconcile finalized hire", "", reconciledHire.admission),
+        core.executeCheckout(
+          "generic preflight failure",
+          "",
+          genericFailure.admission,
+        ),
       ).resolves.toMatchObject({
         status: 503,
         body: {
-          error: expect.stringContaining("hire committed"),
-          task: "task-pda",
-          phase: "moderating",
+          error: expect.stringContaining("preflight failure"),
         },
       });
-      expect(reconciledHire.state.recovery).toMatchObject({
-        progress: {
-          phase: "moderating",
-          hireSignature: "",
-          hireReconciled: true,
-        },
-      });
-      globals.__agencCoreTaskExists = false;
+      expect(genericFailure.state.aborted).toBe(1);
+      expect(genericFailure.state.recovery).toBeUndefined();
       globals.__agencCoreHireCalls = 0;
+      globals.__agencCoreStoreCalls = [];
+      globals.__agencCoreVerifyCalls = [];
+
+      globals.__agencCoreMode = "invalid-finalized-fresh";
+      const invalidFreshFinality = makeAdmission();
+      await expect(
+        core.executeCheckout(
+          "invalid finalized proof",
+          "",
+          invalidFreshFinality.admission,
+        ),
+      ).resolves.toMatchObject({
+        status: 503,
+        body: { error: expect.stringContaining("key is locked") },
+      });
+      expect(invalidFreshFinality.state.blocked).toBe(1);
+      expect(invalidFreshFinality.state.aborted).toBe(0);
+      expect(invalidFreshFinality.state.discarded).toBe(0);
+      globals.__agencCoreHireCalls = 0;
+      globals.__agencCoreStoreCalls = [];
+      globals.__agencCoreVerifyCalls = [];
+
+      let hiringFingerprint: string | undefined;
+      globals.__agencCoreMode = "fail-hiring";
+      const hiringFailure = makeAdmission(undefined, (value) => {
+        hiringFingerprint = value;
+        return true;
+      });
+      await expect(
+        core.executeCheckout(
+          "resume ambiguous sdk hire",
+          "",
+          hiringFailure.admission,
+        ),
+      ).resolves.toMatchObject({
+        status: 503,
+        body: {
+          error: expect.stringContaining("outcome is not finalized"),
+          phase: "hiring",
+        },
+      });
+      expect(hiringFailure.state.recovery).toMatchObject({
+        progress: {
+          phase: "hiring",
+          taskPda: TASK_PDA,
+          candidateSignature: VALID_SIGNATURE,
+          hireIntentDigest: INTENT_DIGEST,
+        },
+      });
+      expect(globals.__agencCoreHireCalls).toBe(1);
+
+      const malformedHiringRecovery = structuredClone(
+        hiringFailure.state.recovery,
+      ) as { progress: { candidateSignature: string } };
+      malformedHiringRecovery.progress.candidateSignature = "";
+      const rejectedHiringResume = makeAdmission(
+        malformedHiringRecovery,
+        (value) => value === hiringFingerprint,
+      );
+      await expect(
+        core.executeCheckout(
+          "resume ambiguous sdk hire",
+          "",
+          rejectedHiringResume.admission,
+        ),
+      ).resolves.toMatchObject({
+        status: 503,
+        body: { error: expect.stringContaining("recovery state is invalid") },
+      });
+      expect(globals.__agencCoreHireCalls).toBe(1);
+      expect(globals.__agencCoreResumeCalls).toBe(0);
+
+      const missingDigestRecovery = structuredClone(
+        hiringFailure.state.recovery,
+      ) as { progress: { hireIntentDigest?: string } };
+      delete missingDigestRecovery.progress.hireIntentDigest;
+      const rejectedMissingDigest = makeAdmission(
+        missingDigestRecovery,
+        (value) => value === hiringFingerprint,
+      );
+      await expect(
+        core.executeCheckout(
+          "resume ambiguous sdk hire",
+          "",
+          rejectedMissingDigest.admission,
+        ),
+      ).resolves.toMatchObject({
+        status: 503,
+        body: { error: expect.stringContaining("recovery state is invalid") },
+      });
+      expect(globals.__agencCoreResumeCalls).toBe(0);
+
+      globals.__agencCoreMode = "invalid-finalized-failure";
+      const invalidFinalizedFailure = makeAdmission(
+        hiringFailure.state.recovery,
+        (value) => value === hiringFingerprint,
+      );
+      await expect(
+        core.executeCheckout(
+          "resume ambiguous sdk hire",
+          "",
+          invalidFinalizedFailure.admission,
+        ),
+      ).resolves.toMatchObject({
+        status: 503,
+        body: {
+          error: expect.stringContaining("invalid finalized-failure signature"),
+        },
+      });
+      expect(invalidFinalizedFailure.state.discarded).toBe(0);
+      expect(invalidFinalizedFailure.state.recovery).toEqual(
+        hiringFailure.state.recovery,
+      );
+      expect(globals.__agencCoreResumeCalls).toBe(1);
+      globals.__agencCoreResumeCalls = 0;
+
+      globals.__agencCoreMode = "finalized-failure";
+      const finalizedFailure = makeAdmission(
+        hiringFailure.state.recovery,
+        (value) => value === hiringFingerprint,
+      );
+      await expect(
+        core.executeCheckout(
+          "resume ambiguous sdk hire",
+          "",
+          finalizedFailure.admission,
+        ),
+      ).resolves.toMatchObject({
+        status: 503,
+        body: {
+          error: expect.stringContaining("failed atomically"),
+          signature: VALID_SIGNATURE,
+        },
+      });
+      expect(finalizedFailure.state.discarded).toBe(1);
+      expect(finalizedFailure.state.recovery).toBeUndefined();
+      expect(globals.__agencCoreHireCalls).toBe(1);
+      expect(globals.__agencCoreResumeCalls).toBe(1);
+      globals.__agencCoreResumeCalls = 0;
+
+      globals.__agencCoreMode = "resume";
+      const hiringResume = makeAdmission(
+        hiringFailure.state.recovery,
+        (value) => value === hiringFingerprint,
+      );
+      await expect(
+        core.executeCheckout(
+          "resume ambiguous sdk hire",
+          "",
+          hiringResume.admission,
+        ),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(globals.__agencCoreHireCalls).toBe(1);
+      expect(globals.__agencCoreResumeCalls).toBe(1);
+      expect(globals.__agencCoreStoreCalls).toHaveLength(1);
+
+      globals.__agencCoreHireCalls = 0;
+      globals.__agencCoreResumeCalls = 0;
+      globals.__agencCoreAttestationCalls = 0;
       globals.__agencCoreStoreCalls = [];
       globals.__agencCoreVerifyCalls = [];
 
@@ -500,20 +768,58 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       ).resolves.toMatchObject({ status: 503, body: { phase: "moderating" } });
       expect(first.state.recovery).toMatchObject({
         expectedVersion: 7n,
-        progress: { phase: "moderating", hireSignature: "sig-hire" },
+        progress: {
+          phase: "moderating",
+          hireSignature: VALID_SIGNATURE,
+          hireIntentDigest: INTENT_DIGEST,
+        },
       });
       expect(globals.__agencCoreStoreCalls).toEqual([
         `https://old-host.example/agenc/job-specs?hash=${SPEC_HEX}`,
       ]);
 
+      const unsafeBareStateRecovery = structuredClone(first.state.recovery) as {
+        progress: {
+          hireSignature: string;
+          hireReconciled?: boolean;
+          hireIntentDigest?: string;
+        };
+      };
+      unsafeBareStateRecovery.progress.hireSignature = "";
+      unsafeBareStateRecovery.progress.hireReconciled = true;
+      delete unsafeBareStateRecovery.progress.hireIntentDigest;
+      const rejectedBareState = makeAdmission(
+        unsafeBareStateRecovery,
+        (value) => value === fingerprint,
+      );
+      await expect(
+        core.executeCheckout(
+          "same canonical work",
+          "",
+          rejectedBareState.admission,
+        ),
+      ).resolves.toMatchObject({
+        status: 503,
+        body: { error: expect.stringContaining("recovery state is invalid") },
+      });
+      expect(globals.__agencCoreResumeCalls).toBe(0);
+
       process.env.AGENC_RPC_URL = "http://localhost:8899";
       process.env.AGENC_ATTESTOR_URL = "http://localhost:4402/v1/attest";
-      globals.__agencCoreHostBase = "https://new-host.example/api/agenc/job-specs";
+      globals.__agencCoreHostBase =
+        "https://new-host.example/api/agenc/job-specs";
       globals.__agencCoreMode = "resume";
       globals.__agencCoreInfoModerator = CREATOR;
-      const wrongIdentity = makeAdmission(first.state.recovery, (value) => value === fingerprint);
+      const wrongIdentity = makeAdmission(
+        first.state.recovery,
+        (value) => value === fingerprint,
+      );
       await expect(
-        core.executeCheckout("same canonical work", "", wrongIdentity.admission),
+        core.executeCheckout(
+          "same canonical work",
+          "",
+          wrongIdentity.admission,
+        ),
       ).resolves.toMatchObject({ status: 503 });
       expect(globals.__agencCoreAttestationCalls).toBe(0);
       expect(wrongIdentity.state.recovery).toMatchObject({
@@ -539,8 +845,8 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
         moderator: MODERATOR,
       });
       expect(resumed.state.completed).toMatchObject({
-        task: "task-pda",
-        hireSignature: "sig-hire",
+        task: TASK_PDA,
+        hireSignature: VALID_SIGNATURE,
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -549,7 +855,8 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       }
       Object.assign(process.env, savedEnv);
       for (const key of Object.keys(globals)) {
-        if (key.startsWith("__agencCore")) delete (globals as Record<string, unknown>)[key];
+        if (key.startsWith("__agencCore"))
+          delete (globals as Record<string, unknown>)[key];
       }
       rmSync(moduleDir, { recursive: true, force: true });
     }
@@ -575,9 +882,18 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     );
     expect(result.files.every((f) => f.status === "written")).toBe(true);
     // The route uses the plain SDK orchestration, not marketplace-react.
-    const route = readFileSync(path.join(dir, "app", "agenc", "checkout", "route.ts"), "utf8");
-    const core = readFileSync(path.join(dir, "app", "agenc", "checkout-core.ts"), "utf8");
-    const page = readFileSync(path.join(dir, "app", "agenc", "page.tsx"), "utf8");
+    const route = readFileSync(
+      path.join(dir, "app", "agenc", "checkout", "route.ts"),
+      "utf8",
+    );
+    const core = readFileSync(
+      path.join(dir, "app", "agenc", "checkout-core.ts"),
+      "utf8",
+    );
+    const page = readFileSync(
+      path.join(dir, "app", "agenc", "page.tsx"),
+      "utf8",
+    );
     expect(core).toContain("hireAndActivate");
     expect(route).not.toContain('from "@tetsuo-ai/marketplace-react"');
     expect(core).toContain("await storeJobSpec(jobSpec)");
@@ -600,7 +916,10 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     expect(core).toContain("resumeHireAndActivate");
     expect(core).toContain("verifyPublishedJobSpec");
     expectTypeScriptSyntax(core);
-    const store = readFileSync(path.join(dir, "app", "agenc", "job-spec-store.ts"), "utf8");
+    const store = readFileSync(
+      path.join(dir, "app", "agenc", "job-spec-store.ts"),
+      "utf8",
+    );
     expect(store).toContain("values.canonicalJobSpecHash(payload)");
     expect(store).toContain('"canonicalization":"json-stable-v1"');
     expect(store).toContain("AGENC_JOB_SPEC_PUBLIC_BASE_URL");
@@ -620,7 +939,10 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     expect(getRoute).toContain("readJobSpec(hash)");
     expectTypeScriptSyntax(route);
     expectTypeScriptSyntax(
-      readFileSync(path.join(dir, "app", "agenc", "checkout-policy.ts"), "utf8"),
+      readFileSync(
+        path.join(dir, "app", "agenc", "checkout-policy.ts"),
+        "utf8",
+      ),
     );
     expectTypeScriptSyntax(
       readFileSync(path.join(dir, "app", "agenc", "wallet-file.ts"), "utf8"),
@@ -628,7 +950,10 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     expectTypeScriptSyntax(store);
     expectTypeScriptSyntax(getRoute);
     // The config parses back and carries the project name.
-    const config = parseConfig(readFileSync(path.join(dir, "agenc.config.json"), "utf8"), "agenc.config.json");
+    const config = parseConfig(
+      readFileSync(path.join(dir, "agenc.config.json"), "utf8"),
+      "agenc.config.json",
+    );
     expect(config.name).toBe("my-shop");
     expect(config.kind).toBe("checkout");
   });
@@ -641,15 +966,23 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     );
     mkdirSync(path.join(dir, "pages"));
     const result = runInit(dir);
-    expect(result.files.map((f) => f.path)).toContain(path.join("pages", "agenc.tsx"));
+    expect(result.files.map((f) => f.path)).toContain(
+      path.join("pages", "agenc.tsx"),
+    );
     expect(result.files.map((f) => f.path)).toContain(
       path.join("pages", "api", "agenc", "checkout.ts"),
     );
     expect(result.files.map((f) => f.path)).toContain(
       path.join("pages", "api", "agenc", "job-specs.ts"),
     );
-    const api = readFileSync(path.join(dir, "pages", "api", "agenc", "checkout.ts"), "utf8");
-    const core = readFileSync(path.join(dir, "lib", "agenc", "checkout-core.ts"), "utf8");
+    const api = readFileSync(
+      path.join(dir, "pages", "api", "agenc", "checkout.ts"),
+      "utf8",
+    );
+    const core = readFileSync(
+      path.join(dir, "lib", "agenc", "checkout-core.ts"),
+      "utf8",
+    );
     expect(api).toContain("executeCheckout");
     expect(core).toContain("await storeJobSpec(jobSpec)");
     expect(api).not.toContain("agenc://job-spec/");
@@ -668,7 +1001,10 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       readFileSync(path.join(dir, "lib", "agenc", "job-spec-store.ts"), "utf8"),
     );
     expectTypeScriptSyntax(
-      readFileSync(path.join(dir, "pages", "api", "agenc", "job-specs.ts"), "utf8"),
+      readFileSync(
+        path.join(dir, "pages", "api", "agenc", "job-specs.ts"),
+        "utf8",
+      ),
     );
   });
 
@@ -678,7 +1014,10 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     const savedEnv = { ...process.env };
     try {
       const compiled = ts.transpileModule(checkoutPolicyModule(), {
-        compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+        compilerOptions: {
+          module: ts.ModuleKind.ESNext,
+          target: ts.ScriptTarget.ES2022,
+        },
         reportDiagnostics: true,
       });
       expect(compiled.diagnostics ?? []).toEqual([]);
@@ -693,8 +1032,10 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
               ok: true;
               cachedBody?: Record<string, unknown>;
               bindIntent(fingerprint: string): boolean;
-              checkpoint(recovery: unknown, now?: number): boolean;
+              checkpoint(now?: number): boolean;
               preserve(recovery: unknown): void;
+              block(reason: string): void;
+              discardRecovery(): void;
               complete(body: Record<string, unknown>, now?: number): void;
               abort(): void;
             }
@@ -743,7 +1084,11 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
 
       // A closure from an expired generation must never delete/credit the
       // replacement request occupying the same key.
-      const stale = policy.admitCheckout(withKey("stale-generation-01"), 500n, 10_000_000);
+      const stale = policy.admitCheckout(
+        withKey("stale-generation-01"),
+        500n,
+        10_000_000,
+      );
       expect(stale.ok).toBe(true);
       const replacement = policy.admitCheckout(
         withKey("stale-generation-01"),
@@ -752,7 +1097,7 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       );
       expect(replacement.ok).toBe(true);
       if (stale.ok) {
-        expect(stale.checkpoint({ taskId: "must-not-broadcast" })).toBe(false);
+        expect(stale.checkpoint()).toBe(false);
         stale.abort();
       }
       expect(
@@ -795,7 +1140,11 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       // Rolling reservations expire independently: a request at minute 59 is
       // still counted after the earlier request falls out at minute 60.
       process.env.AGENC_CHECKOUT_HOURLY_DEBIT_LIMIT_LAMPORTS = "1500";
-      const windowA = policy.admitCheckout(withKey("rolling-window-a1"), 500n, 30_000_000);
+      const windowA = policy.admitCheckout(
+        withKey("rolling-window-a1"),
+        500n,
+        30_000_000,
+      );
       if (windowA.ok) {
         windowA.bindIntent("rolling-a");
         windowA.complete({ task: "a" }, 30_000_000);
@@ -817,6 +1166,39 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
           30_000_000 + 3_600_001,
         ),
       ).toMatchObject({ ok: false, status: 429 });
+
+      // Finalized execution failure proves atomic non-commit. Discarding that
+      // post-send token must release both the key and its debit reservation so
+      // a later clean attempt can bind a fresh intent.
+      process.env.AGENC_CHECKOUT_HOURLY_DEBIT_LIMIT_LAMPORTS = "10000";
+      const discardStartedAt = 35_000_000;
+      const discardSeed = policy.admitCheckout(
+        withKey("discard-finalized-01"),
+        1_000n,
+        discardStartedAt,
+      );
+      expect(discardSeed.ok).toBe(true);
+      if (discardSeed.ok) {
+        expect(discardSeed.bindIntent("failed-intent")).toBe(true);
+        discardSeed.preserve({ phase: "hiring", proof: "finalized-failed" });
+      }
+      const discardResume = policy.admitCheckout(
+        withKey("discard-finalized-01"),
+        1_000n,
+        discardStartedAt + 1,
+      );
+      expect(discardResume.ok).toBe(true);
+      if (discardResume.ok) discardResume.discardRecovery();
+      const cleanRetry = policy.admitCheckout(
+        withKey("discard-finalized-01"),
+        1_000n,
+        discardStartedAt + 3_600_002,
+      );
+      expect(cleanRetry.ok).toBe(true);
+      if (cleanRetry.ok) {
+        expect(cleanRetry.bindIntent("fresh-intent")).toBe(true);
+        cleanRetry.abort();
+      }
 
       // Resuming just before the original reservation expires restarts the
       // rolling window. The post-hire activation can spend at resume time, so
@@ -840,10 +1222,7 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       expect(slidingResume.ok).toBe(true);
       if (slidingResume.ok) {
         expect(slidingResume.bindIntent("sliding-intent")).toBe(true);
-        slidingResume.complete(
-          { task: "activated" },
-          40_000_000 + 3_540_000,
-        );
+        slidingResume.complete({ task: "activated" }, 40_000_000 + 3_540_000);
       }
       expect(
         policy.admitCheckout(
@@ -866,12 +1245,9 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
       expect(longRunning.ok).toBe(true);
       if (longRunning.ok) {
         expect(longRunning.bindIntent("long-running-intent")).toBe(true);
-        expect(
-          longRunning.checkpoint(
-            { phase: "hiring" },
-            longRunningStartedAt + 3_600_001,
-          ),
-        ).toBe(true);
+        expect(longRunning.checkpoint(longRunningStartedAt + 3_600_001)).toBe(
+          true,
+        );
         longRunning.complete(
           { task: "long-running-task" },
           longRunningStartedAt + 3_600_002,
@@ -882,6 +1258,39 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
           withKey("long-running-funded-02"),
           1_000n,
           longRunningStartedAt + 3_600_003,
+        ),
+      ).toMatchObject({ ok: false, status: 429 });
+
+      // An invalid terminal proof is neither resumable nor retry-safe. Keep a
+      // permanent non-recovery lock and retain its conservative debit reserve.
+      process.env.AGENC_CHECKOUT_HOURLY_DEBIT_LIMIT_LAMPORTS = "1000";
+      const blockedStartedAt = 60_000_000;
+      const blocked = policy.admitCheckout(
+        withKey("invalid-proof-lock-01"),
+        1_000n,
+        blockedStartedAt,
+      );
+      expect(blocked.ok).toBe(true);
+      if (blocked.ok) {
+        expect(blocked.bindIntent("unproven-outcome")).toBe(true);
+        blocked.block("manual review required");
+      }
+      expect(
+        policy.admitCheckout(
+          withKey("invalid-proof-lock-01"),
+          1_000n,
+          blockedStartedAt + 40_000_000,
+        ),
+      ).toMatchObject({
+        ok: false,
+        status: 409,
+        body: { error: "manual review required" },
+      });
+      expect(
+        policy.admitCheckout(
+          withKey("invalid-proof-other"),
+          1_000n,
+          blockedStartedAt + 40_000_001,
         ),
       ).toMatchObject({ ok: false, status: 429 });
 
@@ -929,7 +1338,9 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
 
   it("generates an HTTPS envelope the stock worker verifies", async () => {
     const moduleDir = moduleTempDir(".agenc-store-test-");
-    const storageDir = mkdtempSync(path.join(tmpdir(), "agenc-job-spec-store-"));
+    const storageDir = mkdtempSync(
+      path.join(tmpdir(), "agenc-job-spec-store-"),
+    );
     const modulePath = path.join(moduleDir, "job-spec-store.mjs");
     const previousDir = process.env.AGENC_JOB_SPEC_DIR;
     const previousBaseUrl = process.env.AGENC_JOB_SPEC_PUBLIC_BASE_URL;
@@ -966,9 +1377,9 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
               values.bytesToHex(hosted.jobSpecHash),
         ),
       ).toBe(true);
-      expect(readdirSync(storageDir).filter((name) => name.endsWith(".tmp"))).toEqual(
-        [],
-      );
+      expect(
+        readdirSync(storageDir).filter((name) => name.endsWith(".tmp")),
+      ).toEqual([]);
       const reordered = await store.storeJobSpec({
         z: { second: 2, first: 1 },
         a: "same canonical content",
@@ -981,8 +1392,7 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
         values.bytesToHex(reorderedAgain.jobSpecHash),
       );
       for (const suffix of ["?", "#"]) {
-        process.env.AGENC_JOB_SPEC_PUBLIC_BASE_URL =
-          `https://jobs.example/agenc/job-specs${suffix}`;
+        process.env.AGENC_JOB_SPEC_PUBLIC_BASE_URL = `https://jobs.example/agenc/job-specs${suffix}`;
         await expect(
           store.storeJobSpec({ instructions: "must not publish" }),
         ).rejects.toThrow(/no query or fragment/u);
@@ -1043,6 +1453,11 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     expect(worker).toContain("AGENC_WORKER_CREATOR_ALLOWLIST");
     expect(worker).toContain("taskThread.createContentTransport");
     expect(worker).toContain("taskThreadTransport");
+    expect(worker).toContain("createSolanaAccountReaders");
+    expect(worker).toContain("readAccountInfo");
+    expect(worker).toContain(
+      'getAccountInfo(address, { commitment: "confirmed", encoding: "base64" })',
+    );
     expect(worker).toContain("loadSolanaKeypairFile(config.walletPath)");
     expect(worker).toContain("getMinimumBalanceForRentExemption(BigInt(space)");
     expect(worker).not.toContain("Uint8Array.from(JSON.parse");
@@ -1054,7 +1469,11 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
   it("executes the generated worker against linked runtime mocks", async () => {
     const moduleDir = moduleTempDir(".agenc-worker-template-test-");
     const writeMockPackage = (name: string, source: string): void => {
-      const packageDir = path.join(moduleDir, "node_modules", ...name.split("/"));
+      const packageDir = path.join(
+        moduleDir,
+        "node_modules",
+        ...name.split("/"),
+      );
       mkdirSync(packageDir, { recursive: true });
       writeFileSync(
         path.join(packageDir, "package.json"),
@@ -1065,6 +1484,8 @@ export async function verifyPublishedJobSpec(stored) { globalThis.__agencCoreVer
     const globals = globalThis as typeof globalThis & {
       __agencWorkerRpc?: Record<string, (...args: unknown[]) => unknown>;
       __agencWorkerContext?: Record<string, unknown>;
+      __agencAccountInfoCall?: { address: unknown; options: unknown };
+      __agencBalanceCall?: { address: unknown; options: unknown };
       __agencRentCall?: { space: unknown; options: unknown };
     };
     try {
@@ -1094,14 +1515,46 @@ export function defaultConfigPath() { return "/private/config.json"; }
 export function loadConfigFile() { return {}; }
 export function loadSolanaKeypairFile() { return new Uint8Array(64); }
 export function resolveWorkerConfig(first) { return first; }
+export function createSolanaAccountReaders(fetchAccountInfo) {
+  const readAccountInfo = async (address) => {
+    const value = await fetchAccountInfo(address);
+    if (value === null) return null;
+    return {
+      data: new Uint8Array(Buffer.from(value.data[0], "base64")),
+      owner: value.owner,
+      executable: value.executable,
+    };
+  };
+  return {
+    readAccountInfo,
+    readAccount: async (address) => (await readAccountInfo(address))?.data ?? null,
+  };
+}
 export async function findVerifiedSettlementSignature() { return "settlement-signature"; }
 export async function runUp(context) { globalThis.__agencWorkerContext = context; }
 `,
       );
       globals.__agencWorkerRpc = {
-        getAccountInfo: () => ({ send: async () => ({ value: null }) }),
-        getBalance: () => ({ send: async () => ({ value: 99n }) }),
-        getMinimumBalanceForRentExemption: (space: unknown, options: unknown) => {
+        getAccountInfo: (address: unknown, options: unknown) => {
+          globals.__agencAccountInfoCall = { address, options };
+          return {
+            send: async () => ({
+              value: {
+                data: ["", "base64"],
+                owner: "11111111111111111111111111111111",
+                executable: false,
+              },
+            }),
+          };
+        },
+        getBalance: (address: unknown, options: unknown) => {
+          globals.__agencBalanceCall = { address, options };
+          return { send: async () => ({ value: 99n }) };
+        },
+        getMinimumBalanceForRentExemption: (
+          space: unknown,
+          options: unknown,
+        ) => {
           globals.__agencRentCall = { space, options };
           return { send: async () => 1234n };
         },
@@ -1113,12 +1566,16 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
       );
       await import(pathToFileURL(workerPath).href);
       const context = globals.__agencWorkerContext as {
+        readAccount(address: string): Promise<Uint8Array | null>;
+        readAccountInfo(address: string): Promise<unknown>;
         getMinimumBalanceForRentExemption(space: number): Promise<bigint>;
         getBalance(address: string): Promise<bigint>;
         findSettlementSignature(task: string): Promise<string>;
         stateDir: string;
       };
-      await expect(context.getMinimumBalanceForRentExemption(388)).resolves.toBe(1234n);
+      await expect(
+        context.getMinimumBalanceForRentExemption(388),
+      ).resolves.toBe(1234n);
       expect(globals.__agencRentCall).toEqual({
         space: 388n,
         options: { commitment: "finalized" },
@@ -1126,6 +1583,24 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
       await expect(
         context.getBalance("11111111111111111111111111111111"),
       ).resolves.toBe(99n);
+      expect(globals.__agencBalanceCall).toEqual({
+        address: "11111111111111111111111111111111",
+        options: { commitment: "confirmed" },
+      });
+      await expect(
+        context.readAccount("11111111111111111111111111111111"),
+      ).resolves.toEqual(new Uint8Array());
+      expect(globals.__agencAccountInfoCall).toEqual({
+        address: "11111111111111111111111111111111",
+        options: { commitment: "confirmed", encoding: "base64" },
+      });
+      await expect(
+        context.readAccountInfo("11111111111111111111111111111111"),
+      ).resolves.toEqual({
+        data: new Uint8Array(),
+        owner: "11111111111111111111111111111111",
+        executable: false,
+      });
       await expect(context.findSettlementSignature("task")).resolves.toBe(
         "settlement-signature",
       );
@@ -1133,6 +1608,8 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     } finally {
       delete globals.__agencWorkerRpc;
       delete globals.__agencWorkerContext;
+      delete globals.__agencAccountInfoCall;
+      delete globals.__agencBalanceCall;
       delete globals.__agencRentCall;
       rmSync(moduleDir, { recursive: true, force: true });
     }
@@ -1161,7 +1638,9 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     writeFileSync(pagePath, "// user edited this\n");
     const result = runInit(dir);
     expect(result.refused).toBe(true);
-    const page = result.files.find((f) => f.path === path.join("app", "agenc", "page.tsx"));
+    const page = result.files.find(
+      (f) => f.path === path.join("app", "agenc", "page.tsx"),
+    );
     expect(page?.status).toBe("refused");
     // The user's edit survived.
     expect(readFileSync(pagePath, "utf8")).toBe("// user edited this\n");
@@ -1173,7 +1652,10 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
 
   it("--force refuses leaf symlinks instead of overwriting their outside targets", () => {
     const dir = nextAppDir();
-    const outside = path.join(mkdtempSync(path.join(tmpdir(), "agenc-outside-")), "victim.tsx");
+    const outside = path.join(
+      mkdtempSync(path.join(tmpdir(), "agenc-outside-")),
+      "victim.tsx",
+    );
     writeFileSync(outside, "// outside sentinel\n");
     mkdirSync(path.join(dir, "app", "agenc"), { recursive: true });
     const target = path.join(dir, "app", "agenc", "page.tsx");
@@ -1181,7 +1663,9 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
 
     const result = runInit(dir, { force: true });
     expect(
-      result.files.find((file) => file.path === path.join("app", "agenc", "page.tsx")),
+      result.files.find(
+        (file) => file.path === path.join("app", "agenc", "page.tsx"),
+      ),
     ).toMatchObject({ status: "refused" });
     expect(readFileSync(outside, "utf8")).toBe("// outside sentinel\n");
   });
@@ -1193,9 +1677,14 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
 
     const migrated = runInit(dir, { kind: "checkout", force: true });
     expect(migrated.refused).toBe(false);
-    expect(migrated.files).toContainEqual({ path: "worker.mjs", status: "removed" });
+    expect(migrated.files).toContainEqual({
+      path: "worker.mjs",
+      status: "removed",
+    });
     expect(existsSync(path.join(dir, "worker.mjs"))).toBe(false);
-    expect(existsSync(path.join(dir, "app", "agenc", "checkout", "route.ts"))).toBe(true);
+    expect(
+      existsSync(path.join(dir, "app", "agenc", "checkout", "route.ts")),
+    ).toBe(true);
   });
 
   it("retains every stale surface when replacement publication fails mid-batch", () => {
@@ -1245,7 +1734,10 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     const dir = mkdtempSync(path.join(tmpdir(), "agenc-cli-init-"));
     writeFileSync(
       path.join(dir, "package.json"),
-      JSON.stringify({ name: "router-migration", dependencies: { next: "15.0.0" } }),
+      JSON.stringify({
+        name: "router-migration",
+        dependencies: { next: "15.0.0" },
+      }),
     );
     mkdirSync(path.join(dir, "pages"));
     runInit(dir, { router: "pages" });
@@ -1255,7 +1747,9 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     const toApp = runInit(dir, { router: "app", force: true });
     expect(toApp.refused).toBe(false);
     expect(existsSync(pagesRoute)).toBe(false);
-    expect(existsSync(path.join(dir, "lib", "agenc", "checkout-core.ts"))).toBe(false);
+    expect(existsSync(path.join(dir, "lib", "agenc", "checkout-core.ts"))).toBe(
+      false,
+    );
     const appRoute = path.join(dir, "app", "agenc", "checkout", "route.ts");
     expect(existsSync(appRoute)).toBe(true);
 
@@ -1268,17 +1762,34 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
   it("refuses a migration when a stale output was edited or replaced by a symlink", () => {
     const editedDir = nextAppDir();
     runInit(editedDir);
-    const editedRoute = path.join(editedDir, "app", "agenc", "checkout", "route.ts");
+    const editedRoute = path.join(
+      editedDir,
+      "app",
+      "agenc",
+      "checkout",
+      "route.ts",
+    );
     writeFileSync(editedRoute, "// application-owned route\n");
     const edited = runInit(editedDir, { kind: "worker", force: true });
     expect(edited.refused).toBe(true);
-    expect(readFileSync(editedRoute, "utf8")).toBe("// application-owned route\n");
+    expect(readFileSync(editedRoute, "utf8")).toBe(
+      "// application-owned route\n",
+    );
     expect(existsSync(path.join(editedDir, "worker.mjs"))).toBe(false);
 
     const linkedDir = nextAppDir();
     runInit(linkedDir);
-    const linkedRoute = path.join(linkedDir, "app", "agenc", "checkout", "route.ts");
-    const outside = path.join(mkdtempSync(path.join(tmpdir(), "agenc-outside-")), "route.ts");
+    const linkedRoute = path.join(
+      linkedDir,
+      "app",
+      "agenc",
+      "checkout",
+      "route.ts",
+    );
+    const outside = path.join(
+      mkdtempSync(path.join(tmpdir(), "agenc-outside-")),
+      "route.ts",
+    );
     writeFileSync(outside, "// outside\n");
     rmSync(linkedRoute);
     symlinkSync(outside, linkedRoute);
@@ -1290,13 +1801,21 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
 
   it("refuses an unsafe config before publishing any other target", () => {
     const dir = nextAppDir();
-    const outside = path.join(mkdtempSync(path.join(tmpdir(), "agenc-outside-")), "config.json");
-    writeFileSync(outside, JSON.stringify(defaultConfig("outside", "checkout")));
+    const outside = path.join(
+      mkdtempSync(path.join(tmpdir(), "agenc-outside-")),
+      "config.json",
+    );
+    writeFileSync(
+      outside,
+      JSON.stringify(defaultConfig("outside", "checkout")),
+    );
     symlinkSync(outside, path.join(dir, "agenc.config.json"));
 
     const result = runInit(dir, { force: true });
     expect(result.refused).toBe(true);
-    expect(result.files).toEqual([{ path: "agenc.config.json", status: "refused" }]);
+    expect(result.files).toEqual([
+      { path: "agenc.config.json", status: "refused" },
+    ]);
     expect(existsSync(path.join(dir, "app", "agenc", "page.tsx"))).toBe(false);
   });
 
@@ -1320,7 +1839,9 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     expect(result.kind).toBe("worker");
     const pkgFile = result.files.find((f) => f.path === "package.json");
     expect(pkgFile?.status).toBe("written");
-    const pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"));
+    const pkg = JSON.parse(
+      readFileSync(path.join(dir, "package.json"), "utf8"),
+    );
     // Name derived from the dir basename, sanitized to a valid npm name.
     expect(pkg.name).toMatch(/^[a-z0-9-._~]+$/);
     expect(pkg.private).toBe(true);
@@ -1330,7 +1851,9 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     expect(pkg.dependencies["@tetsuo-ai/agenc-worker"]).toBe("^0.2.0");
     expect(pkg.dependencies["@solana/kit"]).toBeDefined();
     // The printed next step is a plain `npm install`.
-    expect(result.instructions.some((l) => l.includes("npm install"))).toBe(true);
+    expect(result.instructions.some((l) => l.includes("npm install"))).toBe(
+      true,
+    );
   });
 
   it("never touches an existing package.json", () => {
@@ -1374,15 +1897,11 @@ export async function runUp(context) { globalThis.__agencWorkerContext = context
     const config = defaultConfig("price-test", "checkout");
     config.listing.priceLamports = "18446744073709551615";
     expect(
-      parseConfig(JSON.stringify(config), "agenc.config.json").listing.priceLamports,
+      parseConfig(JSON.stringify(config), "agenc.config.json").listing
+        .priceLamports,
     ).toBe("18446744073709551615");
 
-    for (const priceLamports of [
-      "0",
-      "999",
-      "0001",
-      "18446744073709551616",
-    ]) {
+    for (const priceLamports of ["0", "999", "0001", "18446744073709551616"]) {
       config.listing.priceLamports = priceLamports;
       expect(() =>
         parseConfig(JSON.stringify(config), "agenc.config.json"),

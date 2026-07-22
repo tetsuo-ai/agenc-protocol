@@ -54,6 +54,17 @@ unsupported.
   live revision-4 records that predate the immutable provider field, supplies
   the exact stored listing as migration evidence. This keeps existing open
   hires claimable without allowing a different registered agent to take them.
+- Canonical hire-PDA reads now retain RPC owner and executable metadata. The
+  runtime accepts only an absent account or a System-owned, non-executable,
+  zero-data placeholder as a direct task; a program-owned hire must have the
+  exact `HireRecord` size, discriminator, task, and PDA bump. Wrong owners,
+  executable accounts, non-empty System data, and malformed program data fail
+  before funding checks or signing. This also fixes direct tasks being skipped
+  when permissionless lamport dust creates the valid empty System placeholder.
+  A valid hire designated to another agent now returns the stable
+  `not-designated-provider` skip before external content fetches, funding
+  hooks, WAL creation, or transaction send. CLI account and balance reads pin
+  `confirmed`, matching SDK discovery and transaction defaults explicitly.
 
 ### Breaking Changes
 
@@ -62,6 +73,17 @@ unsupported.
 - Existing custom executors must select `executorMode: "sandboxed"` or the
   explicit legacy `"unsafe"` mode. Existing unrestricted creator/reward
   policies must be replaced with limits or explicit opt-outs.
+- Revision-5 hired tasks are accepted only when the pinned job-spec hash equals
+  the buyer commitment stored at funding. Open revision-4 hires have a zero
+  commitment tail and are reported as `legacy-hire-requires-rehire` instead of
+  being claimed; their creator must cancel/refund and hire again after cutover.
+- Task descriptions are always rendered as opaque hash labels. The worker never
+  interprets either 32-byte commitment as UTF-8 prompt text.
+- Programmatic contexts should add the new optional `readAccountInfo` callback;
+  `createSolanaAccountReaders` builds it alongside the backward-compatible raw
+  reader. Shipped worker CLIs/templates wire it automatically. Bytes-only
+  embedders remain source-compatible but cannot preflight owner/executable
+  metadata, so they should migrate before signing production claims.
 
 ## 0.1.1
 

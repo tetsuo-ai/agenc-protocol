@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -46,6 +44,8 @@ import {
   type OptionOrNullable,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getDependencyTypeDecoder,
   getDependencyTypeEncoder,
@@ -66,7 +66,7 @@ export const TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getTaskDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(TASK_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(TASK_DISCRIMINATOR);
 }
 
 export type Task = {
@@ -294,12 +294,12 @@ export type TaskArgs = {
 export function getTaskEncoder(): Encoder<TaskArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["taskId", getFixedBytesEncoder(32, "taskId")],
       ["creator", getAddressEncoder()],
       ["requiredCapabilities", getU64Encoder()],
-      ["description", fixEncoderSize(getBytesEncoder(), 64)],
-      ["constraintHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["description", getFixedBytesEncoder(64, "description")],
+      ["constraintHash", getFixedBytesEncoder(32, "constraintHash")],
       ["rewardAmount", getU64Encoder()],
       ["maxWorkers", getU8Encoder()],
       ["currentWorkers", getU8Encoder()],
@@ -309,7 +309,7 @@ export function getTaskEncoder(): Encoder<TaskArgs> {
       ["deadline", getI64Encoder()],
       ["completedAt", getI64Encoder()],
       ["escrow", getAddressEncoder()],
-      ["result", fixEncoderSize(getBytesEncoder(), 64)],
+      ["result", getFixedBytesEncoder(64, "result")],
       ["completions", getU8Encoder()],
       ["requiredCompletions", getU8Encoder()],
       ["bump", getU8Encoder()],
@@ -320,7 +320,7 @@ export function getTaskEncoder(): Encoder<TaskArgs> {
       ["rewardMint", getOptionEncoder(getAddressEncoder())],
       ["operator", getAddressEncoder()],
       ["operatorFeeBps", getU16Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 16)],
+      ["reserved", getFixedBytesEncoder(16, "reserved")],
       ["referrer", getAddressEncoder()],
       ["referrerFeeBps", getU16Encoder()],
     ]),

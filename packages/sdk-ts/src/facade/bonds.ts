@@ -13,10 +13,10 @@ import {
   type PostCompletionBondAsyncInput,
   type ReclaimCompletionBondAsyncInput,
 } from "../generated/index.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
+import { snapshotStructuredClone } from "../values/structured-clone.js";
 
-export {
-  findCompletionBondPda,
-};
+export { findCompletionBondPda };
 
 /**
  * Post a completion bond for a task — the write side of **Guaranteed Hire**: a
@@ -63,71 +63,83 @@ export type PostCompletionBondInput =
   | PostCreatorCompletionBondInput
   | PostWorkerCompletionBondInput;
 
-const SYSTEM_PROGRAM_ADDRESS =
-  "11111111111111111111111111111111" as Address;
+const SYSTEM_PROGRAM_ADDRESS = "11111111111111111111111111111111" as Address;
 
 export async function postCompletionBond(input: PostCompletionBondInput) {
-  if (input.role !== 0 && input.role !== 1) {
-    throw new Error("postCompletionBond: role must be 0 (creator) or 1 (worker)");
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  if (stableInput.role !== 0 && stableInput.role !== 1) {
+    throw new Error(
+      "postCompletionBond: role must be 0 (creator) or 1 (worker)",
+    );
   }
-  if (input.role === 0 && (input.worker || input.workerClaim)) {
+  if (
+    stableInput.role === 0 &&
+    (stableInput.worker || stableInput.workerClaim)
+  ) {
     throw new Error(
       "postCompletionBond: creator role must omit worker and workerClaim",
     );
   }
-  if (input.role === 1 && !input.worker) {
+  if (stableInput.role === 1 && !stableInput.worker) {
     throw new Error(
       "postCompletionBond: worker role requires the worker AgentRegistration address",
     );
   }
 
   const protocolConfig =
-    input.protocolConfig ?? (await findProtocolConfigPda())[0];
+    stableInput.protocolConfig ?? (await findProtocolConfigPda())[0];
   const completionBond =
-    input.completionBond ??
+    stableInput.completionBond ??
     (
       await findCompletionBondPda({
-        task: input.task,
-        party: input.authority.address,
+        task: stableInput.task,
+        party: stableInput.authority.address,
       })
     )[0];
   const worker =
-    input.role === 1 ? input.worker : AGENC_COORDINATION_PROGRAM_ADDRESS;
+    stableInput.role === 1
+      ? stableInput.worker
+      : AGENC_COORDINATION_PROGRAM_ADDRESS;
   const workerClaim =
-    input.role === 1
-      ? (input.workerClaim ??
-        (await findClaimPda({ task: input.task, bidder: input.worker }))[0])
+    stableInput.role === 1
+      ? (stableInput.workerClaim ??
+        (
+          await findClaimPda({
+            task: stableInput.task,
+            bidder: stableInput.worker,
+          })
+        )[0])
       : AGENC_COORDINATION_PROGRAM_ADDRESS;
 
   return {
     programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
     accounts: [
       // Revision 5: Task is read-only; protocol config entry-gates new custody.
-      { address: input.task, role: AccountRole.READONLY },
+      { address: stableInput.task, role: AccountRole.READONLY },
       { address: protocolConfig, role: AccountRole.READONLY },
       { address: completionBond, role: AccountRole.WRITABLE },
       { address: worker, role: AccountRole.READONLY },
       { address: workerClaim, role: AccountRole.READONLY },
       {
-        address: input.authority.address,
+        address: stableInput.authority.address,
         role: AccountRole.WRITABLE_SIGNER,
-        signer: input.authority,
+        signer: stableInput.authority,
       },
       {
-        address: input.systemProgram ?? SYSTEM_PROGRAM_ADDRESS,
+        address: stableInput.systemProgram ?? SYSTEM_PROGRAM_ADDRESS,
         role: AccountRole.READONLY,
       },
-      ...(input.dependencyParent
+      ...(stableInput.dependencyParent
         ? [
             {
-              address: input.dependencyParent,
+              address: stableInput.dependencyParent,
               role: AccountRole.READONLY,
             } as const,
           ]
         : []),
     ],
     data: getPostCompletionBondInstructionDataEncoder().encode({
-      role: input.role,
+      role: stableInput.role,
     }),
   };
 }
@@ -147,5 +159,7 @@ export async function postCompletionBond(input: PostCompletionBondInput) {
 export async function reclaimCompletionBond(
   input: ReclaimCompletionBondAsyncInput,
 ) {
-  return getReclaimCompletionBondInstructionAsync(input);
+  return getReclaimCompletionBondInstructionAsync(
+    snapshotStructuredClone(input, "reclaimCompletionBond: input"),
+  );
 }

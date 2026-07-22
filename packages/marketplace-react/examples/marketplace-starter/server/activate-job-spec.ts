@@ -1,25 +1,17 @@
 import { values } from "@tetsuo-ai/marketplace-sdk";
 import { isAddress } from "@solana/kit";
+import {
+  normalizeStarterJobSpec,
+  type StarterJobSpec,
+  type StarterJobSpecPayload,
+} from "../src/job-spec.js";
 
-const MAX_TITLE_CHARS = 160;
-const MAX_ITEM_CHARS = 280;
-const MAX_ITEMS = 12;
-const MAX_NOTES_CHARS = 2_000;
 const DEFAULT_MAX_CANONICAL_BYTES = 64 * 1024;
 const DEFAULT_MAX_REQUEST_BYTES = 128 * 1024;
 const TASK_JOB_SPEC_URI_MAX_BYTES = 256;
 
-export interface StarterJobSpecInput {
-  title: string;
-  deliverables: string[];
-  acceptanceCriteria: string[];
-  notes?: string;
-}
-
-export interface StarterJobSpecPayload extends StarterJobSpecInput {
-  schema: "agenc.marketplace.starter.jobSpec.v1";
-  taskPda: string;
-}
+export type StarterJobSpecInput = StarterJobSpec;
+export type { StarterJobSpecPayload } from "../src/job-spec.js";
 
 export interface StarterJobSpecEnvelope {
   integrity: {
@@ -167,75 +159,13 @@ function validateStoredJobSpecUri(value: string): string {
   return value;
 }
 
-function stringField(
-  source: Record<string, unknown>,
-  key: string,
-  maxChars: number,
-): string {
-  const value = source[key];
-  if (typeof value !== "string") {
-    throw new Error(`spec.${key} must be a string.`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error(`spec.${key} is required.`);
-  if (trimmed.length > maxChars) {
-    throw new Error(`spec.${key} must be ${maxChars} characters or less.`);
-  }
-  return trimmed;
-}
-
-function stringArrayField(
-  source: Record<string, unknown>,
-  key: string,
-): string[] {
-  const value = source[key];
-  if (!Array.isArray(value)) {
-    throw new Error(`spec.${key} must be an array of strings.`);
-  }
-  const strings = value
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter(Boolean);
-  if (strings.length === 0) {
-    throw new Error(`spec.${key} needs at least one item.`);
-  }
-  if (strings.length > MAX_ITEMS) {
-    throw new Error(`spec.${key} supports at most ${MAX_ITEMS} items.`);
-  }
-  const tooLong = strings.find((item) => item.length > MAX_ITEM_CHARS);
-  if (tooLong) {
-    throw new Error(`spec.${key} items must be ${MAX_ITEM_CHARS} characters or less.`);
-  }
-  return strings;
-}
-
-function normalizeSpec(taskPda: string, spec: unknown): StarterJobSpecPayload {
-  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
-    throw new Error("spec must be an object.");
-  }
-  const source = spec as Record<string, unknown>;
-  const payload: StarterJobSpecPayload = {
-    schema: "agenc.marketplace.starter.jobSpec.v1",
-    taskPda,
-    title: stringField(source, "title", MAX_TITLE_CHARS),
-    deliverables: stringArrayField(source, "deliverables"),
-    acceptanceCriteria: stringArrayField(source, "acceptanceCriteria"),
-  };
-  if (typeof source.notes === "string" && source.notes.trim()) {
-    const notes = source.notes.trim();
-    if (notes.length > MAX_NOTES_CHARS) {
-      throw new Error(`spec.notes must be ${MAX_NOTES_CHARS} characters or less.`);
-    }
-    payload.notes = notes;
-  }
-  return payload;
-}
-
 function requestParts(body: unknown): { taskPda: string; spec: unknown } {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new Error("Request body must be a JSON object.");
   }
   const record = body as Record<string, unknown>;
-  const taskPda = typeof record.taskPda === "string" ? record.taskPda.trim() : "";
+  const taskPda =
+    typeof record.taskPda === "string" ? record.taskPda.trim() : "";
   if (!isAddress(taskPda)) {
     throw new Error("taskPda must be an exact 32-byte Solana address.");
   }
@@ -271,7 +201,7 @@ export function createActivateJobSpecHandler({
     try {
       const parts = requestParts(body);
       taskPda = parts.taskPda;
-      payload = normalizeSpec(taskPda, parts.spec);
+      payload = normalizeStarterJobSpec(taskPda, parts.spec);
       canonicalJson = values.canonicalJobSpecJson(payload);
       jobSpecHashHex = (await values.canonicalJobSpecHash(payload)).hex;
       envelope = {
@@ -309,13 +239,31 @@ export function createActivateJobSpecHandler({
       return jsonResponse({ error: "Job-spec storage failed." }, 502);
     }
 
-    if (!stored.uri) {
+    let storedUri: unknown;
+    try {
+      // Treat dependency output as caller-owned. Snapshot its accessor exactly
+      // once and never mutate or re-read it across the moderation await.
+      storedUri = stored.uri;
+    } catch {
+      return jsonResponse(
+        { error: "Job-spec storage returned an invalid URI." },
+        502,
+      );
+    }
+    if (storedUri === "" || storedUri === null || storedUri === undefined) {
       return jsonResponse({ error: "Job-spec storage returned no URI." }, 502);
     }
+    let jobSpecUri: string;
     try {
-      stored.uri = validateStoredJobSpecUri(stored.uri);
+      if (typeof storedUri !== "string") {
+        throw new TypeError("Stored job-spec URI must be a string.");
+      }
+      jobSpecUri = validateStoredJobSpecUri(storedUri);
     } catch {
-      return jsonResponse({ error: "Job-spec storage returned an invalid URI." }, 502);
+      return jsonResponse(
+        { error: "Job-spec storage returned an invalid URI." },
+        502,
+      );
     }
 
     let moderation: TaskModerationResult;
@@ -325,10 +273,13 @@ export function createActivateJobSpecHandler({
         jobSpecHashHex,
         payload,
         canonicalJson,
-        jobSpecUri: stored.uri,
+        jobSpecUri,
       });
     } catch {
-      return jsonResponse({ error: "Task moderation attestation failed." }, 502);
+      return jsonResponse(
+        { error: "Task moderation attestation failed." },
+        502,
+      );
     }
 
     if (moderation.attested !== true) {
@@ -343,7 +294,7 @@ export function createActivateJobSpecHandler({
 
     return jsonResponse({
       jobSpecHashHex,
-      jobSpecUri: stored.uri,
+      jobSpecUri,
       moderationAttested: moderation.attested === true,
       moderation: moderation.moderation ?? null,
       txSignature: moderation.txSignature ?? null,

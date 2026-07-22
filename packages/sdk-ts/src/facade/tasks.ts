@@ -13,7 +13,12 @@
 // intentionally out of scope here.
 //
 // Never import from generated/ internals other than its public exports.
-import { AccountRole, type AccountMeta, type Address } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  type AccountMeta,
+  type Address,
+} from "@solana/kit";
 import {
   findModerationAttestorPda,
   findModerationBlockPda,
@@ -73,6 +78,18 @@ import {
   DependencyType,
   ValidationMode,
 } from "../generated/index.js";
+import { DISPUTE_SAFE_MAX_WORKERS } from "../values/protocol-limits.js";
+import { assertCanonicalHash32 } from "../values/hash.js";
+import {
+  snapshotFixedBytes,
+  snapshotOptionalFixedBytes,
+} from "../values/fixed-bytes.js";
+import { snapshotOptionalAddress } from "../values/options.js";
+import {
+  snapshotDenseStructuredArray,
+  snapshotStructuredClone,
+} from "../values/structured-clone.js";
+import { canonicalizeFacadeInputSignerFields } from "../client/signer-identity.js";
 
 // Re-export the PDA helpers callers most often need to pre-derive task-lifecycle
 // addresses (mirrors agents.ts re-exporting findAgentPda).
@@ -95,21 +112,53 @@ export {
  * real `referrer` address with a non-zero `referrerFeeBps` to opt a demand-side
  * embedder into the 4-way settlement split.
  */
-type OptionalReferrer<T extends { referrer: unknown; referrerFeeBps: number }> =
-  Omit<T, "referrer" | "referrerFeeBps"> & {
-    referrer?: T["referrer"];
-    referrerFeeBps?: number;
-  };
+export type OptionalReferrer<
+  T extends { referrer: unknown; referrerFeeBps: number },
+> = Omit<T, "referrer" | "referrerFeeBps"> & {
+  referrer?: T["referrer"];
+  referrerFeeBps?: number;
+};
 
 /** Apply the facade's referrer defaults (no-leg skip path): `null` / `0`. */
 function withReferrerDefaults<
   T extends { referrer: unknown; referrerFeeBps: number },
->(input: OptionalReferrer<T>): T {
-  return {
+>(input: OptionalReferrer<T>, label: string): T {
+  const normalized = {
     referrer: null,
     referrerFeeBps: 0,
     ...input,
   } as T;
+  return {
+    ...normalized,
+    referrer: snapshotOptionalAddress(
+      normalized.referrer as Parameters<typeof snapshotOptionalAddress>[0],
+      `${label}: referrer`,
+    ),
+  } as T;
+}
+
+function snapshotOptionalNested<T>(
+  value: T | undefined,
+  label: string,
+): T | undefined {
+  return value === undefined
+    ? undefined
+    : snapshotStructuredClone(value, label);
+}
+
+function assertDisputeSafeWorkerLimit(
+  operation: string,
+  maxWorkers: number,
+): void {
+  if (
+    !Number.isInteger(maxWorkers) ||
+    maxWorkers < 1 ||
+    maxWorkers > DISPUTE_SAFE_MAX_WORKERS
+  ) {
+    throw new RangeError(
+      `${operation}: maxWorkers must be an integer between 1 and ${DISPUTE_SAFE_MAX_WORKERS}.`,
+    );
+  }
 }
 
 /**
@@ -124,7 +173,38 @@ function withReferrerDefaults<
 export async function createTask(
   input: OptionalReferrer<CreateTaskAsyncInput>,
 ) {
-  return getCreateTaskInstructionAsync(withReferrerDefaults(input));
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+    "creator",
+  ] as const);
+  assertDisputeSafeWorkerLimit("createTask", stableInput.maxWorkers);
+  return getCreateTaskInstructionAsync(
+    withReferrerDefaults<CreateTaskAsyncInput>(
+      {
+        ...stableInput,
+        taskId: snapshotFixedBytes(
+          stableInput.taskId,
+          32,
+          "createTask: taskId",
+        ),
+        description: snapshotFixedBytes(
+          stableInput.description,
+          64,
+          "createTask: description",
+        ),
+        constraintHash: snapshotOptionalFixedBytes(
+          stableInput.constraintHash,
+          32,
+          "createTask: constraintHash",
+        ),
+        rewardMintArg: snapshotOptionalAddress(
+          stableInput.rewardMintArg,
+          "createTask: rewardMintArg",
+        ),
+      },
+      "createTask",
+    ),
+  );
 }
 
 /**
@@ -139,7 +219,25 @@ export async function createTask(
 export async function createTaskHumanless(
   input: OptionalReferrer<CreateTaskHumanlessAsyncInput>,
 ) {
-  return getCreateTaskHumanlessInstructionAsync(withReferrerDefaults(input));
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["creator"]);
+  return getCreateTaskHumanlessInstructionAsync(
+    withReferrerDefaults<CreateTaskHumanlessAsyncInput>(
+      {
+        ...stableInput,
+        taskId: snapshotFixedBytes(
+          stableInput.taskId,
+          32,
+          "createTaskHumanless: taskId",
+        ),
+        description: snapshotFixedBytes(
+          stableInput.description,
+          64,
+          "createTaskHumanless: description",
+        ),
+      },
+      "createTaskHumanless",
+    ),
+  );
 }
 
 /**
@@ -149,7 +247,33 @@ export async function createTaskHumanless(
 export async function createDependentTask(
   input: CreateDependentTaskAsyncInput,
 ) {
-  return getCreateDependentTaskInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+    "creator",
+  ] as const);
+  assertDisputeSafeWorkerLimit("createDependentTask", stableInput.maxWorkers);
+  return getCreateDependentTaskInstructionAsync({
+    ...stableInput,
+    taskId: snapshotFixedBytes(
+      stableInput.taskId,
+      32,
+      "createDependentTask: taskId",
+    ),
+    description: snapshotFixedBytes(
+      stableInput.description,
+      64,
+      "createDependentTask: description",
+    ),
+    constraintHash: snapshotOptionalFixedBytes(
+      stableInput.constraintHash,
+      32,
+      "createDependentTask: constraintHash",
+    ),
+    rewardMintArg: snapshotOptionalAddress(
+      stableInput.rewardMintArg,
+      "createDependentTask: rewardMintArg",
+    ),
+  });
 }
 
 /**
@@ -172,15 +296,25 @@ export type ClaimTaskWithJobSpecInput = Omit<
 };
 
 export async function claimTaskWithJobSpec(input: ClaimTaskWithJobSpecInput) {
-  const { jobSpecHash, moderationBlock, parentTask, ...generatedInput } = input;
-  if (!moderationBlock && !jobSpecHash) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  const { jobSpecHash, moderationBlock, parentTask, ...generatedInput } =
+    stableInput;
+  const stableJobSpecHash =
+    jobSpecHash === undefined
+      ? undefined
+      : snapshotFixedBytes(
+          jobSpecHash,
+          32,
+          "claimTaskWithJobSpec: jobSpecHash",
+        );
+  if (!moderationBlock && !stableJobSpecHash) {
     throw new Error(
       "claimTaskWithJobSpec: provide jobSpecHash (or moderationBlock) for the assignment-time BLOCK check",
     );
   }
   const block =
     moderationBlock ??
-    (await findModerationBlockPda({ contentHash: jobSpecHash! }))[0];
+    (await findModerationBlockPda({ contentHash: stableJobSpecHash! }))[0];
   const instruction = await getClaimTaskWithJobSpecInstructionAsync({
     ...generatedInput,
     moderationBlock: block,
@@ -201,7 +335,20 @@ export async function claimTaskWithJobSpec(input: ClaimTaskWithJobSpecInput) {
  * config, submission, and protocol-config PDAs from `task`/`worker`.
  */
 export async function submitTaskResult(input: SubmitTaskResultAsyncInput) {
-  return getSubmitTaskResultInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getSubmitTaskResultInstructionAsync({
+    ...stableInput,
+    proofHash: snapshotFixedBytes(
+      stableInput.proofHash,
+      32,
+      "submitTaskResult: proofHash",
+    ),
+    resultData: snapshotOptionalFixedBytes(
+      stableInput.resultData,
+      64,
+      "submitTaskResult: resultData",
+    ),
+  });
 }
 
 /**
@@ -218,7 +365,28 @@ export type BidCompletionSettlement = {
   bidderAuthority?: Address;
 };
 
-type CompletionRemainingAccounts = {
+/**
+ * BidExclusive rejection reopens the book and refunds the accepted bidder to
+ * the generated instruction's named `workerAuthority`. Rust therefore consumes
+ * exactly three settlement metas and no caller-selected fourth recipient.
+ */
+export type BidRejectionSettlement = Omit<
+  BidCompletionSettlement,
+  "bidderAuthority"
+> & {
+  bidderAuthority?: never;
+};
+
+export type BidRejectionRemainingAccounts = {
+  /** Required only for a Proof-dependent BidExclusive rejection. */
+  dependencyParent?: Address;
+  /** Required whenever `bidSettlement` is supplied so its prefix is unambiguous. */
+  dependencyType?: DependencyType;
+  /** Exact three-account suffix consumed by the on-chain rejection path. */
+  bidSettlement?: BidRejectionSettlement;
+};
+
+export type CompletionRemainingAccounts = {
   /** Required for every dependent task and always occupies remaining slot 0. */
   dependencyParent?: Address;
   /** Required for BidExclusive completion/accept settlement. */
@@ -266,22 +434,127 @@ async function appendCompletionRemainingAccounts<
   return { ...instruction, accounts };
 }
 
+function snapshotBidRejectionSettlement(
+  value: BidRejectionSettlement | undefined,
+  label: string,
+): BidRejectionSettlement | undefined {
+  const snapshot = snapshotOptionalNested(value, label);
+  if (snapshot === undefined) return undefined;
+  if (Object.hasOwn(snapshot, "bidderAuthority")) {
+    throw new TypeError(
+      `${label}: bidderAuthority must be omitted; rejection refunds the named workerAuthority`,
+    );
+  }
+  return Object.freeze({
+    ...(snapshot.bidBook === undefined
+      ? {}
+      : { bidBook: address(snapshot.bidBook) }),
+    acceptedBid: address(snapshot.acceptedBid),
+    bidderMarketState: address(snapshot.bidderMarketState),
+  });
+}
+
+function bidRejectionDependencyParent(
+  label: string,
+  remaining: BidRejectionRemainingAccounts,
+): Address | undefined {
+  const { bidSettlement, dependencyParent, dependencyType } = remaining;
+  if (bidSettlement === undefined) {
+    if (dependencyParent !== undefined) {
+      throw new Error(
+        `${label}: dependencyParent is only consumed with BidExclusive rejection settlement`,
+      );
+    }
+    return undefined;
+  }
+  if (dependencyType === undefined) {
+    throw new Error(
+      `${label}: dependencyType is required for BidExclusive rejection settlement`,
+    );
+  }
+  if (
+    dependencyType !== DependencyType.None &&
+    dependencyType !== DependencyType.Data &&
+    dependencyType !== DependencyType.Ordering &&
+    dependencyType !== DependencyType.Proof
+  ) {
+    throw new RangeError(`${label}: dependencyType is invalid`);
+  }
+  if (dependencyType === DependencyType.Proof) {
+    if (dependencyParent === undefined) {
+      throw new Error(
+        `${label}: dependencyParent is required for a Proof-dependent BidExclusive rejection`,
+      );
+    }
+    return address(dependencyParent);
+  }
+  if (dependencyParent !== undefined) {
+    throw new Error(
+      `${label}: dependencyParent must be omitted unless dependencyType is Proof`,
+    );
+  }
+  return undefined;
+}
+
+async function appendBidRejectionRemainingAccounts<
+  TInstruction extends { readonly accounts: readonly AccountMeta[] },
+>(
+  instruction: TInstruction,
+  task: Address,
+  remaining: BidRejectionRemainingAccounts,
+  label: string,
+) {
+  const dependencyParent = bidRejectionDependencyParent(label, remaining);
+  if (remaining.bidSettlement === undefined) return instruction;
+  const bidBook =
+    remaining.bidSettlement.bidBook ?? (await findBidBookPda({ task }))[0];
+  return {
+    ...instruction,
+    accounts: [
+      ...instruction.accounts,
+      ...(dependencyParent === undefined
+        ? []
+        : [{ address: dependencyParent, role: AccountRole.READONLY } as const]),
+      { address: bidBook, role: AccountRole.WRITABLE } as const,
+      {
+        address: remaining.bidSettlement.acceptedBid,
+        role: AccountRole.WRITABLE,
+      } as const,
+      {
+        address: remaining.bidSettlement.bidderMarketState,
+        role: AccountRole.WRITABLE,
+      } as const,
+    ],
+  };
+}
+
 export type AcceptTaskResultInput = AcceptTaskResultAsyncInput &
   CompletionRemainingAccounts;
 
 export async function acceptTaskResult(input: AcceptTaskResultInput) {
-  const { dependencyParent, bidSettlement, ...generatedInput } = input;
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "creator",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    bidSettlement: snapshotOptionalNested(
+      signerStableInput.bidSettlement,
+      "acceptTaskResult: bidSettlement",
+    ),
+  };
+  const { dependencyParent, bidSettlement, ...generatedInput } = stableInput;
   const hireRecord =
-    input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
+    stableInput.hireRecord ??
+    (await findHireRecordPda({ task: stableInput.task }))[0];
   const instruction = await getAcceptTaskResultInstructionAsync({
     ...generatedInput,
     hireRecord,
   });
   return appendCompletionRemainingAccounts(
     instruction,
-    input.task,
+    stableInput.task,
     { dependencyParent, bidSettlement },
-    input.workerAuthority,
+    stableInput.workerAuthority,
   );
 }
 
@@ -289,10 +562,45 @@ export async function acceptTaskResult(input: AcceptTaskResultInput) {
  * Creator rejects a submitted result (with a rejection hash). Auto-derives
  * validation config, submission, and protocol-config PDAs from `task`/`worker`.
  */
-export type RejectTaskResultInput = RejectTaskResultAsyncInput;
+export type RejectTaskResultInput = RejectTaskResultAsyncInput &
+  BidRejectionRemainingAccounts;
 
 export async function rejectTaskResult(input: RejectTaskResultInput) {
-  return getRejectTaskResultInstructionAsync(input);
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "creator",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    bidSettlement: snapshotBidRejectionSettlement(
+      signerStableInput.bidSettlement,
+      "rejectTaskResult: bidSettlement",
+    ),
+  };
+  const { dependencyParent, dependencyType, bidSettlement, ...generatedInput } =
+    stableInput;
+  const parentForWire = bidRejectionDependencyParent("rejectTaskResult", {
+    dependencyParent,
+    dependencyType,
+    bidSettlement,
+  });
+  const instruction = await getRejectTaskResultInstructionAsync({
+    ...generatedInput,
+    rejectionHash: snapshotFixedBytes(
+      stableInput.rejectionHash,
+      32,
+      "rejectTaskResult: rejectionHash",
+    ),
+  });
+  return appendBidRejectionRemainingAccounts(
+    instruction,
+    stableInput.task,
+    {
+      dependencyParent: parentForWire,
+      dependencyType,
+      bidSettlement,
+    },
+    "rejectTaskResult",
+  );
 }
 
 /**
@@ -306,18 +614,29 @@ export async function rejectTaskResult(input: RejectTaskResultInput) {
  * as before.
  */
 export async function autoAcceptTaskResult(input: AutoAcceptTaskResultInput) {
-  const { dependencyParent, bidSettlement, ...generatedInput } = input;
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    bidSettlement: snapshotOptionalNested(
+      signerStableInput.bidSettlement,
+      "autoAcceptTaskResult: bidSettlement",
+    ),
+  };
+  const { dependencyParent, bidSettlement, ...generatedInput } = stableInput;
   const hireRecord =
-    input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
+    stableInput.hireRecord ??
+    (await findHireRecordPda({ task: stableInput.task }))[0];
   const instruction = await getAutoAcceptTaskResultInstructionAsync({
     ...generatedInput,
     hireRecord,
   });
   return appendCompletionRemainingAccounts(
     instruction,
-    input.task,
+    stableInput.task,
     { dependencyParent, bidSettlement },
-    input.workerAuthority,
+    stableInput.workerAuthority,
   );
 }
 
@@ -346,14 +665,14 @@ export type ValidateTaskResultInput = ValidateTaskResultAsyncInput &
     dependencyType?: DependencyType;
   };
 
-function validationDependencyParent(
+function validationAcceptanceDependencyParent(
   input: ValidateTaskResultInput,
 ): Address | undefined {
-  const { approved, bidSettlement, dependencyParent, dependencyType } = input;
+  const { dependencyParent, dependencyType } = input;
   const declaredDependent =
     dependencyType !== undefined && dependencyType !== DependencyType.None;
 
-  if (approved && declaredDependent && dependencyParent === undefined) {
+  if (declaredDependent && dependencyParent === undefined) {
     throw new Error(
       "validateTaskResult: dependencyParent is required when accepting a declared dependent task",
     );
@@ -366,46 +685,56 @@ function validationDependencyParent(
       "validateTaskResult: dependencyParent must be omitted for an independent task",
     );
   }
-
-  // Completion always uses the uniform [parent?, bid...] layout. Non-bid
-  // rejection has no bid suffix to offset, so preserving an optional parent is
-  // harmless and keeps the existing facade behavior.
-  if (approved || bidSettlement === undefined) return dependencyParent;
-
-  // BidExclusive rejection is intentionally different on-chain: Proof keeps
-  // its historical parent prefix, while Data/Ordering unwind speculatively and
-  // read bidBook from remaining_accounts[0]. Never let a supplied parent shift
-  // those three settlement accounts by one.
-  if (dependencyType === undefined) {
-    if (dependencyParent !== undefined) {
-      throw new Error(
-        "validateTaskResult: dependencyType is required to lay out a dependent BidExclusive rejection",
-      );
-    }
-    return undefined;
-  }
-  if (dependencyType === DependencyType.Proof) {
-    if (dependencyParent === undefined) {
-      throw new Error(
-        "validateTaskResult: dependencyParent is required for a Proof-dependent BidExclusive rejection",
-      );
-    }
-    return dependencyParent;
-  }
-  return undefined;
+  return dependencyParent;
 }
 
 export async function validateTaskResult(input: ValidateTaskResultInput) {
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "reviewer",
+  ]);
+  const stableInput = signerStableInput.approved
+    ? {
+        ...signerStableInput,
+        bidSettlement: snapshotOptionalNested(
+          signerStableInput.bidSettlement,
+          "validateTaskResult: bidSettlement",
+        ),
+      }
+    : {
+        ...signerStableInput,
+        bidSettlement: snapshotBidRejectionSettlement(
+          signerStableInput.bidSettlement as BidRejectionSettlement | undefined,
+          "validateTaskResult: bidSettlement",
+        ),
+      };
   const { dependencyParent, dependencyType, bidSettlement, ...generatedInput } =
-    input;
-  const parentForWire = validationDependencyParent(input);
+    stableInput;
+  const parentForWire = stableInput.approved
+    ? validationAcceptanceDependencyParent(stableInput)
+    : bidRejectionDependencyParent("validateTaskResult", {
+        dependencyParent,
+        dependencyType,
+        bidSettlement: bidSettlement as BidRejectionSettlement | undefined,
+      });
   const instruction =
     await getValidateTaskResultInstructionAsync(generatedInput);
+  if (!stableInput.approved) {
+    return appendBidRejectionRemainingAccounts(
+      instruction,
+      stableInput.task,
+      {
+        dependencyParent: parentForWire,
+        dependencyType,
+        bidSettlement: bidSettlement as BidRejectionSettlement | undefined,
+      },
+      "validateTaskResult",
+    );
+  }
   return appendCompletionRemainingAccounts(
     instruction,
-    input.task,
+    stableInput.task,
     { dependencyParent: parentForWire, bidSettlement },
-    input.workerAuthority,
+    stableInput.workerAuthority,
   );
 }
 
@@ -415,7 +744,15 @@ export async function validateTaskResult(input: ValidateTaskResultInput) {
  * config from `task`/`claim`.
  */
 export async function requestChanges(input: RequestChangesAsyncInput) {
-  return getRequestChangesInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["creator"]);
+  return getRequestChangesInstructionAsync({
+    ...stableInput,
+    changesHash: snapshotFixedBytes(
+      stableInput.changesHash,
+      32,
+      "requestChanges: changesHash",
+    ),
+  });
 }
 
 /**
@@ -423,7 +760,15 @@ export async function requestChanges(input: RequestChangesAsyncInput) {
  * dispute. Auto-derives validation config, submission, and protocol config.
  */
 export async function rejectAndFreeze(input: RejectAndFreezeAsyncInput) {
-  return getRejectAndFreezeInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["creator"]);
+  return getRejectAndFreezeInstructionAsync({
+    ...stableInput,
+    rejectionHash: snapshotFixedBytes(
+      stableInput.rejectionHash,
+      32,
+      "rejectAndFreeze: rejectionHash",
+    ),
+  });
 }
 
 /**
@@ -436,13 +781,35 @@ export type CompleteTaskInput = CompleteTaskAsyncInput &
   CompletionRemainingAccounts;
 
 export async function completeTask(input: CompleteTaskInput) {
-  const { dependencyParent, bidSettlement, ...generatedInput } = input;
-  const instruction = await getCompleteTaskInstructionAsync(generatedInput);
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    bidSettlement: snapshotOptionalNested(
+      signerStableInput.bidSettlement,
+      "completeTask: bidSettlement",
+    ),
+  };
+  const { dependencyParent, bidSettlement, ...generatedInput } = stableInput;
+  const instruction = await getCompleteTaskInstructionAsync({
+    ...generatedInput,
+    proofHash: snapshotFixedBytes(
+      generatedInput.proofHash,
+      32,
+      "completeTask: proofHash",
+    ),
+    resultData: snapshotOptionalFixedBytes(
+      generatedInput.resultData,
+      64,
+      "completeTask: resultData",
+    ),
+  });
   return appendCompletionRemainingAccounts(
     instruction,
-    input.task,
+    stableInput.task,
     { dependencyParent, bidSettlement },
-    input.authority.address,
+    stableInput.authority.address,
   );
 }
 
@@ -493,6 +860,31 @@ export type CancelTaskInput = Omit<
   bidSettlement?: CancelTaskBidSettlement;
 };
 
+function snapshotCancelTaskWorkerAccounts(
+  value: readonly CancelTaskWorkerAccounts[] | undefined,
+): readonly CancelTaskWorkerAccounts[] {
+  const snapshot = snapshotDenseStructuredArray(
+    value ?? [],
+    "cancelTask: workerAccounts",
+    DISPUTE_SAFE_MAX_WORKERS,
+  );
+  const normalized: CancelTaskWorkerAccounts[] = [];
+  for (let index = 0; index < snapshot.length; index += 1) {
+    const entry = snapshot[index];
+    if (typeof entry !== "object" || entry === null) {
+      throw new TypeError(
+        `cancelTask: workerAccounts[${index}] must be an account record`,
+      );
+    }
+    normalized[index] = Object.freeze({
+      claim: address(entry.claim),
+      workerAgent: address(entry.workerAgent),
+      workerAuthority: address(entry.workerAuthority),
+    });
+  }
+  return Object.freeze(normalized);
+}
+
 /**
  * Creator cancels a task and refunds the escrow. Auto-derives escrow and protocol
  * config; pass token accounts only for token tasks.
@@ -514,26 +906,39 @@ export type CancelTaskInput = Omit<
  * single worker triple in the exact order required by the program.
  */
 export async function cancelTask(input: CancelTaskInput) {
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    workerAccounts: snapshotCancelTaskWorkerAccounts(
+      signerStableInput.workerAccounts,
+    ),
+    bidSettlement: snapshotOptionalNested(
+      signerStableInput.bidSettlement,
+      "cancelTask: bidSettlement",
+    ),
+  };
   const {
     workerAccounts = [],
     dependencyParent,
     bidSettlement,
     ...generatedInput
-  } = input;
+  } = stableInput;
   const creatorCompletionBond =
-    input.creatorCompletionBond ??
+    stableInput.creatorCompletionBond ??
     (
       await findCreatorCompletionBondPda({
-        task: input.task,
-        creator: input.authority.address,
+        task: stableInput.task,
+        creator: stableInput.authority.address,
       })
     )[0];
   const workerCompletionBond =
-    input.workerCompletionBond ??
+    stableInput.workerCompletionBond ??
     (
       await findWorkerCompletionBondPda({
-        task: input.task,
-        workerAuthority: input.workerBondAuthority,
+        task: stableInput.task,
+        workerAuthority: stableInput.workerBondAuthority,
       })
     )[0];
   if (bidSettlement?.kind === "open" && workerAccounts.length !== 0) {
@@ -560,7 +965,8 @@ export async function cancelTask(input: CancelTaskInput) {
   let bidMetas: { address: Address; role: AccountRole }[] = [];
   if (bidSettlement) {
     const bidBook =
-      bidSettlement.bidBook ?? (await findBidBookPda({ task: input.task }))[0];
+      bidSettlement.bidBook ??
+      (await findBidBookPda({ task: stableInput.task }))[0];
     bidMetas = [{ address: bidBook, role: AccountRole.WRITABLE }];
     if (bidSettlement.kind === "accepted") {
       bidMetas.push(
@@ -646,35 +1052,148 @@ export type CloseTaskChild =
         }
     ));
 
+// MarketplaceClient emits a v0 transaction without address lookup tables and
+// prepends a compute-unit-limit instruction (plus an optional unit-price
+// instruction). With a fee payer distinct from the authority, the nine fixed
+// close_task metas, two signatures, and worst-case distinct keys, 28 total
+// close_task metas serialize to at most 1,219 bytes. With 29 metas, the normal
+// default-limit path is already 1,240 bytes (1,252 with a unit-price
+// instruction), above Solana's 1,232-byte packet limit. Keep this facade's
+// normal standalone send path constructible. Additional transaction composition
+// still requires callers to size/preflight the complete message.
+const CLOSE_TASK_FIXED_ACCOUNT_META_COUNT = 9;
+const CLOSE_TASK_MAX_STANDALONE_ACCOUNT_META_COUNT = 28;
+const CLOSE_TASK_MAX_REMAINING_ACCOUNT_META_COUNT =
+  CLOSE_TASK_MAX_STANDALONE_ACCOUNT_META_COUNT -
+  CLOSE_TASK_FIXED_ACCOUNT_META_COUNT;
+
+function closeTaskChildAccountMetaCount(
+  children: readonly CloseTaskChild[],
+): number {
+  let count = 0;
+  for (const child of children) {
+    count +=
+      child.kind === "creatorFunded"
+        ? 1
+        : child.kind === "namedRecipient"
+          ? 2
+          : 3;
+  }
+  return count;
+}
+
+function snapshotCloseTaskChildren(
+  value: readonly CloseTaskChild[] | undefined,
+): readonly CloseTaskChild[] {
+  const snapshot = snapshotDenseStructuredArray(
+    value ?? [],
+    "closeTask: children",
+  );
+  const normalized: CloseTaskChild[] = [];
+  for (let index = 0; index < snapshot.length; index += 1) {
+    const child = snapshot[index];
+    if (typeof child !== "object" || child === null) {
+      throw new TypeError(
+        `closeTask: children[${index}] must be an account record`,
+      );
+    }
+    if (child.kind === "creatorFunded") {
+      normalized[index] = Object.freeze({
+        kind: "creatorFunded",
+        account: address(child.account),
+      });
+      continue;
+    }
+    if (child.kind === "namedRecipient") {
+      normalized[index] = Object.freeze({
+        kind: "namedRecipient",
+        account: address(child.account),
+        recipient: address(child.recipient),
+      });
+      continue;
+    }
+    if (child.kind === "workerSubmission") {
+      const hasRentRecipient = child.rentRecipient !== undefined;
+      const hasWorkerAuthority = child.workerAuthority !== undefined;
+      if (hasRentRecipient === hasWorkerAuthority) {
+        throw new TypeError(
+          `closeTask: children[${index}] worker submission requires exactly one rent recipient`,
+        );
+      }
+      const rentRecipient = address(
+        (child.rentRecipient ?? child.workerAuthority)!,
+      );
+      normalized[index] = Object.freeze({
+        kind: "workerSubmission",
+        submission: address(child.submission),
+        workerAgent: address(child.workerAgent),
+        rentRecipient,
+      });
+      continue;
+    }
+    throw new TypeError(
+      `closeTask: children[${index}] has an invalid child kind`,
+    );
+  }
+  return Object.freeze(normalized);
+}
+
 function optionalAddress(value: Address | null | undefined): Address {
   return value ?? AGENC_COORDINATION_PROGRAM_ADDRESS;
 }
 
 /**
- * Close a terminal task and reclaim its rent. Auto-derives the optional job-spec
- * pointer by default, omits the normally-closed escrow by default, and derives
- * the required hire record when omitted. Pass `listing` for hired tasks so
- * their listing capacity is released. Set `bidExclusive` for BidExclusive tasks;
- * the facade then derives and prepends the canonical bid book to the child sweep.
+ * Sweep a terminal task while retaining its rent-exempt Task as the durable
+ * liveness anchor for children that cannot be enumerated on-chain. Auto-derives
+ * the optional job-spec pointer on the first pass, omits the normally-closed
+ * escrow by default, and derives the required hire-record address when omitted.
+ * Pass `listing` while a live hired-task record still needs its capacity slot
+ * released.
+ *
+ * One standalone client transaction supports at most 19 remaining metas: the
+ * optional bid book plus weighted `children` (creator-funded=1,
+ * named-recipient=2, worker-submission=3). Split larger cleanup sets across
+ * repeat calls. On later passes, use `taskJobSpec: null` after that pointer was
+ * swept and omit every already-closed optional account. A BidExclusive task
+ * must continue to pass `bidExclusive` on every pass, even after the canonical
+ * book was swept, because Rust reserves that PDA as remaining-account slot 0.
+ * `reclaimOrphanTaskChild` is only for a destroyed historical parent and cannot
+ * replace this live-parent batching flow.
  */
 export async function closeTask(input: CloseTaskInput) {
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    children: snapshotCloseTaskChildren(signerStableInput.children),
+  };
+  const remainingAccountMetaCount =
+    closeTaskChildAccountMetaCount(stableInput.children) +
+    (stableInput.bidExclusive ? 1 : 0);
+  if (remainingAccountMetaCount > CLOSE_TASK_MAX_REMAINING_ACCOUNT_META_COUNT) {
+    throw new RangeError(
+      `closeTask: bid book and children expand to ${remainingAccountMetaCount} remaining account metas; at most ${CLOSE_TASK_MAX_REMAINING_ACCOUNT_META_COUNT} are supported (${CLOSE_TASK_MAX_STANDALONE_ACCOUNT_META_COUNT} total) by the standalone client transaction`,
+    );
+  }
   const taskJobSpec =
-    input.taskJobSpec === undefined
-      ? (await findTaskJobSpecPda({ task: input.task }))[0]
-      : optionalAddress(input.taskJobSpec);
+    stableInput.taskJobSpec === undefined
+      ? (await findTaskJobSpecPda({ task: stableInput.task }))[0]
+      : optionalAddress(stableInput.taskJobSpec);
   const hireRecord =
-    input.hireRecord ?? (await findHireRecordPda({ task: input.task }))[0];
+    stableInput.hireRecord ??
+    (await findHireRecordPda({ task: stableInput.task }))[0];
   const [protocolConfig] = await findProtocolConfigPda();
 
   const remainingAccounts: { address: Address; role: AccountRole }[] = [];
-  if (input.bidExclusive) {
+  if (stableInput.bidExclusive) {
     const bidBook =
-      typeof input.bidExclusive === "string"
-        ? input.bidExclusive
-        : (await findBidBookPda({ task: input.task }))[0];
+      typeof stableInput.bidExclusive === "string"
+        ? stableInput.bidExclusive
+        : (await findBidBookPda({ task: stableInput.task }))[0];
     remainingAccounts.push({ address: bidBook, role: AccountRole.WRITABLE });
   }
-  for (const child of input.children ?? []) {
+  for (const child of stableInput.children ?? []) {
     if (child.kind === "creatorFunded") {
       remainingAccounts.push({
         address: child.account,
@@ -698,34 +1217,37 @@ export async function closeTask(input: CloseTaskInput) {
   return {
     programAddress: AGENC_COORDINATION_PROGRAM_ADDRESS,
     accounts: [
-      { address: input.task, role: AccountRole.WRITABLE },
+      { address: stableInput.task, role: AccountRole.WRITABLE },
       {
         address: taskJobSpec,
         role:
-          input.taskJobSpec === null
+          stableInput.taskJobSpec === null
             ? AccountRole.READONLY
             : AccountRole.WRITABLE,
       },
       {
-        address: optionalAddress(input.escrow),
-        role: input.escrow ? AccountRole.WRITABLE : AccountRole.READONLY,
+        address: optionalAddress(stableInput.escrow),
+        role: stableInput.escrow ? AccountRole.WRITABLE : AccountRole.READONLY,
       },
       { address: hireRecord, role: AccountRole.WRITABLE },
       {
-        address: optionalAddress(input.listing),
-        role: input.listing ? AccountRole.WRITABLE : AccountRole.READONLY,
+        address: optionalAddress(stableInput.listing),
+        role: stableInput.listing ? AccountRole.WRITABLE : AccountRole.READONLY,
       },
-      { address: input.creatorCompletionBond, role: AccountRole.READONLY },
       {
-        address: optionalAddress(input.workerCompletionBond),
-        role: input.workerCompletionBond
+        address: stableInput.creatorCompletionBond,
+        role: AccountRole.READONLY,
+      },
+      {
+        address: optionalAddress(stableInput.workerCompletionBond),
+        role: stableInput.workerCompletionBond
           ? AccountRole.WRITABLE
           : AccountRole.READONLY,
       },
       {
-        address: input.authority.address,
+        address: stableInput.authority.address,
         role: AccountRole.WRITABLE_SIGNER,
-        signer: input.authority,
+        signer: stableInput.authority,
       },
       // Fix round (FIX 5): optional protocol_config, always supplied by the
       // facade (const-seed PDA). It validates the treasury payee when a
@@ -772,26 +1294,41 @@ export type ReclaimOrphanTaskChildFacadeInput = Omit<
 export async function reclaimOrphanTaskChild(
   input: ReclaimOrphanTaskChildFacadeInput,
 ) {
-  const rentRecipient = input.recovery
-    ? input.recovery.treasury
-    : input.rentRecipient;
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    recovery: snapshotOptionalNested(
+      signerStableInput.recovery,
+      "reclaimOrphanTaskChild: recovery",
+    ),
+  };
+  const rentRecipient = stableInput.recovery
+    ? stableInput.recovery.treasury
+    : stableInput.rentRecipient;
+  if (rentRecipient === undefined) {
+    throw new TypeError(
+      "reclaimOrphanTaskChild: rentRecipient is required without recovery",
+    );
+  }
   const instruction = getReclaimOrphanTaskChildInstruction({
-    child: input.child,
-    parentTask: input.parentTask,
-    workerAgent: input.workerAgent,
+    child: stableInput.child,
+    parentTask: stableInput.parentTask,
+    workerAgent: stableInput.workerAgent,
     rentRecipient,
-    authority: input.authority,
+    authority: stableInput.authority,
   });
-  if (!input.recovery) return instruction;
+  if (!stableInput.recovery) return instruction;
 
   const protocolConfig =
-    input.recovery.protocolConfig ?? (await findProtocolConfigPda())[0];
+    stableInput.recovery.protocolConfig ?? (await findProtocolConfigPda())[0];
   return Object.freeze({
     ...instruction,
     accounts: [
       ...instruction.accounts,
       { address: protocolConfig, role: AccountRole.READONLY },
-      { address: input.recovery.treasury, role: AccountRole.WRITABLE },
+      { address: stableInput.recovery.treasury, role: AccountRole.WRITABLE },
     ],
   });
 }
@@ -818,7 +1355,17 @@ export type ExpireClaimInput = ExpireClaimAsyncInput & {
 };
 
 export async function expireClaim(input: ExpireClaimInput) {
-  const { dependencyParent, bidSettlement, ...generatedInput } = input;
+  const signerStableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+  ]);
+  const stableInput = {
+    ...signerStableInput,
+    bidSettlement: snapshotOptionalNested(
+      signerStableInput.bidSettlement,
+      "expireClaim: bidSettlement",
+    ),
+  };
+  const { dependencyParent, bidSettlement, ...generatedInput } = stableInput;
   const instruction = await getExpireClaimInstructionAsync(generatedInput);
   const remainingAccounts: { address: Address; role: AccountRole }[] = [];
   if (dependencyParent) {
@@ -829,7 +1376,8 @@ export async function expireClaim(input: ExpireClaimInput) {
   }
   if (bidSettlement) {
     const bidBook =
-      bidSettlement.bidBook ?? (await findBidBookPda({ task: input.task }))[0];
+      bidSettlement.bidBook ??
+      (await findBidBookPda({ task: stableInput.task }))[0];
     remainingAccounts.push(
       { address: bidBook, role: AccountRole.WRITABLE },
       { address: bidSettlement.acceptedBid, role: AccountRole.WRITABLE },
@@ -852,7 +1400,14 @@ export async function expireClaim(input: ExpireClaimInput) {
 export async function configureTaskValidation(
   input: ConfigureTaskValidationAsyncInput,
 ) {
-  return getConfigureTaskValidationInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["creator"]);
+  return getConfigureTaskValidationInstructionAsync({
+    ...stableInput,
+    attestor: snapshotOptionalAddress(
+      stableInput.attestor,
+      "configureTaskValidation: attestor",
+    ),
+  });
 }
 
 /**
@@ -896,33 +1451,45 @@ export type SetTaskJobSpecInput = Omit<
  * attestor's pubkey WITH `moderatorIsAttestor: true` for the roster path.
  * Auto-derives the protocol config, moderation config, the v2 moderation record
  * (from `task` + `jobSpecHash` + `moderator`), the BLOCK-floor PDA (from
- * `jobSpecHash`), and the task-job-spec PDA from `task`.
+ * `jobSpecHash`), the task-job-spec PDA, and the canonical hire-record PDA from
+ * `task`. For revision-5 hires, the program also requires `jobSpecHash` to equal
+ * the buyer-specific hash committed atomically by the hire instruction.
  */
 export async function setTaskJobSpec(input: SetTaskJobSpecInput) {
-  const { moderatorIsAttestor, ...rest } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "creator",
+  ] as const);
+  const { moderatorIsAttestor, ...rest } = stableInput;
+  const jobSpecHash = snapshotFixedBytes(
+    rest.jobSpecHash,
+    32,
+    "setTaskJobSpec: jobSpecHash",
+  );
+  assertCanonicalHash32(jobSpecHash, "setTaskJobSpec: jobSpecHash");
+  const stableRest = { ...rest, jobSpecHash };
   const taskModeration =
-    rest.taskModeration ??
+    stableRest.taskModeration ??
     (
       await findTaskModerationPda({
-        task: rest.task,
-        jobSpecHash: rest.jobSpecHash,
-        moderator: rest.moderator,
+        task: stableRest.task,
+        jobSpecHash,
+        moderator: stableRest.moderator,
       })
     )[0];
   const moderationBlock =
-    rest.moderationBlock ??
-    (await findModerationBlockPda({ contentHash: rest.jobSpecHash }))[0];
+    stableRest.moderationBlock ??
+    (await findModerationBlockPda({ contentHash: jobSpecHash }))[0];
   // The generated async builder unconditionally resolves the OPTIONAL roster
   // account from `moderator`, but on the global-authority path that PDA does not
   // exist on-chain (Anchor would fail to load it). Default it to the program-id
   // placeholder (= None) unless the caller opts into the roster path.
   const moderationAttestor =
-    rest.moderationAttestor ??
+    stableRest.moderationAttestor ??
     (moderatorIsAttestor
-      ? (await findModerationAttestorPda({ attestor: rest.moderator }))[0]
+      ? (await findModerationAttestorPda({ attestor: stableRest.moderator }))[0]
       : AGENC_COORDINATION_PROGRAM_ADDRESS);
   return getSetTaskJobSpecInstructionAsync({
-    ...rest,
+    ...stableRest,
     taskModeration,
     moderationBlock,
     moderationAttestor,
@@ -995,22 +1562,48 @@ export type CreateContestTaskInput = Omit<
  * path (`referrer: null`, `referrerFeeBps: 0`).
  */
 export async function createContestTask(input: CreateContestTaskInput) {
-  const { reviewWindowSecs, ...rest } = input;
+  const stableInput = canonicalizeFacadeInputSignerFields(input, [
+    "authority",
+    "creator",
+  ] as const);
+  const { reviewWindowSecs, ...rest } = stableInput;
+  assertDisputeSafeWorkerLimit("createContestTask", rest.maxWorkers);
   if (BigInt(rest.deadline) <= 0n) {
     throw new Error(
       "createContestTask: contests are deadline-bearing — pass a deadline > 0 (ghost_at anchors on it).",
     );
   }
+  const taskId = snapshotFixedBytes(
+    rest.taskId,
+    32,
+    "createContestTask: taskId",
+  );
+  const description = snapshotFixedBytes(
+    rest.description,
+    64,
+    "createContestTask: description",
+  );
+  const constraintHash = snapshotOptionalFixedBytes(
+    rest.constraintHash,
+    32,
+    "createContestTask: constraintHash",
+  );
   const createIx = await getCreateTaskInstructionAsync(
-    withReferrerDefaults({
-      ...rest,
-      taskType: 2, // TaskType::Competitive
-      rewardMintArg: null, // contests are SOL-only (ContestSolRewardOnly)
-    } as OptionalReferrer<CreateTaskAsyncInput>),
+    withReferrerDefaults(
+      {
+        ...rest,
+        taskId,
+        description,
+        constraintHash,
+        taskType: 2, // TaskType::Competitive
+        rewardMintArg: null, // contests are SOL-only (ContestSolRewardOnly)
+      } as OptionalReferrer<CreateTaskAsyncInput>,
+      "createContestTask",
+    ),
   );
   const [task] = await findTaskPda({
     creator: rest.creator.address,
-    taskId: rest.taskId as Parameters<typeof findTaskPda>[0]["taskId"],
+    taskId: taskId as Parameters<typeof findTaskPda>[0]["taskId"],
   });
   const configureIx = await getConfigureTaskValidationInstructionAsync({
     task,
@@ -1037,7 +1630,8 @@ export async function createContestTask(input: CreateContestTaskInput) {
 export async function distributeGhostShare(
   input: DistributeGhostShareAsyncInput,
 ) {
-  return getDistributeGhostShareInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["cranker"]);
+  return getDistributeGhostShareInstructionAsync(stableInput);
 }
 
 /**
@@ -1053,5 +1647,6 @@ export async function distributeGhostShare(
 export async function reclaimTerminalClaim(
   input: ReclaimTerminalClaimAsyncInput,
 ) {
-  return getReclaimTerminalClaimInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getReclaimTerminalClaimInstructionAsync(stableInput);
 }

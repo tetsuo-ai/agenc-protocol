@@ -20,7 +20,7 @@ window or before the deploy is announced publicly.
 > 90-ix P1.2 open roster (2026-07-03, slot 430491216) → additive batches 2–4
 > (store + moderation heartbeat → contest → goods) culminating in the current
 > binary. Verified live on 2026-07-10: on-chain `ProtocolConfig.surface_revision
-> = 4` and SDK `getDeployedSurface` reports `goods: true`.
+= 4` and SDK `getDeployedSurface` reports `goods: true`.
 
 - Program ID: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK`
 - Program source path: `programs/agenc-coordination/`
@@ -35,20 +35,20 @@ window or before the deploy is announced publicly.
 
 ## Pending Revision-5 Candidate (not deployed)
 
-The production/default `#[program]` surface contains **98 actual Rust
+The production/default `#[program]` surface contains **101 actual Rust
 entrypoints**. That number is derived from the cfg-gated source, not this
 document:
 
-- production defaults: 98 (`spl-token-rewards`; `private-zk` off);
-- explicit development `private-zk`: 101;
+- production defaults: 101 (`spl-token-rewards`; `private-zk` off);
+- explicit development `private-zk`: 104;
 - restricted `mainnet-canary`: 25;
 - raw `pub fn` declarations across the mutually exclusive full/canary modules:
-  126, representing 101 unique names because the canary's 25 names are repeated.
+  129, representing 104 unique names because the canary's 25 names are repeated.
 
 The three private-proof entrypoints are quarantined because the guest,
 verifier/router deployment, and end-to-end proof policy have not been
 independently established for mainnet. Production builds and IDLs must exclude
-them; `scripts/mainnet-upgrade.mjs` enforces the exact 98/101/25 sets and
+them; `scripts/mainnet-upgrade.mjs` enforces the exact 101/104/25 sets and
 refuses stale artifacts.
 
 Revision 5 is a coordinated, paused cutover rather than an in-place client
@@ -61,9 +61,15 @@ terminal child cleanup. It also adds the narrowly scoped
 append-only from 250 to 252 bytes to snapshot its accepted-bid no-show policy;
 the mainnet inventory currently contains no bid accounts.
 
+The three funded-hire/activation writes use explicit revision-5 discriminators
+and a separate buyer-specific job-spec commitment; neither old-to-new nor
+new-to-old write skew is accepted. Historical indexer replay must retain a
+frozen revision-4 decoder. The exact atomic release order and the inventoried
+legacy-hire exits are in [`REVISION_5_CUTOVER.md`](./REVISION_5_CUTOVER.md).
+
 The deployment rail is deliberately fail-closed:
 
-- it requires a fresh production binary and matching 98-instruction IDL;
+- it requires a fresh production binary and matching 101-instruction IDL;
 - it verifies the canonical ProgramData and Squads v4 2-of-3 vault/controller
   policy instead of inferring an EOA from account shape;
 - it proves the approved binary fits the live ProgramData allocation and forces
@@ -85,42 +91,104 @@ The deployment rail is deliberately fail-closed:
 **Current ProgramData capacity blocker:** read-only mainnet RPC resolved the
 canonical ProgramData account as
 `E5w1ZkgC5ysWWBECHHzqsL4s6dDUoyWBnUMRptm5cEAw`, with data length 2,183,269
-bytes (45 loader metadata + 2,183,224 executable payload). The current
-2,280,376-byte candidate needs a 2,280,421-byte account, so it is 97,152 payload
-bytes too large. The loader maximum is 10,485,760 account-data bytes, or
-10,485,715 executable bytes after ProgramData metadata. Mainnet's active
-SIMD-0431 rule normally requires an extension of at least 10,240 bytes (except
-when consuming all remaining loader headroom); the exact 97,152-byte extension
-is valid without rounding.
+bytes (45 loader metadata + 2,183,224 executable payload). The reviewed final
+production SBF is 2,303,608 bytes, SHA-256
+`049a66e30da166c1e02ee379993425c32386f774fd9ff8861153e21900b496f2`,
+and exceeds live payload capacity by exactly 120,384 bytes. This supersedes
+the pre-close-task-fix 2,284,496-byte `79f55a68…` identity: the 2026-07-20
+close-task fix build and two isolated 2026-07-21 rebuilds of the canonical
+`programs/agenc-coordination/target/deploy/agenc_coordination.so` all
+reproduced these exact bytes. The loader maximum remains 10,485,760
+account-data bytes, or 10,485,715 executable bytes after ProgramData metadata.
+The exact 120,384-byte extension satisfies mainnet's active SIMD-0431 minimum.
 
-The existing ProgramData account held its exact 15,196,443,120-lamport rent
-floor. Extending it to the candidate's exact capacity requires
-15,872,621,040 lamports, a 676,177,920-lamport (0.67617792 SOL) top-up. Agave
-CLI 3.0.13 allocates the candidate upgrade Buffer at 2,280,413 bytes (37-byte
-Buffer header), whose rent floor is 15,872,565,360 lamports, but funds it on the
-2,280,421-byte ProgramData basis: 15,872,621,040 lamports, 55,680 lamports more.
-Those are different accounting surfaces; do not substitute the Buffer allocation
-size for ProgramData capacity.
+All former 2,284,496-byte / 101,272-byte-extension figures (and the earlier
+2,284,384-byte capacity, rent, Buffer, and 101,160-byte extension figures) are
+superseded. For the bound artifact, the target ProgramData account length is
+2,303,653 bytes and the upgrade Buffer length is 2,303,645 bytes. The standard
+rent formula gives a 16,034,315,760-lamport ProgramData floor at that length;
+the 2026-07-20 dual-provider rent/balance evidence (15,901,296,240 /
+15,901,240,560 floors, 15,196,443,120 live balance, 704,853,120-lamport top-up
+at context slots 434137752/434137753) was read for the superseded 2,284,541-byte
+target and must be re-read from two independent providers for the new length
+immediately before any ceremony; the rail recomputes rent, funding, and the
+top-up live and additionally requires a 1,000,000-lamport payer fee reserve. The official
+[`getMinimumBalanceForRentExemption` contract](https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption)
+accepts a commitment but returns no context slot; it does not support
+`minContextSlot`. The extension
+rail therefore sends only `{ commitment: "finalized" }`, requires the two
+providers to return the same estimate, and uses it only for pre-send funding.
+The loader/runtime enforces rent during execution. Finalized postflight re-queries
+both providers and requires agreement on the rent floor and immutable postimage.
+Each independently observed balance must be at least that floor and records its
+own `excessLamports`; permissionless dust or ordinary finalized-provider lag cannot
+make a correct irreversible extension unrecoverable. A stable-field/rent-floor
+disagreement or a floor above either balance fails closed.
 
-Before the binary upgrade, a separate reviewed Squads proposal must execute
-loader `ExtendProgramChecked` for at least 97,152 additional bytes through
-Squads CPI; 97,152 is the exact minimum for this candidate. The vault PDA is the
-loader authority and cannot be supplied as a CLI keypair. The pinned
-`scripts/squads-extend-program.mjs` builder derives the ProgramData PDA, checks
-the official Squads-program vault PDA from the reviewed multisig/index, checks
-the exact capacity arithmetic, and refuses any message whose independently
-compiled Squads serialization differs from SHA-256
-`12c64e5b1476e6eec9d98c9f4743e6cbcf1a4b14366d1ab6741e246fc156f69b`.
-Its `--execute` flag creates and activates that Squads proposal only; it does
-not approve quorum or execute the inner loader instruction. A second member
-must approve the recorded proposal and an authorized executor must execute it
-as separate, reviewed actions.
+The Squads authority vault held 27,216,000 lamports at finalized provider
+context slots 434137753 and 434137755, but current Agave rejects legacy extension
+through CPI, so that balance is not used for extension. The former
+authority/payer wallet separately held
+19.555838965 SOL on both providers at finalized slot 434137785. That balance
+exceeds the presently calculated extension plus Buffer requirements, but it is
+still only dated evidence: re-query rent and the selected payer during the
+ceremony. No vault-funding transfer is required for the top-level extension
+itself.
+
+Before the binary upgrade, execute loader legacy `ExtendProgram` for the exact
+120,384-byte shortfall as a top-level transaction. Mainnet never activated
+`ExtendProgramChecked`, while both legacy and checked extension are unavailable
+through current Agave CPI; therefore **do not** create a Squads extension proposal.
+The pinned `scripts/program-extend-mainnet.mjs` rail requires official Agave CLI
+4.1.0 from the reviewed source commit, the supplied official release archive,
+and the exact x86_64 Linux binary hash. It measures both supplied files, copies
+the binary through no-follow descriptors into a private mode-0700 directory,
+rehashes the destination, and executes that still-open inode rather than reopening
+the operator path. The payer keypair is likewise copied once from a private,
+single-link no-follow source into a mode-0400 inode, unlinked, and passed as child
+file descriptor 4 for both address derivation and the irreversible transaction;
+the mutable operator path is never reopened and secret bytes are never logged,
+hashed, or serialized. The rail requires an explicitly funded System-owned payer
+and a durable untracked evidence file. It checks genesis, Program/ProgramData linkage,
+the existing Squads upgrade authority, inactive checked-feature state, active
+SIMD-0431 state, exact capacity arithmetic, rent, funding, ProgramData slot, and
+original payload hash on two independent finalized RPCs before execution. Its
+checked-in production policy is `reviewed-final-twice-reproduced` and binds the
+exact SBF hash, 2,303,608-byte payload, and 120,384-byte extension above; policy
+arithmetic drift or malformed/unbound fields fail before file or RPC work.
+Postflight paginates finalized ProgramData history until it reaches the saved
+pre-send signature anchor (bounded at 100 pages of 1,000; failure to reach the
+anchor aborts), then independently retrieves and decodes the exact expected
+loader instruction through both RPCs. Its signature and ProgramData write slot
+must agree and be strictly newer than both saved preflight context slots. Both
+providers must
+also prove identical whole-payload hashes, an unchanged old payload prefix, an
+exact zero-filled 120,384-byte suffix, authority, and rent floor. Each provider's
+possibly different dusted balance and exact surplus are retained and validated.
+Transaction signature and slot must agree; each provider's standards-valid
+nullable `blockTime` is retained and checked when present. Use
+`--postflight-only` with the same evidence after an
+interrupted run.
+
+The evidence is a mode-0600, version-3, policy-bound record written through an
+fsynced exclusive temp file and atomic publication. Phase changes hold an
+exclusive sidecar lock across exact-record comparison and atomic rename, then
+fsync the parent directory; a surviving lock fails closed and may be removed
+only after confirming that no writer remains active. Resume validates every
+field and relationship, including bounded-future phase timestamps. Transaction
+wall-clock chronology is checked when Solana RPC supplies `blockTime`; canonical
+`null` remains valid and slot/signature/anchor/ProgramData ordering stays
+mandatory. Validation occurs before making a postflight RPC. `recordSha256` is an unkeyed corruption
+checksum, not a signature or MAC: authenticity depends on the local OS account,
+mode-0600 file, and protected parent directory. The permissionless
+preflight-to-inclusion race is irreducible; exact postflight detects but cannot
+undo an unexpected concurrent extension, so any size mismatch aborts.
 Extension stamps the ProgramData slot, so the extension and
 `Upgrade` cannot execute in the same slot; wait for a later slot, then rerun the
-entire preflight. The rail pins Solana CLI 3.0.13, queries rent through the
-genesis-checked RPC, forces `--no-auto-extend`, and rejects pre/post capacity
-drift. Re-query size, rent, authority, balance, feature activation, and slot at
-the ceremony. This audit did **not** authorize, sign, or execute the extension.
+entire preflight. The separate upgrade rail pins Solana CLI 3.0.13, forces
+`--no-auto-extend`, and rejects pre/post capacity drift. Re-query size, rent,
+authority, balance, feature state, and slot at the ceremony. This record does
+not claim the extension has already executed.
 
 Read-only mainnet inventory on 2026-07-18 found no Active disputes, no Active
 governance proposals, no bid accounts, no token-denominated tasks, no
@@ -253,11 +321,15 @@ The latest mainnet snapshot found:
   under the hardened claim path until their creator publishes a moderated job
   spec; none has an existing worker. There are zero active job-spec BLOCKs and
   zero malformed moderation-block conditions.
-- 62 exact-layout HireRecords. All 62 use the legacy default-provider carve-out,
-  but every one retains a canonical immutable ServiceListing provider proof: 16
-  are nonterminal and 46 terminal. They use the explicit `legacy_listing`
-  compatibility account; a missing, malformed, or mismatched listing blocks the
-  upgrade.
+- 62 exact-layout HireRecords. All 62 use both revision-4 legacy forms: the
+  default-provider carve-out and a zero buyer-job-spec commitment tail. Every
+  record retains a canonical immutable ServiceListing provider proof. Of the 16
+  nonterminal hires, 13 are Open/unassigned and must retain cancel/refund then be
+  re-hired with an explicit task commitment; three are assigned and retain only
+  their existing settlement/exit lifecycle. The provider compatibility path uses
+  the exact `legacy_listing` account, but revision 5 deliberately has no fallback
+  that invents a missing buyer work contract. See `REVISION_5_CUTOVER.md` for the
+  exact task inventory.
 - Zero TaskBid and zero TaskBidBook accounts. The immediate predeploy rescan now
   requires explicit `openBidCount=0` and `openBidBondPrincipal=0`; paused legacy
   exit paths can otherwise mutate or orphan a bid while loader transactions are

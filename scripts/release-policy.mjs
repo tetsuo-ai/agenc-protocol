@@ -2,7 +2,8 @@
 
 import { createHash } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
@@ -20,8 +21,7 @@ export const EXPECTED_VERIFICATION_REPOSITORY =
   "https://github.com/tetsuo-ai/agenc-protocol";
 const NUMERIC_IDENTIFIER = "(?:0|[1-9][0-9]*)";
 const NON_NUMERIC_IDENTIFIER = "(?:[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
-const PRERELEASE_IDENTIFIER =
-  `(?:${NUMERIC_IDENTIFIER}|${NON_NUMERIC_IDENTIFIER})`;
+const PRERELEASE_IDENTIFIER = `(?:${NUMERIC_IDENTIFIER}|${NON_NUMERIC_IDENTIFIER})`;
 const SEMVER = new RegExp(
   `^(${NUMERIC_IDENTIFIER})\\.(${NUMERIC_IDENTIFIER})\\.(${NUMERIC_IDENTIFIER})` +
     `(?:-(${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*))?$`,
@@ -37,6 +37,14 @@ function fail(message) {
 function requireValue(value, label) {
   const normalized = String(value ?? "").trim();
   if (normalized.length === 0) fail(`${label} is required`);
+  return normalized;
+}
+
+function requirePackageId(value, label) {
+  const normalized = requireValue(value, label);
+  if (!/^[a-z][a-z0-9-]*$/.test(normalized)) {
+    fail(`${label} must be a canonical package id`);
+  }
   return normalized;
 }
 
@@ -148,13 +156,239 @@ export function validateReleaseTrain(train) {
   return { train, byId };
 }
 
+function requireWorkspaceDirectory(value) {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\\")) {
+    fail(
+      "root workspaces must contain explicit repository-relative directories",
+    );
+  }
+  const segments = value.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        segment.length === 0 ||
+        segment === "." ||
+        segment === ".." ||
+        !/^[A-Za-z0-9._-]+$/.test(segment),
+    )
+  ) {
+    fail(
+      "root workspaces must contain explicit repository-relative directories",
+    );
+  }
+  return value;
+}
+
+export function rootWorkspaceDirectories(rootManifest) {
+  if (
+    !Array.isArray(rootManifest?.workspaces) ||
+    rootManifest.workspaces.length === 0
+  ) {
+    fail("root package manifest must declare an explicit workspace array");
+  }
+  const directories = rootManifest.workspaces.map(requireWorkspaceDirectory);
+  if (new Set(directories).size !== directories.length) {
+    fail("root package manifest contains duplicate workspace directories");
+  }
+  return directories;
+}
+
+export function validateReleaseWorkspaceCoverage(
+  train,
+  rootManifest,
+  workspaceManifests,
+) {
+  validateReleaseTrain(train);
+  if (!(workspaceManifests instanceof Map)) {
+    fail("workspace manifests must be keyed by root workspace directory");
+  }
+  const publishable = rootWorkspaceDirectories(rootManifest).filter(
+    (directory) => {
+      const manifest = workspaceManifests.get(directory);
+      if (
+        manifest === null ||
+        typeof manifest !== "object" ||
+        Array.isArray(manifest)
+      ) {
+        fail(`root workspace ${directory} has no readable package manifest`);
+      }
+      return manifest.private !== true;
+    },
+  );
+  const expected = [...publishable].sort();
+  const actual = train.packages.map(({ directory }) => directory).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(
+      "release train directories must exactly cover publishable root workspaces",
+    );
+  }
+  return true;
+}
+
+export function validateReleaseWorkflowTagGlobs(train, tagGlobs) {
+  validateReleaseTrain(train);
+  if (
+    !Array.isArray(tagGlobs) ||
+    tagGlobs.some((value) => typeof value !== "string")
+  ) {
+    fail("release workflow tag routes must be an array of strings");
+  }
+  const expected = train.packages
+    .map(({ tagPrefix }) => `${tagPrefix}*`)
+    .sort();
+  const actual = [...tagGlobs].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail("release workflow tag routes must exactly match the release train");
+  }
+  return true;
+}
+
+export function validateReleaseWorkflowGateIdentities(train, gates) {
+  validateReleaseTrain(train);
+  if (
+    !Array.isArray(gates) ||
+    gates.some(
+      (value) =>
+        value === null || typeof value !== "object" || Array.isArray(value),
+    )
+  ) {
+    fail("release workflow package gates must be an array of identities");
+  }
+  for (const gate of gates) {
+    requireExactKeys(gate, ["id", "name", "directory"], "release package gate");
+  }
+  const expected = train.packages
+    .map(({ id, name, directory }) => ({ id, name, directory }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const actual = gates
+    .map(({ id, name, directory }) => ({ id, name, directory }))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(
+      "release workflow package gates must exactly cover the release train identities",
+    );
+  }
+  return true;
+}
+
+export function validateReleaseWorkflowGateIds(train, gateIds) {
+  validateReleaseTrain(train);
+  if (
+    !Array.isArray(gateIds) ||
+    gateIds.some((value) => typeof value !== "string")
+  ) {
+    fail("release workflow routed gate ids must be an array of strings");
+  }
+  const expected = train.packages.map(({ id }) => id).sort();
+  const actual = [...gateIds].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(
+      "release workflow routed gate ids must exactly cover the release train",
+    );
+  }
+  return true;
+}
+
+const RELEASE_GATE_PROOF_FILENAME = "agenc-release-gate-proof-v1.json";
+
+function releaseGateProofPath(runnerTemp) {
+  const directory = requireValue(runnerTemp, "RUNNER_TEMP");
+  if (!isAbsolute(directory)) fail("RUNNER_TEMP must be an absolute path");
+  return join(directory, RELEASE_GATE_PROOF_FILENAME);
+}
+
+function expectedReleaseGateProof(release, train) {
+  const { byId } = validateReleaseTrain(train);
+  const entry = byId.get(release?.id);
+  if (!entry) fail("release gate proof references an unknown package");
+  const resolved = resolveReleaseTag(
+    `${entry.tagPrefix}${requireValue(release?.version, "release version")}`,
+    train,
+  );
+  if (
+    resolved.id !== release.id ||
+    resolved.name !== release.name ||
+    resolved.directory !== release.directory
+  ) {
+    fail("release gate proof identity does not match the release train");
+  }
+  return {
+    schemaVersion: 1,
+    id: resolved.id,
+    name: resolved.name,
+    directory: resolved.directory,
+    version: resolved.version,
+    tag: `${resolved.tagPrefix}${resolved.version}`,
+  };
+}
+
+export async function recordReleaseGateCompletion({
+  release,
+  train,
+  gates,
+  gateId,
+  runnerTemp,
+}) {
+  validateReleaseWorkflowGateIdentities(train, gates);
+  const expected = expectedReleaseGateProof(release, train);
+  if (
+    requirePackageId(gateId, "RELEASE_COMPLETES_PACKAGE_ID") !== expected.id
+  ) {
+    fail(`release gate cannot complete resolved package ${expected.id}`);
+  }
+  const proofPath = releaseGateProofPath(runnerTemp);
+  try {
+    await writeFile(proofPath, `${JSON.stringify(expected)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (error) {
+    fail(`release gate proof must be created exactly once: ${error.message}`);
+  }
+  return true;
+}
+
+export async function verifyReleaseGateCompletion({
+  release,
+  train,
+  gates,
+  runnerTemp,
+}) {
+  validateReleaseWorkflowGateIdentities(train, gates);
+  const expected = expectedReleaseGateProof(release, train);
+  const proofPath = releaseGateProofPath(runnerTemp);
+  let serialized;
+  try {
+    serialized = await readFile(proofPath, "utf8");
+  } catch (error) {
+    fail(`release gate proof is missing or unreadable: ${error.message}`);
+  }
+  let actual;
+  try {
+    actual = JSON.parse(serialized);
+  } catch (error) {
+    fail(`release gate proof must be valid JSON: ${error.message}`);
+  }
+  requireExactKeys(
+    actual,
+    ["schemaVersion", "id", "name", "directory", "version", "tag"],
+    "release gate proof",
+  );
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail("release gate proof does not match the resolved package");
+  }
+  return true;
+}
+
 export function resolveReleaseTag(tag, train) {
   const { byId } = validateReleaseTrain(train);
   if (typeof tag !== "string") fail("release tag is required");
   const matches = [...byId.values()].filter((entry) =>
     tag.startsWith(entry.tagPrefix),
   );
-  if (matches.length !== 1) fail(`unrecognized or ambiguous release tag: ${tag}`);
+  if (matches.length !== 1)
+    fail(`unrecognized or ambiguous release tag: ${tag}`);
   const entry = matches[0];
   const version = tag.slice(entry.tagPrefix.length);
   const match = version.match(SEMVER);
@@ -242,41 +476,107 @@ export function versionRangeAdmits(version, range) {
   });
 }
 
+const RELEASE_DEPENDENCY_SECTIONS = Object.freeze([
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+]);
+
+function releaseDependencySections(manifest, packageId) {
+  return RELEASE_DEPENDENCY_SECTIONS.flatMap((sectionName) => {
+    const section = manifest[sectionName];
+    if (section === undefined) return [];
+    if (
+      section === null ||
+      typeof section !== "object" ||
+      Array.isArray(section)
+    ) {
+      fail(`${packageId} ${sectionName} must be a package-name-to-spec object`);
+    }
+    return Object.entries(section).map(([name, range]) => ({
+      sectionName,
+      name,
+      range,
+    }));
+  });
+}
+
+function firstPartyNpmAliasTarget(range, byName) {
+  if (
+    typeof range !== "string" ||
+    range.slice(0, "npm:".length).toLowerCase() !== "npm:"
+  ) {
+    return undefined;
+  }
+  const targetSpec = range.slice("npm:".length).toLowerCase();
+  for (const [name, entry] of byName) {
+    const normalizedName = name.toLowerCase();
+    if (
+      targetSpec === normalizedName ||
+      targetSpec.startsWith(`${normalizedName}@`)
+    ) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
 export function validateReleaseDependencyGraph(train, manifests) {
   const { byId } = validateReleaseTrain(train);
-  const byName = new Map([...byId.values()].map((entry) => [entry.name, entry]));
+  const byName = new Map(
+    [...byId.values()].map((entry) => [entry.name, entry]),
+  );
   for (const entry of byId.values()) {
     const manifest = manifests.get(entry.id);
     if (
       manifest?.name !== entry.name ||
       manifest?.version !== entry.expectedVersion
     ) {
-      fail(`${entry.id} package manifest does not match its reviewed release-train identity`);
+      fail(
+        `${entry.id} package manifest does not match its reviewed release-train identity`,
+      );
     }
-    const declared = {
-      ...(manifest.dependencies ?? {}),
-      ...(manifest.optionalDependencies ?? {}),
-      ...(manifest.peerDependencies ?? {}),
-    };
-    for (const [name, range] of Object.entries(declared)) {
+    const declaredById = new Map();
+    for (const { sectionName, name, range } of releaseDependencySections(
+      manifest,
+      entry.id,
+    )) {
+      const aliasTarget = firstPartyNpmAliasTarget(range, byName);
+      if (aliasTarget) {
+        fail(
+          `${entry.id} ${sectionName} ${name} aliases first-party dependency ` +
+            `${aliasTarget.id}; release-train dependencies must use canonical package names`,
+        );
+      }
       const dependency = byName.get(name);
       if (!dependency) continue;
       if (!entry.requires.includes(dependency.id)) {
-        fail(`${entry.id} declares untracked first-party dependency ${dependency.id}`);
+        fail(
+          `${entry.id} declares untracked first-party dependency ${dependency.id}`,
+        );
       }
       if (!versionRangeAdmits(dependency.expectedVersion, range)) {
         fail(
           `${entry.id} dependency range for ${dependency.id} does not admit reviewed ${dependency.expectedVersion}`,
         );
       }
+      const previous = declaredById.get(dependency.id);
+      if (previous && previous.range.trim() !== range.trim()) {
+        fail(
+          `${entry.id} declares contradictory ${previous.sectionName}/${sectionName} ` +
+            `ranges for first-party dependency ${dependency.id}`,
+        );
+      }
+      declaredById.set(dependency.id, { sectionName, range });
     }
     for (const requiredId of entry.requires) {
-      const required = byId.get(requiredId);
       // Protocol is an ABI/release-order prerequisite, not a JavaScript runtime
       // dependency, for the SDK and moderation packages.
-      if (requiredId === "protocol" && declared[required.name] === undefined) continue;
-      if (declared[required.name] === undefined) {
-        fail(`${entry.id} is missing declared first-party dependency ${requiredId}`);
+      if (requiredId === "protocol" && !declaredById.has(requiredId)) continue;
+      if (!declaredById.has(requiredId)) {
+        fail(
+          `${entry.id} is missing declared first-party dependency ${requiredId}`,
+        );
       }
     }
   }
@@ -285,11 +585,17 @@ export function validateReleaseDependencyGraph(train, manifests) {
 
 function registryVersion(document, version, packageName, expectedIntegrity) {
   const metadata = document?.versions?.[version];
-  if (!metadata || metadata.name !== packageName || metadata.version !== version) {
+  if (
+    !metadata ||
+    metadata.name !== packageName ||
+    metadata.version !== version
+  ) {
     fail(`${packageName}@${version} is not published exactly`);
   }
   if (metadata.dist?.integrity !== expectedIntegrity) {
-    fail(`${packageName}@${version} registry integrity differs from the reviewed artifact`);
+    fail(
+      `${packageName}@${version} registry integrity differs from the reviewed artifact`,
+    );
   }
   return metadata;
 }
@@ -303,8 +609,10 @@ export async function verifyReleasePrerequisites({
   verifyProvenance,
 }) {
   if (typeof fetchRegistry !== "function") fail("fetchRegistry is required");
-  if (typeof resolveSourceIdentity !== "function") fail("resolveSourceIdentity is required");
-  if (typeof verifyProvenance !== "function") fail("verifyProvenance is required");
+  if (typeof resolveSourceIdentity !== "function")
+    fail("resolveSourceIdentity is required");
+  if (typeof verifyProvenance !== "function")
+    fail("verifyProvenance is required");
   validateReleaseDependencyGraph(train, manifests);
   const prerequisites = transitivePrerequisites(release, train);
   const checked = [];
@@ -347,20 +655,21 @@ export async function verifyReleasePrerequisites({
 }
 
 function normalizeHash(value, label) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!SHA256.test(normalized)) fail(`${label} must be 64 lowercase hexadecimal characters`);
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!SHA256.test(normalized))
+    fail(`${label} must be 64 lowercase hexadecimal characters`);
   return normalized;
 }
 
 function decodeRpcAccount(response, label, minimumContextSlot = 0) {
   const value = response?.result?.value;
   const slot = response?.result?.context?.slot;
-  if (
-    !Number.isSafeInteger(slot) ||
-    slot < minimumContextSlot ||
-    !value
-  ) {
-    fail(`${label} RPC account response is missing finalized context/account data`);
+  if (!Number.isSafeInteger(slot) || slot < minimumContextSlot || !value) {
+    fail(
+      `${label} RPC account response is missing finalized context/account data`,
+    );
   }
   if (!Array.isArray(value.data) || value.data[1] !== "base64") {
     fail(`${label} RPC account data is not canonical base64`);
@@ -382,7 +691,11 @@ export async function deriveProtocolConfigAddress() {
 }
 
 export function hashProgramData(data) {
-  if (!Buffer.isBuffer(data) || data.length <= 45 || data.readUInt32LE(0) !== 3) {
+  if (
+    !Buffer.isBuffer(data) ||
+    data.length <= 45 ||
+    data.readUInt32LE(0) !== 3
+  ) {
     fail("ProgramData account has an invalid loader header");
   }
   let end = data.length;
@@ -398,7 +711,8 @@ async function rpcCall(fetchFn, url, method, params) {
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response?.ok) fail(`${method} failed with HTTP ${response?.status ?? "unknown"}`);
+  if (!response?.ok)
+    fail(`${method} failed with HTTP ${response?.status ?? "unknown"}`);
   const body = await response.json();
   if (body?.error || body?.jsonrpc !== "2.0") {
     fail(`${method} returned a malformed/error JSON-RPC response`);
@@ -409,8 +723,11 @@ async function rpcCall(fetchFn, url, method, params) {
 export async function readFinalizedCutoverEvidence({ url, fetchFn = fetch }) {
   const genesis = (await rpcCall(fetchFn, url, "getGenesisHash", [])).result;
   if (genesis !== MAINNET_GENESIS) fail("RPC is not Solana mainnet-beta");
-  const slot = (await rpcCall(fetchFn, url, "getSlot", [{ commitment: "finalized" }])).result;
-  if (!Number.isSafeInteger(slot) || slot <= 0) fail("RPC returned an invalid finalized slot");
+  const slot = (
+    await rpcCall(fetchFn, url, "getSlot", [{ commitment: "finalized" }])
+  ).result;
+  if (!Number.isSafeInteger(slot) || slot <= 0)
+    fail("RPC returned an invalid finalized slot");
   const accountConfig = {
     commitment: "finalized",
     encoding: "base64",
@@ -427,20 +744,33 @@ export async function readFinalizedCutoverEvidence({ url, fetchFn = fetch }) {
     program.data.length !== 36 ||
     program.data.readUInt32LE(0) !== 2
   ) {
-    fail("program account is not the expected executable upgradeable-loader Program");
+    fail(
+      "program account is not the expected executable upgradeable-loader Program",
+    );
   }
-  const programDataAddress = getAddressDecoder().decode(program.data.subarray(4, 36));
+  const programDataAddress = getAddressDecoder().decode(
+    program.data.subarray(4, 36),
+  );
   const programData = decodeRpcAccount(
-    await rpcCall(fetchFn, url, "getAccountInfo", [programDataAddress, accountConfig]),
+    await rpcCall(fetchFn, url, "getAccountInfo", [
+      programDataAddress,
+      accountConfig,
+    ]),
     "ProgramData",
     slot,
   );
-  if (programData.owner !== UPGRADEABLE_LOADER || programData.executable !== false) {
+  if (
+    programData.owner !== UPGRADEABLE_LOADER ||
+    programData.executable !== false
+  ) {
     fail("ProgramData account has an unexpected owner/executable flag");
   }
   const protocolAddress = await deriveProtocolConfigAddress();
   const protocol = decodeRpcAccount(
-    await rpcCall(fetchFn, url, "getAccountInfo", [protocolAddress, accountConfig]),
+    await rpcCall(fetchFn, url, "getAccountInfo", [
+      protocolAddress,
+      accountConfig,
+    ]),
     "ProtocolConfig",
     slot,
   );
@@ -453,7 +783,9 @@ export async function readFinalizedCutoverEvidence({ url, fetchFn = fetch }) {
     protocol.data.length !== 351 ||
     !protocol.data.subarray(0, 8).equals(discriminator)
   ) {
-    fail("ProtocolConfig owner/layout/discriminator does not match revision-5 ABI");
+    fail(
+      "ProtocolConfig owner/layout/discriminator does not match revision-5 ABI",
+    );
   }
   return Object.freeze({
     genesis,
@@ -494,13 +826,20 @@ export function assertIndependentCutoverEvidence(
 
 export function assertVerifiedBuildStatus(
   statuses,
-  { expectedHash, expectedCommit, expectedRepository = EXPECTED_VERIFICATION_REPOSITORY },
+  {
+    expectedHash,
+    expectedCommit,
+    expectedRepository = EXPECTED_VERIFICATION_REPOSITORY,
+  },
 ) {
   const hash = normalizeHash(expectedHash, "expected executable hash");
   if (!/^[0-9a-f]{40}$/i.test(expectedCommit ?? "")) {
-    fail("expected verified source commit must be a 40-character Git object ID");
+    fail(
+      "expected verified source commit must be a 40-character Git object ID",
+    );
   }
-  if (!Array.isArray(statuses)) fail("verified-build status response must be an array");
+  if (!Array.isArray(statuses))
+    fail("verified-build status response must be an array");
   const normalizedRepository = expectedRepository.replace(/\/?(?:\.git)?$/, "");
   const match = statuses.find(
     (status) =>
@@ -508,9 +847,13 @@ export function assertVerifiedBuildStatus(
       String(status.on_chain_hash).toLowerCase() === hash &&
       String(status.executable_hash).toLowerCase() === hash &&
       String(status.commit).toLowerCase() === expectedCommit.toLowerCase() &&
-      String(status.repo_url).replace(/\/?(?:\.git)?$/, "") === normalizedRepository,
+      String(status.repo_url).replace(/\/?(?:\.git)?$/, "") ===
+        normalizedRepository,
   );
-  if (!match) fail("no verified-build record binds the expected repo commit and live hash");
+  if (!match)
+    fail(
+      "no verified-build record binds the expected repo commit and live hash",
+    );
   return match;
 }
 
@@ -531,7 +874,9 @@ export function assertVerifiableBuildManifest(
     commit?.toLowerCase() !== expectedCommit.toLowerCase() ||
     production?.toLowerCase() !== hash
   ) {
-    fail("verifiable-build manifest does not bind the expected source commit and production hash");
+    fail(
+      "verifiable-build manifest does not bind the expected source commit and production hash",
+    );
   }
   return true;
 }
@@ -549,14 +894,18 @@ export async function verifyStableCutover({
   }
   const rpcUrls = JSON.parse(environment.AGENC_MAINNET_RPC_URLS_JSON ?? "null");
   if (!Array.isArray(rpcUrls) || rpcUrls.length !== 2) {
-    fail("AGENC_MAINNET_RPC_URLS_JSON must contain exactly two distinct RPC origins");
+    fail(
+      "AGENC_MAINNET_RPC_URLS_JSON must contain exactly two distinct RPC origins",
+    );
   }
   const origins = rpcUrls.map((url) => {
     let parsed;
     try {
       parsed = new URL(url);
     } catch {
-      fail("AGENC_MAINNET_RPC_URLS_JSON must contain exactly two valid RPC URLs");
+      fail(
+        "AGENC_MAINNET_RPC_URLS_JSON must contain exactly two valid RPC URLs",
+      );
     }
     if (
       parsed.protocol !== "https:" ||
@@ -572,7 +921,9 @@ export async function verifyStableCutover({
     return parsed.origin;
   });
   if (origins[0] === origins[1]) {
-    fail("AGENC_MAINNET_RPC_URLS_JSON must contain exactly two distinct RPC origins");
+    fail(
+      "AGENC_MAINNET_RPC_URLS_JSON must contain exactly two distinct RPC origins",
+    );
   }
   const expectedHash = normalizeHash(
     environment.EXPECTED_MAINNET_PROGRAM_SHA256,
@@ -585,7 +936,9 @@ export async function verifyStableCutover({
   if (release?.id === "protocol") {
     const githubSha = requireValue(environment.GITHUB_SHA, "GITHUB_SHA");
     if (expectedCommit.toLowerCase() !== githubSha.toLowerCase()) {
-      fail("protocol stable release requires verified source commit to equal GITHUB_SHA");
+      fail(
+        "protocol stable release requires verified source commit to equal GITHUB_SHA",
+      );
     }
     const manifestPath = requireValue(
       environment.VERIFIABLE_BUILD_MANIFEST,
@@ -607,7 +960,10 @@ export async function verifyStableCutover({
     environment.VERIFICATION_STATUS_BASE_URL ?? "https://verify.osec.io";
   const verificationResponse = await fetchFn(
     `${verificationBase}/status-all/${PROGRAM_ID}`,
-    { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) },
+    {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    },
   );
   if (!verificationResponse.ok) {
     fail(`verified-build status failed: HTTP ${verificationResponse.status}`);
@@ -641,9 +997,12 @@ export function planReleaseState({
   for (const [name, values] of Object.entries(allowed)) {
     if (!values.includes(states[name])) fail(`invalid ${name}`);
   }
-  if (npmState === "mismatch") fail("published npm integrity differs from reviewed tarball");
-  if (assetState === "mismatch") fail("release asset digest differs from reviewed artifact");
-  if (npmState === "matching" && !npmAttested) fail("published npm artifact lacks provenance");
+  if (npmState === "mismatch")
+    fail("published npm integrity differs from reviewed tarball");
+  if (assetState === "mismatch")
+    fail("release asset digest differs from reviewed artifact");
+  if (npmState === "matching" && !npmAttested)
+    fail("published npm artifact lacks provenance");
   if (releaseState === "public" && npmState === "absent") {
     fail("public GitHub release exists before npm publication");
   }
@@ -668,14 +1027,24 @@ export function planReleaseState({
 }
 
 async function loadTrainAndManifests() {
-  const train = JSON.parse(await readFile(new URL("release-train.json", ROOT), "utf8"));
+  const [train, rootManifest] = await Promise.all([
+    readFile(new URL("release-train.json", ROOT), "utf8").then(JSON.parse),
+    readFile(new URL("package.json", ROOT), "utf8").then(JSON.parse),
+  ]);
   validateReleaseTrain(train);
+  const workspaceManifests = new Map();
+  for (const directory of rootWorkspaceDirectories(rootManifest)) {
+    workspaceManifests.set(
+      directory,
+      JSON.parse(
+        await readFile(new URL(`${directory}/package.json`, ROOT), "utf8"),
+      ),
+    );
+  }
+  validateReleaseWorkspaceCoverage(train, rootManifest, workspaceManifests);
   const manifests = new Map();
   for (const entry of train.packages) {
-    manifests.set(
-      entry.id,
-      JSON.parse(await readFile(new URL(`${entry.directory}/package.json`, ROOT), "utf8")),
-    );
+    manifests.set(entry.id, workspaceManifests.get(entry.directory));
   }
   validateReleaseDependencyGraph(train, manifests);
   return { train, manifests };
@@ -704,18 +1073,38 @@ function appendGithubOutput(values) {
   );
 }
 
+function releaseWorkflowGatesFromEnvironment(train) {
+  const serializedGates = requireValue(
+    process.env.RELEASE_PACKAGE_GATES_JSON,
+    "RELEASE_PACKAGE_GATES_JSON",
+  );
+  let gates;
+  try {
+    gates = JSON.parse(serializedGates);
+  } catch (error) {
+    fail(`RELEASE_PACKAGE_GATES_JSON must be valid JSON: ${error.message}`);
+  }
+  validateReleaseWorkflowGateIdentities(train, gates);
+  return gates;
+}
+
+function resolveManifestBoundRelease(train, manifests) {
+  const release = resolveReleaseTag(process.env.GITHUB_REF_NAME, train);
+  const manifest = manifests.get(release.id);
+  if (manifest.name !== release.name || manifest.version !== release.version) {
+    fail(
+      `tag ${process.env.GITHUB_REF_NAME} does not match ${release.directory}/package.json ` +
+        `(${manifest.name}@${manifest.version})`,
+    );
+  }
+  return release;
+}
+
 async function cli() {
   const command = process.argv[2];
   const { train, manifests } = await loadTrainAndManifests();
   if (command === "resolve") {
-    const release = resolveReleaseTag(process.env.GITHUB_REF_NAME, train);
-    const manifest = manifests.get(release.id);
-    if (manifest.name !== release.name || manifest.version !== release.version) {
-      fail(
-        `tag ${process.env.GITHUB_REF_NAME} does not match ${release.directory}/package.json ` +
-          `(${manifest.name}@${manifest.version})`,
-      );
-    }
+    const release = resolveManifestBoundRelease(train, manifests);
     await appendGithubOutput({
       id: release.id,
       name: release.name,
@@ -727,6 +1116,47 @@ async function cli() {
     });
     return;
   }
+  if (command === "gates") {
+    const gates = releaseWorkflowGatesFromEnvironment(train);
+    const release = resolveManifestBoundRelease(train, manifests);
+    const resolvedId = requirePackageId(
+      process.env.RESOLVED_PACKAGE_ID,
+      "RESOLVED_PACKAGE_ID",
+    );
+    if (
+      resolvedId !== release.id ||
+      !gates.some(({ id }) => id === resolvedId)
+    ) {
+      fail(`resolved package id ${resolvedId} is not bound to the release tag`);
+    }
+    console.log(`verified release gate coverage for ${resolvedId}`);
+    return;
+  }
+  if (command === "complete-gate") {
+    const gates = releaseWorkflowGatesFromEnvironment(train);
+    const release = resolveManifestBoundRelease(train, manifests);
+    await recordReleaseGateCompletion({
+      release,
+      train,
+      gates,
+      gateId: process.env.RELEASE_COMPLETES_PACKAGE_ID,
+      runnerTemp: process.env.RUNNER_TEMP,
+    });
+    console.log(`recorded completed release gate for ${release.id}`);
+    return;
+  }
+  if (command === "verify-gate") {
+    const gates = releaseWorkflowGatesFromEnvironment(train);
+    const release = resolveManifestBoundRelease(train, manifests);
+    await verifyReleaseGateCompletion({
+      release,
+      train,
+      gates,
+      runnerTemp: process.env.RUNNER_TEMP,
+    });
+    console.log(`verified completed release gate for ${release.id}`);
+    return;
+  }
   if (command === "prerequisites") {
     const release = resolveReleaseTag(process.env.GITHUB_REF_NAME, train);
     const checked = await verifyReleasePrerequisites({
@@ -736,9 +1166,15 @@ async function cli() {
       fetchRegistry: async (packageName) => {
         const response = await fetch(
           `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
-          { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) },
+          {
+            headers: { accept: "application/json" },
+            signal: AbortSignal.timeout(15_000),
+          },
         );
-        if (!response.ok) fail(`npm registry lookup failed for ${packageName}: HTTP ${response.status}`);
+        if (!response.ok)
+          fail(
+            `npm registry lookup failed for ${packageName}: HTTP ${response.status}`,
+          );
         return response.json();
       },
       resolveSourceIdentity: async (entry, version) => {
@@ -751,7 +1187,9 @@ async function cli() {
             { cwd: fileURLToPath(ROOT), encoding: "utf8" },
           ));
         } catch {
-          fail(`cannot resolve reviewed source commit for prerequisite tag ${tag}`);
+          fail(
+            `cannot resolve reviewed source commit for prerequisite tag ${tag}`,
+          );
         }
         const commit = stdout.trim().toLowerCase();
         if (!/^[0-9a-f]{40}$/.test(commit)) {
@@ -761,13 +1199,17 @@ async function cli() {
       },
       verifyProvenance: verifyNpmProvenance,
     });
-    console.log(`verified release prerequisites: ${checked.join(", ") || "none"}`);
+    console.log(
+      `verified release prerequisites: ${checked.join(", ") || "none"}`,
+    );
     return;
   }
   if (command === "cutover") {
     const release = resolveReleaseTag(process.env.GITHUB_REF_NAME, train);
     if (release.prerelease) {
-      console.log("prerelease tag: stable mainnet cutover gate is not required; dist-tag remains next");
+      console.log(
+        "prerelease tag: stable mainnet cutover gate is not required; dist-tag remains next",
+      );
       return;
     }
     const result = await verifyStableCutover({ release, train });
@@ -777,7 +1219,9 @@ async function cli() {
     );
     return;
   }
-  fail("usage: release-policy.mjs <resolve|prerequisites|cutover>");
+  fail(
+    "usage: release-policy.mjs <resolve|gates|complete-gate|verify-gate|prerequisites|cutover>",
+  );
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

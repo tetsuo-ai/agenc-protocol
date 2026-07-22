@@ -363,6 +363,7 @@ describe("e2e: query helpers return exactly the matching on-chain subset", () =>
         expectedPrice: PRICE,
         expectedVersion: 1n,
         listingSpecHash: l1SpecHash,
+        taskJobSpecHash: l1SpecHash,
         moderator: moderator.address,
       }),
     ]);

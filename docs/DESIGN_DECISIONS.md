@@ -1,6 +1,7 @@
 # Reviewed Design Decisions and Resolved Residuals
 
-Dated 2026-07-18, after the three-pass 2026-07 audit and the full TODO.MD
+Dated 2026-07-18, after the three-pass 2026-07 audit and the full
+`docs/audit/ENTERPRISE_REMEDIATION_2026-07.md`
 hardening queue. Entries marked **Resolved** record the implemented invariant
 and its regression boundary. The remaining entries are deliberate, reviewed
 trade-offs rather than open findings. Read the rationale before proposing a

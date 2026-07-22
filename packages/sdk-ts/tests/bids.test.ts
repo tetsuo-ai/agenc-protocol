@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { AccountRole, address, createNoopSigner } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  createNoopSigner,
+  getSignersFromInstruction,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   createBid,
   cancelBid,
@@ -15,6 +22,7 @@ import {
   findBidMarketplacePda,
   findBidderMarketStatePda,
 } from "../src/facade/bids.js";
+import { snapshotMultisigSigners } from "../src/facade/wire.js";
 import {
   getCreateBidInstructionDataDecoder,
   getCancelBidInstructionDataDecoder,
@@ -42,6 +50,34 @@ const bidder = address("So11111111111111111111111111111111111111112");
 const authority = createNoopSigner(
   address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
 );
+const secondMultisigSigner = createNoopSigner(
+  address("SysvarRent111111111111111111111111111111111"),
+);
+
+function createCapabilityMutatingSigner(
+  initialAddress: Address,
+  mutatedAddress: Address,
+): TransactionSigner {
+  let liveAddress = initialAddress;
+  const base = createNoopSigner(initialAddress);
+  const signer = {} as TransactionSigner;
+  Object.defineProperties(signer, {
+    address: {
+      configurable: true,
+      enumerable: true,
+      get: () => liveAddress,
+    },
+    signTransactions: {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        liveAddress = mutatedAddress;
+        return base.signTransactions;
+      },
+    },
+  });
+  return signer;
+}
 
 // 32-byte fixed hashes used by create/update bid args.
 const qualityGuaranteeHash = new Uint8Array(32).fill(3);
@@ -114,6 +150,46 @@ describe("createBid facade", () => {
       Array.from(jobSpecHash),
     );
     expect(decoded.expectedJobSpecUpdatedAt).toBe(42n);
+  });
+
+  it("detaches fixed terms and binds the signer before PDA derivation", async () => {
+    const stableAddress = address(
+      "Vote111111111111111111111111111111111111111",
+    );
+    const hostileAuthority = createCapabilityMutatingSigner(
+      stableAddress,
+      bidder,
+    );
+    const quality = new Uint8Array(32).fill(21);
+    const metadata = new Uint8Array(32).fill(22);
+    const jobSpec = new Uint8Array(32).fill(23);
+    const pending = createBid({
+      task,
+      bidder,
+      authority: hostileAuthority,
+      requestedRewardLamports: 1_000n,
+      etaSeconds: 3600,
+      confidenceBps: 8000,
+      qualityGuaranteeHash: quality,
+      metadataHash: metadata,
+      expiresAt: 1_700_000_000n,
+      expectedJobSpecHash: jobSpec,
+      expectedJobSpecUpdatedAt: 42n,
+    });
+
+    quality.fill(91);
+    metadata.fill(92);
+    jobSpec.fill(93);
+
+    const ix = await pending;
+    const decoded = getCreateBidInstructionDataDecoder().decode(ix.data);
+    expect(decoded.qualityGuaranteeHash).toEqual(new Uint8Array(32).fill(21));
+    expect(decoded.metadataHash).toEqual(new Uint8Array(32).fill(22));
+    expect(decoded.expectedJobSpecHash).toEqual(new Uint8Array(32).fill(23));
+    expect(ix.accounts[8]).toMatchObject({
+      address: stableAddress,
+      signer: hostileAuthority,
+    });
   });
 });
 
@@ -192,6 +268,35 @@ describe("updateBid facade", () => {
     );
     expect(decoded.expectedJobSpecUpdatedAt).toBe(84n);
   });
+
+  it("detaches every fixed-width term before the generated builder yields", async () => {
+    const quality = new Uint8Array(32).fill(31);
+    const metadata = new Uint8Array(32).fill(32);
+    const jobSpec = new Uint8Array(32).fill(33);
+    const pending = updateBid({
+      task,
+      bidder,
+      authority,
+      requestedRewardLamports: 2_500n,
+      etaSeconds: 7200,
+      confidenceBps: 9500,
+      qualityGuaranteeHash: quality,
+      metadataHash: metadata,
+      expiresAt: 1_800_000_000n,
+      expectedJobSpecHash: jobSpec,
+      expectedJobSpecUpdatedAt: 84n,
+    });
+    quality.fill(94);
+    metadata.fill(95);
+    jobSpec.fill(96);
+
+    const decoded = getUpdateBidInstructionDataDecoder().decode(
+      (await pending).data,
+    );
+    expect(decoded.qualityGuaranteeHash).toEqual(new Uint8Array(32).fill(31));
+    expect(decoded.metadataHash).toEqual(new Uint8Array(32).fill(32));
+    expect(decoded.expectedJobSpecHash).toEqual(new Uint8Array(32).fill(33));
+  });
 });
 
 describe("expireBid facade (time-gated)", () => {
@@ -239,7 +344,6 @@ describe("acceptBid facade", () => {
       moderationBlock: await moderationBlockFor(jobSpecHash),
       jobSpecHash,
       expectedBidTermsHash,
-      otherOpenBidPairs: [],
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
@@ -290,9 +394,7 @@ describe("acceptBid facade", () => {
     const creator = createNoopSigner(
       address("Vote111111111111111111111111111111111111111"),
     );
-    const parentTask = address(
-      "4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB",
-    );
+    const parentTask = address("4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB");
     const ix = await acceptBid({
       task,
       bidder,
@@ -301,7 +403,6 @@ describe("acceptBid facade", () => {
       jobSpecHash,
       expectedBidTermsHash,
       parentTask,
-      otherOpenBidPairs: [],
     });
 
     expect(ix.accounts.at(-1)).toEqual({
@@ -311,82 +412,40 @@ describe("acceptBid facade", () => {
     expect(ix.accounts).toHaveLength(12);
   });
 
-  it("places dependency parent before every competing bid/agent pair", async () => {
+
+
+  it("detaches the CAS hashes before awaiting", async () => {
     const creator = createNoopSigner(
       address("Vote111111111111111111111111111111111111111"),
     );
-    const parentTask = address(
-      "4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB",
-    );
-    const otherBid = address(
-      "Stake11111111111111111111111111111111111111",
-    );
-    const otherBidder = address(
-      "Config1111111111111111111111111111111111111",
-    );
-    const ix = await acceptBid({
+    const originalJobSpecHash = new Uint8Array(32).fill(44);
+    const originalExpectedTerms = new Uint8Array(32).fill(45);
+    const expectedBlock = await moderationBlockFor(originalJobSpecHash);
+    const pending = acceptBid({
       task,
       bidder,
       creator,
-      moderationBlock: await moderationBlockFor(jobSpecHash),
-      jobSpecHash,
-      expectedBidTermsHash,
-      parentTask,
-      otherOpenBidPairs: [{ bid: otherBid, bidder: otherBidder }],
+      jobSpecHash: originalJobSpecHash,
+      expectedBidTermsHash: originalExpectedTerms,
     });
 
-    expect(ix.accounts.slice(-3)).toEqual([
-      { address: parentTask, role: AccountRole.READONLY },
-      { address: otherBid, role: AccountRole.READONLY },
-      { address: otherBidder, role: AccountRole.READONLY },
-    ]);
+    originalJobSpecHash.fill(97);
+    originalExpectedTerms.fill(98);
+
+    const ix = await pending;
+    expect(ix.accounts[8]?.address).toBe(expectedBlock);
+    expect(
+      getAcceptBidInstructionDataDecoder().decode(ix.data).expectedBidTermsHash,
+    ).toEqual(new Uint8Array(32).fill(45));
   });
 
-  it("rejects duplicate competing bid or bidder accounts before assembly", async () => {
-    const creator = createNoopSigner(
-      address("Vote111111111111111111111111111111111111111"),
-    );
-    const otherBid = address(
-      "Stake11111111111111111111111111111111111111",
-    );
-    const otherBidder = address(
-      "Config1111111111111111111111111111111111111",
-    );
-    await expect(
-      acceptBid({
-        task,
-        bidder,
-        creator,
-        moderationBlock: await moderationBlockFor(jobSpecHash),
-        jobSpecHash,
-        expectedBidTermsHash,
-        otherOpenBidPairs: [
-          { bid: otherBid, bidder: otherBidder },
-          { bid: otherBid, bidder: authority.address },
-        ],
-      }),
-    ).rejects.toThrow(/duplicate bid/);
-    await expect(
-      acceptBid({
-        task,
-        bidder,
-        creator,
-        moderationBlock: await moderationBlockFor(jobSpecHash),
-        jobSpecHash,
-        expectedBidTermsHash,
-        otherOpenBidPairs: [
-          { bid: otherBid, bidder: otherBidder },
-          { bid: authority.address, bidder: otherBidder },
-        ],
-      }),
-    ).rejects.toThrow(/duplicate bidder/);
-  });
 });
 
 describe("initializeBidMarketplace facade", () => {
   it("assembles with the right program, account order, and round-trips its data", async () => {
     const ix = await initializeBidMarketplace({
       authority,
+      multisigSigners: [authority, secondMultisigSigner],
       minBidBondLamports: 50_000n,
       bidCreationCooldownSecs: 60n,
       maxBidsPer24h: 100,
@@ -403,22 +462,138 @@ describe("initializeBidMarketplace facade", () => {
       bidMarketplace,
       authority.address,
       SYSTEM_PROGRAM,
+      authority.address,
+      secondMultisigSigner.address,
     ]);
     expect(ix.accounts.map((a) => a.role)).toEqual([
       AccountRole.READONLY,
       AccountRole.WRITABLE,
       AccountRole.WRITABLE_SIGNER,
       AccountRole.READONLY,
+      AccountRole.READONLY_SIGNER,
+      AccountRole.READONLY_SIGNER,
     ]);
 
-    const decoded =
-      getInitializeBidMarketplaceInstructionDataDecoder().decode(ix.data);
+    const decoded = getInitializeBidMarketplaceInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.minBidBondLamports).toBe(50_000n);
     expect(decoded.bidCreationCooldownSecs).toBe(60n);
     expect(decoded.maxBidsPer24h).toBe(100);
     expect(decoded.maxActiveBidsPerTask).toBe(10);
     expect(decoded.maxBidLifetimeSecs).toBe(86_400n);
     expect(decoded.acceptedNoShowSlashBps).toBe(500);
+  });
+
+  it("rejects duplicate multisig approvals before a transaction is built", async () => {
+    await expect(
+      initializeBidMarketplace({
+        authority,
+        multisigSigners: [authority, authority],
+        minBidBondLamports: 50_000n,
+        bidCreationCooldownSecs: 60n,
+        maxBidsPer24h: 100,
+        maxActiveBidsPerTask: 10,
+        maxBidLifetimeSecs: 86_400n,
+        acceptedNoShowSlashBps: 500,
+      }),
+    ).rejects.toThrow(/duplicate signer address/u);
+  });
+
+  it("locks an approval address before a capability getter can mutate it", async () => {
+    const initialAddress = address(
+      "Vote111111111111111111111111111111111111111",
+    );
+    const capabilityMutator = createCapabilityMutatingSigner(
+      initialAddress,
+      bidder,
+    );
+    const ix = await initializeBidMarketplace({
+      authority,
+      multisigSigners: [capabilityMutator, secondMultisigSigner],
+      minBidBondLamports: 50_000n,
+      bidCreationCooldownSecs: 60n,
+      maxBidsPer24h: 100,
+      maxActiveBidsPerTask: 10,
+      maxBidLifetimeSecs: 86_400n,
+      acceptedNoShowSlashBps: 500,
+    });
+
+    expect(ix.accounts.at(-2)).toMatchObject({
+      address: initialAddress,
+      role: AccountRole.READONLY_SIGNER,
+      signer: capabilityMutator,
+    });
+    expect(
+      Object.getOwnPropertyDescriptor(capabilityMutator, "address"),
+    ).toMatchObject({
+      configurable: false,
+      writable: false,
+      value: initialAddress,
+    });
+  });
+
+  it("reuses the named signer identity for an equal-address approval", async () => {
+    const distinctApproval = {
+      ...createNoopSigner(authority.address),
+      capabilityRole: "multisig-approval",
+    } as TransactionSigner;
+    // Make this capability intentionally non-equivalent under Solana Kit's
+    // signer deduplicator. Before canonicalization, extraction throws
+    // ADDRESS_CANNOT_HAVE_MULTIPLE_SIGNERS for this exact pair.
+    const ix = await initializeBidMarketplace({
+      authority,
+      multisigSigners: [distinctApproval, secondMultisigSigner],
+      minBidBondLamports: 50_000n,
+      bidCreationCooldownSecs: 60n,
+      maxBidsPer24h: 100,
+      maxActiveBidsPerTask: 10,
+      maxBidLifetimeSecs: 86_400n,
+      acceptedNoShowSlashBps: 500,
+    });
+
+    expect(ix.accounts[2]).toHaveProperty("signer", authority);
+    expect(ix.accounts.at(-2)).toHaveProperty("signer", authority);
+    expect(() => getSignersFromInstruction(ix)).not.toThrow();
+    expect(getSignersFromInstruction(ix)).toEqual([
+      authority,
+      secondMultisigSigner,
+    ]);
+  });
+
+  it("fails closed for malformed approval containers without invoking entries", () => {
+    let accessorReads = 0;
+    const accessorEntry: TransactionSigner[] = [];
+    Object.defineProperty(accessorEntry, "0", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        accessorReads += 1;
+        return authority;
+      },
+    });
+    const throwingDescriptor = new Proxy([authority], {
+      getOwnPropertyDescriptor() {
+        throw new Error("descriptor trap");
+      },
+    });
+    const malformed = [
+      {},
+      new Array(1),
+      accessorEntry,
+      new Array(11).fill(authority),
+      [{ address: authority.address }],
+      throwingDescriptor,
+    ];
+
+    for (const value of malformed) {
+      expect(() =>
+        snapshotMultisigSigners(
+          value as unknown as readonly TransactionSigner[],
+        ),
+      ).toThrow();
+    }
+    expect(accessorReads).toBe(0);
   });
 });
 
@@ -458,7 +633,9 @@ describe("initializeBidBook facade", () => {
       AccountRole.READONLY,
     ]);
 
-    const decoded = getInitializeBidBookInstructionDataDecoder().decode(ix.data);
+    const decoded = getInitializeBidBookInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.policy).toBe(1);
     expect(decoded.priceWeightBps).toBe(4000);
     expect(decoded.etaWeightBps).toBe(2000);
@@ -551,6 +728,7 @@ describe("updateBidMarketplaceConfig facade", () => {
   it("assembles with the right program, account order, and round-trips its data", async () => {
     const ix = await updateBidMarketplaceConfig({
       authority,
+      multisigSigners: [authority, secondMultisigSigner],
       minBidBondLamports: 75_000n,
       bidCreationCooldownSecs: 120n,
       maxBidsPer24h: 200,
@@ -566,6 +744,15 @@ describe("updateBidMarketplaceConfig facade", () => {
       protocolConfig,
       bidMarketplace,
       authority.address,
+      authority.address,
+      secondMultisigSigner.address,
+    ]);
+    expect(ix.accounts.map((a) => a.role)).toEqual([
+      AccountRole.READONLY,
+      AccountRole.WRITABLE,
+      AccountRole.READONLY_SIGNER,
+      AccountRole.READONLY_SIGNER,
+      AccountRole.READONLY_SIGNER,
     ]);
 
     const decoded =
@@ -576,5 +763,20 @@ describe("updateBidMarketplaceConfig facade", () => {
     expect(decoded.maxActiveBidsPerTask).toBe(20);
     expect(decoded.maxBidLifetimeSecs).toBe(172_800n);
     expect(decoded.acceptedNoShowSlashBps).toBe(750);
+  });
+
+  it("rejects duplicate multisig approvals before a transaction is built", async () => {
+    await expect(
+      updateBidMarketplaceConfig({
+        authority,
+        multisigSigners: [authority, authority],
+        minBidBondLamports: 75_000n,
+        bidCreationCooldownSecs: 120n,
+        maxBidsPer24h: 200,
+        maxActiveBidsPerTask: 20,
+        maxBidLifetimeSecs: 172_800n,
+        acceptedNoShowSlashBps: 750,
+      }),
+    ).rejects.toThrow(/duplicate signer address/u);
   });
 });

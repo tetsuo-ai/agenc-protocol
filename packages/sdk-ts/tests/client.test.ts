@@ -3,19 +3,25 @@
 // (with RE-SIGN proof), bounded retries, and AgencError hydration across both
 // kit-shaped and litesvm-shaped failures. No network, no litesvm — transports
 // are faked at the seam the client actually uses.
+import { runInNewContext } from "node:vm";
 import { describe, it, expect } from "vitest";
 import {
+  AccountRole,
   address,
   generateKeyPairSigner,
   getBase58Decoder,
   getCompiledTransactionMessageDecoder,
   getSignatureFromTransaction,
+  getTransactionSize,
+  isSolanaError,
   SolanaError,
   SOLANA_ERROR__BLOCK_HEIGHT_EXCEEDED,
   SOLANA_ERROR__INSTRUCTION_ERROR__CUSTOM,
   SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
   SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND,
+  SOLANA_ERROR__TRANSACTION__EXCEEDS_SIZE_LIMIT,
   type Blockhash,
+  type Address,
   type Instruction,
   type KeyPairSigner,
   type TransactionSigner,
@@ -30,6 +36,7 @@ import {
   getSetComputeUnitLimitInstruction,
   getSetComputeUnitPriceInstruction,
   isBlockhashExpiredError,
+  stabilizeTransactionSigner,
   toAgencError,
   withReferrerDefault,
   type RpcTransportRpc,
@@ -42,14 +49,91 @@ import {
   AGENC_COORDINATION_ERROR__AGENT_NOT_FOUND,
   AGENC_COORDINATION_ERROR__TASK_NOT_OPEN,
 } from "../src/generated/index.js";
+import { getAddressLookupTableEncoder } from "@solana-program/address-lookup-table";
 
 const SYSTEM_PROGRAM = address("11111111111111111111111111111111");
 
+describe("stabilizeTransactionSigner public identity contract", () => {
+  it("canonicalizes an inherited address in place without freezing signer state", async () => {
+    const baseSigner = await generateKeyPairSigner();
+    const signer = Object.create(baseSigner) as TransactionSigner;
+    expect(Object.getOwnPropertyDescriptor(signer, "address")).toBeUndefined();
+
+    const stabilized = stabilizeTransactionSigner(signer);
+
+    expect(stabilized).toBe(signer);
+    expect(stabilized.address).toBe(baseSigner.address);
+    expect(
+      Object.getOwnPropertyDescriptor(stabilized, "address"),
+    ).toMatchObject({
+      configurable: false,
+      enumerable: true,
+      value: baseSigner.address,
+      writable: false,
+    });
+    expect(Object.isFrozen(stabilized)).toBe(false);
+  });
+
+  it("captures a configurable address accessor without freezing other state", async () => {
+    const baseSigner = await generateKeyPairSigner();
+    let liveAddress: TransactionSigner["address"] = baseSigner.address;
+    const signer = Object.create(baseSigner) as TransactionSigner;
+    Object.defineProperty(signer, "address", {
+      configurable: true,
+      enumerable: true,
+      get: () => liveAddress,
+    });
+
+    stabilizeTransactionSigner(signer);
+    liveAddress = SYSTEM_PROGRAM;
+
+    expect(signer.address).toBe(baseSigner.address);
+    expect(Object.isFrozen(signer)).toBe(false);
+  });
+
+  it("preserves a stateful signer's ability to update unrelated own fields", async () => {
+    const baseSigner = await generateKeyPairSigner();
+    const signer = Object.create(baseSigner) as KeyPairSigner & {
+      counter: number;
+    };
+    Object.defineProperties(signer, {
+      counter: {
+        configurable: true,
+        enumerable: true,
+        value: 0,
+        writable: true,
+      },
+      signTransactions: {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: async function (
+          this: KeyPairSigner & { counter: number },
+          transactions: Parameters<KeyPairSigner["signTransactions"]>[0],
+          config?: Parameters<KeyPairSigner["signTransactions"]>[1],
+        ) {
+          this.counter += 1;
+          return baseSigner.signTransactions(transactions, config);
+        },
+      },
+    });
+
+    stabilizeTransactionSigner(signer);
+    await signer.signTransactions([]);
+
+    expect(signer.counter).toBe(1);
+    expect(Object.isFrozen(signer)).toBe(false);
+  });
+});
+
 /** Deterministic, valid base58 blockhash from a filled 32-byte seed. */
 function blockhashFromSeed(seed: number): Blockhash {
-  return getBase58Decoder().decode(
-    new Uint8Array(32).fill(seed),
-  ) as Blockhash;
+  return getBase58Decoder().decode(new Uint8Array(32).fill(seed)) as Blockhash;
+}
+
+/** Deterministic, valid address for transaction-shape fixtures. */
+function addressFromSeed(seed: number): Address {
+  return getBase58Decoder().decode(new Uint8Array(32).fill(seed)) as Address;
 }
 
 /** Kit's real structured shape for an RPC sendTransaction preflight expiry. */
@@ -223,7 +307,9 @@ describe("client compute-budget prepend (default / override / disable)", () => {
     expect(msg.instructions[1]!.programAddress).toBe(
       COMPUTE_BUDGET_PROGRAM_ADDRESS,
     );
-    expect(msg.instructions[1]!.data).toEqual([3, 0x88, 0x13, 0, 0, 0, 0, 0, 0]);
+    expect(msg.instructions[1]!.data).toEqual([
+      3, 0x88, 0x13, 0, 0, 0, 0, 0, 0,
+    ]);
   });
 
   it("per-call overrides replace the client defaults", async () => {
@@ -257,6 +343,710 @@ describe("client compute-budget prepend (default / override / disable)", () => {
     expect(msg.instructions).toHaveLength(1);
     expect(msg.instructions[0]!.programAddress).toBe(SYSTEM_PROGRAM);
     expect(msg.staticAccounts).not.toContain(COMPUTE_BUDGET_PROGRAM_ADDRESS);
+  });
+});
+
+describe("client v0 wire-size boundary", () => {
+  it("signs and sends an exact 1,232-byte message with duplicate signer metas", async () => {
+    const feePayer = countingSigner(await generateKeyPairSigner());
+    const instructionSigner = countingSigner(await generateKeyPairSigner());
+    const transport = fakeTransport();
+    const client = createMarketplaceClient({
+      transport,
+      signer: feePayer.signer,
+    });
+    const signerMeta = {
+      address: instructionSigner.signer.address,
+      role: AccountRole.READONLY_SIGNER as const,
+      signer: instructionSigner.signer,
+    };
+    const instruction: Instruction = {
+      programAddress: SYSTEM_PROGRAM,
+      accounts: [signerMeta, signerMeta],
+      data: new Uint8Array(922),
+    };
+
+    await client.send([instruction]);
+
+    expect(transport.sendCalls()).toBe(1);
+    expect(getTransactionSize(transport.captured[0]!)).toBe(1_232);
+    expect(feePayer.signCalls()).toBe(1);
+    expect(instructionSigner.signCalls()).toBe(1);
+  });
+
+  it("rejects a 1,233-byte message before invoking any signer or transport send", async () => {
+    const feePayer = countingSigner(await generateKeyPairSigner());
+    const instructionSigner = countingSigner(await generateKeyPairSigner());
+    const transport = fakeTransport();
+    const client = createMarketplaceClient({
+      transport,
+      signer: feePayer.signer,
+    });
+    const signerMeta = {
+      address: instructionSigner.signer.address,
+      role: AccountRole.READONLY_SIGNER as const,
+      signer: instructionSigner.signer,
+    };
+    const failure = await client
+      .send([
+        {
+          programAddress: SYSTEM_PROGRAM,
+          accounts: [signerMeta, signerMeta],
+          data: new Uint8Array(923),
+        },
+      ])
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AgencError);
+    expect(
+      isSolanaError(
+        (failure as AgencError).cause,
+        SOLANA_ERROR__TRANSACTION__EXCEEDS_SIZE_LIMIT,
+      ),
+    ).toBe(true);
+    expect((failure as AgencError).signature).toBeNull();
+    expect(transport.sendCalls()).toBe(0);
+    expect(feePayer.signCalls()).toBe(0);
+    expect(instructionSigner.signCalls()).toBe(0);
+  });
+
+  it.each([
+    { dataBytes: 1_008, expectedSize: 1_232, shouldSend: true },
+    { dataBytes: 1_009, expectedSize: 1_233, shouldSend: false },
+  ])(
+    "accounts for compute-unit price at the $expectedSize-byte boundary",
+    async ({ dataBytes, expectedSize, shouldSend }) => {
+      const feePayer = countingSigner(await generateKeyPairSigner());
+      const transport = fakeTransport();
+      const client = createMarketplaceClient({
+        transport,
+        signer: feePayer.signer,
+        computeUnitPrice: 1n,
+      });
+      const outcome = await client
+        .send([
+          {
+            programAddress: SYSTEM_PROGRAM,
+            data: new Uint8Array(dataBytes),
+          },
+        ])
+        .catch((error: unknown) => error);
+
+      if (shouldSend) {
+        expect(outcome).toEqual({
+          signature: getSignatureFromTransaction(transport.captured[0]!),
+          logs: ["Program log: ok"],
+        });
+        expect(getTransactionSize(transport.captured[0]!)).toBe(expectedSize);
+        expect(feePayer.signCalls()).toBe(1);
+        expect(transport.sendCalls()).toBe(1);
+      } else {
+        expect(outcome).toBeInstanceOf(AgencError);
+        expect(
+          isSolanaError(
+            (outcome as AgencError).cause,
+            SOLANA_ERROR__TRANSACTION__EXCEEDS_SIZE_LIMIT,
+          ),
+        ).toBe(true);
+        expect(feePayer.signCalls()).toBe(0);
+        expect(transport.sendCalls()).toBe(0);
+      }
+    },
+  );
+});
+
+describe("client verified address lookup tables", () => {
+  const LOOKUP_TABLE_PROGRAM = address(
+    "AddressLookupTab1e1111111111111111111111111",
+  );
+
+  function encodeLookupTableAccount(contents: readonly Address[]): Uint8Array {
+    return new Uint8Array(
+      getAddressLookupTableEncoder().encode({
+        deactivationSlot: 0xffffffffffffffffn,
+        lastExtendedSlot: 0n,
+        lastExtendedSlotStartIndex: 0,
+        authority: null,
+        addresses: [...contents],
+      }),
+    );
+  }
+
+  function lookupTableRpc(
+    accounts: readonly ({ bytes: Uint8Array; owner: Address } | null)[],
+    observe?: (
+      addresses: readonly Address[],
+      config: Record<string, unknown>,
+    ) => void,
+  ): RpcTransportRpc {
+    return {
+      getMultipleAccounts(
+        addresses: readonly Address[],
+        config: Record<string, unknown>,
+      ) {
+        observe?.(addresses, config);
+        return {
+          async send() {
+            return {
+              value: accounts.map((account) =>
+                account === null
+                  ? null
+                  : {
+                      data: [
+                        Buffer.from(account.bytes).toString("base64"),
+                        "base64",
+                      ],
+                      executable: false,
+                      lamports: 1n,
+                      owner: account.owner,
+                      space: BigInt(account.bytes.length),
+                    },
+              ),
+            };
+          },
+        };
+      },
+    } as unknown as RpcTransportRpc;
+  }
+
+  it("RPC transport decodes raw ordered table contents at its confirmation commitment", async () => {
+    const table = addressFromSeed(94);
+    const contents = [addressFromSeed(10), addressFromSeed(11)];
+    let observedAddresses: readonly Address[] | undefined;
+    let observedConfig: Record<string, unknown> | undefined;
+    const transport = createRpcTransport({
+      rpc: lookupTableRpc(
+        [{ bytes: encodeLookupTableAccount(contents), owner: LOOKUP_TABLE_PROGRAM }],
+        (addresses, config) => {
+          observedAddresses = addresses;
+          observedConfig = config;
+        },
+      ),
+      commitment: "finalized",
+    });
+
+    await expect(transport.resolveAddressLookupTables!([table])).resolves.toEqual(
+      { [table]: contents },
+    );
+    expect(observedAddresses).toEqual([table]);
+    // The raw base64 account bytes are decoded locally with the official
+    // lookup-table codec — never the RPC's `jsonParsed` convenience view.
+    expect(observedConfig).toMatchObject({
+      commitment: "finalized",
+      encoding: "base64",
+    });
+  });
+
+  it("RPC transport rejects a missing lookup table account", async () => {
+    const table = addressFromSeed(94);
+    const transport = createRpcTransport({
+      rpc: lookupTableRpc([null]),
+      commitment: "confirmed",
+    });
+
+    await expect(
+      transport.resolveAddressLookupTables!([table]),
+    ).rejects.toThrow(/does not exist/);
+  });
+
+  it("RPC transport rejects a lookup table owned by the wrong program", async () => {
+    const table = addressFromSeed(94);
+    const contents = [addressFromSeed(10)];
+    const transport = createRpcTransport({
+      rpc: lookupTableRpc([
+        { bytes: encodeLookupTableAccount(contents), owner: SYSTEM_PROGRAM },
+      ]),
+      commitment: "confirmed",
+    });
+
+    await expect(
+      transport.resolveAddressLookupTables!([table]),
+    ).rejects.toThrow(/not owned by the address lookup table program/);
+  });
+
+  it("RPC transport rejects an uninitialized lookup table account", async () => {
+    const table = addressFromSeed(94);
+    const bytes = encodeLookupTableAccount([addressFromSeed(10)]);
+    bytes[0] = 0; // ProgramState::Uninitialized discriminator
+    const transport = createRpcTransport({
+      rpc: lookupTableRpc([{ bytes, owner: LOOKUP_TABLE_PROGRAM }]),
+      commitment: "confirmed",
+    });
+
+    await expect(
+      transport.resolveAddressLookupTables!([table]),
+    ).rejects.toThrow(/not an initialized lookup table/);
+  });
+
+  it("RPC transport rejects lookup table bytes that fail strict decoding", async () => {
+    const table = addressFromSeed(94);
+    const bytes = encodeLookupTableAccount([
+      addressFromSeed(10),
+      addressFromSeed(11),
+    ]).slice(0, -7); // truncated mid-address: not a valid table layout
+    const transport = createRpcTransport({
+      rpc: lookupTableRpc([{ bytes, owner: LOOKUP_TABLE_PROGRAM }]),
+      commitment: "confirmed",
+    });
+
+    await expect(
+      transport.resolveAddressLookupTables!([table]),
+    ).rejects.toThrow();
+  });
+
+  it("fetches table contents through the transport and compresses an otherwise oversized message", async () => {
+    const feePayer = countingSigner(await generateKeyPairSigner());
+    const lookupTable = addressFromSeed(90);
+    const lookedUpAddresses = Array.from({ length: 35 }, (_, index) =>
+      addressFromSeed(index + 10),
+    );
+    const instruction: Instruction = {
+      programAddress: SYSTEM_PROGRAM,
+      accounts: lookedUpAddresses.map((accountAddress, index) => ({
+        address: accountAddress,
+        role:
+          index % 2 === 0 ? AccountRole.WRITABLE : AccountRole.READONLY,
+      })),
+      data: new Uint8Array(8),
+    };
+
+    const noLookupTransport = fakeTransport();
+    const noLookupClient = createMarketplaceClient({
+      transport: noLookupTransport,
+      signer: feePayer.signer,
+    });
+    const oversized = await noLookupClient
+      .send([instruction])
+      .catch((error: unknown) => error);
+    expect(oversized).toBeInstanceOf(AgencError);
+    expect(
+      isSolanaError(
+        (oversized as AgencError).cause,
+        SOLANA_ERROR__TRANSACTION__EXCEEDS_SIZE_LIMIT,
+      ),
+    ).toBe(true);
+    expect(noLookupTransport.sendCalls()).toBe(0);
+    expect(feePayer.signCalls()).toBe(0);
+
+    const baseTransport = fakeTransport();
+    const requestedTables: Address[][] = [];
+    const transport: Transport = {
+      ...baseTransport,
+      async resolveAddressLookupTables(tableAddresses) {
+        requestedTables.push([...tableAddresses]);
+        return { [lookupTable]: lookedUpAddresses };
+      },
+    };
+    const configuredTables: Address[] = [lookupTable];
+    const client = createMarketplaceClient({
+      transport,
+      signer: feePayer.signer,
+    });
+    const pending = client.send([instruction], {
+      addressLookupTableAddresses: configuredTables,
+    });
+    configuredTables[0] = addressFromSeed(91);
+
+    await pending;
+
+    expect(requestedTables).toEqual([[lookupTable]]);
+    expect(baseTransport.sendCalls()).toBe(1);
+    expect(feePayer.signCalls()).toBe(1);
+    expect(getTransactionSize(baseTransport.captured[0]!)).toBeLessThan(1_232);
+    const decoded = getCompiledTransactionMessageDecoder().decode(
+      baseTransport.captured[0]!.messageBytes,
+    );
+    expect("addressTableLookups" in decoded).toBe(true);
+    if ("addressTableLookups" in decoded) {
+      const lookups = decoded.addressTableLookups;
+      expect(lookups).toHaveLength(1);
+      if (lookups === undefined) throw new Error("expected v0 lookup table");
+      expect(lookups[0]!.lookupTableAddress).toBe(lookupTable);
+      expect(lookups[0]!.writableIndexes).toHaveLength(18);
+      expect(lookups[0]!.readonlyIndexes).toHaveLength(17);
+    }
+  });
+
+  it("fails before signing when a transport cannot resolve the requested table exactly", async () => {
+    const table = addressFromSeed(92);
+    const otherTable = addressFromSeed(93);
+    const cases: Array<{ label: string; transport: Transport }> = [
+      {
+        label: "unsupported transport",
+        transport: fakeTransport(),
+      },
+      {
+        label: "missing requested table",
+        transport: {
+          ...fakeTransport(),
+          async resolveAddressLookupTables() {
+            return {};
+          },
+        },
+      },
+      {
+        label: "substituted table",
+        transport: {
+          ...fakeTransport(),
+          async resolveAddressLookupTables() {
+            return { [otherTable]: [] };
+          },
+        },
+      },
+    ];
+
+    for (const { label, transport } of cases) {
+      const feePayer = countingSigner(await generateKeyPairSigner());
+      const client = createMarketplaceClient({
+        transport,
+        signer: feePayer.signer,
+      });
+      const failure = await client
+        .send([DUMMY_IX], { addressLookupTableAddresses: [table] })
+        .catch((error: unknown) => error);
+      expect(failure, label).toBeInstanceOf(AgencError);
+      expect((failure as AgencError).signature, label).toBeNull();
+      expect(feePayer.signCalls(), label).toBe(0);
+      expect((transport as FakeTransport).sendCalls(), label).toBe(0);
+    }
+  });
+});
+
+describe("client async input and signer-identity boundary", () => {
+  it("snapshots direct send instruction data before the blockhash await", async () => {
+    let releaseBlockhash!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBlockhash = resolve;
+    });
+    const captured: SignedTransaction[] = [];
+    const transport: Transport = {
+      async getLatestBlockhash() {
+        await gate;
+        return {
+          blockhash: blockhashFromSeed(1),
+          lastValidBlockHeight: 100n,
+        };
+      },
+      async sendAndConfirm(transaction) {
+        captured.push(transaction);
+        return {
+          signature: getSignatureFromTransaction(transaction),
+          logs: [],
+        };
+      },
+    };
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+    const data = new Uint8Array([1, 2, 3]);
+
+    const pending = client.send([{ programAddress: SYSTEM_PROGRAM, data }], {
+      computeBudget: false,
+    });
+    data.fill(9);
+    releaseBlockhash();
+    await pending;
+
+    expect(decodeMessage(captured[0]!).instructions[0]!.data).toEqual([
+      1, 2, 3,
+    ]);
+  });
+
+  it("snapshots account metas without invoking a caller-owned array map", async () => {
+    let releaseBlockhash!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseBlockhash = resolve;
+    });
+    const captured: SignedTransaction[] = [];
+    const transport: Transport = {
+      async getLatestBlockhash() {
+        await gate;
+        return {
+          blockhash: blockhashFromSeed(1),
+          lastValidBlockHeight: 100n,
+        };
+      },
+      async sendAndConfirm(transaction) {
+        captured.push(transaction);
+        return {
+          signature: getSignatureFromTransaction(transaction),
+          logs: [],
+        };
+      },
+    };
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+    const original = address("So11111111111111111111111111111111111111112");
+    const moved = address("Stake11111111111111111111111111111111111111");
+    const meta: { address: Address; role: AccountRole } = {
+      address: original,
+      role: AccountRole.READONLY,
+    };
+    const accounts = [meta];
+    Object.defineProperty(accounts, "map", {
+      configurable: true,
+      value: () => {
+        throw new Error("caller-owned map must not run");
+      },
+    });
+
+    const pending = client.send(
+      [
+        {
+          programAddress: SYSTEM_PROGRAM,
+          accounts,
+          data: new Uint8Array([1]),
+        },
+      ],
+      { computeBudget: false },
+    );
+    meta.address = moved;
+    releaseBlockhash();
+    await pending;
+
+    const message = decodeMessage(captured[0]!);
+    expect(message.staticAccounts).toContain(original);
+    expect(message.staticAccounts).not.toContain(moved);
+  });
+
+  it("fails closed on an uninspectable account container before transport", async () => {
+    const transport = fakeTransport();
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+    const accounts = new Proxy(
+      [{ address: SYSTEM_PROGRAM, role: AccountRole.READONLY }],
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("revoked-like account array");
+        },
+      },
+    );
+
+    const failure = await client
+      .send(
+        [
+          {
+            programAddress: SYSTEM_PROGRAM,
+            accounts,
+            data: new Uint8Array([1]),
+          },
+        ],
+        { computeBudget: false },
+      )
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AgencError);
+    expect((failure as AgencError).cause).toBeInstanceOf(TypeError);
+    expect(transport.sendCalls()).toBe(0);
+  });
+
+  it("accepts cross-realm instruction bytes and rejects proxy/shared/detached/spoofed views pre-transport", async () => {
+    const ForeignUint8Array = runInNewContext(
+      "Uint8Array",
+    ) as Uint8ArrayConstructor;
+    const foreign = new ForeignUint8Array([4, 5, 6]);
+    const transport = fakeTransport();
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+    const pending = client.send(
+      [{ programAddress: SYSTEM_PROGRAM, data: foreign }],
+      { computeBudget: false },
+    );
+    foreign.fill(8);
+    await pending;
+    expect(decodeMessage(transport.captured[0]!).instructions[0]!.data).toEqual(
+      [4, 5, 6],
+    );
+
+    const detached = new Uint8Array([1]);
+    structuredClone(detached, { transfer: [detached.buffer] });
+    const spoofed = Object.defineProperty(
+      new DataView(new ArrayBuffer(1)),
+      Symbol.toStringTag,
+      {
+        configurable: true,
+        value: "Uint8Array",
+      },
+    );
+    const invalid = [
+      new Proxy(new Uint8Array([1]), {}),
+      new Uint8Array(new SharedArrayBuffer(1)),
+      detached,
+      spoofed,
+    ];
+    for (const data of invalid) {
+      const before = transport.sendCalls();
+      const failure = await client
+        .send([{ programAddress: SYSTEM_PROGRAM, data: data as Uint8Array }], {
+          computeBudget: false,
+        })
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AgencError);
+      expect((failure as AgencError).cause).toBeInstanceOf(TypeError);
+      expect(transport.sendCalls()).toBe(before);
+    }
+  });
+
+  it("collapses duplicate fee-payer wrappers in standard, humanless, and activation client methods", async () => {
+    const base = await generateKeyPairSigner();
+    const fee = countingSigner(base);
+    const standardAuthority = countingSigner(base);
+    const standardCreator = countingSigner(base);
+    const humanlessCreator = countingSigner(base);
+    const activationCreator = countingSigner(base);
+    const transport = fakeTransport();
+    const client = createMarketplaceClient({ transport, signer: fee.signer });
+    const listing = address("Stake11111111111111111111111111111111111111");
+    const providerAgent = address(
+      "So11111111111111111111111111111111111111112",
+    );
+    const creatorAgent = address(
+      "4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB",
+    );
+    const moderator = address("9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA");
+
+    await client.hireFromListing(
+      {
+        listing,
+        providerAgent,
+        creatorAgent,
+        authority: standardAuthority.signer,
+        creator: standardCreator.signer,
+        taskId: new Uint8Array(32).fill(1),
+        expectedPrice: 1n,
+        expectedVersion: 1n,
+        listingSpecHash: new Uint8Array(32).fill(2),
+        taskJobSpecHash: new Uint8Array(32).fill(3),
+        moderator,
+      },
+      { computeBudget: false },
+    );
+    await client.hireFromListingHumanless(
+      {
+        listing,
+        providerAgent,
+        creator: humanlessCreator.signer,
+        taskId: new Uint8Array(32).fill(4),
+        expectedPrice: 1n,
+        expectedVersion: 1n,
+        reviewWindowSecs: 3600n,
+        listingSpecHash: new Uint8Array(32).fill(5),
+        taskJobSpecHash: new Uint8Array(32).fill(6),
+        moderator,
+      },
+      { computeBudget: false },
+    );
+    await client.setTaskJobSpec(
+      {
+        task: listing,
+        creator: activationCreator.signer,
+        jobSpecHash: new Uint8Array(32).fill(7),
+        jobSpecUri: "ipfs://client-boundary",
+        moderator,
+      },
+      { computeBudget: false },
+    );
+
+    expect(transport.sendCalls()).toBe(3);
+    expect(fee.signCalls()).toBe(3);
+    expect(standardAuthority.signCalls()).toBe(0);
+    expect(standardCreator.signCalls()).toBe(0);
+    expect(humanlessCreator.signCalls()).toBe(0);
+    expect(activationCreator.signCalls()).toBe(0);
+  });
+
+  it("locks named-method signer addresses synchronously before generated PDA awaits", async () => {
+    const actorBase = await generateKeyPairSigner();
+    const mutableWrapper = () => {
+      let liveAddress: TransactionSigner["address"] = actorBase.address;
+      const signer = Object.create(actorBase) as TransactionSigner;
+      Object.defineProperty(signer, "address", {
+        configurable: true,
+        enumerable: true,
+        get: () => liveAddress,
+      });
+      return {
+        signer,
+        move(next: TransactionSigner["address"]) {
+          liveAddress = next;
+        },
+      };
+    };
+    const authority = mutableWrapper();
+    const creator = mutableWrapper();
+    const transport = fakeTransport();
+    const client = createMarketplaceClient({
+      transport,
+      signer: await generateKeyPairSigner(),
+    });
+    const moved = address("Vote111111111111111111111111111111111111111");
+
+    const pending = client.hireFromListing(
+      {
+        listing: address("Stake11111111111111111111111111111111111111"),
+        providerAgent: address("So11111111111111111111111111111111111111112"),
+        creatorAgent: address("4xTpJ4p76bAeggXoYywpCCNKfJspbuRzZ79R7zG6BfQB"),
+        authority: authority.signer,
+        creator: creator.signer,
+        taskId: new Uint8Array(32).fill(0x31),
+        expectedPrice: 1n,
+        expectedVersion: 1n,
+        listingSpecHash: new Uint8Array(32).fill(0x32),
+        taskJobSpecHash: new Uint8Array(32).fill(0x33),
+        moderator: address("9Y8Nt5Z3sYTLNm6n5jKj7c5y8C2y2H8gPq4y6t9q1aA"),
+      },
+      { computeBudget: false },
+    );
+    authority.move(moved);
+    creator.move(moved);
+    await pending;
+
+    const message = decodeMessage(transport.captured[0]!);
+    expect(message.staticAccounts).toContain(actorBase.address);
+    expect(message.staticAccounts).not.toContain(moved);
+    expect(authority.signer.address).toBe(actorBase.address);
+    // Equal-address roles collapse to the first stabilized representative;
+    // the unused wrapper remains mutable but never enters the wire message.
+    expect(creator.signer.address).toBe(moved);
+  });
+
+  it("keeps distinct signer capabilities and collapses equal non-fee wrappers", async () => {
+    const fee = countingSigner(await generateKeyPairSigner());
+    const actorBase = await generateKeyPairSigner();
+    const firstActor = countingSigner(actorBase);
+    const duplicateActor = countingSigner(actorBase);
+    const client = createMarketplaceClient({
+      transport: fakeTransport(),
+      signer: fee.signer,
+    });
+    const instruction: Instruction = {
+      programAddress: SYSTEM_PROGRAM,
+      accounts: [
+        {
+          address: firstActor.signer.address,
+          role: AccountRole.READONLY_SIGNER,
+          signer: firstActor.signer,
+        },
+        {
+          address: duplicateActor.signer.address,
+          role: AccountRole.READONLY_SIGNER,
+          signer: duplicateActor.signer,
+        },
+      ],
+      data: new Uint8Array([1]),
+    } as unknown as Instruction;
+
+    await client.send([instruction], { computeBudget: false });
+
+    expect(fee.signCalls()).toBe(1);
+    expect(firstActor.signCalls()).toBe(1);
+    expect(duplicateActor.signCalls()).toBe(0);
   });
 });
 
@@ -360,9 +1150,7 @@ describe("blockhash-expiry-aware retry", () => {
       lastValidBlockHeight: 100n,
     });
     const transport = fakeTransport([expiry]);
-    const { signer, signCalls } = countingSigner(
-      await generateKeyPairSigner(),
-    );
+    const { signer, signCalls } = countingSigner(await generateKeyPairSigner());
     const client = createMarketplaceClient({ transport, signer });
 
     const failure = await client.send([DUMMY_IX]).catch((e: unknown) => e);
@@ -410,9 +1198,7 @@ describe("blockhash-expiry-aware retry", () => {
     expect(
       isBlockhashExpiredError(`${"x".repeat(40_000)}BlockhashNotFound`),
     ).toBe(false);
-    expect(
-      isBlockhashExpiredError("blockhash".repeat(4_096)),
-    ).toBe(false);
+    expect(isBlockhashExpiredError("blockhash".repeat(4_096))).toBe(false);
   });
 
   it("does not retry a bare-context BlockhashNotFound without -32002 provenance", async () => {
@@ -421,7 +1207,10 @@ describe("blockhash-expiry-aware retry", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(1), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(1),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => ({
         send: async () => {
@@ -523,7 +1312,9 @@ describe("AgencError hydration shapes", () => {
     });
     const hydrated = toAgencError(wrapped);
     expect(hydrated.code).toBe(AGENC_COORDINATION_ERROR__AGENT_NOT_FOUND);
-    expect(hydrated.errorName).toBe("AGENC_COORDINATION_ERROR__AGENT_NOT_FOUND");
+    expect(hydrated.errorName).toBe(
+      "AGENC_COORDINATION_ERROR__AGENT_NOT_FOUND",
+    );
     expect(hydrated.cause).toBe(wrapped);
   });
 
@@ -532,7 +1323,10 @@ describe("AgencError hydration shapes", () => {
       transactionError: unknown;
     };
     failure.transactionError = {
-      InstructionError: [0, { Custom: AGENC_COORDINATION_ERROR__TASK_NOT_OPEN }],
+      InstructionError: [
+        0,
+        { Custom: AGENC_COORDINATION_ERROR__TASK_NOT_OPEN },
+      ],
     };
     const hydrated = toAgencError(failure);
     expect(hydrated.code).toBe(AGENC_COORDINATION_ERROR__TASK_NOT_OPEN);
@@ -632,7 +1426,10 @@ describe("createRpcTransport (polling path, no subscriptions)", () => {
     const failingRpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => thunk("sig"),
       getSignatureStatuses: () =>
@@ -993,7 +1790,10 @@ describe("in-flight signature on post-submission failures", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => thunk("sig"),
       getSignatureStatuses: () => thunk({ value: [null] }),
@@ -1016,7 +1816,10 @@ describe("in-flight signature on post-submission failures", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => thunk("sig"),
       getSignatureStatuses: () => {
@@ -1037,11 +1840,16 @@ describe("in-flight signature on post-submission failures", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => ({
         send: async () => {
-          throw new Error("HTTP response lost after the RPC accepted the wire bytes");
+          throw new Error(
+            "HTTP response lost after the RPC accepted the wire bytes",
+          );
         },
       }),
       getSignatureStatuses: () => thunk({ value: [null] }),
@@ -1061,7 +1869,10 @@ describe("in-flight signature on post-submission failures", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => ({
         send: async () => {
@@ -1080,13 +1891,19 @@ describe("in-flight signature on post-submission failures", () => {
   });
 
   it("does not tag a compatible raw BlockhashNotFound preflight as broadcast", async () => {
-    const preflight = Object.assign(new Error("Transaction simulation failed"), {
-      context: { err: "BlockhashNotFound" },
-    });
+    const preflight = Object.assign(
+      new Error("Transaction simulation failed"),
+      {
+        context: { err: "BlockhashNotFound" },
+      },
+    );
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => ({
         send: async () => {
@@ -1105,11 +1922,16 @@ describe("in-flight signature on post-submission failures", () => {
   });
 
   it("does not tag subscription-path request-construction failures as broadcast", async () => {
-    const requestFailure = new Error("subscription RPC request construction failed");
+    const requestFailure = new Error(
+      "subscription RPC request construction failed",
+    );
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => {
         throw requestFailure;
@@ -1155,7 +1977,10 @@ describe("in-flight signature on post-submission failures", () => {
       getLatestBlockhash() {
         this.#assertReceiver();
         return thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         });
       }
     }
@@ -1167,7 +1992,10 @@ describe("in-flight signature on post-submission failures", () => {
       getEpochInfo: () => thunk({ absoluteSlot: 50n, blockHeight: 50n }),
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
     });
     const tx = await signedDummyTx(await generateKeyPairSigner());
@@ -1189,7 +2017,10 @@ describe("in-flight signature on post-submission failures", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => {
         throw requestFailure;
@@ -1210,7 +2041,10 @@ describe("in-flight signature on post-submission failures", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => thunk("sig"),
       getSignatureStatuses: () => {
@@ -1232,7 +2066,10 @@ describe("in-flight signature on post-submission failures", () => {
     const rpc = {
       getLatestBlockhash: () =>
         thunk({
-          value: { blockhash: blockhashFromSeed(9), lastValidBlockHeight: 100n },
+          value: {
+            blockhash: blockhashFromSeed(9),
+            lastValidBlockHeight: 100n,
+          },
         }),
       sendTransaction: () => thunk("sig"),
       getSignatureStatuses: () => {
@@ -1329,9 +2166,7 @@ describe("custom program error hex-prefix parsing", () => {
 
   it("keeps parsing lowercase 0x and bare decimal codes", () => {
     expect(
-      extractCustomProgramErrorCode(
-        new Error("custom program error: 0x1771"),
-      ),
+      extractCustomProgramErrorCode(new Error("custom program error: 0x1771")),
     ).toBe(6001);
     expect(
       extractCustomProgramErrorCode(new Error("custom program error: 6001")),
@@ -1410,10 +2245,11 @@ describe("withReferrerDefault (P6.2 demand-side referral default)", () => {
   });
 
   it("snapshots and freezes the configured referral recovery intent", async () => {
-    const configured: { address: ReturnType<typeof address>; feeBps: number } = {
-      address: REF,
-      feeBps: 500,
-    };
+    const configured: { address: ReturnType<typeof address>; feeBps: number } =
+      {
+        address: REF,
+        feeBps: 500,
+      };
     const client = createMarketplaceClient({
       transport: fakeTransport(),
       signer: await generateKeyPairSigner(),

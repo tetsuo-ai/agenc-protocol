@@ -11,6 +11,7 @@
  *
  * @module hooks/internal
  */
+import { stabilizeTransactionSigner } from "@tetsuo-ai/marketplace-sdk";
 import { t } from "../strings/index.js";
 import type {
   Address,
@@ -140,21 +141,150 @@ export function resolveReferrerArgs(
   };
 }
 
-export type SignerOrAddress = TransactionSigner | Address;
+/**
+ * Detach one on-chain fixed-byte value from caller-owned mutable storage.
+ * Validation happens synchronously at the hook's public enqueue boundary so a
+ * later TanStack/SDK await can never observe a different byte sequence.
+ */
+export function snapshotFixedBytes32(
+  value: unknown,
+  label: string,
+): Uint8Array {
+  return snapshotFixedBytes(value, 32, label);
+}
 
-export function signerAddress(signerOrAddress: SignerOrAddress): Address {
-  if (typeof signerOrAddress === "string") {
-    return signerOrAddress;
-  }
+function snapshotFixedBytes(
+  value: unknown,
+  byteLength: number,
+  label: string,
+): Uint8Array {
   if (
-    typeof signerOrAddress === "object" &&
-    signerOrAddress !== null &&
-    "address" in signerOrAddress &&
-    typeof signerOrAddress.address === "string"
+    !isExactUint8Array(value) ||
+    typedArrayByteLengthGetter?.call(value) !== byteLength ||
+    !hasOrdinaryArrayBuffer(value)
   ) {
-    return signerOrAddress.address;
+    throw new TypeError(`${label} must be exactly ${byteLength} bytes`);
   }
-  throw new Error("Expected a TransactionSigner or Address with an address field.");
+  return new Uint8Array(value);
+}
+
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayTagGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  Symbol.toStringTag,
+)?.get;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+)?.get;
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+)?.get;
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength",
+)?.get;
+
+/**
+ * Recognize the SDK's exact byte-view contract across browser/worker realms.
+ * `instanceof` is realm-local and `Object#toString` honors a spoofable own
+ * `Symbol.toStringTag`. Calling the shared `%TypedArray%` intrinsic getter
+ * directly performs the unforgeable typed-array-kind check across realms.
+ */
+function isExactUint8Array(value: unknown): value is Uint8Array {
+  return (
+    ArrayBuffer.isView(value) &&
+    typedArrayTagGetter?.call(value) === "Uint8Array"
+  );
+}
+
+/** Shared backing can change concurrently and cannot yield one coherent hash. */
+function hasOrdinaryArrayBuffer(value: Uint8Array): boolean {
+  try {
+    const buffer = typedArrayBufferGetter?.call(value);
+    return (
+      buffer !== undefined &&
+      typeof arrayBufferByteLengthGetter?.call(buffer) === "number"
+    );
+  } catch {
+    // `%ArrayBuffer%.byteLength` rejects SharedArrayBuffer and foreign brands.
+    return false;
+  }
+}
+
+/**
+ * Detach a nullable Solana `OptionOrNullable<ReadonlyUint8Array>` while
+ * preserving its public representation. Both the convenient nullable form and
+ * Kit's explicit `Some`/`None` objects are accepted by generated encoders.
+ */
+export function snapshotOptionalFixedBytes<T>(
+  value: T,
+  byteLength: number,
+  label: string,
+): T {
+  if (value === undefined || value === null) return value;
+  if (isExactUint8Array(value)) {
+    return snapshotFixedBytes(value, byteLength, label) as T;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`${label} must be exactly ${byteLength} bytes or None`);
+  }
+
+  const option = value as {
+    readonly __option?: unknown;
+    readonly value?: unknown;
+  };
+  const tag = option.__option;
+  if (tag === "None") {
+    return Object.freeze({ __option: "None" }) as T;
+  }
+  if (tag === "Some") {
+    const bytes = snapshotFixedBytes(option.value, byteLength, label);
+    return Object.freeze({ __option: "Some", value: bytes }) as T;
+  }
+  throw new TypeError(`${label} must be exactly ${byteLength} bytes or None`);
+}
+
+/**
+ * Copy and freeze one caller-owned record. Callers with nested mutable values
+ * must replace those values with their own snapshots before enqueueing.
+ */
+export function snapshotRecord<T extends object>(value: T): T {
+  return Object.freeze({ ...value }) as T;
+}
+
+/** Copy a caller-owned account collection and every known-flat entry. */
+export function snapshotRecordArray<T extends object>(
+  value: readonly T[],
+): readonly T[] {
+  return Object.freeze(value.map((entry) => snapshotRecord(entry)));
+}
+
+/**
+ * Stabilize the fee-payer signer and the exact optional instruction override at
+ * the synchronous hook boundary. An override for the fee-payer's canonical
+ * address resolves to the fee-payer object because Solana Kit rejects distinct
+ * signer implementations for one address. A different-address override keeps
+ * its own identity after the SDK guard permanently locks its address. Other
+ * stateful wallet/session fields remain usable.
+ */
+export function stabilizeSelectedTransactionSigner(
+  clientSigner: TransactionSigner,
+  override?: TransactionSigner,
+): TransactionSigner {
+  const stableClientSigner = stabilizeTransactionSigner(clientSigner);
+  if (
+    override === undefined ||
+    override === stableClientSigner ||
+    override.address === stableClientSigner.address
+  ) {
+    return stableClientSigner;
+  }
+  const stableOverride = stabilizeTransactionSigner(override);
+  return stableOverride.address === stableClientSigner.address
+    ? stableClientSigner
+    : stableOverride;
 }
 
 export function withoutReferrerArgs<T extends object>(

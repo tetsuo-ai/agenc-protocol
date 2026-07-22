@@ -22,7 +22,9 @@ import { App } from "../src/App.js";
 import type {
   HostedModeratedJobSpec,
   MarketplaceBackendAdapter,
+  StarterJobSpec,
 } from "../src/backend.js";
+import { normalizeStarterJobSpec } from "../src/job-spec.js";
 
 const LISTING = address(
   "Stake11111111111111111111111111111111111111",
@@ -42,8 +44,6 @@ const WORKER_AUTHORITY = address(
 const TREASURY = address(
   "SysvarRent111111111111111111111111111111111",
 ) as Address;
-const JOB_SPEC_HASH = new Uint8Array(32).fill(7);
-
 interface RecordedCall {
   name: string;
   order: number;
@@ -55,6 +55,20 @@ interface RenderedApp {
   root: Root;
   cleanup: () => Promise<void>;
 }
+
+test("starter normalization deep-freezes the committed object graph", () => {
+  const payload = normalizeStarterJobSpec(String(BUYER), {
+    title: "Immutable contract",
+    deliverables: ["Artifact"],
+    acceptanceCriteria: ["Hash matches"],
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.equal(Object.isFrozen(payload.deliverables), true);
+  assert.equal(Object.isFrozen(payload.acceptanceCriteria), true);
+  assert.throws(() => {
+    (payload.deliverables as string[])[0] = "mutated";
+  }, TypeError);
+});
 
 function createRecorder() {
   let order = 0;
@@ -111,14 +125,22 @@ function makeReadTransport(): ReadTransport {
 function makeBackend(
   recorder: ReturnType<typeof createRecorder>,
   moderationAttested = true,
+  hashOverride?: Uint8Array,
 ): MarketplaceBackendAdapter {
   return {
     async hostAndModerateJobSpec(input) {
       recorder.record("hostAndModerateJobSpec", input);
+      const payload = normalizeStarterJobSpec(
+        String(input.taskPda),
+        input.spec,
+      );
+      const canonicalHash = await values.canonicalJobSpecHash(payload);
+      const jobSpecHash = hashOverride ?? canonicalHash.bytes;
+      const jobSpecHashHex = canonicalHash.hex;
       return {
-        jobSpecHash: JOB_SPEC_HASH,
-        jobSpecHashHex: values.bytesToHex(JOB_SPEC_HASH),
-        jobSpecUri: `https://market.example/job-specs/${values.bytesToHex(JOB_SPEC_HASH)}.json`,
+        jobSpecHash,
+        jobSpecHashHex,
+        jobSpecUri: `https://market.example/job-specs/${jobSpecHashHex}.json`,
         moderationAttested,
       } satisfies HostedModeratedJobSpec;
     },
@@ -369,6 +391,11 @@ test("starter UI drives the public humanless marketplace lifecycle with injected
     });
 
     await clickButton(rendered.container, "Hire");
+    await setInput(
+      rendered.container,
+      "Job spec title",
+      "  Translate the release notes  ",
+    );
     await clickButton(rendered.container, "Hire with humanless checkout");
     await waitFor(() => {
       call(recorder.calls, "hireFromListingHumanless");
@@ -379,6 +406,7 @@ test("starter UI drives the public humanless marketplace lifecycle with injected
       creator: TransactionSigner;
       taskId: Uint8Array;
       listing: Address;
+      taskJobSpecHash: Uint8Array;
     };
     assert.equal(hireInput.creator, signer);
     assert.equal(hireInput.listing, LISTING);
@@ -396,18 +424,24 @@ test("starter UI drives the public humanless marketplace lifecycle with injected
     });
     const hosted = call(recorder.calls, "hostAndModerateJobSpec");
     const activation = call(recorder.calls, "setTaskJobSpec");
-    assert.ok(hosted.order < activation.order);
-    assert.equal(
-      String((hosted.input as { taskPda: Address }).taskPda),
-      String(expectedTaskPda),
+    const hostedInput = hosted.input as {
+      taskPda: Address;
+      spec: StarterJobSpec;
+    };
+    const expectedJobSpecHash = await values.canonicalJobSpecHash(
+      normalizeStarterJobSpec(String(expectedTaskPda), hostedInput.spec),
     );
+    assert.ok(hosted.order < activation.order);
+    assert.equal(String(hostedInput.taskPda), String(expectedTaskPda));
+    assert.equal(hostedInput.spec.title, "Translate the release notes");
+    assert.deepEqual(hireInput.taskJobSpecHash, expectedJobSpecHash.bytes);
     assert.deepEqual(
       (activation.input as { jobSpecHash: Uint8Array }).jobSpecHash,
-      JOB_SPEC_HASH,
+      expectedJobSpecHash.bytes,
     );
     assert.equal(
       (activation.input as { jobSpecUri: string }).jobSpecUri,
-      `https://market.example/job-specs/${values.bytesToHex(JOB_SPEC_HASH)}.json`,
+      `https://market.example/job-specs/${expectedJobSpecHash.hex}.json`,
     );
     assert.equal(
       String((activation.input as { task: Address }).task),
@@ -530,6 +564,248 @@ test("starter activation fails closed when the backend does not attest moderatio
     assert.equal(
       recorder.calls.some((entry) => entry.name === "setTaskJobSpec"),
       false,
+    );
+  } finally {
+    await rendered.cleanup();
+  }
+});
+
+test("starter never activates a backend hash that differs from the funded hire commitment", async () => {
+  const signer = createNoopSigner(BUYER);
+  const recorder = createRecorder();
+  const client = makeClient(signer, recorder);
+  const backend = makeBackend(recorder, true, new Uint8Array(32).fill(7));
+  const rendered = await renderStarter({ backend, client, signer });
+
+  try {
+    await waitFor(() => {
+      assert.match(rendered.container.textContent ?? "", /Translation service/);
+    });
+
+    await clickButton(rendered.container, "Hire");
+    await clickButton(rendered.container, "Hire with humanless checkout");
+    await waitFor(() => {
+      call(recorder.calls, "hireFromListingHumanless");
+    });
+    await waitFor(() => {
+      findButton(rendered.container, "Host, moderate, and activate");
+    });
+    await clickButton(rendered.container, "Host, moderate, and activate");
+    await waitFor(() => {
+      assert.match(
+        rendered.container.textContent ?? "",
+        /does not match the funded hire commitment/,
+      );
+    });
+
+    assert.equal(
+      recorder.calls.some((entry) => entry.name === "setTaskJobSpec"),
+      false,
+    );
+  } finally {
+    await rendered.cleanup();
+  }
+});
+
+test("starter isolates its immutable commitment when a backend mutates its input clone", async () => {
+  const signer = createNoopSigner(BUYER);
+  const recorder = createRecorder();
+  const client = makeClient(signer, recorder);
+  const backend: MarketplaceBackendAdapter = {
+    async hostAndModerateJobSpec(input) {
+      recorder.record("hostAndModerateJobSpec", input);
+      const canonical = await values.canonicalJobSpecHash(
+        normalizeStarterJobSpec(String(input.taskPda), input.spec),
+      );
+      const mutable = input.spec as {
+        title: string;
+        deliverables: string[];
+        acceptanceCriteria: string[];
+      };
+      mutable.title = "Backend-mutated title";
+      mutable.deliverables[0] = "Backend-mutated deliverable";
+      mutable.acceptanceCriteria[0] = "Backend-mutated acceptance";
+      return {
+        jobSpecHash: canonical.bytes,
+        jobSpecHashHex: canonical.hex,
+        jobSpecUri: `https://market.example/job-specs/${canonical.hex}.json`,
+        moderationAttested: true,
+      };
+    },
+  };
+  const rendered = await renderStarter({ backend, client, signer });
+
+  try {
+    await waitFor(() => {
+      assert.match(rendered.container.textContent ?? "", /Translation service/);
+    });
+    await clickButton(rendered.container, "Hire");
+    await clickButton(rendered.container, "Hire with humanless checkout");
+    await waitFor(() => call(recorder.calls, "hireFromListingHumanless"));
+    await clickButton(rendered.container, "Host, moderate, and activate");
+    await waitFor(() => call(recorder.calls, "setTaskJobSpec"));
+
+    assert.match(
+      rendered.container.textContent ?? "",
+      /Committed job spec: Complete the hired service/,
+    );
+    assert.doesNotMatch(
+      rendered.container.textContent ?? "",
+      /Backend-mutated/,
+    );
+  } finally {
+    await rendered.cleanup();
+  }
+});
+
+test("starter rejects a backend hash bound to a different task", async () => {
+  const signer = createNoopSigner(BUYER);
+  const recorder = createRecorder();
+  const client = makeClient(signer, recorder);
+  const backend: MarketplaceBackendAdapter = {
+    async hostAndModerateJobSpec(input) {
+      recorder.record("hostAndModerateJobSpec", input);
+      const wrongTask = await values.canonicalJobSpecHash(
+        normalizeStarterJobSpec(String(TREASURY), input.spec),
+      );
+      return {
+        jobSpecHash: wrongTask.bytes,
+        jobSpecHashHex: wrongTask.hex,
+        jobSpecUri: `https://market.example/job-specs/${wrongTask.hex}.json`,
+        moderationAttested: true,
+      };
+    },
+  };
+  const rendered = await renderStarter({ backend, client, signer });
+
+  try {
+    await waitFor(() => {
+      assert.match(rendered.container.textContent ?? "", /Translation service/);
+    });
+    await clickButton(rendered.container, "Hire");
+    await clickButton(rendered.container, "Hire with humanless checkout");
+    await waitFor(() => call(recorder.calls, "hireFromListingHumanless"));
+    await clickButton(rendered.container, "Host, moderate, and activate");
+    await waitFor(() => {
+      assert.match(
+        rendered.container.textContent ?? "",
+        /does not match the funded hire commitment/,
+      );
+    });
+    assert.equal(
+      recorder.calls.some((entry) => entry.name === "setTaskJobSpec"),
+      false,
+    );
+  } finally {
+    await rendered.cleanup();
+  }
+});
+
+test("starter never passes backend-owned hash bytes into activation", async () => {
+  const signer = createNoopSigner(BUYER);
+  const recorder = createRecorder();
+  const client = makeClient(signer, recorder);
+  const backendHash = new Uint8Array(32);
+  const backend: MarketplaceBackendAdapter = {
+    async hostAndModerateJobSpec(input) {
+      recorder.record("hostAndModerateJobSpec", input);
+      const canonical = await values.canonicalJobSpecHash(
+        normalizeStarterJobSpec(String(input.taskPda), input.spec),
+      );
+      backendHash.set(canonical.bytes);
+      return {
+        jobSpecHash: backendHash,
+        jobSpecHashHex: canonical.hex,
+        jobSpecUri: `https://market.example/job-specs/${canonical.hex}.json`,
+        moderationAttested: true,
+      };
+    },
+  };
+  const rendered = await renderStarter({ backend, client, signer });
+
+  try {
+    await waitFor(() => {
+      assert.match(rendered.container.textContent ?? "", /Translation service/);
+    });
+    await clickButton(rendered.container, "Hire");
+    await clickButton(rendered.container, "Hire with humanless checkout");
+    await waitFor(() => call(recorder.calls, "hireFromListingHumanless"));
+    const funded = (
+      call(recorder.calls, "hireFromListingHumanless").input as {
+        taskJobSpecHash: Uint8Array;
+      }
+    ).taskJobSpecHash;
+    await clickButton(rendered.container, "Host, moderate, and activate");
+    await waitFor(() => call(recorder.calls, "setTaskJobSpec"));
+
+    backendHash.fill(0);
+    const activated = (
+      call(recorder.calls, "setTaskJobSpec").input as {
+        jobSpecHash: Uint8Array;
+      }
+    ).jobSpecHash;
+    assert.deepEqual(activated, funded);
+    assert.notEqual(activated, backendHash);
+  } finally {
+    await rendered.cleanup();
+  }
+});
+
+test("starter snapshots backend response accessors exactly once", async () => {
+  const signer = createNoopSigner(BUYER);
+  const recorder = createRecorder();
+  const client = makeClient(signer, recorder);
+  const reads = {
+    hash: 0,
+    hashHex: 0,
+    uri: 0,
+    attested: 0,
+  };
+  const backend: MarketplaceBackendAdapter = {
+    async hostAndModerateJobSpec(input) {
+      recorder.record("hostAndModerateJobSpec", input);
+      const canonical = await values.canonicalJobSpecHash(
+        normalizeStarterJobSpec(String(input.taskPda), input.spec),
+      );
+      return {
+        get jobSpecHash() {
+          reads.hash += 1;
+          return canonical.bytes;
+        },
+        get jobSpecHashHex() {
+          reads.hashHex += 1;
+          return canonical.hex;
+        },
+        get jobSpecUri() {
+          reads.uri += 1;
+          return reads.uri === 1
+            ? `https://market.example/job-specs/${canonical.hex}.json`
+            : "https://attacker.example/replaced.json";
+        },
+        get moderationAttested() {
+          reads.attested += 1;
+          return true;
+        },
+      };
+    },
+  };
+  const rendered = await renderStarter({ backend, client, signer });
+
+  try {
+    await waitFor(() => {
+      assert.match(rendered.container.textContent ?? "", /Translation service/);
+    });
+    await clickButton(rendered.container, "Hire");
+    await clickButton(rendered.container, "Hire with humanless checkout");
+    await waitFor(() => call(recorder.calls, "hireFromListingHumanless"));
+    await clickButton(rendered.container, "Host, moderate, and activate");
+    await waitFor(() => call(recorder.calls, "setTaskJobSpec"));
+
+    assert.deepEqual(reads, { hash: 1, hashHex: 1, uri: 1, attested: 1 });
+    assert.match(
+      (call(recorder.calls, "setTaskJobSpec").input as { jobSpecUri: string })
+        .jobSpecUri,
+      /^https:\/\/market\.example\//,
     );
   } finally {
     await rendered.cleanup();

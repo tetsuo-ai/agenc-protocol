@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -52,7 +52,7 @@ export const ACCEPT_BID_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getAcceptBidDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(ACCEPT_BID_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(ACCEPT_BID_DISCRIMINATOR);
 }
 
 export type AcceptBidInstruction<
@@ -122,8 +122,11 @@ export type AcceptBidInstructionDataArgs = {
 export function getAcceptBidInstructionDataEncoder(): FixedSizeEncoder<AcceptBidInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["expectedBidTermsHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      [
+        "expectedBidTermsHash",
+        getFixedBytesEncoder(32, "expectedBidTermsHash"),
+      ],
     ]),
     (value) => ({ ...value, discriminator: ACCEPT_BID_DISCRIMINATOR }),
   );

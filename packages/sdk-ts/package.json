@@ -55,7 +55,7 @@
     "typecheck": "tsc --noEmit",
     "examples:check": "tsc --noEmit -p tsconfig.examples.json",
     "build": "tsup",
-    "pretest": "node scripts/sync-testing-so.mjs",
+    "pretest": "node --test scripts/sync-testing-so.test.mjs && node scripts/sync-testing-so.mjs",
     "test": "vitest run",
     "test:structural": "vitest run tests/",
     "docs:api": "typedoc",
@@ -67,7 +67,7 @@
   "peerDependencies": {
     "@solana/kit": "^6.9.0",
     "@solana/program-client-core": "^6.4.0",
-    "litesvm": "^1.1.0"
+    "litesvm": "1.1.0"
   },
   "peerDependenciesMeta": {
     "litesvm": {
@@ -80,7 +80,7 @@
     "@solana/kit": "6.9.0",
     "@solana/program-client-core": "^6.4.0",
     "codama": "1.7.0",
-    "litesvm": "^1.1.0",
+    "litesvm": "1.1.0",
     "prettier": "3.8.3",
     "tsup": "8.5.1",
     "typedoc": "^0.28.13",
@@ -113,5 +113,8 @@
   "author": "Tetsuo AI",
   "engines": {
     "node": ">=22.23.1"
+  },
+  "dependencies": {
+    "@solana-program/address-lookup-table": "0.11.0"
   }
 }

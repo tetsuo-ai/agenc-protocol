@@ -73,6 +73,9 @@ export function MoneyModal() {
           expectedPrice: l.account.price,
           expectedVersion: l.account.version,
           moderator: FIXTURE_MODERATOR,
+          // Revision 5: the buyer commits the exact task-specific work
+          // contract at hire time; a non-zero 32-byte hash is required.
+          taskJobSpecHash: new Uint8Array(32).fill(7),
         })}
       />
       {/* The OPEN money dialog, server-rendered to prove it SSRs without throwing. */}

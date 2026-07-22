@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -44,6 +42,8 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getTaskBidStateDecoder,
   getTaskBidStateEncoder,
@@ -56,7 +56,7 @@ export const TASK_BID_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getTaskBidDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(TASK_BID_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(TASK_BID_DISCRIMINATOR);
 }
 
 export type TaskBid = {
@@ -112,7 +112,7 @@ export type TaskBidArgs = {
 export function getTaskBidEncoder(): FixedSizeEncoder<TaskBidArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["bidBook", getAddressEncoder()],
       ["bidder", getAddressEncoder()],
@@ -121,8 +121,11 @@ export function getTaskBidEncoder(): FixedSizeEncoder<TaskBidArgs> {
       ["etaSeconds", getU32Encoder()],
       ["confidenceBps", getU16Encoder()],
       ["reputationSnapshotBps", getU16Encoder()],
-      ["qualityGuaranteeHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
+      [
+        "qualityGuaranteeHash",
+        getFixedBytesEncoder(32, "qualityGuaranteeHash"),
+      ],
+      ["metadataHash", getFixedBytesEncoder(32, "metadataHash")],
       ["expiresAt", getI64Encoder()],
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],

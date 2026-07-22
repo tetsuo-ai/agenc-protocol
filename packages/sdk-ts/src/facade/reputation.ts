@@ -33,7 +33,24 @@ import {
   type PostToFeedAsyncInput,
   type UpvotePostAsyncInput,
 } from "../generated/index.js";
-import { AccountRole, type Address, type TransactionSigner } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
+import {
+  canonicalizeFacadeInputSignerFields,
+  stabilizeTransactionSigner,
+} from "../client/signer-identity.js";
+import {
+  snapshotFixedBytes,
+  snapshotOptionalFixedBytes,
+} from "../values/fixed-bytes.js";
+import {
+  snapshotOptionOrNullable,
+  snapshotOptionalAddress,
+} from "../values/options.js";
 
 // Re-export the PDA helpers used by this domain so callers can derive accounts
 // without reaching into generated/.
@@ -56,19 +73,25 @@ export type StakeReputationInput = StakeReputationAsyncInput;
 
 /** Stake reputation for an agent; canonical stake/config PDAs auto-derive. */
 export async function stakeReputation(input: StakeReputationInput) {
-  return getStakeReputationInstructionAsync(input);
+  return getStakeReputationInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /** Withdraw a reputation stake; the reputationStake PDA is auto-derived from agent. */
 export async function withdrawReputationStake(
   input: WithdrawReputationStakeAsyncInput,
 ) {
-  return getWithdrawReputationStakeInstructionAsync(input);
+  return getWithdrawReputationStakeInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 /** Delegate reputation between agents; the delegation PDA is auto-derived from the agent pair. */
 export async function delegateReputation(input: DelegateReputationAsyncInput) {
-  return getDelegateReputationInstructionAsync(input);
+  return getDelegateReputationInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }
 
 export type RevokeDelegationFacadeInput = {
@@ -88,11 +111,60 @@ export type RevokeDelegationFacadeInput = {
     protocolConfig?: Address;
     treasury: Address;
   };
-} &
-  (
-    | { delegation: Address; delegateeAgent?: never }
-    | { delegation?: never; delegateeAgent: Address }
+} & (
+  | { delegation: Address; delegateeAgent?: never }
+  | { delegation?: never; delegateeAgent: Address }
+);
+
+const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+
+function ownDataField<T extends object, K extends keyof T>(
+  input: T,
+  key: K,
+  label: string,
+  optional = false,
+): T[K] | undefined {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = getOwnPropertyDescriptor(input, key);
+  } catch (cause) {
+    throw new TypeError(`${label} must be safely inspectable`, { cause });
+  }
+  if (descriptor === undefined) {
+    if (optional) return undefined;
+    throw new TypeError(`${label} must be an own data property`);
+  }
+  if (!("value" in descriptor)) {
+    throw new TypeError(`${label} must be an own data property`);
+  }
+  return descriptor.value as T[K];
+}
+
+function snapshotRevokeDelegationRecovery(
+  recovery: RevokeDelegationFacadeInput["recovery"],
+): RevokeDelegationFacadeInput["recovery"] {
+  if (recovery === undefined) return undefined;
+  if (typeof recovery !== "object" || recovery === null) {
+    throw new TypeError("revokeDelegation: recovery must be an object");
+  }
+  const treasury = ownDataField(
+    recovery,
+    "treasury",
+    "revokeDelegation: recovery.treasury",
   );
+  const protocolConfig = ownDataField(
+    recovery,
+    "protocolConfig",
+    "revokeDelegation: recovery.protocolConfig",
+    true,
+  );
+  return Object.freeze({
+    treasury: address(treasury!),
+    ...(protocolConfig === undefined
+      ? {}
+      : { protocolConfig: address(protocolConfig) }),
+  });
+}
 
 /**
  * Permanently retire a legacy reputation delegation. This never restores the
@@ -101,37 +173,67 @@ export type RevokeDelegationFacadeInput = {
  * only reach the recorded authority (continuous identity) or canonical treasury
  * (closed/re-registered identity).
  */
-export async function revokeDelegation(
-  input: RevokeDelegationFacadeInput,
-) {
+export async function revokeDelegation(input: RevokeDelegationFacadeInput) {
+  if (typeof input !== "object" || input === null) {
+    throw new TypeError("revokeDelegation: input must be an object");
+  }
+  const rawAuthority = ownDataField(
+    input,
+    "authority",
+    "revokeDelegation: authority",
+  )!;
   const authority =
-    typeof input.authority === "string"
-      ? input.authority
-      : input.authority.address;
+    typeof rawAuthority === "string"
+      ? address(rawAuthority)
+      : stabilizeTransactionSigner(rawAuthority).address;
+  const delegatorAgent = address(
+    ownDataField(input, "delegatorAgent", "revokeDelegation: delegatorAgent")!,
+  );
+  const explicitDelegation = ownDataField(
+    input,
+    "delegation",
+    "revokeDelegation: delegation",
+    true,
+  );
+  const delegateeAgent = ownDataField(
+    input,
+    "delegateeAgent",
+    "revokeDelegation: delegateeAgent",
+    true,
+  );
+  const recovery = snapshotRevokeDelegationRecovery(
+    ownDataField(input, "recovery", "revokeDelegation: recovery", true),
+  );
+  if (explicitDelegation === undefined && delegateeAgent === undefined) {
+    throw new TypeError(
+      "revokeDelegation: provide delegation or delegateeAgent as an own data property",
+    );
+  }
   const delegation =
-    input.delegation ??
-    (
-      await findDelegationPda({
-        delegatorAgent: input.delegatorAgent,
-        delegateeAgent: input.delegateeAgent,
-      })
-    )[0];
+    explicitDelegation === undefined
+      ? (
+          await findDelegationPda({
+            delegatorAgent,
+            delegateeAgent: address(delegateeAgent!),
+          })
+        )[0]
+      : address(explicitDelegation);
   const instruction = getRevokeDelegationInstruction({
     authority,
-    delegatorAgent: input.delegatorAgent,
+    delegatorAgent,
     delegation,
   });
 
-  if (!input.recovery) return instruction;
+  if (!recovery) return instruction;
 
   const protocolConfig =
-    input.recovery.protocolConfig ?? (await findProtocolConfigPda())[0];
+    recovery.protocolConfig ?? (await findProtocolConfigPda())[0];
   return Object.freeze({
     ...instruction,
     accounts: [
       ...instruction.accounts,
       { address: protocolConfig, role: AccountRole.READONLY },
-      { address: input.recovery.treasury, role: AccountRole.WRITABLE },
+      { address: recovery.treasury, role: AccountRole.WRITABLE },
     ],
   });
 }
@@ -149,9 +251,25 @@ export async function registerSkill(
     priceMint?: RegisterSkillAsyncInput["priceMint"];
   },
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   return getRegisterSkillInstructionAsync({
-    priceMint: null,
-    ...input,
+    ...stableInput,
+    skillId: snapshotFixedBytes(
+      stableInput.skillId,
+      32,
+      "registerSkill: skillId",
+    ),
+    name: snapshotFixedBytes(stableInput.name, 32, "registerSkill: name"),
+    contentHash: snapshotFixedBytes(
+      stableInput.contentHash,
+      32,
+      "registerSkill: contentHash",
+    ),
+    priceMint: snapshotOptionalAddress(
+      stableInput.priceMint ?? null,
+      "registerSkill: priceMint",
+    ),
+    tags: snapshotFixedBytes(stableInput.tags, 64, "registerSkill: tags"),
   });
 }
 
@@ -166,10 +284,23 @@ export async function updateSkill(
     isActive?: UpdateSkillAsyncInput["isActive"];
   },
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   return getUpdateSkillInstructionAsync({
-    tags: null,
-    isActive: null,
-    ...input,
+    ...stableInput,
+    contentHash: snapshotFixedBytes(
+      stableInput.contentHash,
+      32,
+      "updateSkill: contentHash",
+    ),
+    tags: snapshotOptionalFixedBytes(
+      stableInput.tags ?? null,
+      64,
+      "updateSkill: tags",
+    ),
+    isActive: snapshotOptionOrNullable(
+      stableInput.isActive ?? null,
+      "updateSkill: isActive",
+    ),
   });
 }
 
@@ -182,9 +313,14 @@ export async function rateSkill(
     reviewHash?: RateSkillAsyncInput["reviewHash"];
   },
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   return getRateSkillInstructionAsync({
-    reviewHash: null,
-    ...input,
+    ...stableInput,
+    reviewHash: snapshotOptionalFixedBytes(
+      stableInput.reviewHash ?? null,
+      32,
+      "rateSkill: reviewHash",
+    ),
   });
 }
 
@@ -198,7 +334,15 @@ export async function rateSkill(
 export type PurchaseSkillInput = PurchaseSkillAsyncInput;
 
 export async function purchaseSkill(input: PurchaseSkillInput) {
-  return getPurchaseSkillInstructionAsync(input);
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
+  return getPurchaseSkillInstructionAsync({
+    ...stableInput,
+    expectedContentHash: snapshotFixedBytes(
+      stableInput.expectedContentHash,
+      32,
+      "purchaseSkill: expectedContentHash",
+    ),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -214,13 +358,26 @@ export async function postToFeed(
     parentPost?: PostToFeedAsyncInput["parentPost"];
   },
 ) {
+  const stableInput = canonicalizeFacadeInputSignerFields(input, ["authority"]);
   return getPostToFeedInstructionAsync({
-    parentPost: null,
-    ...input,
+    ...stableInput,
+    contentHash: snapshotFixedBytes(
+      stableInput.contentHash,
+      32,
+      "postToFeed: contentHash",
+    ),
+    nonce: snapshotFixedBytes(stableInput.nonce, 32, "postToFeed: nonce"),
+    topic: snapshotFixedBytes(stableInput.topic, 32, "postToFeed: topic"),
+    parentPost: snapshotOptionalAddress(
+      stableInput.parentPost ?? null,
+      "postToFeed: parentPost",
+    ),
   });
 }
 
 /** Upvote a post; the vote PDA (from post + voter) and protocolConfig PDA are auto-derived. */
 export async function upvotePost(input: UpvotePostAsyncInput) {
-  return getUpvotePostInstructionAsync(input);
+  return getUpvotePostInstructionAsync(
+    canonicalizeFacadeInputSignerFields(input, ["authority"]),
+  );
 }

@@ -218,6 +218,8 @@ pub mod agenc_coordination {
     /// task. P1.2 §4.4: `moderator` names the attestor whose moderation record the
     /// caller consumes (the record slot is v2-else-legacy; the required
     /// `moderation_block` account is the §5.2 takedown floor).
+    /// Discriminator = sha256("global:set_task_job_spec_v2")[0..8].
+    #[instruction(discriminator = [118, 9, 99, 58, 215, 87, 58, 59])]
     pub fn set_task_job_spec(
         ctx: Context<SetTaskJobSpec>,
         job_spec_hash: [u8; 32],
@@ -426,6 +428,19 @@ pub mod agenc_coordination {
     #[cfg(not(feature = "mainnet-canary"))]
     pub fn expire_bid(ctx: Context<ExpireBid>) -> Result<()> {
         instructions::bid_marketplace::expire_bid_handler(ctx)
+    }
+
+    /// Permissionlessly promote a live bid to the book's tracked policy winner.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn promote_bid(ctx: Context<PromoteBid>) -> Result<()> {
+        instructions::bid_marketplace::promote_bid_handler(ctx)
+    }
+
+    /// Permissionlessly demote a provably dead tracked winner and open the
+    /// re-promotion grace window.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn demote_ineligible_best(ctx: Context<DemoteIneligibleBest>) -> Result<()> {
+        instructions::bid_marketplace::demote_ineligible_best_handler(ctx)
     }
 
     /// Claim a task to signal intent to work on it.
@@ -758,6 +773,14 @@ pub mod agenc_coordination {
         rationale_uri: String,
     ) -> Result<()> {
         instructions::resolve_dispute::handler(ctx, approve, rationale_hash, rationale_uri)
+    }
+
+    /// Permissionlessly settle one deferred collaborative peer claim after a
+    /// dispute ruling (chunked settlement). The dispute reaches its recorded
+    /// terminal status when the last peer settles.
+    #[cfg(not(feature = "mainnet-canary"))]
+    pub fn settle_dispute_claim(ctx: Context<SettleDisputeClaim>) -> Result<()> {
+        instructions::settle_dispute_claim::handler(ctx)
     }
 
     /// Apply slashing to a worker after losing a dispute.
@@ -1175,7 +1198,13 @@ pub mod agenc_coordination {
 
     /// Hire a provider from a standing service listing, minting a one-shot task
     /// that snapshots the listing's terms and funds escrow from the buyer.
+    ///
+    /// The explicit v2 discriminator (`sha256("global:hire_from_listing_v2")[0..8]`)
+    /// is an atomic rollout boundary: the old
+    /// program rejects new clients instead of silently ignoring the appended
+    /// task-job-spec commitment, and the upgraded program rejects old clients.
     #[cfg(not(feature = "mainnet-canary"))]
+    #[instruction(discriminator = [241, 94, 127, 7, 104, 174, 240, 116])]
     pub fn hire_from_listing(
         ctx: Context<HireFromListing>,
         task_id: [u8; 32],
@@ -1184,6 +1213,7 @@ pub mod agenc_coordination {
         referrer: Option<Pubkey>,
         referrer_fee_bps: u16,
         moderator: Pubkey,
+        task_job_spec_hash: [u8; 32],
     ) -> Result<()> {
         instructions::hire_from_listing::handler(
             ctx,
@@ -1193,6 +1223,7 @@ pub mod agenc_coordination {
             referrer,
             referrer_fee_bps,
             moderator,
+            task_job_spec_hash,
         )
     }
 
@@ -1200,8 +1231,12 @@ pub mod agenc_coordination {
     /// registered agent (single-agent storefront). Funds SOL escrow, carries the
     /// listing's operator-fee leg (the embedding site's cut), and pins
     /// ValidationMode::CreatorReview so the human reviews the work before payout.
+    /// Its discriminator is
+    /// `sha256("global:hire_from_listing_humanless_v2")[0..8]` so the
+    /// required task commitment cannot be silently ignored by the old binary.
     #[cfg(not(feature = "mainnet-canary"))]
     #[allow(clippy::too_many_arguments)]
+    #[instruction(discriminator = [229, 163, 171, 114, 38, 116, 215, 85])]
     pub fn hire_from_listing_humanless(
         ctx: Context<HireFromListingHumanless>,
         task_id: [u8; 32],
@@ -1211,6 +1246,7 @@ pub mod agenc_coordination {
         referrer: Option<Pubkey>,
         referrer_fee_bps: u16,
         moderator: Pubkey,
+        task_job_spec_hash: [u8; 32],
     ) -> Result<()> {
         instructions::hire_from_listing_humanless::handler(
             ctx,
@@ -1221,6 +1257,7 @@ pub mod agenc_coordination {
             referrer,
             referrer_fee_bps,
             moderator,
+            task_job_spec_hash,
         )
     }
 

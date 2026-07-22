@@ -14,13 +14,11 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,13 +39,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const MODERATION_CONFIG_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([20, 180, 54, 96, 191, 141, 52, 148]);
 
 export function getModerationConfigDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    MODERATION_CONFIG_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(MODERATION_CONFIG_DISCRIMINATOR);
 }
 
 export type ModerationConfig = {
@@ -109,14 +107,14 @@ export type ModerationConfigArgs = {
 export function getModerationConfigEncoder(): FixedSizeEncoder<ModerationConfigArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["authority", getAddressEncoder()],
       ["moderationAuthority", getAddressEncoder()],
       ["enabled", getBooleanEncoder()],
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 6)],
+      ["reserved", getFixedBytesEncoder(6, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: MODERATION_CONFIG_DISCRIMINATOR }),
   );

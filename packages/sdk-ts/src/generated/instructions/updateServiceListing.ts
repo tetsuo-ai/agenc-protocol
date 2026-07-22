@@ -11,11 +11,9 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -49,6 +47,8 @@ import {
   type WritableAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -64,9 +64,7 @@ export const UPDATE_SERVICE_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([15, 113, 16, 201, 165, 80, 182, 176]);
 
 export function getUpdateServiceListingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_SERVICE_LISTING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_SERVICE_LISTING_DISCRIMINATOR);
 }
 
 export type UpdateServiceListingInstruction<
@@ -125,16 +123,16 @@ export type UpdateServiceListingInstructionDataArgs = {
 export function getUpdateServiceListingInstructionDataEncoder(): Encoder<UpdateServiceListingInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["price", getOptionEncoder(getU64Encoder())],
-      ["specHash", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32))],
+      ["specHash", getOptionEncoder(getFixedBytesEncoder(32))],
       [
         "specUri",
         getOptionEncoder(
           addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
         ),
       ],
-      ["tags", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 64))],
+      ["tags", getOptionEncoder(getFixedBytesEncoder(64))],
       ["requiredCapabilities", getOptionEncoder(getU64Encoder())],
       ["defaultDeadlineSecs", getOptionEncoder(getI64Encoder())],
       ["maxOpenJobs", getOptionEncoder(getU16Encoder())],

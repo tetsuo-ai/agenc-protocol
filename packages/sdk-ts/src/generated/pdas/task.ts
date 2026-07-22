@@ -7,7 +7,6 @@
  */
 
 import {
-  fixEncoderSize,
   getAddressEncoder,
   getBytesEncoder,
   getProgramDerivedAddress,
@@ -15,6 +14,8 @@ import {
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 
 export type TaskSeeds = {
   creator: Address;
@@ -33,7 +34,7 @@ export async function findTaskPda(
     seeds: [
       getBytesEncoder().encode(new Uint8Array([116, 97, 115, 107])),
       getAddressEncoder().encode(seeds.creator),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.taskId),
+      getFixedBytesEncoder(32).encode(seeds.taskId),
     ],
   });
 }

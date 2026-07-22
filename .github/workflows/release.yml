@@ -11,8 +11,9 @@ name: Release
 #   cli-vX.Y.Z        -> publishes @tetsuo-ai/agenc-cli
 #   cli-alias-vX.Y.Z  -> publishes agenc-cli
 #
-# Publish order matters for first-time installs: sdk before tools/react,
-# tools before mcp (dependency ranges point at the published versions).
+# Publish order matters for first-time installs. The enforced dependency DAG is
+# protocol -> sdk/moderation; sdk -> react/tools/worker; tools -> mcp;
+# sdk+worker -> cli; cli -> alias (dependency ranges point at published versions).
 #
 # Requires the NPM_TOKEN repo secret (npm automation token with publish rights
 # to the @tetsuo-ai scope). Provisioning that secret is a human-owned step.
@@ -46,6 +47,7 @@ permissions:
 env:
   AGAVE_VERSION: v3.0.13
   AGAVE_INSTALL_INIT_SHA256: 1a4e96d884a4df7f204240ea8a0e2ce5a4ca71257bc5ce32ae140e1f6bc140d8
+  RELEASE_PACKAGE_GATES_JSON: '[{"id":"protocol","name":"@tetsuo-ai/protocol","directory":"packages/protocol"},{"id":"sdk","name":"@tetsuo-ai/marketplace-sdk","directory":"packages/sdk-ts"},{"id":"react","name":"@tetsuo-ai/marketplace-react","directory":"packages/marketplace-react"},{"id":"tools","name":"@tetsuo-ai/marketplace-tools","directory":"packages/marketplace-tools"},{"id":"mcp","name":"@tetsuo-ai/marketplace-mcp","directory":"packages/marketplace-mcp"},{"id":"moderation","name":"@tetsuo-ai/marketplace-moderation","directory":"packages/marketplace-moderation"},{"id":"worker","name":"@tetsuo-ai/agenc-worker","directory":"packages/agenc-worker"},{"id":"cli","name":"@tetsuo-ai/agenc-cli","directory":"packages/agenc-cli"},{"id":"cli-alias","name":"agenc-cli","directory":"packages/agenc-cli-alias"}]'
 
 # Package tags share dependency/order constraints and publish credentials.
 # Serialize them so two near-simultaneous tags cannot race npm publication.
@@ -54,8 +56,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve_release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      id: ${{ steps.pkg.outputs.id }}
+    steps:
+      - name: Checkout release identity
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a release commit from main
+        run: |
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main"; then
+            echo "Release tag ${GITHUB_REF_NAME} does not point to a commit on main" >&2
+            exit 1
+          fi
+
+      - name: Setup Node for trusted resolution
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+
+      - name: Pin declared npm release toolchain
+        run: npm install --global npm@11.18.0 && npm --version | grep -Fx 11.18.0
+
+      - name: Verify triggering tag identity
+        run: node scripts/verify-release-tag-binding.mjs
+
+      - name: Install trusted resolver dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Resolve package identity before routed jobs
+        id: pkg
+        run: node scripts/release-policy.mjs resolve
+
+      - name: Require exact package gate coverage
+        env:
+          RESOLVED_PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: node scripts/release-policy.mjs gates
+
   protocol_verifiable_build:
-    if: startsWith(github.ref_name, 'protocol-v')
+    needs: resolve_release
+    if: needs.resolve_release.outputs.id == 'protocol'
     permissions:
       contents: read
     uses: ./.github/workflows/verify.yml
@@ -66,8 +114,8 @@ jobs:
     uses: ./.github/workflows/rust-supply-chain.yml
 
   release:
-    needs: [protocol_verifiable_build, rust_supply_chain]
-    if: ${{ always() && needs.rust_supply_chain.result == 'success' && (needs.protocol_verifiable_build.result == 'success' || needs.protocol_verifiable_build.result == 'skipped') }}
+    needs: [resolve_release, protocol_verifiable_build, rust_supply_chain]
+    if: ${{ always() && needs.resolve_release.result == 'success' && needs.rust_supply_chain.result == 'success' && (needs.protocol_verifiable_build.result == 'success' || needs.protocol_verifiable_build.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     environment: production-release
@@ -114,18 +162,23 @@ jobs:
         id: pkg
         run: node scripts/release-policy.mjs resolve
 
+      - name: Reconfirm exact package gate coverage
+        env:
+          RESOLVED_PACKAGE_ID: ${{ steps.pkg.outputs.id }}
+        run: node scripts/release-policy.mjs gates
+
       - name: Verify exact attested release prerequisites
         run: node scripts/release-policy.mjs prerequisites
 
       # --- Gate: SDK / MCP / react (on-chain e2e needs the compiled program) ---
       - name: Setup Rust (e2e)
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.85.0
 
       - name: Install Solana platform tools (e2e)
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
         run: |
           curl -sSfL --retry 3 \
             "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
@@ -136,12 +189,14 @@ jobs:
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Build program for e2e
-        if: startsWith(github.ref_name, 'sdk-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        if: steps.pkg.outputs.id == 'sdk' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
         run: cargo build-sbf --manifest-path programs/agenc-coordination/Cargo.toml
 
       - name: SDK gate (drift, typecheck, tests incl. e2e, build, examples)
-        if: startsWith(github.ref_name, 'sdk-v')
+        if: steps.pkg.outputs.id == 'sdk'
         working-directory: packages/sdk-ts
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: sdk
         run: |
           npm run sdk:drift
           npx tsc --noEmit
@@ -149,107 +204,132 @@ jobs:
           npm run build
           npm run examples:check
           node scripts/pack-smoke.mjs
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
 
       # react/tools/mcp typecheck + test against the workspace-linked sdk,
       # whose types/runtime live in dist/ — build it first.
       - name: Build workspace sdk (react/tools/mcp gates)
-        if: startsWith(github.ref_name, 'react-v') || startsWith(github.ref_name, 'tools-v') || startsWith(github.ref_name, 'mcp-v') || startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        if: steps.pkg.outputs.id == 'react' || steps.pkg.outputs.id == 'tools' || steps.pkg.outputs.id == 'mcp' || steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
         working-directory: packages/sdk-ts
         run: npm run build
 
       # --- Gate: react (signers e2e boots the litesvm sandbox -> needs the .so) ---
       - name: React gate (typecheck, tests, build)
-        if: startsWith(github.ref_name, 'react-v')
+        if: steps.pkg.outputs.id == 'react'
         working-directory: packages/marketplace-react
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: react
         run: |
           node ../sdk-ts/scripts/sync-testing-so.mjs
           npm run typecheck
           npm test
           npm run test:localnet
           npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
 
       # --- Gate: tools ---
       - name: Tools gate (typecheck, tests, build)
-        if: startsWith(github.ref_name, 'tools-v')
+        if: steps.pkg.outputs.id == 'tools'
         working-directory: packages/marketplace-tools
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: tools
         run: |
           npm run typecheck
           npm test
           npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
 
       # --- Gate: mcp (litesvm e2e boots the real .so via the SDK testing sandbox) ---
       - name: Build workspace tools (mcp gate)
-        if: startsWith(github.ref_name, 'mcp-v')
+        if: steps.pkg.outputs.id == 'mcp'
         working-directory: packages/marketplace-tools
         run: npm run build
 
       - name: MCP gate (typecheck, tests incl. e2e, build)
-        if: startsWith(github.ref_name, 'mcp-v')
+        if: steps.pkg.outputs.id == 'mcp'
         working-directory: packages/marketplace-mcp
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: mcp
         run: |
           node ../sdk-ts/scripts/sync-testing-so.mjs
           npm run typecheck
           npm test
           npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
 
       - name: Moderation gate (typecheck, tests, build)
-        if: startsWith(github.ref_name, 'moderation-v')
+        if: steps.pkg.outputs.id == 'moderation'
         working-directory: packages/marketplace-moderation
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: moderation
         run: |
           npm run typecheck
           npm test
           npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
 
       - name: Sync production program into SDK test assets (worker/CLI gates)
-        if: startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        if: steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
         working-directory: packages/sdk-ts
         run: npm run testing:sync-so
 
       - name: Worker gate (typecheck, unit/e2e tests, build)
-        if: startsWith(github.ref_name, 'worker-v') || startsWith(github.ref_name, 'cli-v')
+        if: steps.pkg.outputs.id == 'worker' || steps.pkg.outputs.id == 'cli'
         working-directory: packages/agenc-worker
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: worker
+          RESOLVED_PACKAGE_ID: ${{ steps.pkg.outputs.id }}
         run: |
           npm run typecheck
           npm test
           npm run build
+          if [ "${RESOLVED_PACKAGE_ID}" = "${RELEASE_COMPLETES_PACKAGE_ID}" ]; then
+            node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
+          fi
 
       - name: CLI gate (typecheck, unit/e2e tests, build)
-        if: startsWith(github.ref_name, 'cli-v')
+        if: steps.pkg.outputs.id == 'cli'
         working-directory: packages/agenc-cli
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: cli
         run: |
           npm run typecheck
           npm test
           npm run build
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
 
       - name: CLI alias dependency and entrypoint gate
-        if: startsWith(github.ref_name, 'cli-alias-v')
+        if: steps.pkg.outputs.id == 'cli-alias'
         working-directory: packages/agenc-cli-alias
+        env:
+          RELEASE_COMPLETES_PACKAGE_ID: cli-alias
         run: |
           node -e 'const p=require("./package.json"); if (p.dependencies["@tetsuo-ai/agenc-cli"] !== `^${p.version}`) process.exit(1)'
           node --check bin/agenc-cli.js
+          node "${GITHUB_WORKSPACE}/scripts/release-policy.mjs" complete-gate
 
       # --- Gate: protocol ---
       - name: Install deployment/preflight dependencies
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: npm ci
         working-directory: tests-integration
 
       - name: Audit independent deployment/preflight dependencies
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: npm run audit:tests-integration
 
       # The drift check must compare against a FRESH build, not pass vacuously
       # (audit L-2): mirror idl-drift.yml's toolchain so `artifacts:check:built`
       # (--require-build) has real target/idl + target/types to compare.
       - name: Setup Rust (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.85.0
           components: rustfmt, clippy
 
       - name: Protocol Rust release matrix
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: |
           cargo fmt --manifest-path programs/agenc-coordination/Cargo.toml --all --check
           cargo clippy --manifest-path programs/agenc-coordination/Cargo.toml --all-targets -- -D warnings
@@ -264,7 +344,7 @@ jobs:
           npm run test:deployment-scripts
 
       - name: Reject mixed release surfaces
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: |
           if bare_output=$(cargo check --manifest-path programs/agenc-coordination/Cargo.toml --no-default-features 2>&1); then
             echo "bare --no-default-features unexpectedly compiled an unnamed full surface" >&2
@@ -283,7 +363,7 @@ jobs:
           grep -F "mainnet-canary and private-zk are mutually exclusive" <<<"${mixed_output}"
 
       - name: Cache anchor CLI binary (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         id: cache-anchor-protocol
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -291,15 +371,15 @@ jobs:
           key: anchor-cli-0.32.1-${{ runner.os }}
 
       - name: Install Anchor native build dependencies (cache miss only)
-        if: startsWith(github.ref_name, 'protocol-v') && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        if: steps.pkg.outputs.id == 'protocol' && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev pkg-config
 
       - name: Install anchor CLI (cache miss only)
-        if: startsWith(github.ref_name, 'protocol-v') && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
+        if: steps.pkg.outputs.id == 'protocol' && steps.cache-anchor-protocol.outputs.cache-hit != 'true'
         run: cargo install anchor-cli@0.32.1 --locked --force
 
       - name: Install Solana platform tools (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: |
           curl -sSfL --retry 3 \
             "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/agave-install-init-x86_64-unknown-linux-gnu" \
@@ -310,19 +390,19 @@ jobs:
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Anchor build (protocol gate — fresh IDL/types for the drift check)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: anchor build
 
       - name: Reject SBF stack-frame overflows (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: npm run check:stack
 
       - name: Compiled-program integration suite (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: node --test tests-integration/*.test.mjs
 
       - name: Protocol gate (artifacts check, build, typecheck, pack smoke)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: |
           npm run artifacts:check:built
           npm run build
@@ -334,28 +414,34 @@ jobs:
       # Tag pushes bypass PR checks, so verify both the frozen wire shape and the
       # compiled timeout-settlement behavior here.
       - name: Build mainnet-canary SBF (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: npm run canary:build
 
       - name: Build mainnet-canary IDL (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: npm run canary:idl
 
       - name: Verify frozen canary IDL surface (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         run: npm run canary:check-idl
 
       - name: Compiled mainnet-canary LiteSVM regression (protocol gate)
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         env:
           AGENC_CANARY_LITESVM: "1"
-        run: node --test tests-integration/canary-*.test.mjs
+          RELEASE_COMPLETES_PACKAGE_ID: protocol
+        run: |
+          node --test tests-integration/canary-*.test.mjs
+          node scripts/release-policy.mjs complete-gate
+
+      - name: Require completed routed package gate
+        run: node scripts/release-policy.mjs verify-gate
 
       - name: Audit runtime npm dependencies
         run: npm audit --omit=dev --workspaces
 
       - name: Download required verifiable-build hashes
-        if: startsWith(github.ref_name, 'protocol-v')
+        if: steps.pkg.outputs.id == 'protocol'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: verifiable-build-hashes
@@ -409,8 +495,8 @@ jobs:
           DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
           PACK_JSON: ${{ runner.temp }}/package-pack.json
           EXPECTED_REVIEWED_INTEGRITY: ${{ steps.pkg.outputs.expected_integrity }}
-          REQUIRED_RELEASE_ASSET: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
-          REQUIRED_RELEASE_ASSET_PATH: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
+          REQUIRED_RELEASE_ASSET: ${{ steps.pkg.outputs.id == 'protocol' && 'verifiable-build-hashes.txt' || '' }}
+          REQUIRED_RELEASE_ASSET_PATH: ${{ steps.pkg.outputs.id == 'protocol' && 'verifiable-build-hashes.txt' || '' }}
           SBOM_RELEASE_ASSET: ${{ steps.sbom.outputs.name }}
           SBOM_RELEASE_ASSET_PATH: ${{ steps.sbom.outputs.path }}
         run: node scripts/release-state.mjs inspect
@@ -443,7 +529,7 @@ jobs:
             --notes "See ${PACKAGE_DIR}/CHANGELOG.md for details."
 
       - name: Attach required verifiable-build hashes
-        if: startsWith(github.ref_name, 'protocol-v') && contains(fromJSON(steps.state.outputs.missing_assets), 'verifiable-build-hashes.txt')
+        if: steps.pkg.outputs.id == 'protocol' && contains(fromJSON(steps.state.outputs.missing_assets), 'verifiable-build-hashes.txt')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -521,8 +607,8 @@ jobs:
           DIST_TAG: ${{ steps.pkg.outputs.dist_tag }}
           PACK_JSON: ${{ runner.temp }}/package-pack.json
           EXPECTED_REVIEWED_INTEGRITY: ${{ steps.pkg.outputs.expected_integrity }}
-          REQUIRED_RELEASE_ASSET: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
-          REQUIRED_RELEASE_ASSET_PATH: ${{ startsWith(github.ref_name, 'protocol-v') && 'verifiable-build-hashes.txt' || '' }}
+          REQUIRED_RELEASE_ASSET: ${{ steps.pkg.outputs.id == 'protocol' && 'verifiable-build-hashes.txt' || '' }}
+          REQUIRED_RELEASE_ASSET_PATH: ${{ steps.pkg.outputs.id == 'protocol' && 'verifiable-build-hashes.txt' || '' }}
           SBOM_RELEASE_ASSET: ${{ steps.sbom.outputs.name }}
           SBOM_RELEASE_ASSET_PATH: ${{ steps.sbom.outputs.path }}
         run: node scripts/release-state.mjs finalize

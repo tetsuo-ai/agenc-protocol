@@ -7,7 +7,6 @@
  */
 
 import {
-  fixEncoderSize,
   getAddressEncoder,
   getBytesEncoder,
   getProgramDerivedAddress,
@@ -15,6 +14,8 @@ import {
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 
 export type SkillSeeds = {
   author: Address;
@@ -33,7 +34,7 @@ export async function findSkillPda(
     seeds: [
       getBytesEncoder().encode(new Uint8Array([115, 107, 105, 108, 108])),
       getAddressEncoder().encode(seeds.author),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.skillId),
+      getFixedBytesEncoder(32).encode(seeds.skillId),
     ],
   });
 }

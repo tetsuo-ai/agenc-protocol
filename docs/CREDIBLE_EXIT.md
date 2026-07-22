@@ -5,9 +5,9 @@ ships. Neutrality is AgenC's only durable wedge against both the token-captured
 incumbent and Web2 platforms. A sophisticated embedder will, on day one, ask the
 uncomfortable question:
 
-> *"If I build on this, am I actually independent — or do hires secretly need
+> _"If I build on this, am I actually independent — or do hires secretly need
 > tetsuo's attestation, reads need tetsuo's indexer, artifacts live on tetsuo's
-> domain, and the source is private so I can't even check?"*
+> domain, and the source is private so I can't even check?"_
 
 The honest answer is not a slogan. It is a **demonstrable property**: an
 end-to-end **hire → settle** cycle that completes with **zero tetsuo-ai hosted
@@ -26,17 +26,17 @@ and is honest about the residuals that remain.
 
 ## TL;DR — what is proven vs. what is deferred
 
-| Pillar | Claim | Status |
-|--------|-------|--------|
-| **Runtime independence** | A full hire→settle cycle runs with own RPC, gPA reads, own moderation key, local artifacts, on-chain settlement | ✅ **PROVEN + EXECUTED** (`scripts/credible-exit.mjs`, transcript below) |
-| **Own RPC** (no marketplace-managed proxy) | The embedder points the SDK at any RPC | ✅ Proven (localnet validator = bring-your-own RPC) |
-| **Reads without the hosted indexer** | Discovery via the SDK gPA path (`listActiveListings` / `listOpenTasks` / `listPinnedJobSpecTasks`) | ✅ Proven |
-| **Moderation without the hosted attestor** | Any wallet self-registers on the attestor roster (`register_moderation_attestor`, 0.25 SOL refundable bond) and its CLEAN records satisfy the publish/hire gates | ✅ **PERMISSIONLESS** — gates honor roster attestations (WP-A1, live 2026-07-02); registration is self-service (P1.2, live 2026-07-03) |
-| **Artifacts on self-chosen storage** | Job-spec / result commitments are hashes of local files (`file://`), never `marketplace.agenc.tech` | ✅ Proven |
-| **On-chain settlement** | escrow → claim → complete; worker paid; exact protocol fee to treasury | ✅ Proven (balances measured) |
-| **Source availability** (fork the program) | An embedder can read/fork the Solana source | ✅ **DONE — repo PUBLIC** (`github.com/tetsuo-ai/agenc-protocol`) |
-| **Third-party verifiable build** | An outsider runs `solana-verify verify-from-repo` against `HJsZ…` | ✅ **DONE** — OtterSec registry reports `is_verified: true` for the deployed bytecode at the deployed commit (verify.osec.io, since 2026-07-03) |
-| **Multisig upgrade custody** | No single key can push a malicious program upgrade | ✅ **DONE — Squads v4 2-of-3 vault `Cj9dWtov…` as of 2026-07-03** (see `UPGRADE_AUTHORITY.md`; an earlier "done 2026-06-11" claim conflated the config multisig with the loader authority) |
+| Pillar                                     | Claim                                                                                                                                                            | Status                                                                                                                                                                                     |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Runtime independence**                   | A full hire→settle cycle runs with own RPC, gPA reads, own moderation key, local artifacts, on-chain settlement                                                  | ✅ **PROVEN + EXECUTED** (`scripts/credible-exit.mjs`, transcript below)                                                                                                                   |
+| **Own RPC** (no marketplace-managed proxy) | The embedder points the SDK at any RPC                                                                                                                           | ✅ Proven (localnet validator = bring-your-own RPC)                                                                                                                                        |
+| **Reads without the hosted indexer**       | Discovery via the SDK gPA path (`listActiveListings` / `listOpenTasks` / `listPinnedJobSpecTasks`)                                                               | ✅ Proven                                                                                                                                                                                  |
+| **Moderation without the hosted attestor** | Any wallet self-registers on the attestor roster (`register_moderation_attestor`, 0.25 SOL refundable bond) and its CLEAN records satisfy the publish/hire gates | ✅ **PERMISSIONLESS** — gates honor roster attestations (WP-A1, live 2026-07-02); registration is self-service (P1.2, live 2026-07-03)                                                     |
+| **Artifacts on self-chosen storage**       | Job-spec / result commitments are hashes of local files (`file://`), never `marketplace.agenc.tech`                                                              | ✅ Proven                                                                                                                                                                                  |
+| **On-chain settlement**                    | escrow → claim → complete; worker paid; exact protocol fee to treasury                                                                                           | ✅ Proven (balances measured)                                                                                                                                                              |
+| **Source availability** (fork the program) | An embedder can read/fork the Solana source                                                                                                                      | ✅ **DONE — repo PUBLIC** (`github.com/tetsuo-ai/agenc-protocol`)                                                                                                                          |
+| **Third-party verifiable build**           | An outsider runs `solana-verify verify-from-repo` against `HJsZ…`                                                                                                | ✅ **DONE** — OtterSec registry reports `is_verified: true` for the deployed bytecode at the deployed commit (verify.osec.io, since 2026-07-03)                                            |
+| **Multisig upgrade custody**               | No single key can push a malicious program upgrade                                                                                                               | ✅ **DONE — Squads v4 2-of-3 vault `Cj9dWtov…` as of 2026-07-03** (see `UPGRADE_AUTHORITY.md`; an earlier "done 2026-06-11" claim conflated the config multisig with the loader authority) |
 
 P8.6 formally depended on P0.6 (public repo), P8.3 (verifiable build), and P8.5
 (multisig custody) — **all three have shipped**. An embedder can fork the
@@ -59,13 +59,13 @@ The credible-exit test answers it by doing exactly that against
 **self-hosted-only** infrastructure. The harness substitutes each hosted
 convenience for its self-hosted equivalent:
 
-| Hosted convenience (what tetsuo *offers*) | Self-hosted substitute used in the proof |
-|---|---|
-| Marketplace-managed RPC proxy | Any RPC the embedder runs (the localnet validator here) |
-| Hosted listings indexer + explorer read API (Phase 3) | SDK gPA reads straight against the RPC |
-| Hosted auto-attestor service (P2.3) | The embedder's own `moderation_authority` key + the P6.8 attestor registry |
-| `marketplace.agenc.tech` artifact hosting | Local files; only their SHA-256 is committed on-chain |
-| Hosted webhooks / event delivery | Direct log subscription / polling (degrades gracefully — see §4) |
+| Hosted convenience (what tetsuo _offers_)             | Self-hosted substitute used in the proof                                   |
+| ----------------------------------------------------- | -------------------------------------------------------------------------- |
+| Marketplace-managed RPC proxy                         | Any RPC the embedder runs (the localnet validator here)                    |
+| Hosted listings indexer + explorer read API (Phase 3) | SDK gPA reads straight against the RPC                                     |
+| Hosted auto-attestor service (P2.3)                   | The embedder's own `moderation_authority` key + the P6.8 attestor registry |
+| `marketplace.agenc.tech` artifact hosting             | Local files; only their SHA-256 is committed on-chain                      |
+| Hosted webhooks / event delivery                      | Direct log subscription / polling (degrades gracefully — see §4)           |
 
 ---
 
@@ -74,8 +74,9 @@ convenience for its self-hosted equivalent:
 The user builds **locally-first** (see [LOCALNET.md](./LOCALNET.md)); the devnet
 run is deploy-gated and is a **[HUMAN]** step. The localnet stack is the faithful
 equivalent: it runs the **real full-surface program at the real program id**,
-loaded as a **real upgradeable program**, with the real `initialize_protocol` /
-`configure_task_moderation` instructions — *nothing is mocked*. So executing the
+loaded as a **real upgradeable program**, with the real `initialize_protocol`,
+`configure_task_moderation`, and `initialize_bid_marketplace` instructions —
+_nothing is mocked_. So executing the
 walkthrough on localnet is a genuine proof of the runtime property; pointing it at
 devnet later is the same code with a different `rpcUrl` (the env-file seam).
 
@@ -83,7 +84,7 @@ devnet later is the same code with a different `rpcUrl` (the env-file seam).
 
 ```bash
 # 1. boot the self-hosted stack (real program, real id, your own validator):
-node scripts/localnet-up.mjs
+node scripts/localnet-up.mjs --dev-ready
 
 # 2. run the credible-exit walkthrough (human transcript on stderr,
 #    machine-readable proof on stdout with --json):
@@ -205,14 +206,14 @@ failure): `taskStatus == Completed`, `treasuryDelta == reward * feeBps / 10000`,
 `rewardAmount 1000000`, and the `complete_task` transaction landed with
 `err=null`.
 
-| Step | On-chain signature (localnet run 2026-06-11) |
-|---|---|
-| `assign_moderation_attestor` | `3RXjDbzDEcNGbKhG8uBmeNWmZfJeXcSQgiZ5Smn7NshBx99dWJRaqLU3q8AkMznzGSk2myaW9yvMTTWBdNiPQQzF` |
+| Step                                  | On-chain signature (localnet run 2026-06-11)                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `assign_moderation_attestor`          | `3RXjDbzDEcNGbKhG8uBmeNWmZfJeXcSQgiZ5Smn7NshBx99dWJRaqLU3q8AkMznzGSk2myaW9yvMTTWBdNiPQQzF` |
 | `record_listing_moderation` (own key) | `4paYt4JAouqrXvAsoiZtHWJJqvPBQ6Cr255j1XgEA9vcPDM5B7kLTRaQADTVg11BVMBqDRcD4RtDJ4Wiytzpovqv` |
-| `hire_from_listing` | `4ud2y2iBL7tPr5ZwrJossKWt5jR1pemu9jNUvMvLbnBghLwgHKGHNGvDHdJDiHZW46UexB1PQineUUm5Yxneo6Bw` |
-| `record_task_moderation` (own key) | `2j3pcy8ANhXpzSe3zBRY1Hk2P9Q3KScmL2wumsAhm8e3tqyaCQeTcFRNQJ1D7ssfoBULATA5cmezfwj4KGMkA4Kj` |
-| `set_task_job_spec` (local artifact) | `3ZJaUPoAthXWhaTBpHFFS7HqiWkQY72n15BhGqn4spb9iQDVCEWdaAMHbpLQMwR4CcnZSX2kMnNr2eQ2kMp5t4M1` |
-| `complete_task` (worker paid) | `4kp3oM5d7BDtNnrhsLTnky6XuoA5yGZuHPWjiTZ9Q1p1SmfXPBFU1grZbFPGKKYEyKN5PHizKKHZrGcGP8ejAoxp` |
+| `hire_from_listing`                   | `4ud2y2iBL7tPr5ZwrJossKWt5jR1pemu9jNUvMvLbnBghLwgHKGHNGvDHdJDiHZW46UexB1PQineUUm5Yxneo6Bw` |
+| `record_task_moderation` (own key)    | `2j3pcy8ANhXpzSe3zBRY1Hk2P9Q3KScmL2wumsAhm8e3tqyaCQeTcFRNQJ1D7ssfoBULATA5cmezfwj4KGMkA4Kj` |
+| `set_task_job_spec` (local artifact)  | `3ZJaUPoAthXWhaTBpHFFS7HqiWkQY72n15BhGqn4spb9iQDVCEWdaAMHbpLQMwR4CcnZSX2kMnNr2eQ2kMp5t4M1` |
+| `complete_task` (worker paid)         | `4kp3oM5d7BDtNnrhsLTnky6XuoA5yGZuHPWjiTZ9Q1p1SmfXPBFU1grZbFPGKKYEyKN5PHizKKHZrGcGP8ejAoxp` |
 
 These signatures are localnet-ledger-scoped (a fresh `localnet-up --reset` wipes
 them). The reproducible **artifact** is the script + the assertions it enforces,
@@ -261,8 +262,8 @@ operator's own `moderation_authority` as the explicit `moderator` throughout
 and demonstrates the roster write path alongside.
 
 **The boundary at the time of the executed proof (2026-06-11, pre-WP-A1) —
-kept as the honest record:** back then the roster widened only *who can
-write*. The consumption gates required
+kept as the honest record:** back then the roster widened only _who can
+write_. The consumption gates required
 `moderation.moderator == moderation_config.moderation_authority`, so **only an
 attestation written by the single global `moderation_authority` key unlocked a
 hire/claim**, and letting a delegated roster attestor's record satisfy the
@@ -270,7 +271,7 @@ gate was "a protocol change, not done here". WP-A1 + P1.2 were exactly that
 protocol change; the pre-P1.2 transcript line (`consumption gates honor only
 moderation_authority — boundary noted`) was retired with the gates. This is
 consistent with [MODERATION_NEUTRALITY.md](./MODERATION_NEUTRALITY.md): the
-registry is a *mechanism*, and the neutrality decision it now carries is
+registry is a _mechanism_, and the neutrality decision it now carries is
 live on mainnet.
 
 ---
@@ -282,9 +283,9 @@ If tetsuo's hosted plane vanishes:
 ### Keeps working (zero tetsuo) — the money-safety core
 
 - **Settlement** — `complete_task` / the direct-pay path; worker paid, fee to the
-  on-chain treasury. *Proven above.*
+  on-chain treasury. _Proven above._
 - **Escrow** — funded at hire, released on completion, refundable on the exit
-  paths. *Proven (hire funds escrow; complete releases it).*
+  paths. _Proven (hire funds escrow; complete releases it)._
 - **The money-never-locks exits** — `cancel_task`, refund/reclaim,
   `reclaim_completion_bond`, the `RejectFrozen` resolve/expire exits. These are
   pure on-chain instructions; see [SECURITY.md](../SECURITY.md) §3 and
@@ -296,17 +297,17 @@ If tetsuo's hosted plane vanishes:
   already-assigned resolver decides directly without a per-case vote.
 - **Reputation** — `AgentStats` track-record aggregates are on-chain accounts.
 - **Reads** — every listing/task/claim/bid/hire-record is a program account
-  fetchable via gPA with the SDK decoders. *Proven (discovery via gPA).*
+  fetchable via gPA with the SDK decoders. _Proven (discovery via gPA)._
 - **Moderation** — by the operator's own `moderation_authority` key **or** a
-  self-registered roster attestor (P1.2). *Proven — the §3 boundary is closed:
-  roster records are consumable.*
+  self-registered roster attestor (P1.2). _Proven — the §3 boundary is closed:
+  roster records are consumable._
 
 ### Degrades gracefully (a convenience is lost, not the capability)
 
 - **Discovery / search.** Without the hosted listings indexer + explorer API, an
   embedder uses the **SDK gPA path** (slower, RPC-load-heavier, no full-text
   search / pagination niceties) or runs **their own** indexer. The SDK exposes a
-  `ProgramAccountsTransport` seam so the *same* `listActiveListings(...)` call
+  `ProgramAccountsTransport` seam so the _same_ `listActiveListings(...)` call
   works against gPA **or** any indexer the embedder stands up — no call-site
   change. Capability preserved; convenience degraded.
 - **Webhooks / push events.** Without hosted signed-webhook delivery, an embedder
@@ -319,7 +320,7 @@ If tetsuo's hosted plane vanishes:
   convenience.
 - **Artifact hosting.** Without `marketplace.agenc.tech`, artifacts live wherever
   the embedder chooses; only the on-chain **hash commitment** matters for
-  integrity. *Proven (local `file://`).*
+  integrity. _Proven (local `file://`)._
 
 ---
 
@@ -356,8 +357,8 @@ today (2026-07-03):
 ### Residuals that honestly remain (2026-07-03)
 
 - **Squads member-key co-location.** All three multisig member keys are
-  currently files on **one host** — the 2-of-3 protects against a single *key*
-  compromise, not a single *host* compromise, until one member moves to a
+  currently files on **one host** — the 2-of-3 protects against a single _key_
+  compromise, not a single _host_ compromise, until one member moves to a
   hardware wallet (tracked in [UPGRADE_AUTHORITY.md](./UPGRADE_AUTHORITY.md)).
 - **Treasury custody is single-key.** The protocol-fee treasury is not yet
   behind a multisig.
@@ -368,7 +369,7 @@ today (2026-07-03):
 
 ### One-paragraph honest summary
 
-> **What is proven:** the AgenC *runtime* is operator-independent. With your own
+> **What is proven:** the AgenC _runtime_ is operator-independent. With your own
 > RPC, gPA reads, your own (or your self-registered roster) moderation key,
 > self-chosen artifact storage, and nothing but the public SDK, you can hire an
 > agent and settle the payment on-chain — escrow funded, worker paid, exact fee

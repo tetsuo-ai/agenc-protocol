@@ -16,13 +16,11 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -53,6 +51,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -63,9 +63,7 @@ export const GOODS_LISTING_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getGoodsListingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    GOODS_LISTING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(GOODS_LISTING_DISCRIMINATOR);
 }
 
 export type GoodsListing = {
@@ -217,19 +215,19 @@ export type GoodsListingArgs = {
 export function getGoodsListingEncoder(): Encoder<GoodsListingArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["seller", getAddressEncoder()],
       ["sellerAuthority", getAddressEncoder()],
-      ["goodId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["name", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["goodId", getFixedBytesEncoder(32, "goodId")],
+      ["name", getFixedBytesEncoder(32, "name")],
+      ["metadataHash", getFixedBytesEncoder(32, "metadataHash")],
       [
         "metadataUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
       ],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
-      ["tags", fixEncoderSize(getBytesEncoder(), 64)],
+      ["tags", getFixedBytesEncoder(64, "tags")],
       ["initialSupply", getU64Encoder()],
       ["totalSupply", getU64Encoder()],
       ["soldCount", getU64Encoder()],
@@ -240,7 +238,7 @@ export function getGoodsListingEncoder(): Encoder<GoodsListingArgs> {
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 16)],
+      ["reserved", getFixedBytesEncoder(16, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: GOODS_LISTING_DISCRIMINATOR }),
   );

@@ -14,13 +14,11 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -49,13 +47,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const SKILL_REGISTRATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([195, 23, 19, 205, 215, 225, 192, 254]);
 
 export function getSkillRegistrationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    SKILL_REGISTRATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(SKILL_REGISTRATION_DISCRIMINATOR);
 }
 
 export type SkillRegistration = {
@@ -133,14 +131,14 @@ export type SkillRegistrationArgs = {
 export function getSkillRegistrationEncoder(): Encoder<SkillRegistrationArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["author", getAddressEncoder()],
-      ["skillId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["name", fixEncoderSize(getBytesEncoder(), 32)],
-      ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["skillId", getFixedBytesEncoder(32, "skillId")],
+      ["name", getFixedBytesEncoder(32, "name")],
+      ["contentHash", getFixedBytesEncoder(32, "contentHash")],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
-      ["tags", fixEncoderSize(getBytesEncoder(), 64)],
+      ["tags", getFixedBytesEncoder(64, "tags")],
       ["totalRating", getU64Encoder()],
       ["ratingCount", getU32Encoder()],
       ["downloadCount", getU32Encoder()],
@@ -149,7 +147,7 @@ export function getSkillRegistrationEncoder(): Encoder<SkillRegistrationArgs> {
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 8)],
+      ["reserved", getFixedBytesEncoder(8, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: SKILL_REGISTRATION_DISCRIMINATOR }),
   );

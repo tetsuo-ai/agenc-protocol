@@ -179,6 +179,8 @@ test("accepts a canonical HireRecord bound to its immutable listing provider", a
   assert.equal(result.accountCount, 1);
   assert.equal(result.boundCount, 1);
   assert.equal(result.backfillCount, 0);
+  assert.equal(result.cancelRehireCount, 1);
+  assert.equal(result.settlementOnlyCount, 0);
   assert.equal(result.exactCapacityListingCount, 1);
   assert.deepEqual(result.blockers, []);
 });
@@ -189,6 +191,8 @@ test("inventories the canonical-listing fallback for nonterminal legacy hires", 
     const result = await scanHireProviderBindings(connectionFor(value));
     assert.equal(result.backfillCount, 1);
     assert.equal(result.nonterminalBackfillCount, 1);
+    assert.equal(result.cancelRehireCount, status === 0 ? 1 : 0);
+    assert.equal(result.settlementOnlyCount, status === 0 ? 0 : 1);
     assert.deepEqual(result.blockers, []);
   }
 });
@@ -198,6 +202,8 @@ test("inventories terminal legacy provider backfills without blocking settlement
     const value = scenario({ status, designated: "default" });
     const result = await scanHireProviderBindings(connectionFor(value));
     assert.equal(result.terminalBackfillCount, 1);
+    assert.equal(result.cancelRehireCount, 0);
+    assert.equal(result.settlementOnlyCount, 0);
     assert.deepEqual(result.blockers, []);
   }
 });

@@ -4,6 +4,8 @@ import {
   address,
   createNoopSigner,
   type AccountMeta,
+  type Address,
+  type TransactionSigner,
 } from "@solana/kit";
 import {
   getCreateProposalInstructionDataDecoder,
@@ -37,6 +39,7 @@ import {
   updateState,
   updateLaunchControls,
   initializeProtocol,
+  findAgencProgramDataPda,
   migrateTask,
   migrateProtocol,
 } from "../src/facade/governance.js";
@@ -95,6 +98,27 @@ function expectMultisigSignerSuffix(accounts: readonly AccountMeta[]) {
   }
 }
 
+function createMutableAddressSigner(initialAddress: Address): {
+  signer: TransactionSigner;
+  setLiveAddress(nextAddress: Address): void;
+} {
+  let liveAddress = initialAddress;
+  const signer = {
+    ...createNoopSigner(initialAddress),
+  } as TransactionSigner;
+  Object.defineProperty(signer, "address", {
+    configurable: true,
+    enumerable: true,
+    get: () => liveAddress,
+  });
+  return {
+    signer,
+    setLiveAddress(nextAddress) {
+      liveAddress = nextAddress;
+    },
+  };
+}
+
 describe("governance facade — proposals", () => {
   it("createProposal: program, account order, data round-trip", async () => {
     const titleHash = new Uint8Array(32).fill(1);
@@ -133,6 +157,38 @@ describe("governance facade — proposals", () => {
       Array.from(descriptionHash),
     );
     expect(Array.from(decoded.payload)).toEqual(Array.from(payload));
+  });
+
+  it("createProposal snapshots signer identity and fixed data before derivation yields", async () => {
+    const mutableAuthority = createMutableAddressSigner(authority.address);
+    const titleHash = new Uint8Array(32).fill(31);
+    const descriptionHash = new Uint8Array(32).fill(32);
+    const payload = new Uint8Array(64).fill(33);
+    const instructionPromise = createProposal({
+      proposer: authority.address,
+      authority: mutableAuthority.signer,
+      nonce: 77n,
+      proposalType: 4,
+      titleHash,
+      descriptionHash,
+      payload,
+      votingPeriod: 86_400n,
+    });
+
+    mutableAuthority.setLiveAddress(A.ownerB);
+    titleHash.fill(91);
+    descriptionHash.fill(92);
+    payload.fill(93);
+
+    const ix = await instructionPromise;
+    const decoded = getCreateProposalInstructionDataDecoder().decode(ix.data);
+    expect(ix.accounts[4]).toMatchObject({
+      address: authority.address,
+      signer: mutableAuthority.signer,
+    });
+    expect(decoded.titleHash).toEqual(new Uint8Array(32).fill(31));
+    expect(decoded.descriptionHash).toEqual(new Uint8Array(32).fill(32));
+    expect(decoded.payload).toEqual(new Uint8Array(64).fill(33));
   });
 
   it("voteProposal: program, account order, data round-trip", async () => {
@@ -244,8 +300,9 @@ describe("governance facade — governance + protocol config", () => {
       SYSTEM_PROGRAM,
     ]);
 
-    const decoded =
-      getInitializeGovernanceInstructionDataDecoder().decode(ix.data);
+    const decoded = getInitializeGovernanceInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.votingPeriod).toBe(86_400n);
     expect(decoded.executionDelay).toBe(3_600n);
     expect(decoded.quorumBps).toBe(2_000);
@@ -315,7 +372,9 @@ describe("governance facade — governance + protocol config", () => {
     ]);
     expectMultisigSignerSuffix(ix.accounts);
 
-    const decoded = getUpdateProtocolFeeInstructionDataDecoder().decode(ix.data);
+    const decoded = getUpdateProtocolFeeInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.protocolFeeBps).toBe(250);
   });
 
@@ -397,9 +456,30 @@ describe("governance facade — governance + protocol config", () => {
     expect(decoded.version).toBe(1n);
   });
 
+  it("updateState detaches key and value before its PDA derivation yields", async () => {
+    const stateKey = new Uint8Array(32).fill(41);
+    const stateValue = new Uint8Array(64).fill(42);
+    const instructionPromise = updateState({
+      agent: A.agent,
+      authority,
+      stateKey,
+      stateValue,
+      version: 3n,
+    });
+
+    stateKey.fill(94);
+    stateValue.fill(95);
+
+    const decoded = getUpdateStateInstructionDataDecoder().decode(
+      (await instructionPromise).data,
+    );
+    expect(decoded.stateKey).toEqual(new Uint8Array(32).fill(41));
+    expect(decoded.stateValue).toEqual(new Uint8Array(64).fill(42));
+  });
+
   it("updateLaunchControls: program, account order, data round-trip", async () => {
-    // P6.5: updateLaunchControls now takes a `surfaceRevision: u16` arg (the
-    // authority can re-stamp the deployed surface revision).
+    // updateLaunchControls carries a `surfaceRevision: u16` argument, but Rust
+    // rejects promotion to CURRENT; only stampReleaseSurface may publish it.
     const ix = await updateLaunchControls({
       protocolConfig: A.protocolConfig,
       authority,
@@ -417,15 +497,21 @@ describe("governance facade — governance + protocol config", () => {
     ]);
     expectMultisigSignerSuffix(ix.accounts);
 
-    const decoded =
-      getUpdateLaunchControlsInstructionDataDecoder().decode(ix.data);
+    const decoded = getUpdateLaunchControlsInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.protocolPaused).toBe(true);
     expect(decoded.disabledTaskTypeMask).toBe(6);
     expect(decoded.surfaceRevision).toBe(1);
   });
 
   it("initializeProtocol: program, account order, data round-trip", async () => {
-    const multisigOwners = [A.ownerA, A.ownerB];
+    const multisigOwners = [
+      authority.address,
+      secondSigner.address,
+      A.ownerA,
+    ];
+    const programData = await findAgencProgramDataPda();
     const ix = await initializeProtocol({
       protocolConfig: A.protocolConfig,
       treasury,
@@ -446,16 +532,138 @@ describe("governance facade — governance + protocol config", () => {
       authority.address,
       secondSigner.address,
       SYSTEM_PROGRAM,
+      programData,
     ]);
 
-    const decoded =
-      getInitializeProtocolInstructionDataDecoder().decode(ix.data);
+    const decoded = getInitializeProtocolInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.disputeThreshold).toBe(3);
     expect(decoded.protocolFeeBps).toBe(200);
     expect(decoded.minStake).toBe(1_000n);
     expect(decoded.minStakeForDispute).toBe(2_000n);
     expect(decoded.multisigThreshold).toBe(2);
     expect(decoded.multisigOwners).toEqual(multisigOwners);
+  });
+
+  it("initializeProtocol snapshots the owner set before derivation yields", async () => {
+    const multisigOwners: Address[] = [
+      authority.address,
+      secondSigner.address,
+      A.ownerA,
+    ];
+    const instructionPromise = initializeProtocol({
+      treasury,
+      authority,
+      secondSigner,
+      disputeThreshold: 3,
+      protocolFeeBps: 200,
+      minStake: 1_000n,
+      minStakeForDispute: 2_000n,
+      multisigThreshold: 2,
+      multisigOwners,
+    });
+
+    multisigOwners[0] = A.treasury;
+    multisigOwners.push(A.recipient);
+
+    expect(
+      getInitializeProtocolInstructionDataDecoder().decode(
+        (await instructionPromise).data,
+      ).multisigOwners,
+    ).toEqual([authority.address, secondSigner.address, A.ownerA]);
+  });
+
+  it("initializeProtocol appends the canonical ProgramData account before additional owner signers", async () => {
+    const additionalA = createNoopSigner(A.ownerA);
+    const additionalB = createNoopSigner(A.ownerB);
+    const additionalMultisigSigners: TransactionSigner[] = [
+      additionalA,
+      additionalB,
+    ];
+    const ixPromise = initializeProtocol({
+      protocolConfig: A.protocolConfig,
+      treasury,
+      authority,
+      secondSigner,
+      disputeThreshold: 67,
+      protocolFeeBps: 200,
+      minStake: 1_000_000n,
+      minStakeForDispute: 2_000n,
+      multisigThreshold: 4,
+      multisigOwners: [
+        authority.address,
+        secondSigner.address,
+        additionalA.address,
+        additionalB.address,
+        treasury.address,
+      ],
+      additionalMultisigSigners,
+    });
+
+    additionalMultisigSigners.reverse();
+
+    const ix = await ixPromise;
+    const programData = await findAgencProgramDataPda();
+    expect(ix.accounts.slice(-3).map((account) => account.address)).toEqual([
+      programData,
+      additionalA.address,
+      additionalB.address,
+    ]);
+    expect(ix.accounts.at(-3)?.role).toBe(AccountRole.READONLY);
+    for (const [index, signer] of [additionalA, additionalB].entries()) {
+      expect(ix.accounts.at(-2 + index)).toMatchObject({
+        role: AccountRole.READONLY_SIGNER,
+        signer,
+      });
+    }
+  });
+
+  it("initializeProtocol rejects unnecessary duplicate or oversized additional owner signer suffixes", async () => {
+    await expect(
+      initializeProtocol({
+        treasury,
+        authority,
+        secondSigner,
+        disputeThreshold: 67,
+        protocolFeeBps: 200,
+        minStake: 1_000_000n,
+        minStakeForDispute: 2_000n,
+        multisigThreshold: 3,
+        multisigOwners: [
+          authority.address,
+          secondSigner.address,
+          A.ownerA,
+          A.ownerB,
+        ],
+        additionalMultisigSigners: [authority],
+      }),
+    ).rejects.toThrow(/must not repeat named signer/u);
+
+    await expect(
+      initializeProtocol({
+        treasury,
+        authority,
+        secondSigner,
+        disputeThreshold: 67,
+        protocolFeeBps: 200,
+        minStake: 1_000_000n,
+        minStakeForDispute: 2_000n,
+        multisigThreshold: 4,
+        multisigOwners: [
+          authority.address,
+          secondSigner.address,
+          A.ownerA,
+          A.ownerB,
+          multisigSignerA.address,
+        ],
+        additionalMultisigSigners: [
+          createNoopSigner(A.ownerA),
+          createNoopSigner(A.ownerB),
+          multisigSignerA,
+        ],
+      }),
+    ).rejects.toThrow(/exactly 2 approvals/u);
   });
 
   it("rejects duplicate ProtocolConfig approval addresses", async () => {
@@ -496,6 +704,58 @@ describe("governance facade — governance + protocol config", () => {
       expect(account?.role).toBe(AccountRole.READONLY_SIGNER);
       expect(account).toHaveProperty("signer", signer);
     }
+  });
+
+  it("snapshots the approval array and signer identity before the async builder yields", async () => {
+    const mutable = createMutableAddressSigner(multisigSignerA.address);
+    const approvals: TransactionSigner[] = [mutable.signer, multisigSignerB];
+
+    const instructionPromise = updateProtocolFee({
+      protocolConfig: A.protocolConfig,
+      authority,
+      protocolFeeBps: 250,
+      multisigSigners: approvals,
+    });
+
+    mutable.setLiveAddress(A.ownerB);
+    approvals[0] = secondSigner;
+
+    const ix = await instructionPromise;
+    expect(ix.accounts.slice(-2).map((account) => account.address)).toEqual([
+      multisigSignerA.address,
+      multisigSignerB.address,
+    ]);
+    expect(ix.accounts.at(-2)).toMatchObject({
+      role: AccountRole.READONLY_SIGNER,
+      signer: mutable.signer,
+    });
+    expect(Object.isFrozen(mutable.signer)).toBe(false);
+    expect(
+      Object.getOwnPropertyDescriptor(mutable.signer, "address"),
+    ).toMatchObject({
+      configurable: false,
+      writable: false,
+      value: multisigSignerA.address,
+    });
+  });
+
+  it("snapshots the proposed owner array before PDA derivation yields", async () => {
+    const proposedOwners: Address[] = [A.ownerA, A.ownerB];
+    const instructionPromise = updateMultisig({
+      authority,
+      newThreshold: 2,
+      newOwners: proposedOwners,
+      multisigSigners,
+    });
+
+    proposedOwners[0] = A.treasury;
+    proposedOwners.push(A.recipient);
+
+    const decoded = getUpdateMultisigInstructionDataDecoder().decode(
+      (await instructionPromise).data,
+    );
+    expect(decoded.newThreshold).toBe(2);
+    expect(decoded.newOwners).toEqual([A.ownerA, A.ownerB]);
   });
 });
 

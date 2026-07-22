@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -33,6 +31,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -44,9 +44,7 @@ export const UPDATE_PROTOCOL_FEE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([170, 136, 6, 60, 43, 130, 81, 96]);
 
 export function getUpdateProtocolFeeDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_PROTOCOL_FEE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_PROTOCOL_FEE_DISCRIMINATOR);
 }
 
 export type UpdateProtocolFeeInstruction<
@@ -79,7 +77,7 @@ export type UpdateProtocolFeeInstructionDataArgs = { protocolFeeBps: number };
 export function getUpdateProtocolFeeInstructionDataEncoder(): FixedSizeEncoder<UpdateProtocolFeeInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["protocolFeeBps", getU16Encoder()],
     ]),
     (value) => ({ ...value, discriminator: UPDATE_PROTOCOL_FEE_DISCRIMINATOR }),

@@ -7,10 +7,10 @@ covered by the `examples:check` script (`npm run examples:check`), which runs
 `tsc --noEmit` over `examples/**/*.ts` + `src/` so the snippets cannot drift from
 the published API.
 
-| File | What it shows |
-|------|---------------|
-| [`embeddable-marketplace.ts`](./embeddable-marketplace.ts) | The first-run marketplace flow as instruction-building only (no RPC): register a provider agent, create a service listing, humanless buyer hire, job-spec activation, claim, submit, accept, rate, and close. |
-| [`localnet-first-hire.ts`](./localnet-first-hire.ts) | The REAL end-to-end sandbox hire against the documented localnet stack: faucet → register → list → attest → `hireAndActivate` → claim → settle. Auto-discovers `.localnet/env.json`; the devnet nightly runs the same file cluster-pinned to devnet. |
+| File                                                       | What it shows                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`embeddable-marketplace.ts`](./embeddable-marketplace.ts) | The first-run marketplace flow as instruction-building only (no RPC): register a provider agent, create a service listing, humanless buyer hire, job-spec activation, claim, submit, accept, rate, and close.                                        |
+| [`localnet-first-hire.ts`](./localnet-first-hire.ts)       | The REAL end-to-end sandbox hire against the documented localnet stack: faucet → register → list → attest → `hireAndActivate` → claim → settle. Auto-discovers `.localnet/env.json`; the devnet nightly runs the same file cluster-pinned to devnet. |
 
 ## Running
 
@@ -33,8 +33,9 @@ repo root:
 ```bash
 anchor build                                    # once
 (cd packages/sdk-ts && npm install && npm run build)
-node scripts/localnet-up.mjs                    # validator + program + configs
-node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs   # picks up .localnet/env.json
+node scripts/localnet-up.mjs --dev-ready        # operational disposable marketplace
+node packages/sdk-ts/scripts/seed-devnet-sandbox.mjs \
+  --moderator-keypair .localnet/keys/moderator.json
 (cd packages/sdk-ts && npx tsx examples/localnet-first-hire.ts)
 ```
 

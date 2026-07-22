@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -43,6 +41,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getCommitment32Encoder,
+  getFixedBytesEncoder,
+} from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -60,12 +63,10 @@ import {
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const HIRE_FROM_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
-  new Uint8Array([174, 225, 81, 68, 172, 19, 97, 194]);
+  new Uint8Array([241, 94, 127, 7, 104, 174, 240, 116]);
 
 export function getHireFromListingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    HIRE_FROM_LISTING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(HIRE_FROM_LISTING_DISCRIMINATOR);
 }
 
 export type HireFromListingInstruction<
@@ -150,6 +151,7 @@ export type HireFromListingInstructionData = {
   referrer: Option<Address>;
   referrerFeeBps: number;
   moderator: Address;
+  taskJobSpecHash: ReadonlyUint8Array;
 };
 
 export type HireFromListingInstructionDataArgs = {
@@ -159,18 +161,20 @@ export type HireFromListingInstructionDataArgs = {
   referrer: OptionOrNullable<Address>;
   referrerFeeBps: number;
   moderator: Address;
+  taskJobSpecHash: ReadonlyUint8Array;
 };
 
 export function getHireFromListingInstructionDataEncoder(): Encoder<HireFromListingInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["taskId", getFixedBytesEncoder(32, "taskId")],
       ["expectedPrice", getU64Encoder()],
       ["expectedVersion", getU64Encoder()],
       ["referrer", getOptionEncoder(getAddressEncoder())],
       ["referrerFeeBps", getU16Encoder()],
       ["moderator", getAddressEncoder()],
+      ["taskJobSpecHash", getCommitment32Encoder("taskJobSpecHash")],
     ]),
     (value) => ({ ...value, discriminator: HIRE_FROM_LISTING_DISCRIMINATOR }),
   );
@@ -185,6 +189,7 @@ export function getHireFromListingInstructionDataDecoder(): Decoder<HireFromList
     ["referrer", getOptionDecoder(getAddressDecoder())],
     ["referrerFeeBps", getU16Decoder()],
     ["moderator", getAddressDecoder()],
+    ["taskJobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
   ]);
 }
 
@@ -290,6 +295,7 @@ export type HireFromListingAsyncInput<
   referrer: HireFromListingInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
   moderator: HireFromListingInstructionDataArgs["moderator"];
+  taskJobSpecHash: HireFromListingInstructionDataArgs["taskJobSpecHash"];
 };
 
 export async function getHireFromListingInstructionAsync<
@@ -573,6 +579,7 @@ export type HireFromListingInput<
   referrer: HireFromListingInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingInstructionDataArgs["referrerFeeBps"];
   moderator: HireFromListingInstructionDataArgs["moderator"];
+  taskJobSpecHash: HireFromListingInstructionDataArgs["taskJobSpecHash"];
 };
 
 export function getHireFromListingInstruction<

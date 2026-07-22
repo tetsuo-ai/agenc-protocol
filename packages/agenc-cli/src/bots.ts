@@ -34,6 +34,7 @@ import {
   newAgentId,
   runTickOnce,
   saveState,
+  type AccountInfoReader,
   type WorkerContext,
   type WorkerLogEvent,
 } from "@tetsuo-ai/agenc-worker";
@@ -67,6 +68,8 @@ export interface DevLoopDeps {
   referrer: Address;
   /** Raw account reader (localnet RPC or litesvm). */
   readAccount: (address: Address) => Promise<Uint8Array | null>;
+  /** Ownership/executable-aware account reader for canonical PDA classification. */
+  readAccountInfo: AccountInfoReader;
   /** Lamport balance reader. */
   getBalance: (address: Address) => Promise<bigint>;
   /** Live cluster rent lookup used by the worker's fail-closed claim gate. */
@@ -144,7 +147,9 @@ async function waitFor<T>(
 }
 
 /** Worker-bot log passthrough: surface the interesting events, drop noise. */
-function workerLogLine(log: (line: string) => void): (event: WorkerLogEvent) => void {
+function workerLogLine(
+  log: (line: string) => void,
+): (event: WorkerLogEvent) => void {
   const interesting = new Set([
     "task.claimed",
     "task.submitted",
@@ -295,6 +300,7 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
       expectedVersion: 1n,
       reviewWindowSecs: 3600n,
       listingSpecHash,
+      taskJobSpecHash: jobSpecHash,
       moderator,
       referrer: deps.referrer, // the 4th leg
       referrerFeeBps: deps.listing.referrerFeeBps,
@@ -370,9 +376,9 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
     signer: deps.provider.signer,
     gpa: deps.gpa,
     readAccount: deps.readAccount,
+    readAccountInfo: deps.readAccountInfo,
     getBalance: deps.getBalance,
-    getMinimumBalanceForRentExemption:
-      deps.getMinimumBalanceForRentExemption,
+    getMinimumBalanceForRentExemption: deps.getMinimumBalanceForRentExemption,
     resolveAgencUri: async (uri) => {
       if (uri !== jobSpecUri) {
         throw new Error(`unknown sandbox job-spec URI: ${uri}`);
@@ -402,14 +408,17 @@ export async function runDevLoop(deps: DevLoopDeps): Promise<DevLoopResult> {
     Math.max(pollIntervalMs, 750),
     timeoutMs,
   );
-  log("worker bot: claimed, executed (stub), submitted — task PendingValidation");
+  log(
+    "worker bot: claimed, executed (stub), submitted — task PendingValidation",
+  );
 
   await waitFor(
     `task ${task} PendingValidation`,
     async () => {
       const bytes = await deps.readAccount(task);
       if (bytes === null) return null;
-      return getTaskDecoder().decode(bytes).status === TaskStatus.PendingValidation
+      return getTaskDecoder().decode(bytes).status ===
+        TaskStatus.PendingValidation
         ? true
         : null;
     },

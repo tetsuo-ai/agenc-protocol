@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -31,6 +29,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -41,9 +41,7 @@ export const REQUEST_ATTESTOR_EXIT_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([94, 3, 20, 231, 175, 66, 101, 44]);
 
 export function getRequestAttestorExitDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REQUEST_ATTESTOR_EXIT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REQUEST_ATTESTOR_EXIT_DISCRIMINATOR);
 }
 
 export type RequestAttestorExitInstruction<
@@ -74,7 +72,9 @@ export type RequestAttestorExitInstructionDataArgs = {};
 
 export function getRequestAttestorExitInstructionDataEncoder(): FixedSizeEncoder<RequestAttestorExitInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: REQUEST_ATTESTOR_EXIT_DISCRIMINATOR,

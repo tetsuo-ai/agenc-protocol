@@ -11,6 +11,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  assertProductionSbf,
+  getIdlInstructionLogNames,
+} from "./sbf-profile.mjs";
+
 const packageDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -21,6 +26,10 @@ const source = path.resolve(
 );
 const destDir = path.join(packageDir, "testing-assets");
 const dest = path.join(destDir, "agenc_coordination.so");
+const idlPath = path.resolve(
+  packageDir,
+  "../../artifacts/anchor/idl/agenc_coordination.json",
+);
 
 if (!existsSync(source)) {
   console.error(
@@ -41,6 +50,12 @@ const sha256 = (file) =>
   createHash("sha256").update(readFileSync(file)).digest("hex");
 
 const sourceSha = sha256(source);
+const idl = JSON.parse(readFileSync(idlPath, "utf8"));
+const expectedInstructionNames = getIdlInstructionLogNames(idl);
+assertProductionSbf(readFileSync(source), {
+  expectedInstructionNames,
+  sourceLabel: source,
+});
 mkdirSync(destDir, { recursive: true });
 
 if (existsSync(dest) && sha256(dest) === sourceSha) {

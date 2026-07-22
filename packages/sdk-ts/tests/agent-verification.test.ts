@@ -11,23 +11,64 @@
 // fetchEncodedAccount consumes, as in surface.test.ts).
 import { describe, it, expect } from "vitest";
 import { Buffer } from "node:buffer";
-import { address, type Address } from "@solana/kit";
 import {
+  address,
+  createNoopSigner,
+  type Address,
+  type TransactionSigner,
+} from "@solana/kit";
+import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
+  getRecordAgentVerificationInstructionDataDecoder,
+  getRevokeAgentVerificationInstructionDataDecoder,
   getAgentVerificationEncoder,
   findAgentVerificationPda,
+  findModerationConfigPda,
   type AgentVerificationArgs,
 } from "../src/index.js";
 import {
   fetchAgentVerification,
   getAgentTrackRecord,
 } from "../src/facade/agents.js";
+import {
+  recordAgentVerification,
+  revokeAgentVerification,
+} from "../src/facade/verification.js";
 
-const AGENT = address("HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK") as Address;
-const ATTESTOR = address("So11111111111111111111111111111111111111112") as Address;
+const AGENT = address(
+  "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK",
+) as Address;
+const ATTESTOR = address(
+  "So11111111111111111111111111111111111111112",
+) as Address;
 const PROGRAM = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK" as Address;
+const SYSTEM_PROGRAM = address("11111111111111111111111111111111");
+
+function mutableSigner(initialAddress: Address): {
+  signer: TransactionSigner;
+  setAddress(nextAddress: Address): void;
+} {
+  let liveAddress = initialAddress;
+  const signer = {
+    ...createNoopSigner(initialAddress),
+  } as TransactionSigner;
+  Object.defineProperty(signer, "address", {
+    configurable: true,
+    enumerable: true,
+    get: () => liveAddress,
+  });
+  return {
+    signer,
+    setAddress(nextAddress) {
+      liveAddress = nextAddress;
+    },
+  };
+}
 
 /** Build the raw on-chain bytes for an AgentVerification account. */
-function encodeVerification(over: Partial<AgentVerificationArgs> = {}): Uint8Array {
+function encodeVerification(
+  over: Partial<AgentVerificationArgs> = {},
+): Uint8Array {
   const args: AgentVerificationArgs = {
     agent: AGENT,
     verifiedDomain: "agent.example.com",
@@ -144,5 +185,96 @@ describe("getAgentTrackRecord verified surfacing (P7.3(3))", () => {
     const record = await getAgentTrackRecord(rpc, AGENT);
     expect(record.verified).toBe(false);
     expect(record.verifiedDomain).toBeNull();
+  });
+});
+
+describe("agent verification facade instruction boundaries", () => {
+  it("records verification with canonical PDA/account order and encoded data", async () => {
+    const attestor = createNoopSigner(ATTESTOR);
+    const ix = await recordAgentVerification({
+      agent: AGENT,
+      attestor,
+      verifiedDomain: "agent.example.com",
+      method: 1,
+      expiresAt: 1_800_000_000n,
+    });
+    const [moderationConfig] = await findModerationConfigPda();
+    const [verification] = await findAgentVerificationPda({ agent: AGENT });
+
+    expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
+    expect(ix.accounts.map((account) => account.address)).toEqual([
+      moderationConfig,
+      AGENT,
+      verification,
+      ATTESTOR,
+      SYSTEM_PROGRAM,
+    ]);
+    const decoded = getRecordAgentVerificationInstructionDataDecoder().decode(
+      ix.data,
+    );
+    expect(decoded.verifiedDomain).toBe("agent.example.com");
+    expect(decoded.method).toBe(1);
+    expect(decoded.expiresAt).toBe(1_800_000_000n);
+  });
+
+  it("derives the verification PDA for revoke and preserves account order", async () => {
+    const attestor = createNoopSigner(ATTESTOR);
+    const ix = await revokeAgentVerification({ agent: AGENT, attestor });
+    const [moderationConfig] = await findModerationConfigPda();
+    const [verification] = await findAgentVerificationPda({ agent: AGENT });
+
+    expect(ix.accounts.map((account) => account.address)).toEqual([
+      moderationConfig,
+      verification,
+      ATTESTOR,
+    ]);
+    expect(
+      getRevokeAgentVerificationInstructionDataDecoder().decode(ix.data)
+        .discriminator,
+    ).toHaveLength(8);
+  });
+
+  it("binds attestor before hostile whole-input reflection can switch it", async () => {
+    const attestor = mutableSigner(ATTESTOR);
+    const target = {
+      agent: AGENT,
+      attestor: attestor.signer,
+      verifiedDomain: "stable.example",
+      method: 0,
+      expiresAt: 0n,
+    };
+    const adversarialInput = new Proxy(target, {
+      ownKeys(currentTarget) {
+        attestor.setAddress(AGENT);
+        return Reflect.ownKeys(currentTarget);
+      },
+    });
+
+    const ix = await recordAgentVerification(adversarialInput);
+    expect(ix.accounts[3]).toMatchObject({
+      address: ATTESTOR,
+      signer: attestor.signer,
+    });
+  });
+
+  it("rejects accessor-backed revoke inputs without invoking the accessor", async () => {
+    let reads = 0;
+    const input = {
+      agent: AGENT,
+      attestor: createNoopSigner(ATTESTOR),
+    };
+    Object.defineProperty(input, "agent", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads += 1;
+        return AGENT;
+      },
+    });
+
+    await expect(revokeAgentVerification(input)).rejects.toThrow(
+      /only own data properties/u,
+    );
+    expect(reads).toBe(0);
   });
 });

@@ -1,6 +1,6 @@
 # PLAN.md — AgenC Embeddable Marketplace: Road to Mass Adoption
 
-> **Historical planning record (banner added 2026-07-17).** This roadmap is a dated planning document, not current state: mainnet has run the full 99-instruction surface (`surface_revision = 4`) since 2026-07-09 — see `docs/MAINNET_MAINLINE.md` for live state and `TODO.MD` for the completed remediation record. Dated body claims (surface sizes, gates, phases) are kept as written.
+> **Historical planning record (banner added 2026-07-17).** This roadmap is a dated planning document, not current state: mainnet has run the full 99-instruction surface (`surface_revision = 4`) since 2026-07-09 — see `docs/MAINNET_MAINLINE.md` for live state and `docs/audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record. Dated body claims (surface sizes, gates, phases) are kept as written.
 
 **Status:** authored 2026-06-09, immediately after PR #47 (humanless hire, completion
 bonds, dispute-resolver roster) merged to `main`.

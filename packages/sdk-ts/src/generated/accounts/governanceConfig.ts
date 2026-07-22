@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -43,13 +41,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const GOVERNANCE_CONFIG_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([81, 63, 124, 107, 210, 100, 145, 70]);
 
 export function getGovernanceConfigDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    GOVERNANCE_CONFIG_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(GOVERNANCE_CONFIG_DISCRIMINATOR);
 }
 
 export type GovernanceConfig = {
@@ -105,7 +103,7 @@ export type GovernanceConfigArgs = {
 export function getGovernanceConfigEncoder(): FixedSizeEncoder<GovernanceConfigArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["authority", getAddressEncoder()],
       ["minProposalStake", getU64Encoder()],
       ["votingPeriod", getI64Encoder()],
@@ -114,7 +112,7 @@ export function getGovernanceConfigEncoder(): FixedSizeEncoder<GovernanceConfigA
       ["approvalThresholdBps", getU16Encoder()],
       ["totalProposals", getU64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 64)],
+      ["reserved", getFixedBytesEncoder(64, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: GOVERNANCE_CONFIG_DISCRIMINATOR }),
   );

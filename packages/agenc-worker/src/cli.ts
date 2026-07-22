@@ -34,7 +34,7 @@ import {
   type WorkerConfig,
   type WorkerConfigInput,
 } from "./config.js";
-import type { AccountReader } from "./job-spec.js";
+import { createSolanaAccountReaders } from "./account-reader.js";
 import { formatDiagnosticError } from "./redact.js";
 import { findVerifiedSettlementSignature } from "./settlement.js";
 import { loadSolanaKeypairFile } from "./wallet.js";
@@ -176,19 +176,24 @@ async function buildContext(
   const signer = await loadSigner(config.walletPath);
   const rpc = createSolanaRpc(config.rpcUrl);
   const client = createMarketplaceClient({ rpc, signer });
-  const readAccount: AccountReader = async (address) => {
-    const { value } = await rpc
-      .getAccountInfo(address, { encoding: "base64" })
-      .send();
-    if (value === null) return null;
-    return new Uint8Array(Buffer.from(value.data[0], "base64"));
-  };
+  const { readAccount, readAccountInfo } = createSolanaAccountReaders(
+    async (address) => {
+      const { value } = await rpc
+        .getAccountInfo(address, {
+          commitment: "confirmed",
+          encoding: "base64",
+        })
+        .send();
+      return value;
+    },
+  );
   const ctx: WorkerContext = {
     config,
     client,
     signer,
     gpa: rpc,
     readAccount,
+    readAccountInfo,
     stateDir: config.stateDir,
     log: logLine,
     dryRun,
@@ -201,7 +206,10 @@ async function buildContext(
     // every later fresh claim rechecks claim/submission rent, worst-case
     // contest deposit, and fee headroom immediately before broadcast.
     getBalance: async (address) =>
-      BigInt((await rpc.getBalance(address).send()).value),
+      BigInt(
+        (await rpc.getBalance(address, { commitment: "confirmed" }).send())
+          .value,
+      ),
     getMinimumBalanceForRentExemption: async (space) =>
       BigInt(
         await rpc

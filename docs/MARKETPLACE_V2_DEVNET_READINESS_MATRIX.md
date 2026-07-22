@@ -1,6 +1,6 @@
 # Marketplace V2 Devnet Readiness Matrix
 
-> **Historical readiness record (banner added 2026-07-17).** The matrix status below is dated (2026-03-27); the release-1 gate it tracks has since shipped — mainnet has run the full 99-instruction surface since 2026-07-09. See `./MAINNET_MAINLINE.md` for current state and `../TODO.MD` for the completed remediation record.
+> **Historical readiness record (banner added 2026-07-17).** The matrix status below is dated (2026-03-27); the release-1 gate it tracks has since shipped — mainnet has run the full 99-instruction surface since 2026-07-09. See `./MAINNET_MAINLINE.md` for current state and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 Status: In progress for the full matrix (`17` pass, `0` fail, `1` remaining)
 

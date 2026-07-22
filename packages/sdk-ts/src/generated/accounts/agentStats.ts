@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,12 +39,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const AGENT_STATS_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
   43, 192, 26, 112, 162, 176, 77, 164,
 ]);
 
 export function getAgentStatsDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(AGENT_STATS_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(AGENT_STATS_DISCRIMINATOR);
 }
 
 export type AgentStats = {
@@ -116,7 +116,7 @@ export type AgentStatsArgs = {
 export function getAgentStatsEncoder(): FixedSizeEncoder<AgentStatsArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["agent", getAddressEncoder()],
       ["tasksRejected", getU64Encoder()],
       ["disputesWon", getU64Encoder()],
@@ -125,7 +125,7 @@ export function getAgentStatsEncoder(): FixedSizeEncoder<AgentStatsArgs> {
       ["totalCancelled", getU64Encoder()],
       ["lastUpdated", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["reserved", getFixedBytesEncoder(32, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: AGENT_STATS_DISCRIMINATOR }),
   );

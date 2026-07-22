@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -44,7 +44,7 @@ export const REGISTER_MODERATION_ATTESTOR_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([118, 194, 62, 4, 232, 60, 199, 142]);
 
 export function getRegisterModerationAttestorDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     REGISTER_MODERATION_ATTESTOR_DISCRIMINATOR,
   );
 }
@@ -86,7 +86,9 @@ export type RegisterModerationAttestorInstructionDataArgs = {};
 
 export function getRegisterModerationAttestorInstructionDataEncoder(): FixedSizeEncoder<RegisterModerationAttestorInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: REGISTER_MODERATION_ATTESTOR_DISCRIMINATOR,

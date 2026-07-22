@@ -290,6 +290,23 @@ import {
 runs the whole loop against the real compiled program in litesvm with the
 executor stubbed to `node -e`.
 
+Signed production contexts should provide both `readAccount` and
+`readAccountInfo`. Use `createSolanaAccountReaders` with the `value` from a
+base64 `getAccountInfo` call; the worker CLI and generated worker template do
+this automatically and pin those reads to `confirmed`, matching SDK task
+discovery. The metadata reader lets the runtime distinguish an absent hire PDA,
+the System-owned/non-executable/zero-data placeholder accepted for a direct
+task, and an exact program-owned `HireRecord` before it signs. A hire designated
+to another agent is skipped as `not-designated-provider` before content fetch,
+funding, state mutation, or send.
+
+`readAccountInfo` is optional only to preserve the existing programmatic
+`AccountReader` API. A legacy bytes-only embedder cannot preflight owner or
+executable state: it treats zero bytes as the direct-task placeholder, while
+the on-chain instruction remains the final owner/executable gate. Upgrade
+embedders to the metadata reader to avoid guaranteed-failing claim attempts
+against malformed canonical accounts.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

@@ -592,7 +592,7 @@ wedge), D12 (every dispute binds a live claim and exitable task state), and D13
 ## Informational — reviewed decision index
 
 The current D1–D4 status is recorded in
-[docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) (with D5 onward covering
+[docs/DESIGN_DECISIONS.md](../DESIGN_DECISIONS.md) (with D5 onward covering
 later findings and reviewed trade-offs). Kept here as the short index:
 
 - **D1** — Canary `PendingValidation` timeout resolved through the frozen

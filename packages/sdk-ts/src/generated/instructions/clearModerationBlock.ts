@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -43,9 +43,7 @@ export const CLEAR_MODERATION_BLOCK_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([210, 192, 192, 105, 106, 74, 147, 252]);
 
 export function getClearModerationBlockDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    CLEAR_MODERATION_BLOCK_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(CLEAR_MODERATION_BLOCK_DISCRIMINATOR);
 }
 
 export type ClearModerationBlockInstruction<
@@ -80,7 +78,9 @@ export type ClearModerationBlockInstructionDataArgs = {};
 
 export function getClearModerationBlockInstructionDataEncoder(): FixedSizeEncoder<ClearModerationBlockInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: CLEAR_MODERATION_BLOCK_DISCRIMINATOR,

@@ -14,13 +14,11 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -43,13 +41,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const TASK_VALIDATION_VOTE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([48, 129, 51, 174, 154, 5, 68, 65]);
 
 export function getTaskValidationVoteDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    TASK_VALIDATION_VOTE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(TASK_VALIDATION_VOTE_DISCRIMINATOR);
 }
 
 export type TaskValidationVote = {
@@ -95,7 +93,7 @@ export type TaskValidationVoteArgs = {
 export function getTaskValidationVoteEncoder(): FixedSizeEncoder<TaskValidationVoteArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["submission", getAddressEncoder()],
       ["reviewer", getAddressEncoder()],
       ["reviewerAgent", getAddressEncoder()],
@@ -103,7 +101,7 @@ export function getTaskValidationVoteEncoder(): FixedSizeEncoder<TaskValidationV
       ["approved", getBooleanEncoder()],
       ["votedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 5)],
+      ["reserved", getFixedBytesEncoder(5, "reserved")],
     ]),
     (value) => ({
       ...value,

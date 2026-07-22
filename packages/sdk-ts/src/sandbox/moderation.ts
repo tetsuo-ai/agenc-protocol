@@ -16,6 +16,7 @@ import type { Address } from "@solana/kit";
 import { resolveSandboxEnvironment } from "./environment.js";
 import { SANDBOX_FIXTURES } from "./fixtures.js";
 import type { SandboxFetchLike } from "./attest.js";
+export type { SandboxFetchLike } from "./attest.js";
 
 /** The three moderation verdicts the scan endpoint can return. */
 export type ListingModerationVerdict = "clean" | "suspicious" | "blocked";

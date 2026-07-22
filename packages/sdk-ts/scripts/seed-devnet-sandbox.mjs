@@ -19,10 +19,13 @@
 //                                         still override every env-file value
 //        [--help]
 //
-// One of --attestor-url / --moderator-keypair is required (listings must be
+// Exactly one effective attestation mechanism is required: --attestor-url or
+// --moderator-keypair (listings must be
 // attested CLEAN or the fail-closed moderation gate blocks every hire); with
 // --env-file those can come from the file's attestorUrl / keypairs.moderator,
-// and --keypair from keypairs.seeder. When no --env-file is passed but the
+// and --keypair from keypairs.seeder. An explicit mechanism replaces (and
+// suppresses) the other mechanism inherited from the env file. When no
+// --env-file is passed but the
 // canonical <repo>/.localnet/env.json exists, it is picked up automatically.
 //
 // LOCALNET RULE: when the (env-file) cluster is "localnet", fixtures are
@@ -66,16 +69,76 @@ const ENV_FILE_CLUSTERS = ["localnet", "devnet", "mainnet"];
  * taxonomy (validated against the SDK's LISTING_CATEGORIES at runtime).
  */
 export const SANDBOX_PROVIDER_BLUEPRINTS = [
-  { name: "Sandbox Codegen Co", category: "code-generation", tags: ["sandbox", "typescript"], priceLamports: 1_000_000, description: "Devnet sandbox provider: generates small code snippets." },
-  { name: "Sandbox Translate", category: "translation", tags: ["sandbox", "en-fr"], priceLamports: 800_000, description: "Devnet sandbox provider: short EN<->FR translations." },
-  { name: "Sandbox Labeler", category: "data-labeling", tags: ["sandbox", "images"], priceLamports: 500_000, description: "Devnet sandbox provider: labels tiny image batches." },
-  { name: "Sandbox Research", category: "research", tags: ["sandbox", "summaries"], priceLamports: 1_500_000, description: "Devnet sandbox provider: one-page research summaries." },
-  { name: "Sandbox Imagegen", category: "image-gen", tags: ["sandbox", "icons"], priceLamports: 1_200_000, description: "Devnet sandbox provider: generates placeholder icons." },
-  { name: "Sandbox Analyst", category: "data-analysis", tags: ["sandbox", "csv"], priceLamports: 1_000_000, description: "Devnet sandbox provider: quick CSV breakdowns." },
-  { name: "Sandbox Scraper", category: "scraping", tags: ["sandbox", "html"], priceLamports: 700_000, description: "Devnet sandbox provider: scrapes a single public page." },
-  { name: "Sandbox Designer", category: "design", tags: ["sandbox", "logos"], priceLamports: 2_000_000, description: "Devnet sandbox provider: rough logo drafts." },
-  { name: "Sandbox Writer", category: "writing", tags: ["sandbox", "blurbs"], priceLamports: 600_000, description: "Devnet sandbox provider: 100-word product blurbs." },
-  { name: "Sandbox Automation", category: "automation", tags: ["sandbox", "workflows"], priceLamports: 1_800_000, description: "Devnet sandbox provider: tiny workflow scripts." },
+  {
+    name: "Sandbox Codegen Co",
+    category: "code-generation",
+    tags: ["sandbox", "typescript"],
+    priceLamports: 1_000_000,
+    description: "Devnet sandbox provider: generates small code snippets.",
+  },
+  {
+    name: "Sandbox Translate",
+    category: "translation",
+    tags: ["sandbox", "en-fr"],
+    priceLamports: 800_000,
+    description: "Devnet sandbox provider: short EN<->FR translations.",
+  },
+  {
+    name: "Sandbox Labeler",
+    category: "data-labeling",
+    tags: ["sandbox", "images"],
+    priceLamports: 500_000,
+    description: "Devnet sandbox provider: labels tiny image batches.",
+  },
+  {
+    name: "Sandbox Research",
+    category: "research",
+    tags: ["sandbox", "summaries"],
+    priceLamports: 1_500_000,
+    description: "Devnet sandbox provider: one-page research summaries.",
+  },
+  {
+    name: "Sandbox Imagegen",
+    category: "image-gen",
+    tags: ["sandbox", "icons"],
+    priceLamports: 1_200_000,
+    description: "Devnet sandbox provider: generates placeholder icons.",
+  },
+  {
+    name: "Sandbox Analyst",
+    category: "data-analysis",
+    tags: ["sandbox", "csv"],
+    priceLamports: 1_000_000,
+    description: "Devnet sandbox provider: quick CSV breakdowns.",
+  },
+  {
+    name: "Sandbox Scraper",
+    category: "scraping",
+    tags: ["sandbox", "html"],
+    priceLamports: 700_000,
+    description: "Devnet sandbox provider: scrapes a single public page.",
+  },
+  {
+    name: "Sandbox Designer",
+    category: "design",
+    tags: ["sandbox", "logos"],
+    priceLamports: 2_000_000,
+    description: "Devnet sandbox provider: rough logo drafts.",
+  },
+  {
+    name: "Sandbox Writer",
+    category: "writing",
+    tags: ["sandbox", "blurbs"],
+    priceLamports: 600_000,
+    description: "Devnet sandbox provider: 100-word product blurbs.",
+  },
+  {
+    name: "Sandbox Automation",
+    category: "automation",
+    tags: ["sandbox", "workflows"],
+    priceLamports: 1_800_000,
+    description: "Devnet sandbox provider: tiny workflow scripts.",
+  },
 ];
 
 /** Usage text for --help (and argument errors). */
@@ -104,8 +167,10 @@ export function usage() {
     "                              inside the file resolve against the cwd.",
     "  --help                      Show this help and exit",
     "",
-    "One of --attestor-url / --moderator-keypair (or the env file's attestorUrl /",
-    "keypairs.moderator) is required for a real run. Run AFTER the program is",
+    "Exactly one effective attestation mechanism is required: --attestor-url or",
+    "--moderator-keypair (or the env file's attestorUrl / keypairs.moderator).",
+    "Passing either CLI option suppresses the other env-file mechanism. Do not",
+    "pass both CLI options. Run AFTER the program is",
     "deployed + config-initialized on the target cluster, and after",
     "`npm run build` (the script imports the built dist/).",
     "",
@@ -168,6 +233,11 @@ export function parseSeedArgs(argv, { hasDefaultEnvFile = false } = {}) {
     args[key] = value;
     i += 1;
   }
+  if (args.attestorUrl !== null && args.moderatorKeypair !== null) {
+    args.errors.push(
+      "--attestor-url and --moderator-keypair are mutually exclusive",
+    );
+  }
   if (!args.help && args.envFile === null && !hasDefaultEnvFile) {
     if (args.keypair === null) args.errors.push("--keypair is required");
     if (args.attestorUrl === null && args.moderatorKeypair === null) {
@@ -206,8 +276,12 @@ export function parseEnvFile(raw, filePath) {
     }
     for (const key of ["attestorUrl", "fixturesPath"]) {
       const value = parsed[key];
-      if (value !== null && value !== undefined && typeof value !== "string") {
-        problems.push(`${key} must be a string or null`);
+      if (
+        value !== null &&
+        value !== undefined &&
+        (typeof value !== "string" || value.trim() === "")
+      ) {
+        problems.push(`${key} must be a non-empty string or null`);
       }
     }
     const keypairs = parsed.keypairs;
@@ -217,9 +291,12 @@ export function parseEnvFile(raw, filePath) {
       } else {
         for (const role of ["authority", "moderator", "seeder"]) {
           const value = keypairs[role];
-          if (value !== undefined && typeof value !== "string") {
+          if (
+            value !== undefined &&
+            (typeof value !== "string" || value.trim() === "")
+          ) {
             problems.push(
-              `keypairs.${role} must be a file path string (PATHS only, never key material)`,
+              `keypairs.${role} must be a non-empty file path string (PATHS only, never key material)`,
             );
           }
         }
@@ -227,25 +304,38 @@ export function parseEnvFile(raw, filePath) {
     }
   }
   if (problems.length > 0) {
-    throw new Error(
-      `invalid env file ${filePath}: ${problems.join("; ")}`,
-    );
+    throw new Error(`invalid env file ${filePath}: ${problems.join("; ")}`);
   }
   return parsed;
 }
 
 /**
  * Pure config merge (exported for unit tests): CLI flags > env-file values >
- * defaults. `envFile` may be null (no env file in play).
+ * defaults. `envFile` may be null (no env file in play). An explicitly
+ * selected attestation mechanism suppresses the opposite env-file mechanism;
+ * otherwise an env-file attestor takes precedence over its moderator keypair.
  */
 export function mergeEnvFileConfig({ args, envFile }) {
   const keypairs = envFile?.keypairs ?? null;
+  const explicitAttestor = args.attestorUrl !== null;
+  const explicitModerator = args.moderatorKeypair !== null;
+  const inheritedAttestor = envFile?.attestorUrl ?? null;
+  const attestorUrl = explicitAttestor
+    ? args.attestorUrl
+    : explicitModerator
+      ? null
+      : inheritedAttestor;
+  const moderatorKeypair = explicitModerator
+    ? args.moderatorKeypair
+    : explicitAttestor || inheritedAttestor !== null
+      ? null
+      : (keypairs?.moderator ?? null);
   return {
     cluster: envFile?.cluster ?? "devnet",
     rpc: args.rpc ?? envFile?.rpcUrl ?? DEFAULT_RPC,
-    attestorUrl: args.attestorUrl ?? envFile?.attestorUrl ?? null,
+    attestorUrl,
     keypair: args.keypair ?? keypairs?.seeder ?? null,
-    moderatorKeypair: args.moderatorKeypair ?? keypairs?.moderator ?? null,
+    moderatorKeypair,
     fixturesPath: envFile?.fixturesPath ?? null,
   };
 }
@@ -258,22 +348,41 @@ export function mergeEnvFileConfig({ args, envFile }) {
  */
 export function validateSeedConfig(config) {
   const errors = [];
+  const nonEmptyString = (value) =>
+    typeof value === "string" && value.trim().length > 0;
   if (config.cluster === "mainnet") {
     errors.push(
       "refusing to seed cluster mainnet: the sandbox seeder is devnet/localnet-only",
     );
   }
-  if (config.keypair === null) {
+  if (!nonEmptyString(config.rpc)) {
+    errors.push("the RPC endpoint must be a non-empty string");
+  }
+  if (!nonEmptyString(config.keypair)) {
     errors.push(
       "a funding keypair is required: pass --keypair or set keypairs.seeder in the env file",
     );
+  }
+  if (config.attestorUrl !== null && !nonEmptyString(config.attestorUrl)) {
+    errors.push("attestorUrl must be a non-empty string when selected");
+  }
+  if (
+    config.moderatorKeypair !== null &&
+    !nonEmptyString(config.moderatorKeypair)
+  ) {
+    errors.push("moderatorKeypair must be a non-empty file path when selected");
   }
   if (config.attestorUrl === null && config.moderatorKeypair === null) {
     errors.push(
       "one of --attestor-url / --moderator-keypair is required (or attestorUrl / keypairs.moderator in the env file)",
     );
   }
-  if (config.cluster === "localnet" && config.fixturesPath === null) {
+  if (config.attestorUrl !== null && config.moderatorKeypair !== null) {
+    errors.push(
+      "attestorUrl and moderatorKeypair are mutually exclusive; select exactly one attestation mechanism",
+    );
+  }
+  if (config.cluster === "localnet" && !nonEmptyString(config.fixturesPath)) {
     errors.push(
       "env cluster is localnet but fixturesPath is not set: localnet fixtures must go to e.g. .localnet/fixtures.json (src/sandbox/fixtures.json is reserved for the shipped public devnet fixtures)",
     );
@@ -358,8 +467,7 @@ function hex(bytes) {
  * message embeds a snippet of the input, which would leak leading secret-key
  * characters into console/CI logs if someone points --keypair at a raw
  * base58 private-key export. */
-const KEYPAIR_FORMAT_ERROR =
-  "expected a solana-keygen JSON array of 64 bytes";
+const KEYPAIR_FORMAT_ERROR = "expected a solana-keygen JSON array of 64 bytes";
 
 /**
  * Pure keypair-file parser (exported for unit tests). Throws a fixed message
@@ -370,14 +478,18 @@ export function parseKeypairBytes(raw, filePath) {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error(`invalid keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`);
+    throw new Error(
+      `invalid keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`,
+    );
   }
   if (
     !Array.isArray(parsed) ||
     parsed.length !== 64 ||
     !parsed.every((b) => Number.isInteger(b) && b >= 0 && b <= 255)
   ) {
-    throw new Error(`invalid keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`);
+    throw new Error(
+      `invalid keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`,
+    );
   }
   return Uint8Array.from(parsed);
 }
@@ -388,7 +500,9 @@ async function loadKeypairSigner(kit, filePath) {
     return await kit.createKeyPairSignerFromBytes(bytes);
   } catch {
     // Same fixed message: never propagate library error text for key material.
-    throw new Error(`invalid keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`);
+    throw new Error(
+      `invalid keypair file ${filePath}: ${KEYPAIR_FORMAT_ERROR}`,
+    );
   }
 }
 
@@ -511,7 +625,9 @@ async function waitForAccount(rpc, address, what, timeoutMs = 60_000) {
   for (;;) {
     if (await accountExists(rpc, address)) return;
     if (Date.now() >= deadline) {
-      throw new Error(`${what} (${address}) did not appear within ${timeoutMs}ms`);
+      throw new Error(
+        `${what} (${address}) did not appear within ${timeoutMs}ms`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 1_500));
   }
@@ -619,12 +735,14 @@ async function main() {
     throw new Error(
       `ProtocolConfig ${protocolConfigPda} not found via ${config.rpc} — the ` +
         `program is not initialized on this cluster. Localnet: run ` +
-        `\`node scripts/localnet-up.mjs\` at the repo root first; devnet: ` +
+        `\`node scripts/localnet-up.mjs --dev-ready\` at the repo root first; devnet: ` +
         `follow scripts/devnet-deploy.md.`,
     );
   }
   const stakeAmount = protocolConfig.data.minAgentStake;
-  console.log(`provider stake: ${stakeAmount} lamports (ProtocolConfig.min_agent_stake)`);
+  console.log(
+    `provider stake: ${stakeAmount} lamports (ProtocolConfig.min_agent_stake)`,
+  );
 
   // P1.2: moderation records are moderator-keyed. Both attestation paths
   // (HTTP attestor / direct moderator keypair) record as the GLOBAL
@@ -640,7 +758,7 @@ async function main() {
     throw new Error(
       `ModerationConfig ${moderationConfigPda} not found via ${config.rpc} — ` +
         `the moderation gate is not configured on this cluster (localnet: ` +
-        `re-run \`node scripts/localnet-up.mjs\`; devnet: follow ` +
+        `re-run \`node scripts/localnet-up.mjs --dev-ready\`; devnet: follow ` +
         `scripts/devnet-deploy.md).`,
     );
   }
@@ -812,7 +930,9 @@ async function main() {
     });
   }
 
-  const seededAtSlot = Number(await rpc.getSlot({ commitment: "confirmed" }).send());
+  const seededAtSlot = Number(
+    await rpc.getSlot({ commitment: "confirmed" }).send(),
+  );
   const fixtures = buildFixturesFile({
     programId: sdk.AGENC_COORDINATION_PROGRAM_ADDRESS,
     seededAtSlot,
@@ -822,10 +942,14 @@ async function main() {
   await writeJsonAtomic(fixturesOutPath, fixtures);
 
   console.log("");
-  console.log(`wrote ${fixturesOutPath} (seeded: true, cluster ${config.cluster}, slot ${seededAtSlot})`);
+  console.log(
+    `wrote ${fixturesOutPath} (seeded: true, cluster ${config.cluster}, slot ${seededAtSlot})`,
+  );
   console.log(`seeded ${entries.length} providers + listings:`);
   for (const entry of entries) {
-    console.log(`  ${entry.name.padEnd(24)} ${entry.category.padEnd(16)} listing ${entry.listing}`);
+    console.log(
+      `  ${entry.name.padEnd(24)} ${entry.category.padEnd(16)} listing ${entry.listing}`,
+    );
   }
   console.log("");
   if (config.cluster === "localnet") {
@@ -833,13 +957,18 @@ async function main() {
     console.log("(plus the other AGENC_SANDBOX_* variables from the env file)");
     console.log("so the SDK environment seam picks up the localnet fixtures.");
   } else {
-    console.log("next: commit src/sandbox/fixtures.json and ship an SDK release");
+    console.log(
+      "next: commit src/sandbox/fixtures.json and ship an SDK release",
+    );
     console.log("so SANDBOX_FIXTURES picks up the seeded addresses.");
   }
 }
 
 // Run only when executed directly (the pure helpers above are unit-tested).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch((error) => {
     console.error(error);
     process.exitCode = 1;

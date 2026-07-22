@@ -277,6 +277,8 @@ export interface BuildHireTransactionParams {
   expectedVersion: bigint | string;
   /** Expected listing spec hash as 64 hex chars (optional guard). */
   listingSpecHash?: string;
+  /** Buyer-specific job-spec commitment as exactly 64 lowercase hex chars. */
+  taskJobSpecHash: string;
   /** The buyer's creator AgentRegistration PDA. */
   creatorAgent: Address | string;
 }
@@ -1269,6 +1271,13 @@ export function createIndexerClient(
       params.listingSpecHash === undefined
         ? undefined
         : parseHexBytes(params.listingSpecHash, "listingSpecHash");
+    const taskJobSpecHash = parseHexBytes(
+      params.taskJobSpecHash,
+      "taskJobSpecHash",
+    );
+    if (!taskJobSpecHash.some((byte) => byte !== 0)) {
+      throw new TypeError("taskJobSpecHash must not be all zeroes");
+    }
 
     let wire: Uint8Array;
     let transaction: Transaction;
@@ -1331,7 +1340,7 @@ export function createIndexerClient(
         throw new Error("instruction targets the wrong program");
       }
       const data = instruction.data;
-      if (data === undefined || data.length !== 91) {
+      if (data === undefined || data.length !== 123) {
         throw new Error(
           "instruction has invalid hire_from_listing data length",
         );
@@ -1350,7 +1359,11 @@ export function createIndexerClient(
         decoded.expectedPrice !== expectedPrice ||
         decoded.expectedVersion !== expectedVersion ||
         !isNone(decoded.referrer) ||
-        decoded.referrerFeeBps !== 0
+        decoded.referrerFeeBps !== 0 ||
+        !bytesEqual(
+          new Uint8Array(decoded.taskJobSpecHash),
+          taskJobSpecHash,
+        )
       ) {
         throw new Error("instruction terms disagree with requested intent");
       }
@@ -1759,6 +1772,13 @@ export function createIndexerClient(
       if (params.listingSpecHash !== undefined) {
         parseHexBytes(params.listingSpecHash, "listingSpecHash");
       }
+      const taskJobSpecHash = parseHexBytes(
+        params.taskJobSpecHash,
+        "taskJobSpecHash",
+      );
+      if (!taskJobSpecHash.some((byte) => byte !== 0)) {
+        throw new TypeError("taskJobSpecHash must not be all zeroes");
+      }
       const body = await request("POST", "/v1/hires", {
         body: {
           buyer,
@@ -1769,6 +1789,7 @@ export function createIndexerClient(
           ...(params.listingSpecHash !== undefined
             ? { listingSpecHash: params.listingSpecHash }
             : {}),
+          taskJobSpecHash: params.taskJobSpecHash,
           creatorAgent,
         },
       });

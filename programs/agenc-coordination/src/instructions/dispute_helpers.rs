@@ -4,8 +4,6 @@
 //! `expire_dispute` instructions, avoiding code duplication across the two
 //! instruction handlers.
 
-use std::collections::HashSet;
-
 use crate::errors::CoordinationError;
 use crate::events::{OperatorFeePaid, ReferrerFeePaid};
 use crate::instructions::completion_helpers::calculate_combined_fees;
@@ -20,13 +18,6 @@ use crate::state::{
     TaskValidationConfig,
 };
 use anchor_lang::prelude::*;
-
-/// Fixed wire stride for each additional collaborative worker:
-/// `(claim, worker registration, task submission evidence)`.
-///
-/// The submission meta is mandatory. Its exact system-owned empty PDA proves
-/// absence; a live program-owned submission is swept before its claim closes.
-pub(crate) const DISPUTE_PEER_BUNDLE_STRIDE: usize = 3;
 
 /// The marketplace fee terms (operator + referrer snapshots) a dispute exit must
 /// honor. Both legs ride together (P3.6 §3.3: dispute settlements honor the
@@ -169,59 +160,6 @@ pub(crate) fn pay_dispute_marketplace_legs<'info>(
     operator_fee
         .checked_add(referrer_fee)
         .ok_or_else(|| error!(CoordinationError::ArithmeticOverflow))
-}
-
-/// Validate the legacy `total_voters` provenance byte and exact peer-bundle
-/// cardinality before any cleanup mutation. The accepted account count for 1–4
-/// total workers is therefore exactly 0, 3, 6, or 9.
-fn validate_dispute_peer_bundle_cardinality(
-    current_workers: u8,
-    dispute_provenance: u8,
-    account_count: usize,
-) -> Result<usize> {
-    require!(
-        dispute_provenance == 0 || dispute_provenance == Dispute::INITIATOR_OUTCOME_COUNTER_MARKER,
-        CoordinationError::CorruptedData
-    );
-    require!(
-        account_count % DISPUTE_PEER_BUNDLE_STRIDE == 0,
-        CoordinationError::InvalidInput
-    );
-    let actual = account_count
-        .checked_div(DISPUTE_PEER_BUNDLE_STRIDE)
-        .ok_or(CoordinationError::ArithmeticOverflow)?;
-    require!(
-        actual == expected_peer_bundles(current_workers),
-        CoordinationError::IncompleteWorkerAccounts
-    );
-    Ok(actual)
-}
-
-/// Checks for duplicate workers in collaborative peer bundles (fix #826).
-///
-/// Iterates over `(claim, worker, task_submission)` bundles and ensures no worker
-/// appears twice.
-/// This prevents `active_tasks` over-decrement via repeated `saturating_sub(1)`.
-fn check_duplicate_peer_workers(
-    remaining_accounts: &[AccountInfo],
-    primary_worker: Pubkey,
-) -> Result<()> {
-    let mut seen_workers: HashSet<Pubkey> = HashSet::new();
-    seen_workers.insert(primary_worker);
-    for i in (0..remaining_accounts.len()).step_by(DISPUTE_PEER_BUNDLE_STRIDE) {
-        let worker_index = i
-            .checked_add(1)
-            .ok_or(CoordinationError::ArithmeticOverflow)?;
-        let worker_key = remaining_accounts
-            .get(worker_index)
-            .ok_or(CoordinationError::IncompleteWorkerAccounts)?
-            .key();
-        require!(
-            seen_workers.insert(worker_key),
-            CoordinationError::InvalidInput
-        );
-    }
-    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -372,51 +310,41 @@ fn settle_validated_worker_claim_bundle<'info>(
     Ok(())
 }
 
-/// Validate and settle every additional collaborative worker in one shared
-/// implementation used by both dispute resolution and expiry.
-///
-/// Validation is deliberately front-loaded for the whole account vector: the
-/// legacy provenance byte, exact bundle stride, expected 1–4 worker cardinality,
-/// and duplicate-worker set are checked before any claim or submission mutation.
-/// Each bundle then enforces canonical claim/submission PDAs and preserves both
-/// task-level and validation-config submission counters.
-pub(crate) fn process_dispute_peer_bundles<'info>(
+/// Chunked (pull) settlement of ONE deferred collaborative peer after a
+/// dispute ruling. Performs exactly the validation and mutation one bundle of
+/// the retired monolithic unwind performed — canonical claim/worker/submission
+/// PDA binding, live-submission sweep with counter conservation, worker
+/// `active_tasks` decrement, and tombstoned claim close — with the aggregate
+/// counter preflight specialized to a single peer. The defendant is excluded:
+/// its claim settles through the ruling and its slash finalizer. Settled
+/// claims are tombstoned, so a second settlement of the same peer fails
+/// structurally at deserialization.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn settle_single_dispute_peer<'info>(
     task: &mut Task,
     task_key: &Pubkey,
-    peer_accounts: &[AccountInfo<'info>],
-    dispute_provenance: u8,
-    primary_worker: Pubkey,
-    mut validation_config: Option<&mut Account<'info, TaskValidationConfig>>,
+    claim_info: &AccountInfo<'info>,
+    worker_info: &AccountInfo<'info>,
+    submission_info: &AccountInfo<'info>,
+    defendant: Pubkey,
+    validation_config: Option<&mut Account<'info, TaskValidationConfig>>,
     program_id: &Pubkey,
 ) -> Result<()> {
-    validate_dispute_peer_bundle_cardinality(
-        task.current_workers,
-        dispute_provenance,
-        peer_accounts.len(),
+    require!(
+        worker_info.key() != defendant,
+        CoordinationError::DisputeDefendantNotPeer
+    );
+    let validated = validate_worker_claim_bundle(
+        claim_info,
+        worker_info,
+        submission_info,
+        task_key,
+        program_id,
     )?;
-    check_duplicate_peer_workers(peer_accounts, primary_worker)?;
-
-    let mut validated_bundles =
-        Vec::with_capacity(peer_accounts.len() / DISPUTE_PEER_BUNDLE_STRIDE);
-    let mut submitted_peer_count: u8 = 0;
-    for bundle in peer_accounts.chunks_exact(DISPUTE_PEER_BUNDLE_STRIDE) {
-        let validated =
-            validate_worker_claim_bundle(&bundle[0], &bundle[1], &bundle[2], task_key, program_id)?;
-        if validated.submission_submitted {
-            submitted_peer_count = submitted_peer_count
-                .checked_add(1)
-                .ok_or(CoordinationError::ArithmeticOverflow)?;
-        }
-        validated_bundles.push(validated);
-    }
-
-    // Aggregate preflight: every Submitted peer carries one unit of Task counter
-    // debt and, for manual validation, one unit of config counter debt. Check the
-    // full batch before sweeping the first account.
-    if submitted_peer_count > 0 {
+    if validated.submission_submitted {
         if task.task_schema() >= Task::TASK_SCHEMA_CONTEST_AWARE {
             require!(
-                task.live_submissions() >= submitted_peer_count,
+                task.live_submissions() >= 1,
                 CoordinationError::ArithmeticOverflow
             );
         }
@@ -432,29 +360,20 @@ pub(crate) fn process_dispute_peer_bundles<'info>(
             );
             ensure_validation_config(config, task_key, task)?;
             require!(
-                config.pending_submission_count() >= u16::from(submitted_peer_count),
+                config.pending_submission_count() >= 1,
                 CoordinationError::ArithmeticOverflow
             );
         }
     }
-
-    for (bundle, validated) in peer_accounts
-        .chunks_exact(DISPUTE_PEER_BUNDLE_STRIDE)
-        .zip(validated_bundles)
-    {
-        let peer_validation_config = validation_config.as_deref_mut();
-        settle_validated_worker_claim_bundle(
-            task,
-            &bundle[0],
-            &bundle[1],
-            &bundle[2],
-            task_key,
-            validated,
-            peer_validation_config,
-        )?;
-    }
-
-    Ok(())
+    settle_validated_worker_claim_bundle(
+        task,
+        claim_info,
+        worker_info,
+        submission_info,
+        task_key,
+        validated,
+        validation_config,
+    )
 }
 
 /// Number of EXTRA collaborative peer bundles a dispute exit must process in
@@ -803,40 +722,6 @@ mod tests {
     }
 
     #[test]
-    fn peer_bundle_wire_shape_is_exact_for_one_through_four_workers() {
-        for current_workers in 1u8..=4 {
-            let expected_accounts = usize::from(current_workers - 1)
-                .checked_mul(DISPUTE_PEER_BUNDLE_STRIDE)
-                .unwrap();
-            assert_eq!(
-                validate_dispute_peer_bundle_cardinality(current_workers, 0, expected_accounts)
-                    .unwrap(),
-                usize::from(current_workers - 1),
-            );
-
-            // Omitting even one peer-submission meta fails closed. Adding an
-            // unparsed trailing meta is rejected too.
-            if expected_accounts > 0 {
-                assert!(validate_dispute_peer_bundle_cardinality(
-                    current_workers,
-                    0,
-                    expected_accounts - 1,
-                )
-                .is_err());
-            }
-            assert!(validate_dispute_peer_bundle_cardinality(
-                current_workers,
-                0,
-                expected_accounts + 1,
-            )
-            .is_err());
-        }
-
-        // A legacy nonzero voter-count encoding can never authorize peer-bundle parsing.
-        assert!(validate_dispute_peer_bundle_cardinality(1, 1, 0).is_err());
-    }
-
-    #[test]
     fn mixed_peer_submissions_clear_every_child_and_counter_before_terminal_close() {
         let task_key = Pubkey::new_unique();
         let creator = Pubkey::new_unique();
@@ -986,30 +871,14 @@ mod tests {
             peer2_submission_data.as_mut_slice(),
         );
 
-        let correct_order = vec![
-            peer1_claim_info.clone(),
-            peer1_worker_info.clone(),
-            peer1_submission_info.clone(),
-            peer2_claim_info.clone(),
-            peer2_worker_info.clone(),
-            peer2_submission_info.clone(),
-        ];
-
-        // Account order is part of the wire contract. Swapping worker and
+        // Account order is part of the wire contract: swapping worker and
         // submission cannot pass canonical claim/worker binding.
-        let wrong_order = vec![
-            peer1_claim_info.clone(),
-            peer1_submission_info.clone(),
-            peer1_worker_info.clone(),
-            peer2_claim_info.clone(),
-            peer2_worker_info.clone(),
-            peer2_submission_info.clone(),
-        ];
-        assert!(process_dispute_peer_bundles(
+        assert!(settle_single_dispute_peer(
             &mut task,
             &task_key,
-            &wrong_order,
-            0,
+            &peer1_claim_info,
+            &peer1_submission_info,
+            &peer1_worker_info,
             primary_worker,
             Some(&mut config_account),
             &crate::ID,
@@ -1020,14 +889,29 @@ mod tests {
         assert_eq!(peer1_claim_info.lamports(), 50);
         assert_eq!(peer1_submission_info.lamports(), 30);
 
+        // The defendant is never a peer: its claim settles through the ruling
+        // and the slash finalizers, so the crank rejects it outright.
+        assert!(settle_single_dispute_peer(
+            &mut task,
+            &task_key,
+            &peer1_claim_info,
+            &peer1_worker_info,
+            &peer1_submission_info,
+            peer1_worker_key,
+            Some(&mut config_account),
+            &crate::ID,
+        )
+        .is_err());
+
         // Stale task and validation counters each fail before rent movement or
         // tombstoning, preserving conservation on corrupted legacy state.
         task.set_live_submissions(0);
-        assert!(process_dispute_peer_bundles(
+        assert!(settle_single_dispute_peer(
             &mut task,
             &task_key,
-            &correct_order,
-            0,
+            &peer1_claim_info,
+            &peer1_worker_info,
+            &peer1_submission_info,
             primary_worker,
             Some(&mut config_account),
             &crate::ID,
@@ -1035,11 +919,12 @@ mod tests {
         .is_err());
         task.set_live_submissions(1);
         config_account.set_pending_submission_count(0);
-        assert!(process_dispute_peer_bundles(
+        assert!(settle_single_dispute_peer(
             &mut task,
             &task_key,
-            &correct_order,
-            0,
+            &peer1_claim_info,
+            &peer1_worker_info,
+            &peer1_submission_info,
             primary_worker,
             Some(&mut config_account),
             &crate::ID,
@@ -1049,16 +934,44 @@ mod tests {
         assert_eq!(peer1_claim_info.lamports(), 50);
         assert_eq!(peer1_submission_info.lamports(), 30);
 
-        process_dispute_peer_bundles(
+        // Chunked settlement: each peer settles in its own call with identical
+        // end state to the retired batch unwind.
+        settle_single_dispute_peer(
             &mut task,
             &task_key,
-            &correct_order,
-            0,
+            &peer1_claim_info,
+            &peer1_worker_info,
+            &peer1_submission_info,
             primary_worker,
             Some(&mut config_account),
             &crate::ID,
         )
         .unwrap();
+        settle_single_dispute_peer(
+            &mut task,
+            &task_key,
+            &peer2_claim_info,
+            &peer2_worker_info,
+            &peer2_submission_info,
+            primary_worker,
+            Some(&mut config_account),
+            &crate::ID,
+        )
+        .unwrap();
+
+        // Structural idempotency: a settled (tombstoned) claim cannot settle
+        // again — deserialization of the tombstone fails closed.
+        assert!(settle_single_dispute_peer(
+            &mut task,
+            &task_key,
+            &peer1_claim_info,
+            &peer1_worker_info,
+            &peer1_submission_info,
+            primary_worker,
+            Some(&mut config_account),
+            &crate::ID,
+        )
+        .is_err());
 
         assert_eq!(task.live_submissions(), 0);
         assert_eq!(config_account.pending_submission_count(), 0);
@@ -1091,8 +1004,9 @@ mod tests {
         assert_eq!(peer1_after.active_tasks, 0);
         assert_eq!(peer2_after.active_tasks, 0);
 
-        // Resolve/Expire performs this final primary-worker transition after peer
-        // cleanup. At that point no child/counter debt remains to brick close_task.
+        // The ruling records deferred peers into current_workers; each settled
+        // peer releases one unit, ending at zero with no child/counter debt to
+        // brick close_task.
         task.current_workers = 0;
         assert_eq!(task.current_workers, 0);
         assert_eq!(task.live_submissions(), 0);

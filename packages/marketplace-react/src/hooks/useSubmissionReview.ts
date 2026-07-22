@@ -21,7 +21,13 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef } from "react";
 import { facade, type facade as facadeNs } from "@tetsuo-ai/marketplace-sdk";
 import { useAgencContext } from "../provider/context.js";
-import { requireClient } from "./internal.js";
+import type { MarketplaceClient } from "../types.js";
+import {
+  requireClient,
+  snapshotFixedBytes32,
+  snapshotRecord,
+  stabilizeSelectedTransactionSigner,
+} from "./internal.js";
 
 /** Per-call input for `accept` (task auto-bound; signer defaults to the client). */
 export type AcceptInput = Omit<
@@ -49,6 +55,11 @@ export type RequestChangesInput = Omit<
 
 /** Lifecycle status of a review verb. */
 export type ReviewStatus = "idle" | "pending" | "success" | "error";
+
+interface QueuedReviewInput<TInput> {
+  readonly client: MarketplaceClient;
+  readonly input: TInput;
+}
 
 /** A single review verb's surface. */
 export interface ReviewAction<TInput> {
@@ -99,38 +110,36 @@ export function useSubmissionReview(
     null,
   );
 
-  const acceptMut = useMutation<string, Error, AcceptInput>({
-    mutationFn: async (input) => {
-      const client = requireClient(ctx.client);
+  const acceptMut = useMutation<string, Error, QueuedReviewInput<AcceptInput>>({
+    mutationFn: async ({ client, input }) => {
       const { signature } = await client.acceptTaskResult({
         ...input,
         task: taskPda,
-        creator: input.creator ?? client.signer,
       } as Parameters<typeof facadeNs.acceptTaskResult>[0]);
       return signature;
     },
   });
 
-  const rejectMut = useMutation<string, Error, RejectInput>({
-    mutationFn: async (input) => {
-      const client = requireClient(ctx.client);
+  const rejectMut = useMutation<string, Error, QueuedReviewInput<RejectInput>>({
+    mutationFn: async ({ client, input }) => {
       const ix = await facade.rejectTaskResult({
         ...input,
         task: taskPda,
-        creator: input.creator ?? client.signer,
       } as Parameters<typeof facadeNs.rejectTaskResult>[0]);
       const { signature } = await client.send([ix]);
       return signature;
     },
   });
 
-  const requestChangesMut = useMutation<string, Error, RequestChangesInput>({
-    mutationFn: async (input) => {
-      const client = requireClient(ctx.client);
+  const requestChangesMut = useMutation<
+    string,
+    Error,
+    QueuedReviewInput<RequestChangesInput>
+  >({
+    mutationFn: async ({ client, input }) => {
       const ix = await facade.requestChanges({
         ...input,
         task: taskPda,
-        creator: input.creator ?? client.signer,
       } as Parameters<typeof facadeNs.requestChanges>[0]);
       const { signature } = await client.send([ix]);
       return signature;
@@ -138,25 +147,69 @@ export function useSubmissionReview(
   });
 
   const accept = useCallback<ReviewAction<AcceptInput>>(
-    (input) => {
+    async (input) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = snapshotRecord(input);
+      const creator = stabilizeSelectedTransactionSigner(
+        client.signer,
+        detachedInput.creator,
+      );
+      const snapshottedInput = snapshotRecord({
+        ...detachedInput,
+        creator,
+        ...(detachedInput.bidSettlement === undefined
+          ? {}
+          : { bidSettlement: snapshotRecord(detachedInput.bidSettlement) }),
+      }) as AcceptInput;
       lastAction.current = "accept";
-      return acceptMut.mutateAsync(input);
+      return acceptMut.mutateAsync({ client, input: snapshottedInput });
     },
-    [acceptMut],
+    [acceptMut, ctx.client],
   );
   const reject = useCallback<ReviewAction<RejectInput>>(
-    (input) => {
+    async (input) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = snapshotRecord(input);
+      const creator = stabilizeSelectedTransactionSigner(
+        client.signer,
+        detachedInput.creator,
+      );
+      const snapshottedInput = snapshotRecord({
+        ...detachedInput,
+        creator,
+        rejectionHash: snapshotFixedBytes32(
+          detachedInput.rejectionHash,
+          "useSubmissionReview.reject: rejectionHash",
+        ),
+      }) as RejectInput;
       lastAction.current = "reject";
-      return rejectMut.mutateAsync(input);
+      return rejectMut.mutateAsync({ client, input: snapshottedInput });
     },
-    [rejectMut],
+    [ctx.client, rejectMut],
   );
   const requestChanges = useCallback<ReviewAction<RequestChangesInput>>(
-    (input) => {
+    async (input) => {
+      const client = requireClient(ctx.client);
+      const detachedInput = snapshotRecord(input);
+      const creator = stabilizeSelectedTransactionSigner(
+        client.signer,
+        detachedInput.creator,
+      );
+      const snapshottedInput = snapshotRecord({
+        ...detachedInput,
+        creator,
+        changesHash: snapshotFixedBytes32(
+          detachedInput.changesHash,
+          "useSubmissionReview.requestChanges: changesHash",
+        ),
+      }) as RequestChangesInput;
       lastAction.current = "requestChanges";
-      return requestChangesMut.mutateAsync(input);
+      return requestChangesMut.mutateAsync({
+        client,
+        input: snapshottedInput,
+      });
     },
-    [requestChangesMut],
+    [ctx.client, requestChangesMut],
   );
 
   const anyPending =

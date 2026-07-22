@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -40,6 +38,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -54,9 +54,7 @@ export const REGISTER_SKILL_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getRegisterSkillDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    REGISTER_SKILL_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(REGISTER_SKILL_DISCRIMINATOR);
 }
 
 export type RegisterSkillInstruction<
@@ -114,13 +112,13 @@ export type RegisterSkillInstructionDataArgs = {
 export function getRegisterSkillInstructionDataEncoder(): Encoder<RegisterSkillInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["skillId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["name", fixEncoderSize(getBytesEncoder(), 32)],
-      ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["skillId", getFixedBytesEncoder(32, "skillId")],
+      ["name", getFixedBytesEncoder(32, "name")],
+      ["contentHash", getFixedBytesEncoder(32, "contentHash")],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
-      ["tags", fixEncoderSize(getBytesEncoder(), 64)],
+      ["tags", getFixedBytesEncoder(64, "tags")],
     ]),
     (value) => ({ ...value, discriminator: REGISTER_SKILL_DISCRIMINATOR }),
   );

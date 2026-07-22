@@ -7,7 +7,6 @@
  */
 
 import {
-  fixEncoderSize,
   getAddressEncoder,
   getBytesEncoder,
   getProgramDerivedAddress,
@@ -15,6 +14,8 @@ import {
   type ProgramDerivedAddress,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 
 export type ListingModerationSeeds = {
   listing: Address;
@@ -39,7 +40,7 @@ export async function findListingModerationPda(
         ]),
       ),
       getAddressEncoder().encode(seeds.listing),
-      fixEncoderSize(getBytesEncoder(), 32).encode(seeds.jobSpecHash),
+      getFixedBytesEncoder(32).encode(seeds.jobSpecHash),
       getAddressEncoder().encode(seeds.moderator),
     ],
   });

@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -39,13 +37,13 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const TASK_ATTESTOR_CONFIG_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([103, 130, 20, 87, 207, 120, 111, 34]);
 
 export function getTaskAttestorConfigDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    TASK_ATTESTOR_CONFIG_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(TASK_ATTESTOR_CONFIG_DISCRIMINATOR);
 }
 
 export type TaskAttestorConfig = {
@@ -87,14 +85,14 @@ export type TaskAttestorConfigArgs = {
 export function getTaskAttestorConfigEncoder(): FixedSizeEncoder<TaskAttestorConfigArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["creator", getAddressEncoder()],
       ["attestor", getAddressEncoder()],
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 7)],
+      ["reserved", getFixedBytesEncoder(7, "reserved")],
     ]),
     (value) => ({
       ...value,

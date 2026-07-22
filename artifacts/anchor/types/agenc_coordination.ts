@@ -5254,6 +5254,146 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "demoteIneligibleBest",
+      "docs": [
+        "Permissionlessly demote a provably dead tracked winner and open the",
+        "re-promotion grace window."
+      ],
+      "discriminator": [
+        51,
+        92,
+        169,
+        234,
+        241,
+        36,
+        97,
+        216
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bid",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidder",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "deregisterAgent",
       "docs": [
         "Deregister an agent and reclaim rent.",
@@ -6896,17 +7036,22 @@ export type AgencCoordination = {
       "name": "hireFromListing",
       "docs": [
         "Hire a provider from a standing service listing, minting a one-shot task",
-        "that snapshots the listing's terms and funds escrow from the buyer."
+        "that snapshots the listing's terms and funds escrow from the buyer.",
+        "",
+        "The explicit v2 discriminator (`sha256(\"global:hire_from_listing_v2\")[0..8]`)",
+        "is an atomic rollout boundary: the old",
+        "program rejects new clients instead of silently ignoring the appended",
+        "task-job-spec commitment, and the upgraded program rejects old clients."
       ],
       "discriminator": [
+        241,
+        94,
+        127,
+        7,
+        104,
         174,
-        225,
-        81,
-        68,
-        172,
-        19,
-        97,
-        194
+        240,
+        116
       ],
       "accounts": [
         {
@@ -7266,6 +7411,15 @@ export type AgencCoordination = {
         {
           "name": "moderator",
           "type": "pubkey"
+        },
+        {
+          "name": "taskJobSpecHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -7275,17 +7429,20 @@ export type AgencCoordination = {
         "Hire a provider from a standing service listing as a human buyer with NO",
         "registered agent (single-agent storefront). Funds SOL escrow, carries the",
         "listing's operator-fee leg (the embedding site's cut), and pins",
-        "ValidationMode::CreatorReview so the human reviews the work before payout."
+        "ValidationMode::CreatorReview so the human reviews the work before payout.",
+        "Its discriminator is",
+        "`sha256(\"global:hire_from_listing_humanless_v2\")[0..8]` so the",
+        "required task commitment cannot be silently ignored by the old binary."
       ],
       "discriminator": [
-        90,
-        142,
-        39,
-        225,
-        150,
-        161,
-        217,
-        49
+        229,
+        163,
+        171,
+        114,
+        38,
+        116,
+        215,
+        85
       ],
       "accounts": [
         {
@@ -7633,6 +7790,15 @@ export type AgencCoordination = {
         {
           "name": "moderator",
           "type": "pubkey"
+        },
+        {
+          "name": "taskJobSpecHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -8808,6 +8974,145 @@ export type AgencCoordination = {
           }
         }
       ]
+    },
+    {
+      "name": "promoteBid",
+      "docs": [
+        "Permissionlessly promote a live bid to the book's tracked policy winner."
+      ],
+      "discriminator": [
+        23,
+        106,
+        251,
+        103,
+        223,
+        120,
+        55,
+        193
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidBook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100,
+                  95,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bid",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  105,
+                  100
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              },
+              {
+                "kind": "account",
+                "path": "bidder"
+              }
+            ]
+          }
+        },
+        {
+          "name": "bidder",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bidder.agent_id",
+                "account": "agentRegistration"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "purchaseGood",
@@ -13292,17 +13597,18 @@ export type AgencCoordination = {
         "Attach or update a content-addressed off-chain job specification pointer for a",
         "task. P1.2 §4.4: `moderator` names the attestor whose moderation record the",
         "caller consumes (the record slot is v2-else-legacy; the required",
-        "`moderation_block` account is the §5.2 takedown floor)."
+        "`moderation_block` account is the §5.2 takedown floor).",
+        "Discriminator = sha256(\"global:set_task_job_spec_v2\")[0..8]."
       ],
       "discriminator": [
-        134,
-        102,
-        102,
-        86,
-        31,
-        164,
-        202,
-        193
+        118,
+        9,
+        99,
+        58,
+        215,
+        87,
+        58,
+        59
       ],
       "accounts": [
         {
@@ -13489,6 +13795,34 @@ export type AgencCoordination = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "hireRecord",
+          "docs": [
+            "Canonical hire-link PDA. A program-owned record proves this task came",
+            "from a listing and binds the published job spec to the immutable hash",
+            "snapshotted in `Task.description[32..64]` at hire time. A direct task must",
+            "supply the empty system-owned account at the same canonical address.",
+            "",
+            "bump, and immutable hash commitment are validated in the handler."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  105,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -13510,6 +13844,159 @@ export type AgencCoordination = {
           "type": "pubkey"
         }
       ]
+    },
+    {
+      "name": "settleDisputeClaim",
+      "docs": [
+        "Permissionlessly settle one deferred collaborative peer claim after a",
+        "dispute ruling (chunked settlement). The dispute reaches its recorded",
+        "terminal status when the last peer settles."
+      ],
+      "discriminator": [
+        139,
+        155,
+        103,
+        84,
+        64,
+        11,
+        148,
+        6
+      ],
+      "accounts": [
+        {
+          "name": "protocolConfig",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "dispute",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  105,
+                  115,
+                  112,
+                  117,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "dispute.dispute_id",
+                "account": "dispute"
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.creator",
+                "account": "task"
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim",
+          "docs": [
+            "and binding to `worker` are all enforced by the shared bundle",
+            "validation in the handler (identical to the retired monolithic path)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "worker",
+          "docs": [
+            "the shared bundle validation; receives the closed claim's rent."
+          ],
+          "writable": true
+        },
+        {
+          "name": "taskSubmission",
+          "docs": [
+            "swept with counter conservation; the exact empty system-owned PDA",
+            "proves absence. Non-skippable evidence, as on the retired path."
+          ],
+          "writable": true
+        },
+        {
+          "name": "taskValidationConfig",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107,
+                  95,
+                  118,
+                  97,
+                  108,
+                  105,
+                  100,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "stakeReputation",
@@ -17151,6 +17638,19 @@ export type AgencCoordination = {
       ]
     },
     {
+      "name": "bidPromoted",
+      "discriminator": [
+        253,
+        12,
+        26,
+        245,
+        103,
+        12,
+        146,
+        176
+      ]
+    },
+    {
       "name": "bidUpdated",
       "discriminator": [
         70,
@@ -17161,6 +17661,19 @@ export type AgencCoordination = {
         94,
         198,
         148
+      ]
+    },
+    {
+      "name": "bidWinnerDemoted",
+      "discriminator": [
+        38,
+        22,
+        88,
+        109,
+        239,
+        121,
+        146,
+        249
       ]
     },
     {
@@ -17278,6 +17791,19 @@ export type AgencCoordination = {
         4,
         183,
         153
+      ]
+    },
+    {
+      "name": "disputePeerClaimSettled",
+      "discriminator": [
+        112,
+        40,
+        20,
+        152,
+        129,
+        236,
+        218,
+        127
       ]
     },
     {
@@ -18364,7 +18890,7 @@ export type AgencCoordination = {
     {
       "code": 6026,
       "name": "invalidMaxWorkers",
-      "msg": "Invalid max workers: must be between 1 and 100"
+      "msg": "Invalid max workers: must be between 1 and 4"
     },
     {
       "code": 6027,
@@ -20195,6 +20721,66 @@ export type AgencCoordination = {
       "code": 6392,
       "name": "releaseUnpauseRequiresCurrentSurface",
       "msg": "The full production protocol can only be unpaused after the current release surface is atomically stamped"
+    },
+    {
+      "code": 6393,
+      "name": "hiredTaskJobSpecMismatch",
+      "msg": "The job specification does not match the commitment selected at hire time"
+    },
+    {
+      "code": 6394,
+      "name": "bidNotBookBest",
+      "msg": "Acceptance requires the bid book's tracked best bid"
+    },
+    {
+      "code": 6395,
+      "name": "bidRepromotionGraceActive",
+      "msg": "The bid book's re-promotion grace window has not elapsed"
+    },
+    {
+      "code": 6396,
+      "name": "bidLeaderRetreat",
+      "msg": "The tracked best bid can only update to equal-or-better terms"
+    },
+    {
+      "code": 6397,
+      "name": "bidWinnerStillEligible",
+      "msg": "The tracked best bid is still valid and eligible"
+    },
+    {
+      "code": 6398,
+      "name": "bidBookCacheMismatch",
+      "msg": "The bid book's cached winner terms do not match the bid account"
+    },
+    {
+      "code": 6399,
+      "name": "bidNotBetterThanTrackedBest",
+      "msg": "The presented bid does not beat the bid book's tracked best"
+    },
+    {
+      "code": 6400,
+      "name": "bidBookScoreWindowInvalid",
+      "msg": "The bid book requires a positive frozen scoring window"
+    },
+    {
+      "code": 6401,
+      "name": "disputePeerBundlesRetired",
+      "msg": "Dispute rulings no longer accept peer worker bundles; use settle_dispute_claim"
+    },
+    {
+      "code": 6402,
+      "name": "disputeSettlementNotPending",
+      "msg": "The dispute has no deferred worker settlement pending"
+    },
+    {
+      "code": 6403,
+      "name": "disputeDefendantNotPeer",
+      "msg": "The defendant claim settles through the ruling, not peer settlement"
+    },
+    {
+      "code": 6404,
+      "name": "disputeTerminalStatusCorrupt",
+      "msg": "The dispute's recorded terminal status is invalid"
     }
   ],
   "types": [
@@ -21318,6 +21904,42 @@ export type AgencCoordination = {
       }
     },
     {
+      "name": "bidPromoted",
+      "docs": [
+        "Emitted when a bid becomes the bid book's tracked policy winner — at",
+        "creation, update, or through the permissionless `promote_bid` crank."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bid",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidder",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "bidUpdated",
       "docs": [
         "Emitted when a bid is updated."
@@ -21355,6 +21977,42 @@ export type AgencCoordination = {
           },
           {
             "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bidWinnerDemoted",
+      "docs": [
+        "Emitted when the tracked winner is removed (cancelled, expired, or proven",
+        "ineligible) and the book enters the re-promotion grace window."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task",
+            "type": "pubkey"
+          },
+          {
+            "name": "bid",
+            "type": "pubkey"
+          },
+          {
+            "name": "bidBook",
+            "type": "pubkey"
+          },
+          {
+            "name": "bookVersion",
+            "type": "u64"
+          },
+          {
+            "name": "winnerStaleSince",
             "type": "i64"
           },
           {
@@ -22109,6 +22767,33 @@ export type AgencCoordination = {
               "`resolve_dispute`. Default pubkey until resolved."
             ],
             "type": "pubkey"
+          },
+          {
+            "name": "peerWorkersTotal",
+            "docs": [
+              "Chunked settlement — APPENDED fields. A ruling on a collaborative task",
+              "records the peer count and defers each peer's sweep to the",
+              "permissionless `settle_dispute_claim` crank (one worker per",
+              "transaction), so ruling transactions are O(1) in accounts. Zero on",
+              "single-worker disputes and on every dispute predating the redesign."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "peerWorkersSettled",
+            "docs": [
+              "Peers settled so far; the dispute reaches its recorded terminal status",
+              "when this equals `peer_workers_total`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "pendingTerminalStatus",
+            "docs": [
+              "Raw `DisputeStatus` discriminant (Resolved/Expired) to apply when the",
+              "final peer settles. Only meaningful while `status == SettlementPending`."
+            ],
+            "type": "u8"
           }
         ]
       }
@@ -22241,6 +22926,50 @@ export type AgencCoordination = {
           {
             "name": "votingDeadline",
             "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "disputePeerClaimSettled",
+      "docs": [
+        "Emitted when the permissionless chunked-settlement crank sweeps one",
+        "deferred collaborative peer claim after a dispute ruling. When",
+        "`peers_remaining` reaches zero the dispute has transitioned to its",
+        "recorded terminal status."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "disputeId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "taskId",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "worker",
+            "type": "pubkey"
+          },
+          {
+            "name": "peersRemaining",
+            "type": "u8"
           },
           {
             "name": "timestamp",
@@ -22480,6 +23209,9 @@ export type AgencCoordination = {
           },
           {
             "name": "cancelled"
+          },
+          {
+            "name": "settlementPending"
           }
         ]
       }
@@ -23514,7 +24246,10 @@ export type AgencCoordination = {
         "exist before a task is minted, so it can't gate `hire_from_listing` at hire",
         "time. This listing/spec-keyed attestation does: the moderation authority attests",
         "the listing's `spec_hash` once, and the hire checks it. Recorded by",
-        "`record_listing_moderation`. PDA seeds: [\"listing_moderation\", service_listing, job_spec_hash]"
+        "`record_listing_moderation`. Revision-5 writes use moderator-keyed PDA seeds:",
+        "[\"listing_moderation_v2\", service_listing, job_spec_hash, moderator]. Frozen",
+        "pre-P1.2 [\"listing_moderation\", service_listing, job_spec_hash] records remain",
+        "read-only compatibility inputs and are never written by revision 5."
       ],
       "type": {
         "kind": "struct",
@@ -27573,6 +28308,58 @@ export type AgencCoordination = {
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "bestBid",
+            "docs": [
+              "Cached deterministic policy winner. `Pubkey::default()` = no tracked",
+              "winner. Maintained incrementally by every bid mutation so `accept_bid`",
+              "never has to enumerate competitors (the O(1)-accept redesign,",
+              "docs/design/bid-accept-o1-redesign.md). Fields appended for layout",
+              "stability; the revision-5 cutover preflight requires zero live books."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bestRewardLamports",
+            "docs": [
+              "Score components of `best_bid`, snapshotted at install so comparisons",
+              "never need to load the incumbent's account. Scores are pure functions",
+              "of these values plus the frozen `score_window_secs`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bestEtaSeconds",
+            "type": "u32"
+          },
+          {
+            "name": "bestConfidenceBps",
+            "type": "u16"
+          },
+          {
+            "name": "bestReputationBps",
+            "type": "u16"
+          },
+          {
+            "name": "winnerStaleSince",
+            "docs": [
+              "Set when the tracked winner is removed (cancel/expiry/demotion).",
+              "`accept_bid` is blocked until the re-promotion grace elapses so every",
+              "remaining bidder gets a fair window to promote before acceptance.",
+              "0 = fresh."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "scoreWindowSecs",
+            "docs": [
+              "Frozen WeightedScore eta-normalization window, recorded once at",
+              "`initialize_bid_book` as `task.deadline - now`. Freezing it makes all",
+              "policy orderings pure functions of immutable bid fields (the winner no",
+              "longer depends on when the creator calls accept)."
+            ],
+            "type": "u32"
           }
         ]
       }

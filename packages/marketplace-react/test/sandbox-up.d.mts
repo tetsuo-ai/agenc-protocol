@@ -40,14 +40,14 @@ export interface StartOptions {
   keepLedger?: boolean;
   seed?: boolean;
   quiet?: boolean;
-  unsafeUnpausedFixture?: boolean;
+  devReady?: boolean;
   disposable?: boolean;
 }
 
 export interface SandboxBootstrapDependencies {
   up: () => Promise<void>;
   readEnv: () => Promise<unknown | null>;
-  seed: () => Promise<void>;
+  seed: (env: unknown) => Promise<void>;
   resolve: () => Promise<SandboxEnv | null>;
   cleanup: () => Promise<void>;
 }
@@ -62,6 +62,19 @@ export function readSandboxFixtures(
 ): Promise<SandboxFixtures | null>;
 export function readSandboxEnv(envFile?: string): Promise<SandboxEnv | null>;
 export function recordedValidatorMayBeLive(): Promise<boolean>;
+export function localSeederArgs(
+  env: unknown,
+  envFile?: string,
+): [string, string, string, string];
+export function parseSandboxCliArgs(argv: string[]):
+  | {
+      command: "up";
+      keepLedger: boolean;
+      seed: boolean;
+      devReady: boolean;
+    }
+  | { command: "down"; purge: boolean }
+  | { command: "env" };
 export function start(
   options?: StartOptions,
   dependencies?: Partial<SandboxStartDependencies>,

@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,14 +39,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const PURCHASE_RECORD_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
   [239, 38, 40, 199, 4, 96, 209, 2],
 );
 
 export function getPurchaseRecordDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    PURCHASE_RECORD_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(PURCHASE_RECORD_DISCRIMINATOR);
 }
 
 export type PurchaseRecord = {
@@ -94,13 +92,13 @@ export type PurchaseRecordArgs = {
 export function getPurchaseRecordEncoder(): FixedSizeEncoder<PurchaseRecordArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["skill", getAddressEncoder()],
       ["buyer", getAddressEncoder()],
       ["pricePaid", getU64Encoder()],
       ["timestamp", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 4)],
+      ["reserved", getFixedBytesEncoder(4, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: PURCHASE_RECORD_DISCRIMINATOR }),
   );

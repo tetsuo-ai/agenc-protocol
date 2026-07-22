@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU8Decoder,
@@ -33,6 +31,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -44,9 +44,7 @@ export const UPDATE_MIN_VERSION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([149, 215, 23, 120, 114, 69, 110, 37]);
 
 export function getUpdateMinVersionDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    UPDATE_MIN_VERSION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(UPDATE_MIN_VERSION_DISCRIMINATOR);
 }
 
 export type UpdateMinVersionInstruction<
@@ -79,7 +77,7 @@ export type UpdateMinVersionInstructionDataArgs = { newMinVersion: number };
 export function getUpdateMinVersionInstructionDataEncoder(): FixedSizeEncoder<UpdateMinVersionInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["newMinVersion", getU8Encoder()],
     ]),
     (value) => ({ ...value, discriminator: UPDATE_MIN_VERSION_DISCRIMINATOR }),

@@ -38,6 +38,10 @@ export default function App() {
         // Write client is built from rpcUrl + signer when both are present,
         // or pass a pre-built `client` (e.g. from startLocalMarketplace()).
         // rpcUrl, signer,
+        // A custom client never inherits the network's implicit RPC for funded
+        // recovery. Pair it with an explicit rpcUrl or orchestrationRpc when
+        // automatic finalized reconciliation/account resolution is required.
+        // orchestrationRpc,
         // Referrer config is accepted + validated, then injected into hires.
         // The earnings hook is still indexer-gated (see "Referrers" below).
         // referrer: { wallet: "<base58>", feeBps: 250 },
@@ -52,20 +56,28 @@ export default function App() {
 `<AgencProvider>` wraps a bundled TanStack `QueryClientProvider` and exposes one
 context (read it with `useAgencContext()`):
 
-| field                         | type                                  | notes                                    |
-| ----------------------------- | ------------------------------------- | ---------------------------------------- |
-| `network`                     | `"localnet" \| "devnet" \| "mainnet"` | resolved target                          |
-| `read`                        | `ReadTransport`                       | indexer-first, gPA fallback              |
-| `client`                      | `MarketplaceClient \| null`           | write runtime; `null` if not configured  |
-| `signer`                      | `TransactionSigner \| null`           | the configured signer                    |
-| `referrer`                    | `ValidatedReferrerConfig \| null`     | validated + stored                       |
-| `resolveReferrerCapability()` | `ReferrerCapability`                  | live when a valid referrer is configured |
+| field                         | type                                  | notes                                                                   |
+| ----------------------------- | ------------------------------------- | ----------------------------------------------------------------------- |
+| `network`                     | `"localnet" \| "devnet" \| "mainnet"` | resolved target                                                         |
+| `cacheNamespace`              | `string`                              | credential-free deployment identity folded into query keys              |
+| `read`                        | `ReadTransport`                       | indexer-first, gPA fallback                                             |
+| `client`                      | `MarketplaceClient \| null`           | write runtime; `null` if not configured                                 |
+| `rpcUrl`                      | `string \| null`                      | resolved general-purpose HTTP RPC                                       |
+| `orchestrationRpc`            | `ModerationAccountReadRpc \| null`    | explicitly injected funded-recovery/account-read seam                   |
+| `orchestrationRpcUrl`         | `string \| null`                      | funded orchestration URL; never an implicit default for a custom client |
+| `indexerBaseUrl`              | `string \| null`                      | explicitly configured hosted-indexer URL                                |
+| `signer`                      | `TransactionSigner \| null`           | the configured signer                                                   |
+| `referrer`                    | `ValidatedReferrerConfig \| null`     | validated + stored                                                      |
+| `resolveReferrerCapability()` | `ReferrerCapability`                  | live when a valid referrer is configured                                |
 
 ### Override slots (test seams, public API)
 
 - `config.client` — a pre-built `MarketplaceClient`. `startLocalMarketplace().client`
   (from `@tetsuo-ai/marketplace-sdk/testing`) plugs straight in for hook e2e.
 - `config.queryTransport` — a pre-built `ReadTransport` (mocks / SSR fixtures).
+- `config.orchestrationRpc` — an explicit account-read/finalized-recovery RPC.
+  It wins over `rpcUrl`; use it to pair an opaque custom client with the exact
+  deployment that client submits to.
 
 ## Read transport
 
@@ -100,6 +112,25 @@ Hooks are imported from `@tetsuo-ai/marketplace-react/hooks`:
 | `useTaskGuarantee`           | read           | Guaranteed Hire status for a task (0.4.1)                                                                             |
 | `useCompletionBond`          | write          | post/reclaim completion bonds for Guaranteed Hire (0.4.1)                                                             |
 
+`useHire`, `useTaskActivation`, and `useHumanlessHireFlow` detach every
+caller-owned 32-byte commitment synchronously, before TanStack can schedule the
+mutation, and reuse those exact bytes across moderation, recovery, and funded
+client awaits. Exact cross-realm Uint8Arrays are accepted; shared backing and
+non-byte views fail before enqueue. A same-address signer override resolves to
+the canonical client fee-payer object, while a distinct signer is canonicalized,
+locked, and frozen in place. Standard hire creator/authority wrappers for the
+same non-client address also resolve to one object. Create a new signer object
+when a wallet changes accounts; do not mutate an enrolled signer's address.
+
+The other multi-step write hooks (`useTaskWork`, `useSubmissionReview`,
+`useDispute`, `useCompletionBond`, `useTaskLifecycle`, and `useRateHire`) also
+detach known mutable records, account collections, and fixed byte views before
+enqueue. Optional byte fields preserve raw bytes, `null`, explicit `Some` /
+`None`, and omission. If an instruction override names the client's fee-payer
+address, the hook uses the canonical client signer object; Solana Kit requires
+one signer implementation per address. A distinct-address override remains the
+selected signer.
+
 ## Referrers
 
 Referral settlement is live on the full protocol surface (99 instructions as of
@@ -117,9 +148,18 @@ the humanless hire first, then calls your `hostAndModerateJobSpec` backend seam
 with the derived `taskPda`, `taskId`, listing, job spec, hire signature, and
 referrer audit flag. It signs `set_task_job_spec` only when that backend returns
 `moderationAttested: true`, a 32-byte `Uint8Array` `jobSpecHash`, and a non-empty
-`jobSpecUri`. If hosting, moderation, or activation fails, `progress` preserves
-the completed phase data so the UI can recover or offer refund/activation
-options without pretending the task is claimable.
+`jobSpecUri`. The hook delegates funded execution and recovery to the SDK's
+audited orchestration rail. If a hire send is ambiguous, or hosting, moderation,
+or activation fails after funding, `progress.recovery` contains the exact SDK
+resume token. Persist that token with a binary-safe store (for example
+structured clone/IndexedDB), then call `resumeHireAndActivate(input, token)`
+with the same intent. Resume never calls the funded hire instruction. An
+ambiguous `hiring` token remains safely preserved and reconciliation-only when
+no RPC is configured, but it cannot progress until the provider supplies an
+explicit `rpcUrl` or `orchestrationRpc` that can prove the exact transaction at
+finalized commitment. A pre-built custom `client` deliberately does not inherit
+the selected network's implicit RPC endpoint: coupling an opaque client to the
+wrong cluster would make recovery evidence unsafe.
 
 Aggregated referrer earnings are an indexer feature. `useReferrerEarnings()`
 fetches `GET /api/explorer/referrers/:wallet/hires` from the configured indexer

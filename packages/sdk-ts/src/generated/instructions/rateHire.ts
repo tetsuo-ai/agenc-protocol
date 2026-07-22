@@ -11,9 +11,7 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -43,6 +41,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -64,7 +64,7 @@ export const RATE_HIRE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getRateHireDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(RATE_HIRE_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(RATE_HIRE_DISCRIMINATOR);
 }
 
 export type RateHireInstruction<
@@ -124,9 +124,9 @@ export type RateHireInstructionDataArgs = {
 export function getRateHireInstructionDataEncoder(): Encoder<RateHireInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["score", getU8Encoder()],
-      ["reviewHash", getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32))],
+      ["reviewHash", getOptionEncoder(getFixedBytesEncoder(32))],
       [
         "reviewUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),

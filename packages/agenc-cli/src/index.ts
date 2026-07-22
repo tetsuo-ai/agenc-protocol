@@ -13,7 +13,11 @@ export {
   type AgencConfig,
   type AgencListingConfig,
 } from "./config.js";
-export { detectProject, type DetectedProject, type ProjectKind } from "./detect.js";
+export {
+  detectProject,
+  type DetectedProject,
+  type ProjectKind,
+} from "./detect.js";
 export {
   planInitFiles,
   runInit,
@@ -29,7 +33,12 @@ export {
   type DevLoopDeps,
   type DevLoopResult,
 } from "./bots.js";
-export { runDev, type DevMode, type DevOptions, type DevRunSummary } from "./dev.js";
+export {
+  runDev,
+  type DevMode,
+  type DevOptions,
+  type DevRunSummary,
+} from "./dev.js";
 export {
   runDevSandbox,
   SANDBOX_PROTOCOL_FEE_BPS,
@@ -53,11 +62,15 @@ export {
 export {
   gatherPromoteInput,
   gatherPromoteInputAsync,
+  readInstalledPackageManifests,
   readInstalledVersions,
   runPromoteChecks,
   SUPPORT_MATRIX,
+  SUPPORT_MATRIX_BY_SURFACE_REVISION,
   versionInMatrix,
   type CheckStatus,
+  type InstalledPackageInventory,
+  type InstalledPackageManifest,
   type PromoteCheck,
   type PromoteChainEvidence,
   type PromoteInput,

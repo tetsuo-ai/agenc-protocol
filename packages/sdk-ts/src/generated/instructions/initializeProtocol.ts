@@ -9,13 +9,11 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getArrayDecoder,
   getArrayEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU16Decoder,
@@ -43,6 +41,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -54,9 +54,7 @@ export const INITIALIZE_PROTOCOL_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([188, 233, 252, 106, 134, 146, 202, 91]);
 
 export function getInitializeProtocolDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    INITIALIZE_PROTOCOL_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(INITIALIZE_PROTOCOL_DISCRIMINATOR);
 }
 
 export type InitializeProtocolInstruction<
@@ -116,7 +114,7 @@ export type InitializeProtocolInstructionDataArgs = {
 export function getInitializeProtocolInstructionDataEncoder(): Encoder<InitializeProtocolInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["disputeThreshold", getU8Encoder()],
       ["protocolFeeBps", getU16Encoder()],
       ["minStake", getU64Encoder()],

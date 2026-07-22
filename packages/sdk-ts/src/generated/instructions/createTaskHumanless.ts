@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -44,6 +42,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -63,9 +63,7 @@ export const CREATE_TASK_HUMANLESS_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([238, 0, 219, 160, 208, 101, 168, 202]);
 
 export function getCreateTaskHumanlessDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    CREATE_TASK_HUMANLESS_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(CREATE_TASK_HUMANLESS_DISCRIMINATOR);
 }
 
 export type CreateTaskHumanlessInstruction<
@@ -137,10 +135,10 @@ export type CreateTaskHumanlessInstructionDataArgs = {
 export function getCreateTaskHumanlessInstructionDataEncoder(): Encoder<CreateTaskHumanlessInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["taskId", getFixedBytesEncoder(32, "taskId")],
       ["requiredCapabilities", getU64Encoder()],
-      ["description", fixEncoderSize(getBytesEncoder(), 64)],
+      ["description", getFixedBytesEncoder(64, "description")],
       ["rewardAmount", getU64Encoder()],
       ["deadline", getI64Encoder()],
       ["minReputation", getU16Encoder()],

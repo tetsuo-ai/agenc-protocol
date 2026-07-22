@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU8Decoder,
@@ -34,6 +32,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -45,7 +45,7 @@ export const SET_SERVICE_LISTING_STATE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([87, 136, 109, 167, 206, 112, 223, 72]);
 
 export function getSetServiceListingStateDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     SET_SERVICE_LISTING_STATE_DISCRIMINATOR,
   );
 }
@@ -84,7 +84,7 @@ export type SetServiceListingStateInstructionDataArgs = { newState: number };
 export function getSetServiceListingStateInstructionDataEncoder(): FixedSizeEncoder<SetServiceListingStateInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["newState", getU8Encoder()],
     ]),
     (value) => ({

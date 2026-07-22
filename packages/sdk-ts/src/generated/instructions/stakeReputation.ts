@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU64Decoder,
@@ -34,6 +32,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -46,9 +46,7 @@ export const STAKE_REPUTATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([104, 250, 157, 87, 16, 190, 180, 238]);
 
 export function getStakeReputationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    STAKE_REPUTATION_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(STAKE_REPUTATION_DISCRIMINATOR);
 }
 
 export type StakeReputationInstruction<
@@ -94,7 +92,7 @@ export type StakeReputationInstructionDataArgs = { amount: number | bigint };
 export function getStakeReputationInstructionDataEncoder(): FixedSizeEncoder<StakeReputationInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["amount", getU64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: STAKE_REPUTATION_DISCRIMINATOR }),

@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -52,9 +52,7 @@ export const EXPIRE_CLAIM_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getExpireClaimDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    EXPIRE_CLAIM_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(EXPIRE_CLAIM_DISCRIMINATOR);
 }
 
 export type ExpireClaimInstruction<
@@ -132,7 +130,9 @@ export type ExpireClaimInstructionDataArgs = {};
 
 export function getExpireClaimInstructionDataEncoder(): FixedSizeEncoder<ExpireClaimInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: EXPIRE_CLAIM_DISCRIMINATOR }),
   );
 }

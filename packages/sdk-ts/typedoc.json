@@ -7,6 +7,10 @@
   "githubPages": false,
   "useTsLinkResolution": true,
   "validation": { "notExported": true, "invalidLink": true, "notDocumented": false },
-  "treatWarningsAsErrors": false,
+  "intentionallyNotExported": [
+    "src/history/marketplace-write.ts:Identity",
+    "src/generated/programs/agencCoordination.ts:MakeOptional"
+  ],
+  "treatWarningsAsErrors": true,
   "excludeInternal": true
 }

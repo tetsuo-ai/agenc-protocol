@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -47,6 +45,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -66,7 +66,7 @@ export const CREATE_TASK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getCreateTaskDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(CREATE_TASK_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(CREATE_TASK_DISCRIMINATOR);
 }
 
 export type CreateTaskInstruction<
@@ -171,18 +171,15 @@ export type CreateTaskInstructionDataArgs = {
 export function getCreateTaskInstructionDataEncoder(): Encoder<CreateTaskInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["taskId", getFixedBytesEncoder(32, "taskId")],
       ["requiredCapabilities", getU64Encoder()],
-      ["description", fixEncoderSize(getBytesEncoder(), 64)],
+      ["description", getFixedBytesEncoder(64, "description")],
       ["rewardAmount", getU64Encoder()],
       ["maxWorkers", getU8Encoder()],
       ["deadline", getI64Encoder()],
       ["taskType", getU8Encoder()],
-      [
-        "constraintHash",
-        getOptionEncoder(fixEncoderSize(getBytesEncoder(), 32)),
-      ],
+      ["constraintHash", getOptionEncoder(getFixedBytesEncoder(32))],
       ["minReputation", getU16Encoder()],
       ["rewardMint", getOptionEncoder(getAddressEncoder())],
       ["referrer", getOptionEncoder(getAddressEncoder())],

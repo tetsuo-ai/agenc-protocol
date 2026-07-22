@@ -35,3 +35,4 @@ export {
   type SendOptions,
   type SendResult,
 } from "./client.js";
+export { stabilizeTransactionSigner } from "./signer-identity.js";

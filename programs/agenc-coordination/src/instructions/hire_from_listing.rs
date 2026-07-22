@@ -118,14 +118,28 @@ pub(crate) fn validate_listing_capacity(open_jobs: u16, max_open_jobs: u16) -> R
     Ok(())
 }
 
-/// The listing's content-commitment hash flows straight into the new task's
-/// `description`; a hire must never mint a task with a zero/empty commitment.
+/// The listing's content-commitment hash flows into the first half of the new
+/// task's `description`; a hire must never mint a task with a zero/empty
+/// advertised commitment.
 /// `create_service_listing` and `update_service_listing` already reject a zero
 /// `spec_hash`, so this is defense-in-depth against a corrupted/legacy listing.
 pub(crate) fn validate_listing_spec_hash(spec_hash: &[u8; 32]) -> Result<()> {
     require!(
         *spec_hash != [0u8; 32],
         CoordinationError::ListingInvalidSpec
+    );
+    Ok(())
+}
+
+/// New hires commit the buyer-specific task specification at the same atomic
+/// boundary that moves funds. The listing hash and task hash are deliberately
+/// separate: the former proves which advertised service terms were purchased;
+/// the latter prevents the buyer from substituting different instructions
+/// after escrow has been funded.
+pub(crate) fn validate_hired_task_spec_hash(spec_hash: &[u8; 32]) -> Result<()> {
+    require!(
+        spec_hash.iter().any(|byte| *byte != 0),
+        CoordinationError::InvalidTaskJobSpecHash
     );
     Ok(())
 }
@@ -359,6 +373,8 @@ pub struct HireFromListing<'info> {
 /// - `task_id`: caller-chosen unique id for the new task (PDA seed).
 /// - `expected_price` / `expected_version`: the listing terms the buyer agreed
 ///   to; the hire is rejected if the on-chain listing no longer matches.
+/// - `task_job_spec_hash`: immutable buyer-specific work instructions. This is
+///   committed before funds move and later enforced by `set_task_job_spec`.
 pub fn handler(
     ctx: Context<HireFromListing>,
     task_id: [u8; 32],
@@ -367,6 +383,7 @@ pub fn handler(
     referrer: Option<Pubkey>,
     referrer_fee_bps: u16,
     moderator: Pubkey,
+    task_job_spec_hash: [u8; 32],
 ) -> Result<()> {
     let clock = Clock::get()?;
     let config = ctx.accounts.protocol_config.as_ref();
@@ -480,11 +497,15 @@ pub fn handler(
     ));
     validate_deadline(deadline, &clock, true)?;
 
-    // Snapshot the content-commitment hash into the task description (hash-shaped:
-    // 32-byte digest + zero tail, as create_task requires).
+    // Snapshot both immutable commitments without changing the Task layout:
+    // advertised listing terms in the first half, buyer-specific work terms in
+    // the second. Listing hires intentionally use the full 64-byte field; direct
+    // create_task remains a single 32-byte digest with a zero tail.
     validate_listing_spec_hash(&listing_spec_hash)?;
+    validate_hired_task_spec_hash(&task_job_spec_hash)?;
     let mut description = [0u8; 64];
     description[..32].copy_from_slice(&listing_spec_hash);
+    description[32..].copy_from_slice(&task_job_spec_hash);
 
     let protocol_fee_bps = config.protocol_fee_bps;
     let creator_agent = ctx.accounts.creator_agent.as_ref();

@@ -4,7 +4,7 @@ The client-side metadata standard for `ServiceListing` accounts. The on-chain
 program stores `name`, `category`, and `tags` as opaque fixed-width byte
 fields ("client-encoded") — this document defines what conforming clients put
 in them, and where the buyer-facing **listing display document** lives
-relative to the listing's `spec_hash` / `spec_uri` job-spec commitment, so
+relative to the listing's `spec_hash` / `spec_uri` advertised-spec commitment, so
 every producer (SDK facade, kit CLI, storefronts) and every reader (explorer,
 query layer, embeds) agrees.
 
@@ -30,23 +30,25 @@ LISTING_METADATA v1 covers:
    (`name`, `category`, `tags`) written by `create_service_listing` /
    `update_service_listing`.
 2. The canonical category taxonomy (20 values).
-3. The `spec_hash` / `spec_uri` job-spec commitment and the listing display
-   document embedded in the job-spec envelope payload.
+3. The listing-level `spec_hash` / `spec_uri` commitment and the listing display
+   document embedded in that envelope payload. The separate buyer-specific task
+   job-spec commitment is covered below only to prevent the two hashes from
+   being confused.
 
 It does **not** change the program: the on-chain layout is unchanged, and the
 program never validates the `name` / `category` / `tags` bytes. Conformance
 is a client/indexer contract.
-Listings whose fields do not decode under these rules are *nonconforming*;
+Listings whose fields do not decode under these rules are _nonconforming_;
 readers should surface them as such (e.g. `metadataValid: false`) rather than
 error.
 
 ## On-chain encoding
 
-| Field | Width | Encoding rule |
-|---|---|---|
-| `name` | 32 bytes | UTF-8, NUL-padded to exactly 32 bytes. Any text; no embedded NUL (`U+0000`). All-NUL = unset. |
+| Field      | Width    | Encoding rule                                                                                                                                                                       |
+| ---------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`     | 32 bytes | UTF-8, NUL-padded to exactly 32 bytes. Any text; no embedded NUL (`U+0000`). All-NUL = unset.                                                                                       |
 | `category` | 32 bytes | Same rule as `name`, **plus** the value must be one of the 20 canonical category tokens below (which are all lowercase-kebab). All-NUL = unset (nonconforming for active listings). |
-| `tags` | 64 bytes | Zero or more lowercase-kebab tokens joined with `","`, then UTF-8, NUL-padded to exactly 64 bytes. All-NUL = no tags. |
+| `tags`     | 64 bytes | Zero or more lowercase-kebab tokens joined with `","`, then UTF-8, NUL-padded to exactly 64 bytes. All-NUL = no tags.                                                               |
 
 **Lowercase-kebab grammar** (categories and each tag token):
 
@@ -92,43 +94,44 @@ an all-NUL category decodes to `""` (unset).
 
 ## Category taxonomy (v1, 20 values)
 
-| Token | Meaning |
-|---|---|
-| `code-generation` | Writing, reviewing, refactoring, or porting source code. |
-| `translation` | Natural-language translation and localization. |
-| `data-labeling` | Annotating, tagging, or classifying datasets for training/eval. |
-| `research` | Investigating a question and delivering findings/summaries with sources. |
-| `image-gen` | Generating or editing images and other static visual assets. |
-| `audio` | Speech, music, voice-over, transcription, and audio processing. |
-| `video` | Video generation, editing, captioning, and post-production. |
-| `marketing` | Campaigns, copy, SEO/ASO, social content, and growth work. |
-| `data-analysis` | Statistics, dashboards, modeling, and insight extraction from data. |
-| `scraping` | Structured extraction of data from websites and public sources. |
-| `devops` | CI/CD, infrastructure, deployment, monitoring, and reliability work. |
-| `security` | Audits, penetration testing, vulnerability triage, and hardening. |
-| `legal` | Contract drafting/review and legal research (informational, not counsel). |
-| `finance` | Financial modeling, accounting, bookkeeping, and market analysis. |
-| `design` | UI/UX, branding, and graphic design deliverables. |
-| `writing` | Long/short-form prose: articles, documentation, editing, ghostwriting. |
-| `support` | Customer/user support, triage, and helpdesk operations. |
-| `search` | Finding, retrieving, and curating information or items on request. |
-| `automation` | Workflow automation, bots, integrations, and agent pipelines. |
-| `other` | Anything that does not fit the categories above. |
+| Token             | Meaning                                                                   |
+| ----------------- | ------------------------------------------------------------------------- |
+| `code-generation` | Writing, reviewing, refactoring, or porting source code.                  |
+| `translation`     | Natural-language translation and localization.                            |
+| `data-labeling`   | Annotating, tagging, or classifying datasets for training/eval.           |
+| `research`        | Investigating a question and delivering findings/summaries with sources.  |
+| `image-gen`       | Generating or editing images and other static visual assets.              |
+| `audio`           | Speech, music, voice-over, transcription, and audio processing.           |
+| `video`           | Video generation, editing, captioning, and post-production.               |
+| `marketing`       | Campaigns, copy, SEO/ASO, social content, and growth work.                |
+| `data-analysis`   | Statistics, dashboards, modeling, and insight extraction from data.       |
+| `scraping`        | Structured extraction of data from websites and public sources.           |
+| `devops`          | CI/CD, infrastructure, deployment, monitoring, and reliability work.      |
+| `security`        | Audits, penetration testing, vulnerability triage, and hardening.         |
+| `legal`           | Contract drafting/review and legal research (informational, not counsel). |
+| `finance`         | Financial modeling, accounting, bookkeeping, and market analysis.         |
+| `design`          | UI/UX, branding, and graphic design deliverables.                         |
+| `writing`         | Long/short-form prose: articles, documentation, editing, ghostwriting.    |
+| `support`         | Customer/user support, triage, and helpdesk operations.                   |
+| `search`          | Finding, retrieving, and curating information or items on request.        |
+| `automation`      | Workflow automation, bots, integrations, and agent pipelines.             |
+| `other`           | Anything that does not fit the categories above.                          |
 
 Use exactly one token; pick `other` when nothing fits. The machine-readable
 list is `LISTING_CATEGORIES` in `packages/sdk-ts/src/values/categories.ts`.
 
-## `spec_hash` / `spec_uri`: the job-spec commitment
+## `spec_hash` / `spec_uri`: the advertised listing commitment
 
 These two fields are **not** display metadata. They are the listing's
-protocol-load-bearing commitment to a **job spec**, with semantics fixed by
+protocol-load-bearing commitment to the provider's **advertised listing spec**,
+with semantics fixed by
 the on-chain program (`programs/agenc-coordination/src/state.rs`,
 `ServiceListing`):
 
-- **`spec_uri`** (string, ≤ 256 bytes) points at the **job-spec envelope**
+- **`spec_uri`** (string, ≤ 256 bytes) points at the advertised-spec envelope
   document, conventionally `agenc://job-spec/sha256/<hex>` where `<hex>` is
   the 64-char lowercase hex of `spec_hash`.
-- **`spec_hash`** (`[u8; 32]`) is the content address of the job spec: the
+- **`spec_hash`** (`[u8; 32]`) is the content address of the advertised spec: the
   SHA-256 of the `json-stable-v1` **canonical JSON of the envelope's
   `payload`** — the value the marketplace kit publishes as
   `integrity.payloadHash`. It is **not** the hash of the raw bytes served at
@@ -136,20 +139,29 @@ the on-chain program (`programs/agenc-coordination/src/state.rs`,
   payload hash, so hashing the served bytes cannot reproduce `spec_hash`
   (that would take a self-referential SHA-256 preimage).
 
-The protocol builds real behavior on this commitment:
+The protocol builds real behavior on this commitment, but it does **not** use
+it as the buyer's complete work order:
 
-- `hire_from_listing` copies `spec_hash` into the minted task's
-  `description[..32]`, making it the hired task's job-spec commitment.
+- Revision-5 `hire_from_listing` copies `spec_hash` into
+  `Task.description[0..32]` and independently requires a non-zero
+  `task_job_spec_hash`, copied into `Task.description[32..64]` before funds move.
+  The first half proves the advertised listing terms; the second half binds the
+  exact buyer-specific work contract that activation may publish.
 - The hire-time moderation gate is seed-bound to it: the `ListingModeration`
-  PDA is `["listing_moderation", listing, spec_hash]`, and when moderation is
-  enabled a hire requires a publishable attestation for exactly this hash.
-- The kit worker's `job_spec_verified` review flow fetches `spec_uri`, parses
-  the envelope, and requires the canonical payload hash to equal the on-chain
-  `spec_hash`.
+  PDA written by revision 5 is
+  `["listing_moderation_v2", listing, spec_hash, moderator]`, and when
+  moderation is enabled a hire requires a publishable attestation from the
+  selected moderator for exactly this listing and hash. Pre-P1.2
+  `["listing_moderation", listing, spec_hash]` records are frozen compatibility
+  inputs only; revision 5 never writes a new record at those legacy seeds.
+- A worker executes only the canonical `TaskJobSpec` pinned for the task. For a
+  listing hire, revision 5 requires that account's hash to equal the immutable
+  second-half `task_job_spec_hash`; it must not treat the listing envelope as a
+  substitute for the buyer's task-specific contract.
 
 ### Verification (normative)
 
-To verify a listing's spec, a reader MUST:
+To verify a listing's advertised spec, a reader MUST:
 
 1. Resolve `spec_uri`. For `agenc://job-spec/sha256/<hex>` URIs, `<hex>` MUST
    equal the lowercase hex of `spec_hash` before fetching.
@@ -164,8 +176,10 @@ The normative reference implementation of step 3 is `canonicalJobSpecJson` /
 `canonicalJobSpecHash` in `packages/sdk-ts/src/values/job-spec.ts` (`values`
 module of `@tetsuo-ai/marketplace-sdk`), validated against kit-generated
 cross-implementation vectors. Do **not** hash the served bytes: only the
-canonical payload hash interoperates with `hire_from_listing`, moderation
-attestations, and kit job-spec verification.
+canonical payload hash interoperates with listing hire and moderation
+attestations. Separately verify the task's pinned `TaskJobSpec` against
+`Task.description[32..64]` before work; passing one verification says nothing
+about the other hash.
 
 ## The listing display document
 
@@ -196,14 +210,14 @@ unverifiable.)
 
 Fields of `payload.custom.listingMetadata`:
 
-| Field | Type | Req | Meaning |
-|---|---|---|---|
-| `displayName` | string (1–120 chars) | yes | Human-facing title (not limited to the 32-byte on-chain name). |
-| `longDescription` | string | no | Full description of the service, inputs, and outputs. |
-| `pricingNotes` | string | no | What the on-chain price covers; surcharges/volume terms. |
-| `sampleOutputs` | string[] | no | Sample deliverables — artifact URIs or short inline excerpts. |
-| `sla` | object | no | Advertised service levels: `responseHours?` (number ≥ 0), `revisions?` (integer ≥ 0), `refundPolicy?` (string). Informational; not protocol-enforced. |
-| `links` | object | no | `website?` and `docs?` URIs. |
+| Field             | Type                 | Req | Meaning                                                                                                                                               |
+| ----------------- | -------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `displayName`     | string (1–120 chars) | yes | Human-facing title (not limited to the 32-byte on-chain name).                                                                                        |
+| `longDescription` | string               | no  | Full description of the service, inputs, and outputs.                                                                                                 |
+| `pricingNotes`    | string               | no  | What the on-chain price covers; surcharges/volume terms.                                                                                              |
+| `sampleOutputs`   | string[]             | no  | Sample deliverables — artifact URIs or short inline excerpts.                                                                                         |
+| `sla`             | object               | no  | Advertised service levels: `responseHours?` (number ≥ 0), `revisions?` (integer ≥ 0), `refundPolicy?` (string). Informational; not protocol-enforced. |
+| `links`           | object               | no  | `website?` and `docs?` URIs.                                                                                                                          |
 
 A listing whose verified envelope has no `custom.listingMetadata` key simply
 has no display document — readers fall back to the on-chain `name` /

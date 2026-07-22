@@ -368,6 +368,7 @@ interface PrepareHireArgs {
   expectedVersion: string;
   moderator: string;
   listingSpecHash: string;
+  taskJobSpecHash: string;
   moderatorIsAttestor?: boolean;
   listingModeration?: string;
   referrer?: string;
@@ -396,6 +397,7 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
       "expectedVersion",
       "moderator",
       "listingSpecHash",
+      "taskJobSpecHash",
     ],
     properties: {
       listing: solanaAddress("ServiceListing PDA to hire from (base58)."),
@@ -429,6 +431,11 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
         "Listing's pinned spec hash as 64 hex chars. The facade derives the " +
           "REQUIRED moderation-block (BLOCK-floor) PDA from it, plus the v2 " +
           "moderator-keyed moderation record PDA unless listingModeration is passed.",
+        true,
+      ),
+      taskJobSpecHash: hex32Schema(
+        "Buyer-specific task job-spec hash as 64 hex chars. Revision 5 commits " +
+          "this before funds move and set_task_job_spec must publish the same hash.",
         true,
       ),
       moderatorIsAttestor: {
@@ -486,6 +493,11 @@ const prepareHire = defineTool<PrepareHireArgs, UnsignedInstructionView>({
         "listingSpecHash",
         "prepare_hire",
       ),
+      taskJobSpecHash: hex32(
+        args.taskJobSpecHash,
+        "taskJobSpecHash",
+        "prepare_hire",
+      ),
     };
     if (args.moderatorIsAttestor !== undefined) {
       input.moderatorIsAttestor = args.moderatorIsAttestor;
@@ -514,6 +526,7 @@ interface PrepareHireHumanlessArgs {
   expectedVersion: string;
   moderator: string;
   listingSpecHash: string;
+  taskJobSpecHash: string;
   moderatorIsAttestor?: boolean;
   listingModeration?: string;
   reviewWindowSecs?: string;
@@ -545,6 +558,7 @@ const prepareHireHumanless = defineTool<
       "expectedVersion",
       "moderator",
       "listingSpecHash",
+      "taskJobSpecHash",
     ],
     properties: {
       listing: solanaAddress("ServiceListing PDA to hire from (base58)."),
@@ -564,6 +578,11 @@ const prepareHireHumanless = defineTool<
       listingSpecHash: hex32Schema(
         "Listing spec hash as 64 hex chars. Derives the REQUIRED moderation-block " +
           "PDA plus the v2 moderation record PDA unless listingModeration is passed.",
+        true,
+      ),
+      taskJobSpecHash: hex32Schema(
+        "Buyer-specific task job-spec hash as 64 hex chars. Revision 5 commits " +
+          "this before funds move and set_task_job_spec must publish the same hash.",
         true,
       ),
       moderatorIsAttestor: {
@@ -626,6 +645,11 @@ const prepareHireHumanless = defineTool<
       listingSpecHash: hex32(
         args.listingSpecHash,
         "listingSpecHash",
+        "prepare_hire_humanless",
+      ),
+      taskJobSpecHash: hex32(
+        args.taskJobSpecHash,
+        "taskJobSpecHash",
         "prepare_hire_humanless",
       ),
     };

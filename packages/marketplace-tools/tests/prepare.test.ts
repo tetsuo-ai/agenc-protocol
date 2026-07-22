@@ -175,6 +175,7 @@ describe("prepare_hire handler", () => {
         expectedVersion: "4",
         moderator: A_MODERATOR,
         listingSpecHash: HEX32,
+        taskJobSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
@@ -213,6 +214,7 @@ describe("prepare_hire handler", () => {
         expectedVersion: "4",
         moderator: A_MODERATOR,
         listingSpecHash: HEX32,
+        taskJobSpecHash: HEX32,
         referrer: A_CREATOR,
         referrerFeeBps: 500,
       },
@@ -242,6 +244,7 @@ describe("prepare_hire handler", () => {
           expectedVersion: "1",
           moderator: A_MODERATOR,
           listingSpecHash: HEX32,
+          taskJobSpecHash: HEX32,
           referrerFeeBps: 500,
         },
         ctx,
@@ -262,6 +265,7 @@ describe("prepare_hire handler", () => {
           expectedVersion: "1",
           moderator: A_MODERATOR,
           listingSpecHash: HEX32,
+          taskJobSpecHash: HEX32,
         },
         ctx,
       ),
@@ -281,6 +285,7 @@ describe("prepare_hire handler", () => {
           expectedVersion: "1",
           moderator: A_MODERATOR,
           listingSpecHash: "deadbeef", // too short
+          taskJobSpecHash: HEX32,
         },
         ctx,
       ),
@@ -300,6 +305,7 @@ describe("prepare_hire_humanless handler", () => {
         expectedVersion: "4",
         moderator: A_MODERATOR,
         listingSpecHash: HEX32,
+        taskJobSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
@@ -328,6 +334,7 @@ describe("prepare_hire_humanless handler", () => {
           expectedVersion: "4",
           moderator: A_MODERATOR,
           listingSpecHash: HEX32,
+          taskJobSpecHash: HEX32,
           referrerFeeBps: 500,
         },
         ctx,
@@ -371,12 +378,13 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
   // post-A1 8/13/12 shapes outright. These exact counts fail against sdk 0.7.x
   // — they pin the cutover. Account indexes below are HARDCODED from the
   // generated client (never computed from the builder):
-  //   set_task_job_spec  → 9  (taskModeration @3, moderationAttestor @4)
+  //   set_task_job_spec  → 10 (taskModeration @3, moderationAttestor @4,
+  //                             canonical hireRecord @9)
   //   hire_from_listing  → 14 (listingModeration @6, moderationAttestor @7)
   //   hire_..._humanless → 13 (listingModeration @7, moderationAttestor @8)
   const NONE_PLACEHOLDER = AGENC_COORDINATION_PROGRAM_ADDRESS;
 
-  it("prepare_set_task_job_spec emits the 9-account post-P1.2 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
+  it("prepare_set_task_job_spec emits the 10-account revision-5 shape (None roster placeholder when moderatorIsAttestor is unset)", async () => {
     const ix = (await getTool("prepare_set_task_job_spec")!.handler(
       {
         task: A_TASK_PDA,
@@ -387,7 +395,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(9);
+    expect(ix.accounts).toHaveLength(10);
     // Global-authority path: the optional roster slot is the program-id
     // sentinel (= Anchor None), NOT a derived roster PDA.
     expect(ix.accounts[4]!.address).toBe(NONE_PLACEHOLDER);
@@ -405,7 +413,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(9);
+    expect(ix.accounts).toHaveLength(10);
     const [rosterPda] = await findModerationAttestorPda({
       attestor: A_MODERATOR,
     });
@@ -425,7 +433,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
       },
       ctx,
     )) as UnsignedInstructionView;
-    expect(ix.accounts).toHaveLength(9);
+    expect(ix.accounts).toHaveLength(10);
     expect(ix.accounts[3]!.address).toBe(A_CREATOR);
   });
 
@@ -441,6 +449,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
         expectedVersion: "4",
         moderator: A_MODERATOR,
         listingSpecHash: HEX32,
+        taskJobSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
@@ -460,6 +469,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
         expectedVersion: "4",
         moderator: A_MODERATOR,
         listingSpecHash: HEX32,
+        taskJobSpecHash: HEX32,
         moderatorIsAttestor: true,
         listingModeration: A_CREATOR,
       },
@@ -485,6 +495,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
         expectedVersion: "4",
         moderator: A_MODERATOR,
         listingSpecHash: HEX32,
+        taskJobSpecHash: HEX32,
       },
       ctx,
     )) as UnsignedInstructionView;
@@ -503,6 +514,7 @@ describe("P1.2 open-roster gate account shapes (sdk ^0.8.0 cutover pin)", () => 
         expectedVersion: "4",
         moderator: A_MODERATOR,
         listingSpecHash: HEX32,
+        taskJobSpecHash: HEX32,
         moderatorIsAttestor: true,
       },
       ctx,

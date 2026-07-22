@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   type ResolvedInstructionAccount,
@@ -42,7 +42,7 @@ export const RECLAIM_ORPHAN_TASK_CHILD_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([91, 115, 255, 0, 240, 58, 74, 223]);
 
 export function getReclaimOrphanTaskChildDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     RECLAIM_ORPHAN_TASK_CHILD_DISCRIMINATOR,
   );
 }
@@ -87,7 +87,9 @@ export type ReclaimOrphanTaskChildInstructionDataArgs = {};
 
 export function getReclaimOrphanTaskChildInstructionDataEncoder(): FixedSizeEncoder<ReclaimOrphanTaskChildInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({
       ...value,
       discriminator: RECLAIM_ORPHAN_TASK_CHILD_DISCRIMINATOR,

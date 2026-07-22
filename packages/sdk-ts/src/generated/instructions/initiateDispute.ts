@@ -11,9 +11,7 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
@@ -39,6 +37,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -61,9 +61,7 @@ export const INITIATE_DISPUTE_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([128, 242, 160, 23, 44, 61, 171, 37]);
 
 export function getInitiateDisputeDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    INITIATE_DISPUTE_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(INITIATE_DISPUTE_DISCRIMINATOR);
 }
 
 export type InitiateDisputeInstruction<
@@ -143,10 +141,10 @@ export type InitiateDisputeInstructionDataArgs = {
 export function getInitiateDisputeInstructionDataEncoder(): Encoder<InitiateDisputeInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["disputeId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["evidenceHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["disputeId", getFixedBytesEncoder(32, "disputeId")],
+      ["taskId", getFixedBytesEncoder(32, "taskId")],
+      ["evidenceHash", getFixedBytesEncoder(32, "evidenceHash")],
       ["resolutionType", getU8Encoder()],
       [
         "evidence",

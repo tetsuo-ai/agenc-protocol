@@ -10,8 +10,6 @@ import {
   assertIsInstructionWithAccounts,
   containsBytes,
   extendClient,
-  fixEncoderSize,
-  getBytesEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_ACCOUNT,
   SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_INSTRUCTION,
   SOLANA_ERROR__PROGRAM_CLIENTS__UNRECOGNIZED_INSTRUCTION_TYPE,
@@ -27,6 +25,8 @@ import {
   type InstructionWithData,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   addSelfFetchFunctions,
   addSelfPlanAndSendFunctions,
@@ -192,6 +192,7 @@ import {
   getCreateTaskHumanlessInstructionAsync,
   getCreateTaskInstructionAsync,
   getDelegateReputationInstructionAsync,
+  getDemoteIneligibleBestInstructionAsync,
   getDeregisterAgentInstructionAsync,
   getDistributeGhostShareInstructionAsync,
   getExecuteProposalInstructionAsync,
@@ -212,6 +213,7 @@ import {
   getModerationHeartbeatInstructionAsync,
   getPostCompletionBondInstructionAsync,
   getPostToFeedInstructionAsync,
+  getPromoteBidInstructionAsync,
   getPurchaseGoodInstructionAsync,
   getPurchaseSkillInstructionAsync,
   getRateHireInstructionAsync,
@@ -240,6 +242,7 @@ import {
   getSetModerationBlockInstructionAsync,
   getSetServiceListingStateInstructionAsync,
   getSetTaskJobSpecInstructionAsync,
+  getSettleDisputeClaimInstructionAsync,
   getStakeReputationInstructionAsync,
   getStampReleaseSurfaceInstructionAsync,
   getSubmitTaskResultInstructionAsync,
@@ -290,6 +293,7 @@ import {
   parseCreateTaskHumanlessInstruction,
   parseCreateTaskInstruction,
   parseDelegateReputationInstruction,
+  parseDemoteIneligibleBestInstruction,
   parseDeregisterAgentInstruction,
   parseDistributeGhostShareInstruction,
   parseExecuteProposalInstruction,
@@ -310,6 +314,7 @@ import {
   parseModerationHeartbeatInstruction,
   parsePostCompletionBondInstruction,
   parsePostToFeedInstruction,
+  parsePromoteBidInstruction,
   parsePurchaseGoodInstruction,
   parsePurchaseSkillInstruction,
   parseRateHireInstruction,
@@ -338,6 +343,7 @@ import {
   parseSetModerationBlockInstruction,
   parseSetServiceListingStateInstruction,
   parseSetTaskJobSpecInstruction,
+  parseSettleDisputeClaimInstruction,
   parseStakeReputationInstruction,
   parseStampReleaseSurfaceInstruction,
   parseSubmitTaskResultInstruction,
@@ -388,6 +394,7 @@ import {
   type CreateTaskAsyncInput,
   type CreateTaskHumanlessAsyncInput,
   type DelegateReputationAsyncInput,
+  type DemoteIneligibleBestAsyncInput,
   type DeregisterAgentAsyncInput,
   type DistributeGhostShareAsyncInput,
   type ExecuteProposalAsyncInput,
@@ -433,6 +440,7 @@ import {
   type ParsedCreateTaskHumanlessInstruction,
   type ParsedCreateTaskInstruction,
   type ParsedDelegateReputationInstruction,
+  type ParsedDemoteIneligibleBestInstruction,
   type ParsedDeregisterAgentInstruction,
   type ParsedDistributeGhostShareInstruction,
   type ParsedExecuteProposalInstruction,
@@ -453,6 +461,7 @@ import {
   type ParsedModerationHeartbeatInstruction,
   type ParsedPostCompletionBondInstruction,
   type ParsedPostToFeedInstruction,
+  type ParsedPromoteBidInstruction,
   type ParsedPurchaseGoodInstruction,
   type ParsedPurchaseSkillInstruction,
   type ParsedRateHireInstruction,
@@ -481,6 +490,7 @@ import {
   type ParsedSetModerationBlockInstruction,
   type ParsedSetServiceListingStateInstruction,
   type ParsedSetTaskJobSpecInstruction,
+  type ParsedSettleDisputeClaimInstruction,
   type ParsedStakeReputationInstruction,
   type ParsedStampReleaseSurfaceInstruction,
   type ParsedSubmitTaskResultInstruction,
@@ -506,6 +516,7 @@ import {
   type ParsedWithdrawReputationStakeInstruction,
   type PostCompletionBondAsyncInput,
   type PostToFeedAsyncInput,
+  type PromoteBidAsyncInput,
   type PurchaseGoodAsyncInput,
   type PurchaseSkillAsyncInput,
   type RateHireAsyncInput,
@@ -534,6 +545,7 @@ import {
   type SetModerationBlockAsyncInput,
   type SetServiceListingStateAsyncInput,
   type SetTaskJobSpecAsyncInput,
+  type SettleDisputeClaimAsyncInput,
   type StakeReputationAsyncInput,
   type StampReleaseSurfaceAsyncInput,
   type SubmitTaskResultAsyncInput,
@@ -670,7 +682,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([130, 53, 100, 103, 121, 77, 148, 19]),
       ),
       0,
@@ -681,7 +693,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([43, 192, 26, 112, 162, 176, 77, 164]),
       ),
       0,
@@ -692,7 +704,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([128, 155, 95, 241, 66, 207, 166, 59]),
       ),
       0,
@@ -703,7 +715,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([155, 36, 149, 133, 58, 70, 81, 19]),
       ),
       0,
@@ -714,7 +726,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([47, 42, 142, 40, 13, 39, 48, 107]),
       ),
       0,
@@ -725,7 +737,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([169, 198, 7, 111, 52, 32, 197, 88]),
       ),
       0,
@@ -736,7 +748,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([77, 209, 12, 19, 44, 65, 93, 238]),
       ),
       0,
@@ -747,7 +759,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([11, 232, 15, 241, 234, 143, 35, 252]),
       ),
       0,
@@ -758,7 +770,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([142, 83, 121, 72, 66, 39, 149, 44]),
       ),
       0,
@@ -769,7 +781,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([36, 49, 241, 67, 40, 36, 241, 74]),
       ),
       0,
@@ -780,7 +792,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([68, 124, 148, 26, 177, 224, 247, 53]),
       ),
       0,
@@ -791,7 +803,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([228, 215, 236, 73, 246, 181, 191, 228]),
       ),
       0,
@@ -802,7 +814,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([228, 56, 120, 128, 135, 128, 195, 19]),
       ),
       0,
@@ -813,7 +825,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([120, 149, 179, 150, 220, 115, 129, 110]),
       ),
       0,
@@ -824,7 +836,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([81, 63, 124, 107, 210, 100, 145, 70]),
       ),
       0,
@@ -835,7 +847,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([157, 104, 16, 111, 208, 31, 53, 132]),
       ),
       0,
@@ -846,7 +858,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([250, 116, 242, 149, 241, 55, 164, 63]),
       ),
       0,
@@ -857,7 +869,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([104, 101, 55, 188, 219, 31, 76, 113]),
       ),
       0,
@@ -868,7 +880,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([157, 129, 173, 120, 123, 143, 215, 24]),
       ),
       0,
@@ -879,7 +891,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([52, 62, 194, 121, 157, 169, 40, 178]),
       ),
       0,
@@ -890,7 +902,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([90, 220, 89, 93, 67, 217, 235, 20]),
       ),
       0,
@@ -901,7 +913,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([20, 180, 54, 96, 191, 141, 52, 148]),
       ),
       0,
@@ -912,7 +924,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([26, 94, 189, 187, 116, 136, 53, 33]),
       ),
       0,
@@ -923,7 +935,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([207, 91, 250, 28, 152, 179, 215, 209]),
       ),
       0,
@@ -934,7 +946,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([239, 38, 40, 199, 4, 96, 209, 2]),
       ),
       0,
@@ -945,7 +957,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([247, 166, 224, 123, 62, 95, 198, 71]),
       ),
       0,
@@ -956,7 +968,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([226, 12, 248, 110, 109, 108, 99, 212]),
       ),
       0,
@@ -967,7 +979,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([114, 79, 236, 216, 212, 117, 80, 21]),
       ),
       0,
@@ -978,7 +990,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([117, 173, 54, 52, 146, 147, 124, 211]),
       ),
       0,
@@ -989,7 +1001,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([107, 74, 49, 243, 139, 30, 9, 244]),
       ),
       0,
@@ -1000,7 +1012,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([195, 23, 19, 205, 215, 225, 192, 254]),
       ),
       0,
@@ -1011,7 +1023,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([130, 48, 247, 244, 182, 191, 30, 26]),
       ),
       0,
@@ -1022,7 +1034,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([79, 34, 229, 55, 88, 90, 55, 84]),
       ),
       0,
@@ -1033,7 +1045,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([103, 130, 20, 87, 207, 120, 111, 34]),
       ),
       0,
@@ -1044,7 +1056,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([173, 104, 90, 231, 189, 239, 133, 142]),
       ),
       0,
@@ -1055,7 +1067,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([65, 139, 202, 158, 184, 110, 242, 52]),
       ),
       0,
@@ -1066,7 +1078,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([115, 77, 242, 98, 7, 81, 209, 137]),
       ),
       0,
@@ -1077,7 +1089,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([209, 72, 197, 54, 17, 55, 3, 187]),
       ),
       0,
@@ -1088,7 +1100,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([249, 63, 211, 94, 228, 165, 3, 196]),
       ),
       0,
@@ -1099,7 +1111,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([170, 214, 132, 159, 229, 119, 11, 43]),
       ),
       0,
@@ -1110,7 +1122,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([111, 64, 190, 132, 148, 33, 215, 63]),
       ),
       0,
@@ -1121,7 +1133,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([101, 204, 19, 0, 210, 2, 191, 0]),
       ),
       0,
@@ -1132,7 +1144,7 @@ export function identifyAgencCoordinationAccount(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([48, 129, 51, 174, 154, 5, 68, 65]),
       ),
       0,
@@ -1174,6 +1186,7 @@ export enum AgencCoordinationInstruction {
   CreateTask,
   CreateTaskHumanless,
   DelegateReputation,
+  DemoteIneligibleBest,
   DeregisterAgent,
   DistributeGhostShare,
   ExecuteProposal,
@@ -1194,6 +1207,7 @@ export enum AgencCoordinationInstruction {
   ModerationHeartbeat,
   PostCompletionBond,
   PostToFeed,
+  PromoteBid,
   PurchaseGood,
   PurchaseSkill,
   RateHire,
@@ -1222,6 +1236,7 @@ export enum AgencCoordinationInstruction {
   SetModerationBlock,
   SetServiceListingState,
   SetTaskJobSpec,
+  SettleDisputeClaim,
   StakeReputation,
   StampReleaseSurface,
   SubmitTaskResult,
@@ -1254,7 +1269,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([196, 191, 1, 229, 144, 172, 122, 227]),
       ),
       0,
@@ -1265,7 +1280,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([89, 230, 51, 25, 0, 219, 5, 137]),
       ),
       0,
@@ -1276,7 +1291,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([195, 168, 20, 83, 250, 122, 11, 187]),
       ),
       0,
@@ -1287,7 +1302,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([63, 59, 40, 189, 124, 61, 159, 168]),
       ),
       0,
@@ -1298,7 +1313,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([64, 252, 49, 0, 45, 0, 58, 14]),
       ),
       0,
@@ -1309,7 +1324,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([236, 52, 254, 148, 54, 97, 130, 25]),
       ),
       0,
@@ -1320,7 +1335,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([217, 200, 76, 0, 144, 80, 23, 241]),
       ),
       0,
@@ -1331,7 +1346,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([40, 243, 190, 217, 208, 253, 86, 206]),
       ),
       0,
@@ -1342,7 +1357,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([23, 155, 220, 94, 76, 141, 231, 124]),
       ),
       0,
@@ -1353,7 +1368,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([106, 74, 128, 146, 19, 65, 39, 23]),
       ),
       0,
@@ -1364,7 +1379,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([69, 228, 134, 187, 134, 105, 238, 48]),
       ),
       0,
@@ -1375,7 +1390,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([49, 222, 219, 238, 155, 68, 221, 136]),
       ),
       0,
@@ -1386,7 +1401,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([230, 40, 107, 109, 208, 228, 175, 31]),
       ),
       0,
@@ -1397,7 +1412,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([210, 192, 192, 105, 106, 74, 147, 252]),
       ),
       0,
@@ -1408,7 +1423,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([87, 18, 213, 192, 63, 136, 65, 205]),
       ),
       0,
@@ -1419,7 +1434,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([55, 234, 77, 69, 245, 208, 54, 167]),
       ),
       0,
@@ -1430,7 +1445,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([109, 167, 192, 41, 129, 108, 220, 196]),
       ),
       0,
@@ -1441,7 +1456,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([228, 57, 251, 233, 203, 252, 126, 31]),
       ),
       0,
@@ -1452,7 +1467,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([11, 79, 19, 188, 13, 32, 244, 90]),
       ),
       0,
@@ -1463,7 +1478,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([234, 10, 213, 160, 52, 26, 91, 142]),
       ),
       0,
@@ -1474,7 +1489,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([113, 118, 102, 157, 66, 214, 158, 146]),
       ),
       0,
@@ -1485,7 +1500,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([47, 95, 35, 219, 15, 80, 134, 20]),
       ),
       0,
@@ -1496,7 +1511,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([132, 116, 68, 174, 216, 160, 198, 22]),
       ),
       0,
@@ -1507,7 +1522,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([91, 37, 216, 26, 93, 146, 13, 182]),
       ),
       0,
@@ -1518,7 +1533,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([194, 80, 6, 180, 232, 127, 48, 171]),
       ),
       0,
@@ -1529,7 +1544,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([238, 0, 219, 160, 208, 101, 168, 202]),
       ),
       0,
@@ -1540,7 +1555,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([195, 86, 46, 27, 29, 166, 147, 66]),
       ),
       0,
@@ -1551,7 +1566,18 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([51, 92, 169, 234, 241, 36, 97, 216]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.DemoteIneligibleBest;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([227, 208, 166, 164, 48, 69, 111, 1]),
       ),
       0,
@@ -1562,7 +1588,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([238, 29, 21, 234, 93, 251, 101, 47]),
       ),
       0,
@@ -1573,7 +1599,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([186, 60, 116, 133, 108, 128, 111, 28]),
       ),
       0,
@@ -1584,7 +1610,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([61, 99, 189, 49, 121, 31, 41, 42]),
       ),
       0,
@@ -1595,7 +1621,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([176, 78, 241, 29, 159, 81, 26, 6]),
       ),
       0,
@@ -1606,7 +1632,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([241, 116, 178, 182, 234, 173, 61, 120]),
       ),
       0,
@@ -1617,7 +1643,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([132, 215, 120, 100, 145, 198, 32, 12]),
       ),
       0,
@@ -1628,7 +1654,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([64, 78, 208, 116, 104, 235, 209, 53]),
       ),
       0,
@@ -1639,8 +1665,8 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([174, 225, 81, 68, 172, 19, 97, 194]),
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([241, 94, 127, 7, 104, 174, 240, 116]),
       ),
       0,
     )
@@ -1650,8 +1676,8 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([90, 142, 39, 225, 150, 161, 217, 49]),
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([229, 163, 171, 114, 38, 116, 215, 85]),
       ),
       0,
     )
@@ -1661,7 +1687,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([13, 138, 190, 172, 182, 53, 234, 251]),
       ),
       0,
@@ -1672,7 +1698,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([29, 114, 158, 184, 251, 125, 249, 176]),
       ),
       0,
@@ -1683,7 +1709,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([171, 87, 101, 237, 27, 107, 201, 57]),
       ),
       0,
@@ -1694,7 +1720,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([188, 233, 252, 106, 134, 146, 202, 91]),
       ),
       0,
@@ -1705,7 +1731,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([128, 242, 160, 23, 44, 61, 171, 37]),
       ),
       0,
@@ -1716,7 +1742,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([182, 254, 253, 220, 0, 144, 234, 250]),
       ),
       0,
@@ -1727,7 +1753,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([114, 41, 111, 76, 14, 117, 128, 54]),
       ),
       0,
@@ -1738,7 +1764,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([215, 182, 250, 219, 71, 134, 198, 0]),
       ),
       0,
@@ -1749,7 +1775,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([119, 207, 253, 151, 32, 175, 35, 66]),
       ),
       0,
@@ -1760,7 +1786,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([140, 84, 238, 165, 168, 159, 119, 128]),
       ),
       0,
@@ -1771,7 +1797,18 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([23, 106, 251, 103, 223, 120, 55, 193]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.PromoteBid;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([29, 214, 83, 30, 102, 121, 47, 92]),
       ),
       0,
@@ -1782,7 +1819,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([70, 41, 105, 156, 159, 169, 215, 188]),
       ),
       0,
@@ -1793,7 +1830,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([31, 201, 148, 116, 69, 243, 201, 90]),
       ),
       0,
@@ -1804,7 +1841,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([44, 124, 30, 253, 90, 244, 174, 75]),
       ),
       0,
@@ -1815,7 +1852,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([199, 123, 80, 81, 92, 254, 10, 192]),
       ),
       0,
@@ -1826,7 +1863,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([91, 115, 255, 0, 240, 58, 74, 223]),
       ),
       0,
@@ -1837,7 +1874,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([224, 135, 44, 9, 88, 5, 32, 20]),
       ),
       0,
@@ -1848,7 +1885,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([185, 60, 213, 195, 106, 238, 222, 56]),
       ),
       0,
@@ -1859,7 +1896,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([83, 247, 2, 131, 91, 223, 49, 33]),
       ),
       0,
@@ -1870,7 +1907,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([156, 205, 56, 24, 136, 114, 93, 160]),
       ),
       0,
@@ -1881,7 +1918,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([135, 157, 66, 195, 2, 113, 175, 30]),
       ),
       0,
@@ -1892,7 +1929,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([118, 194, 62, 4, 232, 60, 199, 142]),
       ),
       0,
@@ -1903,7 +1940,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([166, 249, 255, 189, 192, 197, 102, 2]),
       ),
       0,
@@ -1914,7 +1951,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([63, 55, 152, 6, 167, 127, 89, 129]),
       ),
       0,
@@ -1925,7 +1962,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([114, 109, 131, 41, 79, 109, 135, 18]),
       ),
       0,
@@ -1936,7 +1973,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([144, 7, 58, 232, 157, 167, 85, 214]),
       ),
       0,
@@ -1947,7 +1984,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([94, 3, 20, 231, 175, 66, 101, 44]),
       ),
       0,
@@ -1958,7 +1995,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([136, 84, 241, 1, 189, 89, 226, 187]),
       ),
       0,
@@ -1969,7 +2006,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([231, 6, 202, 6, 96, 103, 12, 230]),
       ),
       0,
@@ -1980,7 +2017,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([247, 17, 223, 213, 12, 193, 235, 127]),
       ),
       0,
@@ -1991,7 +2028,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([241, 39, 84, 1, 9, 216, 243, 66]),
       ),
       0,
@@ -2002,7 +2039,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([188, 92, 135, 67, 160, 181, 54, 62]),
       ),
       0,
@@ -2013,7 +2050,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([155, 111, 4, 156, 192, 155, 89, 134]),
       ),
       0,
@@ -2024,7 +2061,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([192, 141, 245, 60, 48, 104, 165, 105]),
       ),
       0,
@@ -2035,7 +2072,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([134, 54, 111, 97, 148, 185, 102, 131]),
       ),
       0,
@@ -2046,7 +2083,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([212, 41, 81, 152, 230, 234, 217, 101]),
       ),
       0,
@@ -2057,7 +2094,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([87, 136, 109, 167, 206, 112, 223, 72]),
       ),
       0,
@@ -2068,8 +2105,8 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
-        new Uint8Array([134, 102, 102, 86, 31, 164, 202, 193]),
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([118, 9, 99, 58, 215, 87, 58, 59]),
       ),
       0,
     )
@@ -2079,7 +2116,18 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
+        new Uint8Array([139, 155, 103, 84, 64, 11, 148, 6]),
+      ),
+      0,
+    )
+  ) {
+    return AgencCoordinationInstruction.SettleDisputeClaim;
+  }
+  if (
+    containsBytes(
+      data,
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([104, 250, 157, 87, 16, 190, 180, 238]),
       ),
       0,
@@ -2090,7 +2138,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([20, 228, 18, 239, 43, 249, 247, 119]),
       ),
       0,
@@ -2101,7 +2149,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([39, 108, 74, 4, 66, 125, 157, 7]),
       ),
       0,
@@ -2112,7 +2160,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([242, 28, 54, 59, 247, 20, 59, 110]),
       ),
       0,
@@ -2123,7 +2171,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([79, 75, 53, 57, 177, 142, 131, 149]),
       ),
       0,
@@ -2134,7 +2182,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([85, 2, 178, 9, 119, 139, 102, 164]),
       ),
       0,
@@ -2145,7 +2193,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([30, 24, 210, 187, 71, 101, 78, 46]),
       ),
       0,
@@ -2156,7 +2204,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([188, 47, 195, 95, 22, 60, 246, 211]),
       ),
       0,
@@ -2167,7 +2215,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([241, 254, 37, 228, 78, 53, 110, 40]),
       ),
       0,
@@ -2178,7 +2226,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([156, 19, 63, 86, 117, 245, 196, 182]),
       ),
       0,
@@ -2189,7 +2237,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([149, 215, 23, 120, 114, 69, 110, 37]),
       ),
       0,
@@ -2200,7 +2248,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([152, 192, 112, 152, 120, 184, 150, 59]),
       ),
       0,
@@ -2211,7 +2259,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([170, 136, 6, 60, 43, 130, 81, 96]),
       ),
       0,
@@ -2222,7 +2270,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([247, 36, 121, 254, 22, 16, 226, 1]),
       ),
       0,
@@ -2233,7 +2281,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([15, 113, 16, 201, 165, 80, 182, 176]),
       ),
       0,
@@ -2244,7 +2292,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([116, 142, 164, 86, 9, 27, 112, 227]),
       ),
       0,
@@ -2255,7 +2303,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([135, 112, 215, 75, 247, 185, 53, 176]),
       ),
       0,
@@ -2266,7 +2314,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([169, 49, 137, 251, 233, 234, 172, 103]),
       ),
       0,
@@ -2277,7 +2325,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([60, 16, 243, 66, 96, 59, 254, 131]),
       ),
       0,
@@ -2288,7 +2336,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([198, 186, 192, 175, 171, 226, 72, 252]),
       ),
       0,
@@ -2299,7 +2347,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([141, 192, 86, 228, 233, 168, 41, 224]),
       ),
       0,
@@ -2310,7 +2358,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([247, 104, 114, 240, 237, 41, 200, 36]),
       ),
       0,
@@ -2321,7 +2369,7 @@ export function identifyAgencCoordinationInstruction(
   if (
     containsBytes(
       data,
-      fixEncoderSize(getBytesEncoder(), 8).encode(
+      getFixedBytesEncoder(8).encode(
         new Uint8Array([234, 37, 157, 236, 80, 222, 40, 233]),
       ),
       0,
@@ -2420,6 +2468,9 @@ export type ParsedAgencCoordinationInstruction<
       instructionType: AgencCoordinationInstruction.DelegateReputation;
     } & ParsedDelegateReputationInstruction<TProgram>)
   | ({
+      instructionType: AgencCoordinationInstruction.DemoteIneligibleBest;
+    } & ParsedDemoteIneligibleBestInstruction<TProgram>)
+  | ({
       instructionType: AgencCoordinationInstruction.DeregisterAgent;
     } & ParsedDeregisterAgentInstruction<TProgram>)
   | ({
@@ -2479,6 +2530,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.PostToFeed;
     } & ParsedPostToFeedInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.PromoteBid;
+    } & ParsedPromoteBidInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.PurchaseGood;
     } & ParsedPurchaseGoodInstruction<TProgram>)
@@ -2563,6 +2617,9 @@ export type ParsedAgencCoordinationInstruction<
   | ({
       instructionType: AgencCoordinationInstruction.SetTaskJobSpec;
     } & ParsedSetTaskJobSpecInstruction<TProgram>)
+  | ({
+      instructionType: AgencCoordinationInstruction.SettleDisputeClaim;
+    } & ParsedSettleDisputeClaimInstruction<TProgram>)
   | ({
       instructionType: AgencCoordinationInstruction.StakeReputation;
     } & ParsedStakeReputationInstruction<TProgram>)
@@ -2827,6 +2884,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
         ...parseDelegateReputationInstruction(instruction),
       };
     }
+    case AgencCoordinationInstruction.DemoteIneligibleBest: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.DemoteIneligibleBest,
+        ...parseDemoteIneligibleBestInstruction(instruction),
+      };
+    }
     case AgencCoordinationInstruction.DeregisterAgent: {
       assertIsInstructionWithAccounts(instruction);
       return {
@@ -2965,6 +3029,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.PostToFeed,
         ...parsePostToFeedInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.PromoteBid: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.PromoteBid,
+        ...parsePromoteBidInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.PurchaseGood: {
@@ -3162,6 +3233,13 @@ export function parseAgencCoordinationInstruction<TProgram extends string>(
       return {
         instructionType: AgencCoordinationInstruction.SetTaskJobSpec,
         ...parseSetTaskJobSpecInstruction(instruction),
+      };
+    }
+    case AgencCoordinationInstruction.SettleDisputeClaim: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: AgencCoordinationInstruction.SettleDisputeClaim,
+        ...parseSettleDisputeClaimInstruction(instruction),
       };
     }
     case AgencCoordinationInstruction.StakeReputation: {
@@ -3540,6 +3618,10 @@ export type AgencCoordinationPluginInstructions = {
     input: DelegateReputationAsyncInput,
   ) => ReturnType<typeof getDelegateReputationInstructionAsync> &
     SelfPlanAndSendFunctions;
+  demoteIneligibleBest: (
+    input: DemoteIneligibleBestAsyncInput,
+  ) => ReturnType<typeof getDemoteIneligibleBestInstructionAsync> &
+    SelfPlanAndSendFunctions;
   deregisterAgent: (
     input: DeregisterAgentAsyncInput,
   ) => ReturnType<typeof getDeregisterAgentInstructionAsync> &
@@ -3618,6 +3700,10 @@ export type AgencCoordinationPluginInstructions = {
   postToFeed: (
     input: PostToFeedAsyncInput,
   ) => ReturnType<typeof getPostToFeedInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  promoteBid: (
+    input: PromoteBidAsyncInput,
+  ) => ReturnType<typeof getPromoteBidInstructionAsync> &
     SelfPlanAndSendFunctions;
   purchaseGood: (
     input: PurchaseGoodAsyncInput,
@@ -3730,6 +3816,10 @@ export type AgencCoordinationPluginInstructions = {
   setTaskJobSpec: (
     input: SetTaskJobSpecAsyncInput,
   ) => ReturnType<typeof getSetTaskJobSpecInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  settleDisputeClaim: (
+    input: SettleDisputeClaimAsyncInput,
+  ) => ReturnType<typeof getSettleDisputeClaimInstructionAsync> &
     SelfPlanAndSendFunctions;
   stakeReputation: (
     input: StakeReputationAsyncInput,
@@ -4154,6 +4244,11 @@ export function agencCoordinationProgram() {
               client,
               getDelegateReputationInstructionAsync(input),
             ),
+          demoteIneligibleBest: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getDemoteIneligibleBestInstructionAsync(input),
+            ),
           deregisterAgent: (input) =>
             addSelfPlanAndSendFunctions(
               client,
@@ -4259,6 +4354,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getPostToFeedInstructionAsync(input),
+            ),
+          promoteBid: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getPromoteBidInstructionAsync(input),
             ),
           purchaseGood: (input) =>
             addSelfPlanAndSendFunctions(
@@ -4399,6 +4499,11 @@ export function agencCoordinationProgram() {
             addSelfPlanAndSendFunctions(
               client,
               getSetTaskJobSpecInstructionAsync(input),
+            ),
+          settleDisputeClaim: (input) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getSettleDisputeClaimInstructionAsync(input),
             ),
           stakeReputation: (input) =>
             addSelfPlanAndSendFunctions(

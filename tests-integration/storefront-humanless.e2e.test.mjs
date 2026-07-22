@@ -37,6 +37,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
 
   // 2) the human (no agent) hires the listing directly — SOL escrow, CreatorReview pinned.
   const taskId = id32();
+  const jobHash = id32();
   const [task] = pda([enc("task"), human.publicKey.toBuffer(), Buffer.from(taskId)]);
   const [escrow] = pda([enc("escrow"), task.toBuffer()]);
   const [hireRecord] = pda([enc("hire"), task.toBuffer()]);
@@ -44,7 +45,7 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
   const [rateLimit] = pda([enc("authority_rate_limit"), human.publicKey.toBuffer()]);
 
   expectOk(send(w.svm, await humanProg.methods
-    .hireFromListingHumanless(arr(taskId), new BN(price), new BN(1), new BN(3600), null, 0, w.modAuth.publicKey)
+    .hireFromListingHumanless(arr(taskId), new BN(price), new BN(1), new BN(3600), null, 0, w.modAuth.publicKey, arr(jobHash))
     .accounts({
       task, escrow, hireRecord, taskValidationConfig: validation, listing: w.listing,
       providerAgent: w.providerAgent,
@@ -62,7 +63,6 @@ test("storefront: a human with NO agent hires a listing in SOL; review-accept pa
   assert.equal(Number(decode(w.svm, "TaskEscrow", escrow).amount), price, "escrow funded with the price");
 
   // 3) task moderation -> publish job spec (the HUMAN creator signs) -> worker claims.
-  const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);

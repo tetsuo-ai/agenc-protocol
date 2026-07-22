@@ -7,7 +7,7 @@
 
 Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0.1.0).
 
-**98 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
+**101 instructions**, sorted alphabetically. Accounts are listed in wire order; PDA seeds use `"literal"`, `account:<path>`, and `arg:<path>` notation.
 
 ## Index
 
@@ -38,6 +38,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`create_task`](#create_task)
 - [`create_task_humanless`](#create_task_humanless)
 - [`delegate_reputation`](#delegate_reputation)
+- [`demote_ineligible_best`](#demote_ineligible_best)
 - [`deregister_agent`](#deregister_agent)
 - [`distribute_ghost_share`](#distribute_ghost_share)
 - [`execute_proposal`](#execute_proposal)
@@ -58,6 +59,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`moderation_heartbeat`](#moderation_heartbeat)
 - [`post_completion_bond`](#post_completion_bond)
 - [`post_to_feed`](#post_to_feed)
+- [`promote_bid`](#promote_bid)
 - [`purchase_good`](#purchase_good)
 - [`purchase_skill`](#purchase_skill)
 - [`rate_hire`](#rate_hire)
@@ -86,6 +88,7 @@ Program: `HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK` (`agenc_coordination` v0
 - [`set_moderation_block`](#set_moderation_block)
 - [`set_service_listing_state`](#set_service_listing_state)
 - [`set_task_job_spec`](#set_task_job_spec)
+- [`settle_dispute_claim`](#settle_dispute_claim)
 - [`stake_reputation`](#stake_reputation)
 - [`stamp_release_surface`](#stamp_release_surface)
 - [`submit_task_result`](#submit_task_result)
@@ -842,6 +845,26 @@ One delegation per (delegator, delegatee) pair.
 | 1 | `amount` | `u16` |
 | 2 | `expires_at` | `i64` |
 
+## demote_ineligible_best
+
+Permissionlessly demote a provably dead tracked winner and open the
+re-promotion grace window.
+
+### Accounts (6)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 2 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 3 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
+| 4 | `bid` |  |  |  | PDA ["bid", account:task, account:bidder] |  |
+| 5 | `bidder` |  |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
+| 6 | `authority` |  | yes |  |  |  |
+
+### Args (0)
+
+_None._
+
 ## deregister_agent
 
 Deregister an agent and reclaim rent.
@@ -1048,6 +1071,11 @@ _None._
 Hire a provider from a standing service listing, minting a one-shot task
 that snapshots the listing's terms and funds escrow from the buyer.
 
+The explicit v2 discriminator (`sha256("global:hire_from_listing_v2")[0..8]`)
+is an atomic rollout boundary: the old
+program rejects new clients instead of silently ignoring the appended
+task-job-spec commitment, and the upgraded program rejects old clients.
+
 ### Accounts (15)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
@@ -1068,7 +1096,7 @@ that snapshots the listing's terms and funds escrow from the buyer.
 | 14 | `creator` | yes | yes |  |  | The buyer who pays for and owns the hired task. Must match authority to prevent social-engineering attacks (#375). |
 | 15 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
-### Args (6)
+### Args (7)
 
 | # | Arg | Type |
 |---|---|---|
@@ -1078,6 +1106,7 @@ that snapshots the listing's terms and funds escrow from the buyer.
 | 4 | `referrer` | `Option<pubkey>` |
 | 5 | `referrer_fee_bps` | `u16` |
 | 6 | `moderator` | `pubkey` |
+| 7 | `task_job_spec_hash` | `[u8; 32]` |
 
 ## hire_from_listing_humanless
 
@@ -1085,6 +1114,9 @@ Hire a provider from a standing service listing as a human buyer with NO
 registered agent (single-agent storefront). Funds SOL escrow, carries the
 listing's operator-fee leg (the embedding site's cut), and pins
 ValidationMode::CreatorReview so the human reviews the work before payout.
+Its discriminator is
+`sha256("global:hire_from_listing_humanless_v2")[0..8]` so the
+required task commitment cannot be silently ignored by the old binary.
 
 ### Accounts (14)
 
@@ -1105,7 +1137,7 @@ ValidationMode::CreatorReview so the human reviews the work before payout.
 | 13 | `creator` | yes | yes |  |  | The human buyer's wallet — owns and pays for the hired task. No AgentRegistration. |
 | 14 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
 
-### Args (7)
+### Args (8)
 
 | # | Arg | Type |
 |---|---|---|
@@ -1116,6 +1148,7 @@ ValidationMode::CreatorReview so the human reviews the work before payout.
 | 5 | `referrer` | `Option<pubkey>` |
 | 6 | `referrer_fee_bps` | `u16` |
 | 7 | `moderator` | `pubkey` |
+| 8 | `task_job_spec_hash` | `[u8; 32]` |
 
 ## initialize_bid_book
 
@@ -1367,6 +1400,25 @@ Author must be an active agent. Content is stored on IPFS, hash on-chain.
 | 2 | `nonce` | `[u8; 32]` |
 | 3 | `topic` | `[u8; 32]` |
 | 4 | `parent_post` | `Option<pubkey>` |
+
+## promote_bid
+
+Permissionlessly promote a live bid to the book's tracked policy winner.
+
+### Accounts (6)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 2 | `task` |  |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 3 | `bid_book` | yes |  |  | PDA ["bid_book", account:task] |  |
+| 4 | `bid` |  |  |  | PDA ["bid", account:task, account:bidder] |  |
+| 5 | `bidder` |  |  |  | PDA ["agent", account:bidder.agent_id (AgentRegistration)] |  |
+| 6 | `authority` |  | yes |  |  |  |
+
+### Args (0)
+
+_None._
 
 ## purchase_good
 
@@ -2067,8 +2119,9 @@ Attach or update a content-addressed off-chain job specification pointer for a
 task. P1.2 §4.4: `moderator` names the attestor whose moderation record the
 caller consumes (the record slot is v2-else-legacy; the required
 `moderation_block` account is the §5.2 takedown floor).
+Discriminator = sha256("global:set_task_job_spec_v2")[0..8].
 
-### Accounts (9)
+### Accounts (10)
 
 | # | Account | Writable | Signer | Optional | PDA / address | Notes |
 |---|---|---|---|---|---|---|
@@ -2081,6 +2134,7 @@ caller consumes (the record slot is v2-else-legacy; the required
 | 7 | `task_job_spec` | yes |  |  | PDA ["task_job_spec", account:task] |  |
 | 8 | `creator` | yes | yes |  |  |  |
 | 9 | `system_program` |  |  |  | address `11111111111111111111111111111111` |  |
+| 10 | `hire_record` |  |  |  | PDA ["hire", account:task] | Canonical hire-link PDA. A program-owned record proves this task came from a listing and binds the published job spec to the immutable hash snapshotted in `Task.description[32..64]` at hire time. A direct task must supply the empty system-owned account at the same canonical address.  bump, and immutable hash commitment are validated in the handler. |
 
 ### Args (3)
 
@@ -2089,6 +2143,29 @@ caller consumes (the record slot is v2-else-legacy; the required
 | 1 | `job_spec_hash` | `[u8; 32]` |
 | 2 | `job_spec_uri` | `string` |
 | 3 | `moderator` | `pubkey` |
+
+## settle_dispute_claim
+
+Permissionlessly settle one deferred collaborative peer claim after a
+dispute ruling (chunked settlement). The dispute reaches its recorded
+terminal status when the last peer settles.
+
+### Accounts (8)
+
+| # | Account | Writable | Signer | Optional | PDA / address | Notes |
+|---|---|---|---|---|---|---|
+| 1 | `protocol_config` |  |  |  | PDA ["protocol"] |  |
+| 2 | `dispute` | yes |  |  | PDA ["dispute", account:dispute.dispute_id (Dispute)] |  |
+| 3 | `task` | yes |  |  | PDA ["task", account:task.creator (Task), account:task.task_id (Task)] |  |
+| 4 | `claim` | yes |  |  |  | and binding to `worker` are all enforced by the shared bundle validation in the handler (identical to the retired monolithic path). |
+| 5 | `worker` | yes |  |  |  | the shared bundle validation; receives the closed claim's rent. |
+| 6 | `task_submission` | yes |  |  |  | swept with counter conservation; the exact empty system-owned PDA proves absence. Non-skippable evidence, as on the retired path. |
+| 7 | `task_validation_config` | yes |  | yes | PDA ["task_validation", account:task] |  |
+| 8 | `authority` |  | yes |  |  |  |
+
+### Args (0)
+
+_None._
 
 ## stake_reputation
 

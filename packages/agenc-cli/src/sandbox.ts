@@ -5,18 +5,18 @@
 // the sdk's testing-assets — zero toolchain, no validator, no anchor build)
 // and run the SAME `runDevLoop` counterparty-bot lifecycle the localnet path
 // runs, printing the same 4-way settlement split.
-import {
-  generateKeyPairSigner,
-  lamports,
-  type Address,
-} from "@solana/kit";
+import { generateKeyPairSigner, lamports, type Address } from "@solana/kit";
 import {
   findProtocolConfigPda,
   getProtocolConfigDecoder,
   getProtocolConfigEncoder,
 } from "@tetsuo-ai/marketplace-sdk";
 import type { LocalMarketplace } from "@tetsuo-ai/marketplace-sdk/testing";
-import { runDevLoop, type DevListingTerms, type DevLoopResult } from "./bots.js";
+import {
+  runDevLoop,
+  type DevListingTerms,
+  type DevLoopResult,
+} from "./bots.js";
 import { GpaSimulator } from "./gpa-sim.js";
 import { LocalnetError } from "./localnet.js";
 
@@ -66,7 +66,9 @@ async function stampLiveProtocolFee(market: LocalMarketplace): Promise<void> {
       "sandbox ProtocolConfig missing after boot — the sdk testing sandbox did not seed it",
     );
   }
-  const config = getProtocolConfigDecoder().decode(Uint8Array.from(account.data));
+  const config = getProtocolConfigDecoder().decode(
+    Uint8Array.from(account.data),
+  );
   if (config.protocolFeeBps === SANDBOX_PROTOCOL_FEE_BPS) return;
   const data = getProtocolConfigEncoder().encode({
     ...config,
@@ -127,10 +129,22 @@ export async function runDevSandbox(
     if (!account || !account.exists) return null;
     return Uint8Array.from(account.data);
   };
+  const readAccountInfo = async (address: Address) => {
+    const account = market.svm.getAccount(address);
+    if (!account || !account.exists) return null;
+    return {
+      data: Uint8Array.from(account.data),
+      owner: account.programAddress,
+      executable: account.executable,
+    };
+  };
 
   return runDevLoop({
     buyer: { signer: buyerSigner, client: market.clientFor(buyerSigner) },
-    provider: { signer: providerSigner, client: market.clientFor(providerSigner) },
+    provider: {
+      signer: providerSigner,
+      client: market.clientFor(providerSigner),
+    },
     moderator: {
       signer: market.moderator.signer,
       client: market.clientFor(market.moderator.signer),
@@ -138,7 +152,9 @@ export async function runDevSandbox(
     operator: operator.address,
     referrer: referrer.address,
     readAccount,
-    getBalance: async (address: Address) => market.svm.getBalance(address) ?? 0n,
+    readAccountInfo,
+    getBalance: async (address: Address) =>
+      market.svm.getBalance(address) ?? 0n,
     getMinimumBalanceForRentExemption: async (space: number) =>
       market.svm.minimumBalanceForRentExemption(BigInt(space)),
     gpa,

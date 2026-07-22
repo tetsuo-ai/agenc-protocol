@@ -350,6 +350,30 @@ pub struct BidExpired {
     pub timestamp: i64,
 }
 
+/// Emitted when a bid becomes the bid book's tracked policy winner — at
+/// creation, update, or through the permissionless `promote_bid` crank.
+#[event]
+pub struct BidPromoted {
+    pub task: Pubkey,
+    pub bid: Pubkey,
+    pub bidder: Pubkey,
+    pub bid_book: Pubkey,
+    pub book_version: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when the tracked winner is removed (cancelled, expired, or proven
+/// ineligible) and the book enters the re-promotion grace window.
+#[event]
+pub struct BidWinnerDemoted {
+    pub task: Pubkey,
+    pub bid: Pubkey,
+    pub bid_book: Pubkey,
+    pub book_version: u64,
+    pub winner_stale_since: i64,
+    pub timestamp: i64,
+}
+
 /// Emitted when coordination state is updated
 #[event]
 pub struct StateUpdated {
@@ -540,6 +564,19 @@ pub struct DisputeExpired {
     pub creator_amount: u64,
     /// Amount paid to worker (fix #418)
     pub worker_amount: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when the permissionless chunked-settlement crank sweeps one
+/// deferred collaborative peer claim after a dispute ruling. When
+/// `peers_remaining` reaches zero the dispute has transitioned to its
+/// recorded terminal status.
+#[event]
+pub struct DisputePeerClaimSettled {
+    pub dispute_id: [u8; 32],
+    pub task_id: [u8; 32],
+    pub worker: Pubkey,
+    pub peers_remaining: u8,
     pub timestamp: i64,
 }
 

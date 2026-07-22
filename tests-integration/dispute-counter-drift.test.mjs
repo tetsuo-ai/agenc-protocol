@@ -31,10 +31,9 @@ async function setupCreatorNoShowDispute(w) {
       .instruction(), [w.modAuth]), "listing-mod");
   }
   const taskId = id32();
-  const { ix: hix, task, escrow, hireRecord } = await hireIx(w, { taskId, listingModeration: listingMod });
+  const { ix: hix, task, escrow, hireRecord, taskJobSpecHash: jobHash } = await hireIx(w, { taskId, listingModeration: listingMod });
   expectOk(send(w.svm, hix, [w.buyer]), "hire");
 
-  const jobHash = id32();
   const [taskMod] = taskModV2Pda(task, jobHash, w.modAuth.publicKey);
   const [jobSpec] = pda([enc("task_job_spec"), task.toBuffer()]);
   const [claim] = pda([enc("claim"), task.toBuffer(), w.providerAgent.toBuffer()]);

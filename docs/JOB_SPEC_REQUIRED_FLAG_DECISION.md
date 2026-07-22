@@ -1,6 +1,6 @@
 # Job Spec Required Flag Decision
 
-> **Historical decision record (banner added 2026-07-17).** Not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for the completed remediation record.
+> **Historical decision record (banner added 2026-07-17).** Not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 Issue: `agenc-protocol#32`
 

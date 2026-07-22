@@ -17,6 +17,7 @@ import {
   decodeTaskBinding,
   redactRpcText,
 } from "./preflight-dispute-scan.mjs";
+import { decodeCanonicalTaskJobSpec } from "./preflight-active-job-spec-block-scan.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(ROOT, "tests-integration", "package.json"));
@@ -236,10 +237,19 @@ export async function scanHireProviderBindings(connection) {
 
   const accountMap = await fetchAccountMap(
     connection,
-    records.flatMap((record) => [record.task, record.listing]),
+    records.flatMap((record) => {
+      const [taskJobSpec] = PublicKey.findProgramAddressSync(
+        [Buffer.from("task_job_spec"), record.task.toBuffer()],
+        PROGRAM_ID,
+      );
+      return [record.task, record.listing, taskJobSpec];
+    }),
   );
   const backfill = [];
   const bound = [];
+  const cancelRehire = [];
+  const settlementOnly = [];
+  const committed = [];
   const canonicalListings = new Map();
 
   for (const record of records) {
@@ -286,6 +296,92 @@ export async function scanHireProviderBindings(connection) {
           ),
         );
         task = null;
+      }
+    }
+
+    const [taskJobSpecAddress, taskJobSpecBump] =
+      PublicKey.findProgramAddressSync(
+        [Buffer.from("task_job_spec"), record.task.toBuffer()],
+        PROGRAM_ID,
+      );
+    const jobSpecAccount = accountMap.get(taskJobSpecAddress.toBase58());
+    let jobSpec = null;
+    if (!isMissing(jobSpecAccount)) {
+      if (!jobSpecAccount.owner.equals(PROGRAM_ID) || jobSpecAccount.executable) {
+        blockers.push(
+          blocker(
+            "invalid-hired-task-job-spec-owner",
+            record.address,
+            `owner=${jobSpecAccount.owner.toBase58()} executable=${jobSpecAccount.executable}`,
+            {
+              task: record.task,
+              listing: record.listing,
+              taskJobSpec: taskJobSpecAddress,
+            },
+          ),
+        );
+      } else {
+        try {
+          jobSpec = decodeCanonicalTaskJobSpec(jobSpecAccount.data);
+          if (
+            !jobSpec.task.equals(record.task) ||
+            (task && !jobSpec.creator.equals(task.creator)) ||
+            jobSpec.bump !== taskJobSpecBump
+          ) {
+            throw new Error("canonical TaskJobSpec PDA/field/bump mismatch");
+          }
+        } catch (error) {
+          blockers.push(
+            blocker(
+              "invalid-hired-task-job-spec-layout",
+              record.address,
+              error instanceof Error ? error.message : String(error),
+              {
+                task: record.task,
+                listing: record.listing,
+                taskJobSpec: taskJobSpecAddress,
+              },
+            ),
+          );
+          jobSpec = null;
+        }
+      }
+    }
+
+    if (task) {
+      const taskCommitment = Buffer.from(task.description.subarray(32, 64));
+      const item = {
+        hireRecord: record.address,
+        task: record.task,
+        creator: task.creator,
+        listing: record.listing,
+        taskStatus: task.status,
+        currentWorkers: task.currentWorkers,
+        taskJobSpec: jobSpec ? taskJobSpecAddress : null,
+        pinnedJobSpecHash: jobSpec?.jobSpecHash ?? null,
+      };
+      if (taskCommitment.equals(Buffer.alloc(32))) {
+        if (task.status === 0) {
+          cancelRehire.push(item);
+        } else if (!TERMINAL_STATUSES.has(task.status)) {
+          settlementOnly.push(item);
+        }
+      } else {
+        if (jobSpec && !taskCommitment.equals(jobSpec.jobSpecHash)) {
+          blockers.push(
+            blocker(
+              "hired-task-job-spec-commitment-mismatch",
+              record.address,
+              `committed=${taskCommitment.toString("hex")} pinned=${jobSpec.jobSpecHash.toString("hex")}`,
+              {
+                task: record.task,
+                listing: record.listing,
+                taskJobSpec: taskJobSpecAddress,
+              },
+            ),
+          );
+        }
+        committed.push({ ...item, taskJobSpecHash: taskCommitment });
       }
     }
 
@@ -452,6 +548,12 @@ export async function scanHireProviderBindings(connection) {
     listingCapacity,
     bound,
     backfill,
+    cancelRehireCount: cancelRehire.length,
+    settlementOnlyCount: settlementOnly.length,
+    committedCount: committed.length,
+    cancelRehire,
+    settlementOnly,
+    committed,
     blockers,
   };
 }
@@ -472,7 +574,10 @@ async function main() {
       `capacity_undercounted=${result.undercountedListingCount} ` +
       `capacity_overcounted=${result.overcountedListingCount} ` +
       `open_jobs_deficit=${result.openJobsDeficitTotal} ` +
-      `open_jobs_excess=${result.openJobsExcessTotal} blockers=${result.blockers.length}`,
+      `open_jobs_excess=${result.openJobsExcessTotal} ` +
+      `cancel_rehire=${result.cancelRehireCount} ` +
+      `settlement_only=${result.settlementOnlyCount} ` +
+      `committed=${result.committedCount} blockers=${result.blockers.length}`,
   );
   for (const item of result.listingCapacity.filter(
     (listing) => listing.capacityState !== "exact",
@@ -491,6 +596,18 @@ async function main() {
         `status=${item.taskStatus ?? "unknown"}`,
     );
   }
+  for (const item of result.cancelRehire) {
+    console.warn(
+      `  CANCEL+REHIRE: task=${item.task.toBase58()} creator=${item.creator.toBase58()} ` +
+        `status=${item.taskStatus} job_spec=${item.taskJobSpec?.toBase58() ?? "missing"}`,
+    );
+  }
+  for (const item of result.settlementOnly) {
+    console.warn(
+      `  SETTLEMENT-ONLY: task=${item.task.toBase58()} creator=${item.creator.toBase58()} ` +
+        `status=${item.taskStatus} workers=${item.currentWorkers}`,
+    );
+  }
   for (const item of result.blockers) {
     console.error(
       `  BLOCKER ${item.kind}: hire=${item.hireRecord.toBase58()}` +
@@ -505,7 +622,7 @@ async function main() {
     );
   }
   console.log(
-    "PREFLIGHT OK: every HireRecord has canonical task/listing/provider bindings; listing open_jobs never falls below live HireRecord links; conservative overcounts remain explicit inventory.",
+    "PREFLIGHT OK: every HireRecord has canonical task/listing/provider/spec bindings; legacy Open hires are explicit cancel+re-hire actions and assigned legacy hires are settlement-only; listing open_jobs never falls below live HireRecord links.",
   );
 }
 

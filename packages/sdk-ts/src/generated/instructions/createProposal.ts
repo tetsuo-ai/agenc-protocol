@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -38,6 +36,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -56,9 +56,7 @@ export const CREATE_PROPOSAL_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getCreateProposalDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    CREATE_PROPOSAL_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(CREATE_PROPOSAL_DISCRIMINATOR);
 }
 
 export type CreateProposalInstruction<
@@ -120,12 +118,12 @@ export type CreateProposalInstructionDataArgs = {
 export function getCreateProposalInstructionDataEncoder(): FixedSizeEncoder<CreateProposalInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["nonce", getU64Encoder()],
       ["proposalType", getU8Encoder()],
-      ["titleHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["descriptionHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["payload", fixEncoderSize(getBytesEncoder(), 64)],
+      ["titleHash", getFixedBytesEncoder(32, "titleHash")],
+      ["descriptionHash", getFixedBytesEncoder(32, "descriptionHash")],
+      ["payload", getFixedBytesEncoder(64, "payload")],
       ["votingPeriod", getI64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: CREATE_PROPOSAL_DISCRIMINATOR }),

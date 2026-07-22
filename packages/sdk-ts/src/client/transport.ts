@@ -16,6 +16,7 @@ import {
   type Commitment,
   type GetEpochInfoApi,
   type GetLatestBlockhashApi,
+  type GetMultipleAccountsApi,
   type GetSignatureStatusesApi,
   type Rpc,
   type RpcSubscriptions,
@@ -26,7 +27,14 @@ import {
   type SlotNotificationsApi,
   type Transaction,
   type TransactionWithBlockhashLifetime,
+  type Address,
+  type AddressesByLookupTableAddress,
 } from "@solana/kit";
+import {
+  ADDRESS_LOOKUP_TABLE_DISCRIMINATOR,
+  ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS,
+  fetchAllMaybeAddressLookupTable,
+} from "@solana-program/address-lookup-table";
 
 /**
  * A fully signed, blockhash-lifetime transaction — exactly what the client's
@@ -101,6 +109,15 @@ export interface Transport {
    * @returns The latest blockhash and its `lastValidBlockHeight`.
    */
   getLatestBlockhash(): Promise<LatestBlockhash>;
+  /**
+   * OPTIONAL: resolve the exact, ordered on-venue contents of lookup tables.
+   * The client never accepts caller-asserted table contents because a wrong
+   * index would make the signed v0 message authorize a different account.
+   * Standard RPC transports implement this from `getMultipleAccounts`.
+   */
+  resolveAddressLookupTables?(
+    lookupTableAddresses: readonly Address[],
+  ): Promise<AddressesByLookupTableAddress>;
   /**
    * Submit a signed transaction and wait until it is confirmed.
    * @param signedTx - The fully signed, blockhash-lifetime transaction.
@@ -483,6 +500,44 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
     };
   }
 
+  async function resolveAddressLookupTables(
+    lookupTableAddresses: readonly Address[],
+  ): Promise<AddressesByLookupTableAddress> {
+    // Standard Kit RPC clients expose the full Solana API dynamically. Keep the
+    // transport's ordinary type surface minimal while using the account method
+    // only when a caller explicitly requests v0 lookup-table compression.
+    //
+    // Table contents are decoded from the raw base64 account bytes with the
+    // official lookup-table program codec — not taken from the RPC's
+    // `jsonParsed` view — and each account's owner and state discriminator are
+    // verified before its ordered addresses are trusted for compression.
+    const accounts = await fetchAllMaybeAddressLookupTable(
+      rpc as unknown as Rpc<GetMultipleAccountsApi>,
+      [...lookupTableAddresses],
+      { commitment },
+    );
+    const resolved = Object.create(null) as AddressesByLookupTableAddress;
+    for (const account of accounts) {
+      if (!account.exists) {
+        throw new Error(
+          `address lookup table ${account.address} does not exist at commitment "${commitment}"`,
+        );
+      }
+      if (account.programAddress !== ADDRESS_LOOKUP_TABLE_PROGRAM_ADDRESS) {
+        throw new Error(
+          `address lookup table ${account.address} is not owned by the address lookup table program (owner: ${account.programAddress})`,
+        );
+      }
+      if (account.data.discriminator !== ADDRESS_LOOKUP_TABLE_DISCRIMINATOR) {
+        throw new Error(
+          `address lookup table ${account.address} is not an initialized lookup table (state discriminator: ${account.data.discriminator})`,
+        );
+      }
+      resolved[account.address] = account.data.addresses;
+    }
+    return resolved;
+  }
+
   if (rpcSubscriptions) {
     const sendAndConfirmTransaction = sendAndConfirmTransactionFactory({
       rpc: guardSendTransactionConstruction(rpc),
@@ -492,6 +547,7 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
       confirmationCommitment: commitment,
       getLatestBlockhash,
       getSignatureStatus,
+      resolveAddressLookupTables,
       async sendAndConfirm(signedTx) {
         const signature = getSignatureFromTransaction(signedTx);
         try {
@@ -519,6 +575,7 @@ export function createRpcTransport(config: RpcTransportConfig): Transport {
     confirmationCommitment: commitment,
     getLatestBlockhash,
     getSignatureStatus,
+    resolveAddressLookupTables,
     async sendAndConfirm(signedTx) {
       const signature = getSignatureFromTransaction(signedTx);
       const wireTransaction = getBase64EncodedWireTransaction(signedTx);

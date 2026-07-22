@@ -92,7 +92,7 @@ export class SandboxNotSeededError extends Error {
       `The resolved sandbox is not seeded, so there are no ${what} fixtures to use ` +
         `(SANDBOX_FIXTURES.seeded is false). Seed a sandbox and route its fixtures ` +
         `in through the environment seam: on the localnet stack, run ` +
-        `\`node scripts/localnet-up.mjs\` (repo root) then the seeder ` +
+        `\`node scripts/localnet-up.mjs --dev-ready\` (repo root) then the seeder ` +
         `(scripts/seed-devnet-sandbox.mjs — it picks up .localnet/env.json ` +
         `automatically and writes .localnet/fixtures.json), and consume it via ` +
         `AGENC_SANDBOX_FIXTURES=.localnet/fixtures.json or ` +

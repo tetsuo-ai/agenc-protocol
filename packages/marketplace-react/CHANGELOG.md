@@ -1,8 +1,8 @@
 # @tetsuo-ai/marketplace-react
 
-## 0.4.2 (unreleased candidate)
+## 0.5.0 (unreleased candidate)
 
-### Patch Changes
+### Breaking Changes
 
 - Raise the runtime floor to Node 22.23.1 for the coordinated revision-5 train;
   Node 20 is EOL.
@@ -10,9 +10,51 @@
   plugin descriptor. Importing the React package's advertised preset no longer
   fails in clean consumers that do not otherwise install Tailwind; pinned
   Tailwind compilation coverage verifies the descriptor and emitted utilities.
-- Widen the SDK peer range through `^0.12.0` for the coordinated revision-5
-  client candidate. No React API changes; published 0.4.1 remains current until
-  the coordinated package cutover.
+- Require the revision-5 SDK peer (`^0.12.0`) for the coordinated cutover.
+  `useHire` and the humanless flow now require the buyer's non-zero
+  `taskJobSpecHash` before they can fund escrow, and activation verifies that
+  the moderation callback returned that exact hash. This is an intentional API
+  and wire break; published 0.4.1 remains current while mainnet is revision 4.
+- `useHumanlessHireFlow` now delegates to the SDK's non-resubmitting recovery
+  orchestration. Post-submission failures surface `HireAndActivateError`,
+  `progress.recovery` exposes its durable `hiring`/`moderating`/`activating`
+  token, and `resumeHireAndActivate(input, token)` resumes without issuing a
+  second funded hire. This intentionally replaces the old raw backend/send
+  error identity after a hire may have committed.
+- Add an explicit `orchestrationRpc` provider seam and keep funded
+  reconciliation separate from ordinary read endpoints. Provider-built clients
+  use their resolved RPC; pre-built custom clients use only an explicitly
+  supplied `rpcUrl`/`orchestrationRpc` and never inherit a network default.
+- Harden the marketplace starter's funded job contract across custom backend
+  seams. The task-bound normalized specification is detached and deeply frozen,
+  backends receive a separate clone, the local hash is rechecked before and
+  after hosting, and activation/state consume fresh copies of the originally
+  funded bytes rather than backend-owned mutable arrays.
+- Preserve custom signer compatibility in `useHumanlessHireFlow`: React now
+  canonicalizes a same-address creator override to the client fee-payer object
+  and stabilizes a distinct-address signer at its enqueue boundary. This keeps
+  one signer object per address as Solana Kit requires without collapsing an
+  intentional separate signer.
+- Close async intent races in the direct `useHire` and `useTaskActivation`
+  money paths. They synchronously detach `taskId`, `listingSpecHash`,
+  `taskJobSpecHash`, and `jobSpecHash` before enqueue, derive the Task PDA once
+  from the captured bytes/address, canonicalize same-address overrides to the
+  client signer, and preserve distinct-address signer identities before
+  moderation or funded-client awaits. Standard hires also use one object when
+  separate creator/authority wrappers expose the same non-client address.
+- `useHumanlessHireFlow` now validates and detaches every 32-byte hire and
+  activating-recovery commitment at the public enqueue boundary. Exact
+  Uint8Arrays from another browser/worker realm are accepted, while wrong
+  widths, non-byte views, and SharedArrayBuffer-backed views fail before any
+  funded or resumed SDK work begins.
+- Snapshot every caller-owned mutable input in `useTaskWork`,
+  `useSubmissionReview`, `useDispute`, `useCompletionBond`,
+  `useTaskLifecycle`, and `useRateHire` before TanStack enqueue. Fixed byte
+  fields accept exact `Uint8Array` views across JavaScript realms and preserve
+  raw, nullable, and explicit Solana `Option` representations. A signer
+  override for the client fee-payer address resolves to the canonical client
+  signer object, satisfying Solana Kit's one-signer-instance-per-address rule;
+  distinct-address overrides retain their identity.
 
 ## 0.4.1
 

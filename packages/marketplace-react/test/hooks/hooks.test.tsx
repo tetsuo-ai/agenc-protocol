@@ -15,9 +15,15 @@
  *   indexer ships;
  * - useTaskStatus / useDispute read via their injected reader seam.
  */
-import { address, createNoopSigner } from "@solana/kit";
+import {
+  address,
+  createNoopSigner,
+  getBase58Decoder,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   AgencError,
+  HireAndActivateError,
   TaskStatus,
   findTaskPda,
   type Dispute,
@@ -53,9 +59,19 @@ import {
   useTaskStatus,
   useWalletSigner,
 } from "../../src/hooks/index.js";
+import { actAsync } from "../act-async.js";
 
 const VALID_WALLET = "11111111111111111111111111111111";
 const PROVIDER_AGENT = address("So11111111111111111111111111111111111111112");
+const HUMANLESS_SIGNATURE = getBase58Decoder().decode(
+  new Uint8Array(64).fill(11),
+);
+const ACTIVATION_SIGNATURE = getBase58Decoder().decode(
+  new Uint8Array(64).fill(12),
+);
+const RESUMED_ACTIVATION_SIGNATURE = getBase58Decoder().decode(
+  new Uint8Array(64).fill(13),
+);
 
 /** A decoded listing row fixture. */
 function listingRow(
@@ -112,11 +128,11 @@ function stubClient(
     send: vi.fn(async () => ({ signature: "sig-send", logs: [] })),
     hireFromListing: vi.fn(async () => ({ signature: "sig-hire", logs: [] })),
     hireFromListingHumanless: vi.fn(async () => ({
-      signature: "sig-humanless",
+      signature: HUMANLESS_SIGNATURE,
       logs: [],
     })),
     setTaskJobSpec: vi.fn(async () => ({
-      signature: "sig-activate",
+      signature: ACTIVATION_SIGNATURE,
       logs: [],
     })),
     claimTaskWithJobSpec: vi.fn(async () => ({
@@ -288,9 +304,9 @@ describe("useListings", () => {
     );
     await waitFor(() => expect(result.current.listings.length).toBe(2));
     expect(result.current.hasMore).toBe(true);
-    result.current.fetchMore();
+    act(() => result.current.fetchMore());
     await waitFor(() => expect(result.current.listings.length).toBe(4));
-    result.current.fetchMore();
+    act(() => result.current.fetchMore());
     await waitFor(() => expect(result.current.listings.length).toBe(5));
     expect(result.current.hasMore).toBe(false);
   });
@@ -421,10 +437,150 @@ describe("useHire", () => {
         queryTransport: mockReadTransport(),
       }),
     });
-    const res = await result.current.hire(hireArgs);
+    const res = await actAsync(() => result.current.hire(hireArgs));
     expect(client.hireFromListing).toHaveBeenCalledTimes(1);
     expect(res.signature).toBe("sig-hire");
     expect(res.taskPda).toBeTruthy();
+  });
+
+  it("rejects every malformed fixed-byte hire field before enqueue while preserving the Promise API", async () => {
+    const client = stubClient();
+    const { result } = renderHook(() => useHire(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+    const valid = {
+      listing: PROVIDER_AGENT,
+      creatorAgent: PROVIDER_AGENT,
+      taskId: new Uint8Array(32).fill(1),
+      expectedPrice: 1_000_000n,
+      expectedVersion: 1n,
+      listingSpecHash: new Uint8Array(32).fill(2),
+      taskJobSpecHash: new Uint8Array(32).fill(3),
+      moderator: PROVIDER_AGENT,
+      moderatorIsAttestor: false,
+    };
+
+    for (const [label, malformed] of [
+      ["taskId", { taskId: new Uint8Array(31) }],
+      ["listingSpecHash", { listingSpecHash: new Uint8Array(31) }],
+      ["taskJobSpecHash", { taskJobSpecHash: new Uint8Array(31) }],
+    ] as const) {
+      const rejection = result.current.hire({
+        ...valid,
+        ...malformed,
+      } as never);
+      expect(rejection).toBeInstanceOf(Promise);
+      await expect(rejection).rejects.toThrow(
+        `useHire: ${label} must be exactly 32 bytes`,
+      );
+    }
+    expect(client.hireFromListing).not.toHaveBeenCalled();
+  });
+
+  it("snapshots funded identity before enqueue and keeps it stable while send is pending", async () => {
+    let resolveSend!: (value: { signature: string; logs: string[] }) => void;
+    let markSendStarted!: () => void;
+    const sendStarted = new Promise<void>((resolve) => {
+      markSendStarted = resolve;
+    });
+    const sendResult = new Promise<{ signature: string; logs: string[] }>(
+      (resolve) => {
+        resolveSend = resolve;
+      },
+    );
+    const baseSigner = createNoopSigner(PROVIDER_AGENT);
+    let liveAddress: TransactionSigner["address"] = PROVIDER_AGENT;
+    const mutableSigner = Object.create(baseSigner) as TransactionSigner;
+    Object.defineProperty(mutableSigner, "address", {
+      configurable: true,
+      enumerable: true,
+      get: () => liveAddress,
+    });
+    const client = stubClient({
+      hireFromListing: vi.fn(async () => {
+        markSendStarted();
+        return sendResult;
+      }),
+    });
+    const taskId = new Uint8Array(32).fill(0x21);
+    const listingSpecHash = new Uint8Array(32).fill(0x22);
+    const taskJobSpecHash = new Uint8Array(32).fill(0x23);
+    const expectedTaskId = new Uint8Array(taskId);
+    const expectedListingSpecHash = new Uint8Array(listingSpecHash);
+    const expectedTaskJobSpecHash = new Uint8Array(taskJobSpecHash);
+    const [expectedTaskPda] = await findTaskPda({
+      creator: PROVIDER_AGENT,
+      taskId: expectedTaskId,
+    });
+    const { result } = renderHook(() => useHire(), {
+      wrapper: wrapper({
+        network: "localnet",
+        client,
+        queryTransport: mockReadTransport(),
+      }),
+    });
+
+    let settled!: Awaited<ReturnType<typeof result.current.hire>>;
+    await act(async () => {
+      const running = result.current.hire({
+        listing: PROVIDER_AGENT,
+        creatorAgent: PROVIDER_AGENT,
+        taskId,
+        expectedPrice: 1_000_000n,
+        expectedVersion: 1n,
+        listingSpecHash,
+        taskJobSpecHash,
+        moderator: PROVIDER_AGENT,
+        authority: mutableSigner,
+        creator: mutableSigner,
+        // Bypass automatic moderation resolution so this test isolates the
+        // separate client-send await.
+        moderatorIsAttestor: false,
+      } as never);
+
+      // TanStack has not necessarily entered mutationFn yet.
+      taskId.fill(0xa1);
+      listingSpecHash.fill(0xa2);
+      taskJobSpecHash.fill(0xa3);
+      liveAddress = address(VALID_WALLET);
+      await sendStarted;
+
+      // The funded client call is now pending.
+      taskId.fill(0xb1);
+      listingSpecHash.fill(0xb2);
+      taskJobSpecHash.fill(0xb3);
+      liveAddress = address(VALID_WALLET);
+      resolveSend({ signature: "sig-stable-hire", logs: [] });
+      settled = await running;
+    });
+
+    const submitted = (client.hireFromListing as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0];
+    expect(submitted.taskId).toEqual(expectedTaskId);
+    expect(submitted.taskId).not.toBe(taskId);
+    expect(submitted.listingSpecHash).toEqual(expectedListingSpecHash);
+    expect(submitted.listingSpecHash).not.toBe(listingSpecHash);
+    expect(submitted.taskJobSpecHash).toEqual(expectedTaskJobSpecHash);
+    expect(submitted.taskJobSpecHash).not.toBe(taskJobSpecHash);
+    expect(submitted.creator).toBe(mutableSigner);
+    expect(submitted.authority).toBe(mutableSigner);
+    expect(submitted.creator.address).toBe(PROVIDER_AGENT);
+    expect(Object.isFrozen(mutableSigner)).toBe(false);
+    expect(
+      Object.getOwnPropertyDescriptor(mutableSigner, "address"),
+    ).toMatchObject({
+      configurable: false,
+      writable: false,
+      value: PROVIDER_AGENT,
+    });
+    expect(settled).toMatchObject({
+      signature: "sig-stable-hire",
+      taskPda: expectedTaskPda,
+    });
   });
 
   it("calls client.hireFromListingHumanless for storefront-visitor hires", async () => {
@@ -436,16 +592,18 @@ describe("useHire", () => {
         queryTransport: mockReadTransport(),
       }),
     });
-    const res = await result.current.hire({
-      listing: PROVIDER_AGENT,
-      taskId: new Uint8Array(32).fill(8),
-      expectedPrice: 1_000_000n,
-      expectedVersion: 1n,
-      listingSpecHash: new Uint8Array(32).fill(9),
-      humanless: true,
-    } as never);
+    const res = await actAsync(() =>
+      result.current.hire({
+        listing: PROVIDER_AGENT,
+        taskId: new Uint8Array(32).fill(8),
+        expectedPrice: 1_000_000n,
+        expectedVersion: 1n,
+        listingSpecHash: new Uint8Array(32).fill(9),
+        humanless: true,
+      } as never),
+    );
     expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
-    expect(res.signature).toBe("sig-humanless");
+    expect(res.signature).toBe(HUMANLESS_SIGNATURE);
     expect(res.taskPda).toBeTruthy();
   });
 
@@ -459,7 +617,7 @@ describe("useHire", () => {
         referrer: { wallet: VALID_WALLET, feeBps: 250 },
       }),
     });
-    const res = await result.current.hire(hireArgs);
+    const res = await actAsync(() => result.current.hire(hireArgs));
     expect(res.referrerInjected).toBe(true);
     const passed = (client.hireFromListing as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
@@ -476,15 +634,17 @@ describe("useHire", () => {
         queryTransport: mockReadTransport(),
       }),
     });
-    await result.current.hire({
-      listing: PROVIDER_AGENT,
-      creatorAgent: PROVIDER_AGENT,
-      taskId: new Uint8Array(32).fill(7),
-      expectedPrice: 1_000_000n,
-      expectedVersion: 1n,
-      referrer: PROVIDER_AGENT,
-      referrerFeeBps: 999,
-    } as never);
+    await actAsync(() =>
+      result.current.hire({
+        listing: PROVIDER_AGENT,
+        creatorAgent: PROVIDER_AGENT,
+        taskId: new Uint8Array(32).fill(7),
+        expectedPrice: 1_000_000n,
+        expectedVersion: 1n,
+        referrer: PROVIDER_AGENT,
+        referrerFeeBps: 999,
+      } as never),
+    );
     const passed = (client.hireFromListing as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
     expect(passed).not.toHaveProperty("referrer");
@@ -505,7 +665,9 @@ describe("useHire", () => {
         queryTransport: mockReadTransport(),
       }),
     });
-    await expect(result.current.hire(hireArgs)).rejects.toBe(err);
+    await expect(actAsync(() => result.current.hire(hireArgs))).rejects.toBe(
+      err,
+    );
     await waitFor(() => expect(result.current.error).toBe(err));
     expect(result.current.status).toBe("error");
   });
@@ -517,9 +679,9 @@ describe("useHire", () => {
         queryTransport: mockReadTransport(),
       }),
     });
-    await expect(result.current.hire(hireArgs)).rejects.toThrowError(
-      /No write client/,
-    );
+    await expect(
+      actAsync(() => result.current.hire(hireArgs)),
+    ).rejects.toThrowError(/No write client/);
   });
 });
 
@@ -530,6 +692,9 @@ describe("useHumanlessHireFlow", () => {
   const flowTaskId = new Uint8Array(32).fill(8);
   const flowHash = new Uint8Array(32).fill(13);
   const flowJobSpec = { title: "Ship a marketplace audit" };
+  const candidateSignature = getBase58Decoder().decode(
+    new Uint8Array(64).fill(6),
+  );
   const flowHire = {
     listing: PROVIDER_AGENT,
     providerAgent: PROVIDER_AGENT,
@@ -538,6 +703,7 @@ describe("useHumanlessHireFlow", () => {
     expectedVersion: 1n,
     reviewWindowSecs: 3600n,
     listingSpecHash: new Uint8Array(32).fill(9),
+    taskJobSpecHash: flowHash,
     // P1.2: the hire gate names the moderator whose listing attestation it consumes.
     moderator: PROVIDER_AGENT,
   };
@@ -563,18 +729,20 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
         }),
       },
     );
 
-    const res = await result.current.hireAndActivate({
-      hire: flowHire,
-      jobSpec: flowJobSpec,
-      hostAndModerateJobSpec,
-    });
+    const res = await actAsync(() =>
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    );
     const taskPda = await expectedFlowTaskPda();
 
     expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
@@ -583,26 +751,222 @@ describe("useHumanlessHireFlow", () => {
       taskId: flowTaskId,
       listing: PROVIDER_AGENT,
       jobSpec: flowJobSpec,
-      hireSignature: "sig-humanless",
+      hireSignature: HUMANLESS_SIGNATURE,
       referrerInjected: false,
     });
     expect(client.setTaskJobSpec).toHaveBeenCalledTimes(1);
     const activation = (client.setTaskJobSpec as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
     expect(activation.task).toBe(taskPda);
-    expect(activation.creator).toBe(client.signer);
-    expect(activation.jobSpecHash).toBe(flowHash);
+    expect(activation.creator.address).toBe(client.signer.address);
+    expect(activation.jobSpecHash).toEqual(flowHash);
     expect(activation.jobSpecUri).toBe("https://example.test/specs/flow.json");
     expect(res).toMatchObject({
       taskPda,
-      hireSignature: "sig-humanless",
-      activationSignature: "sig-activate",
+      hireSignature: HUMANLESS_SIGNATURE,
+      activationSignature: ACTIVATION_SIGNATURE,
       jobSpecUri: "https://example.test/specs/flow.json",
       referrerInjected: false,
       moderation: { verdict: "allow" },
     });
     await waitFor(() => expect(result.current.phase).toBe("activated"));
-    expect(result.current.progress.activationSignature).toBe("sig-activate");
+    expect(result.current.progress.activationSignature).toBe(
+      ACTIVATION_SIGNATURE,
+    );
+  });
+
+  it("canonicalizes an inherited same-address signer to the client fee payer", async () => {
+    const client = stubClient();
+    const creator = Object.create(client.signer) as TransactionSigner;
+    expect(Object.getOwnPropertyDescriptor(creator, "address")).toBeUndefined();
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/inherited-signer.json",
+      moderationAttested: true,
+      moderator: PROVIDER_AGENT,
+    }));
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+
+    await actAsync(() =>
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+        creator,
+      }),
+    );
+
+    const hireCall = (
+      client.hireFromListingHumanless as ReturnType<typeof vi.fn>
+    ).mock.calls[0]![0];
+    expect(hireCall.creator).toBe(client.signer);
+    expect(Object.getOwnPropertyDescriptor(creator, "address")).toBeUndefined();
+    expect(Object.isFrozen(creator)).toBe(false);
+  });
+
+  it("lets the SDK canonicalize a configurable accessor on a custom client signer", async () => {
+    const client = stubClient();
+    const baseSigner = client.signer;
+    const accessorSigner = Object.create(baseSigner) as TransactionSigner;
+    Object.defineProperty(accessorSigner, "address", {
+      configurable: true,
+      enumerable: true,
+      get: () => baseSigner.address,
+    });
+    (client as { signer: TransactionSigner }).signer = accessorSigner;
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/accessor-signer.json",
+      moderationAttested: true,
+      moderator: PROVIDER_AGENT,
+    }));
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+
+    await actAsync(() =>
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    );
+
+    const descriptor = Object.getOwnPropertyDescriptor(
+      accessorSigner,
+      "address",
+    );
+    expect(descriptor).toMatchObject({
+      configurable: false,
+      writable: false,
+      value: baseSigner.address,
+    });
+    expect(Object.isFrozen(accessorSigner)).toBe(false);
+  });
+
+  it("cannot redirect a same-address override after it canonicalizes to the client", async () => {
+    const client = stubClient();
+    const creator = Object.create(client.signer) as TransactionSigner;
+    Object.defineProperty(creator, "address", {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: client.signer.address,
+    });
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/mutated-signer.json",
+      moderationAttested: true,
+      moderator: PROVIDER_AGENT,
+    }));
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+
+    await actAsync(async () => {
+      const running = result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+        creator,
+      });
+      Object.defineProperty(creator, "address", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: PROVIDER_AGENT,
+      });
+      await running;
+    });
+    const hireCall = (
+      client.hireFromListingHumanless as ReturnType<typeof vi.fn>
+    ).mock.calls[0]![0];
+    expect(hireCall.creator).toBe(client.signer);
+    expect(hostAndModerateJobSpec).toHaveBeenCalledTimes(1);
+  });
+
+  it("snapshots caller input synchronously before TanStack schedules the mutation", async () => {
+    const client = stubClient();
+    const taskId = new Uint8Array(32).fill(0x31);
+    const listingSpecHash = new Uint8Array(32).fill(0x32);
+    const taskJobSpecHash = new Uint8Array(32).fill(0x33);
+    const committedHash = new Uint8Array(taskJobSpecHash);
+    const jobSpec = {
+      title: "entry snapshot",
+      nested: { constraints: [{ region: "ca" }] },
+    };
+    const hostAndModerateJobSpec = vi.fn(
+      async (_host: { jobSpec: typeof jobSpec }) => ({
+        jobSpecHash: committedHash,
+        jobSpecUri: "https://example.test/specs/synchronous-snapshot.json",
+        moderationAttested: true,
+        moderator: PROVIDER_AGENT,
+      }),
+    );
+    const { result } = renderHook(
+      () => useHumanlessHireFlow<typeof jobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    const input = {
+      hire: {
+        ...flowHire,
+        taskId,
+        listingSpecHash,
+        taskJobSpecHash,
+      },
+      jobSpec,
+      hostAndModerateJobSpec,
+    };
+
+    await act(async () => {
+      const running = result.current.hireAndActivate(input);
+      taskId.fill(0xff);
+      listingSpecHash.fill(0xfe);
+      taskJobSpecHash.fill(0xfd);
+      jobSpec.title = "mutated";
+      jobSpec.nested.constraints[0]!.region = "mutated";
+      await running;
+    });
+
+    const submitted = (
+      client.hireFromListingHumanless as ReturnType<typeof vi.fn>
+    ).mock.calls[0]![0];
+    expect(submitted.taskId).toEqual(new Uint8Array(32).fill(0x31));
+    expect(submitted.listingSpecHash).toEqual(new Uint8Array(32).fill(0x32));
+    expect(submitted.taskJobSpecHash).toEqual(new Uint8Array(32).fill(0x33));
+    expect(hostAndModerateJobSpec.mock.calls[0]![0].jobSpec).toEqual({
+      title: "entry snapshot",
+      nested: { constraints: [{ region: "ca" }] },
+    });
   });
 
   it("injects provider referrer config and reports it to the backend seam", async () => {
@@ -619,7 +983,7 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
           referrer: { wallet: VALID_WALLET, feeBps: 250 },
@@ -627,11 +991,13 @@ describe("useHumanlessHireFlow", () => {
       },
     );
 
-    const res = await result.current.hireAndActivate({
-      hire: flowHire,
-      jobSpec: flowJobSpec,
-      hostAndModerateJobSpec,
-    });
+    const res = await actAsync(() =>
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    );
 
     const hireInput = (
       client.hireFromListingHumanless as ReturnType<typeof vi.fn>
@@ -658,22 +1024,24 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
         }),
       },
     );
 
-    const res = await result.current.hireAndActivate({
-      hire: {
-        ...flowHire,
-        referrer: PROVIDER_AGENT,
-        referrerFeeBps: 999,
-      } as never,
-      jobSpec: flowJobSpec,
-      hostAndModerateJobSpec,
-    });
+    const res = await actAsync(() =>
+      result.current.hireAndActivate({
+        hire: {
+          ...flowHire,
+          referrer: PROVIDER_AGENT,
+          referrerFeeBps: 999,
+        } as never,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    );
 
     const hireInput = (
       client.hireFromListingHumanless as ReturnType<typeof vi.fn>
@@ -686,35 +1054,151 @@ describe("useHumanlessHireFlow", () => {
     expect(res.referrerInjected).toBe(false);
   });
 
-  it("preserves hire progress when the backend moderation request fails", async () => {
+  it("resumes durable moderation progress without funding a second hire", async () => {
     const backendError = new Error("moderation backend offline");
     const client = stubClient();
+    let hostAttempts = 0;
     const hostAndModerateJobSpec = vi.fn(async () => {
-      throw backendError;
+      hostAttempts += 1;
+      if (hostAttempts === 1) throw backendError;
+      return {
+        jobSpecHash: flowHash,
+        jobSpecUri: "https://example.test/specs/moderation-resume.json",
+        moderationAttested: true,
+        moderator: PROVIDER_AGENT,
+      };
     });
-    const { result } = renderHook(
+    const { result, unmount } = renderHook(
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
         }),
       },
     );
 
-    await expect(
-      result.current.hireAndActivate({
-        hire: flowHire,
-        jobSpec: flowJobSpec,
-        hostAndModerateJobSpec,
-      }),
-    ).rejects.toBe(backendError);
+    const input = {
+      hire: flowHire,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    };
+    let failure: unknown;
+    await act(async () => {
+      failure = await result.current
+        .hireAndActivate(input)
+        .catch((error: unknown) => error);
+    });
 
+    expect(failure).toBeInstanceOf(HireAndActivateError);
+    expect((failure as HireAndActivateError).cause).toBe(backendError);
+    expect((failure as HireAndActivateError).progress).toMatchObject({
+      phase: "moderating",
+      hireSignature: HUMANLESS_SIGNATURE,
+    });
     await waitFor(() => expect(result.current.phase).toBe("error"));
-    expect(result.current.progress.taskPda).toBeTruthy();
-    expect(result.current.progress.hireSignature).toBe("sig-humanless");
-    expect(result.current.progress.activationSignature).toBeNull();
+    expect(result.current.progress.recovery).toMatchObject({
+      phase: "moderating",
+      hireSignature: HUMANLESS_SIGNATURE,
+    });
+
+    unmount();
+    const resumed = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    await act(async () => {
+      await resumed.result.current.resumeHireAndActivate(
+        input,
+        (failure as HireAndActivateError).progress,
+      );
+    });
+
+    expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
+    expect(hostAndModerateJobSpec).toHaveBeenCalledTimes(2);
+    expect(client.setTaskJobSpec).toHaveBeenCalledTimes(1);
+    expect(resumed.result.current.phase).toBe("activated");
+    expect(resumed.result.current.progress.recovery).toBeNull();
+  });
+
+  it("keeps an ambiguous hire retry on the reconciliation-only SDK rail", async () => {
+    const ambiguousSend = Object.assign(
+      new Error("response timed out after broadcast"),
+      { signature: candidateSignature },
+    );
+    const client = stubClient({
+      hireFromListingHumanless: vi.fn(async () => {
+        throw ambiguousSend;
+      }),
+    });
+    const hostAndModerateJobSpec = vi.fn(async () => ({
+      jobSpecHash: flowHash,
+      jobSpecUri: "https://example.test/specs/ambiguous-hire.json",
+      moderationAttested: true,
+      moderator: PROVIDER_AGENT,
+    }));
+    const { result, unmount } = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    const input = {
+      hire: flowHire,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    };
+
+    let firstFailure: unknown;
+    await act(async () => {
+      firstFailure = await result.current
+        .hireAndActivate(input)
+        .catch((error: unknown) => error);
+    });
+    expect(firstFailure).toBeInstanceOf(HireAndActivateError);
+    expect((firstFailure as HireAndActivateError).progress).toMatchObject({
+      phase: "hiring",
+      candidateSignature,
+    });
+
+    unmount();
+    const resumed = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
+    );
+    let resumeFailure: unknown;
+    await act(async () => {
+      resumeFailure = await resumed.result.current
+        .resumeHireAndActivate(
+          input,
+          (firstFailure as HireAndActivateError).progress,
+        )
+        .catch((error: unknown) => error);
+    });
+
+    expect(resumeFailure).toBeInstanceOf(HireAndActivateError);
+    expect((resumeFailure as HireAndActivateError).progress.phase).toBe(
+      "hiring",
+    );
+    expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
+    expect(hostAndModerateJobSpec).not.toHaveBeenCalled();
     expect(client.setTaskJobSpec).not.toHaveBeenCalled();
   });
 
@@ -730,7 +1214,7 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
         }),
@@ -738,16 +1222,18 @@ describe("useHumanlessHireFlow", () => {
     );
 
     await expect(
-      result.current.hireAndActivate({
-        hire: flowHire,
-        jobSpec: flowJobSpec,
-        hostAndModerateJobSpec,
-      }),
+      actAsync(() =>
+        result.current.hireAndActivate({
+          hire: flowHire,
+          jobSpec: flowJobSpec,
+          hostAndModerateJobSpec,
+        }),
+      ),
     ).rejects.toThrow(/not attested/);
 
     await waitFor(() => expect(result.current.phase).toBe("error"));
     expect(result.current.progress.taskPda).toBeTruthy();
-    expect(result.current.progress.hireSignature).toBe("sig-humanless");
+    expect(result.current.progress.hireSignature).toBe(HUMANLESS_SIGNATURE);
     expect(result.current.progress.jobSpecHash).toBeNull();
     expect(client.setTaskJobSpec).not.toHaveBeenCalled();
   });
@@ -764,7 +1250,7 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client: invalidHashClient,
           queryTransport: mockReadTransport(),
         }),
@@ -772,11 +1258,13 @@ describe("useHumanlessHireFlow", () => {
     );
 
     await expect(
-      invalidHash.result.current.hireAndActivate({
-        hire: flowHire,
-        jobSpec: flowJobSpec,
-        hostAndModerateJobSpec: invalidHashHost,
-      }),
+      actAsync(() =>
+        invalidHash.result.current.hireAndActivate({
+          hire: flowHire,
+          jobSpec: flowJobSpec,
+          hostAndModerateJobSpec: invalidHashHost,
+        }),
+      ),
     ).rejects.toThrow(/invalid jobSpecHash/);
     expect(invalidHashClient.setTaskJobSpec).not.toHaveBeenCalled();
 
@@ -791,7 +1279,7 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client: emptyUriClient,
           queryTransport: mockReadTransport(),
         }),
@@ -799,20 +1287,25 @@ describe("useHumanlessHireFlow", () => {
     );
 
     await expect(
-      emptyUri.result.current.hireAndActivate({
-        hire: flowHire,
-        jobSpec: flowJobSpec,
-        hostAndModerateJobSpec: emptyUriHost,
-      }),
+      actAsync(() =>
+        emptyUri.result.current.hireAndActivate({
+          hire: flowHire,
+          jobSpec: flowJobSpec,
+          hostAndModerateJobSpec: emptyUriHost,
+        }),
+      ),
     ).rejects.toThrow(/empty jobSpecUri/);
     expect(emptyUriClient.setTaskJobSpec).not.toHaveBeenCalled();
   });
 
-  it("preserves moderation progress when activation signing fails", async () => {
+  it("resumes durable activation progress without hiring or moderating twice", async () => {
     const activationError = new AgencError("activation failed", { code: 7001 });
+    let activationAttempts = 0;
     const client = stubClient({
       setTaskJobSpec: vi.fn(async () => {
-        throw activationError;
+        activationAttempts += 1;
+        if (activationAttempts === 1) throw activationError;
+        return { signature: RESUMED_ACTIVATION_SIGNATURE, logs: [] };
       }),
     });
     const hostAndModerateJobSpec = vi.fn(async () => ({
@@ -821,36 +1314,64 @@ describe("useHumanlessHireFlow", () => {
       moderationAttested: true,
       moderator: PROVIDER_AGENT,
     }));
-    const { result } = renderHook(
+    const { result, unmount } = renderHook(
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
         }),
       },
     );
 
-    await expect(
-      result.current.hireAndActivate({
-        hire: flowHire,
-        jobSpec: flowJobSpec,
-        hostAndModerateJobSpec,
-      }),
-    ).rejects.toBe(activationError);
+    const input = {
+      hire: flowHire,
+      jobSpec: flowJobSpec,
+      hostAndModerateJobSpec,
+    };
+    let failure: unknown;
+    await act(async () => {
+      failure = await result.current
+        .hireAndActivate(input)
+        .catch((error: unknown) => error);
+    });
 
-    await waitFor(() => expect(result.current.phase).toBe("error"));
-    expect(result.current.progress.taskPda).toBeTruthy();
-    expect(result.current.progress.hireSignature).toBe("sig-humanless");
-    expect(result.current.progress.jobSpecHash).toBe(flowHash);
-    expect(result.current.progress.jobSpecUri).toBe(
-      "https://example.test/specs/activation-fail.json",
+    expect(failure).toBeInstanceOf(HireAndActivateError);
+    expect((failure as HireAndActivateError).cause).toBe(activationError);
+    expect((failure as HireAndActivateError).progress.phase).toBe("activating");
+    unmount();
+    const resumed = renderHook(
+      () => useHumanlessHireFlow<typeof flowJobSpec>(),
+      {
+        wrapper: wrapper({
+          network: "mainnet",
+          client,
+          queryTransport: mockReadTransport(),
+        }),
+      },
     );
-    expect(result.current.progress.activationSignature).toBeNull();
+    await act(async () => {
+      await resumed.result.current.resumeHireAndActivate(
+        input,
+        (failure as HireAndActivateError).progress,
+      );
+    });
+
+    expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
+    expect(hostAndModerateJobSpec).toHaveBeenCalledTimes(1);
+    expect(client.setTaskJobSpec).toHaveBeenCalledTimes(2);
+    expect(resumed.result.current.progress.activationSignature).toBe(
+      RESUMED_ACTIVATION_SIGNATURE,
+    );
+    expect(resumed.result.current.progress.recovery).toBeNull();
   });
 
   it("rejects overlapping flow runs so recovery state cannot mix paid hires", async () => {
+    let markHostStarted!: () => void;
+    const hostStarted = new Promise<void>((resolve) => {
+      markHostStarted = resolve;
+    });
     let resolveHost:
       | ((value: {
           jobSpecHash: Uint8Array;
@@ -869,44 +1390,55 @@ describe("useHumanlessHireFlow", () => {
           moderator: typeof PROVIDER_AGENT;
         }>((resolve) => {
           resolveHost = resolve;
+          markHostStarted();
         }),
     );
     const { result } = renderHook(
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
         }),
       },
     );
 
-    const first = result.current.hireAndActivate({
-      hire: flowHire,
-      jobSpec: flowJobSpec,
-      hostAndModerateJobSpec,
-    });
-    await waitFor(() => expect(result.current.phase).toBe("moderating"));
-
-    await expect(
-      result.current.hireAndActivate({
-        hire: { ...flowHire, taskId: new Uint8Array(32).fill(10) },
+    let first!: ReturnType<typeof result.current.hireAndActivate>;
+    await act(async () => {
+      first = result.current.hireAndActivate({
+        hire: flowHire,
         jobSpec: flowJobSpec,
         hostAndModerateJobSpec,
-      }),
+      });
+      await hostStarted;
+    });
+    expect(result.current.phase).toBe("moderating");
+
+    await expect(
+      actAsync(() =>
+        result.current.hireAndActivate({
+          hire: { ...flowHire, taskId: new Uint8Array(32).fill(10) },
+          jobSpec: flowJobSpec,
+          hostAndModerateJobSpec,
+        }),
+      ),
     ).rejects.toThrow(/already in progress/);
 
     expect(client.hireFromListingHumanless).toHaveBeenCalledTimes(1);
     expect(resolveHost).toBeTypeOf("function");
-    resolveHost?.({
-      jobSpecHash: flowHash,
-      jobSpecUri: "https://example.test/specs/overlap.json",
-      moderationAttested: true,
-      moderator: PROVIDER_AGENT,
+    let completed!: Awaited<typeof first>;
+    await act(async () => {
+      resolveHost?.({
+        jobSpecHash: flowHash,
+        jobSpecUri: "https://example.test/specs/overlap.json",
+        moderationAttested: true,
+        moderator: PROVIDER_AGENT,
+      });
+      completed = await first;
     });
-    await expect(first).resolves.toMatchObject({
-      activationSignature: "sig-activate",
+    expect(completed).toMatchObject({
+      activationSignature: ACTIVATION_SIGNATURE,
     });
   });
 
@@ -915,18 +1447,20 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           queryTransport: mockReadTransport(),
         }),
       },
     );
 
     await expect(
-      result.current.hireAndActivate({
-        hire: flowHire,
-        jobSpec: flowJobSpec,
-        hostAndModerateJobSpec: vi.fn(),
-      }),
+      actAsync(() =>
+        result.current.hireAndActivate({
+          hire: flowHire,
+          jobSpec: flowJobSpec,
+          hostAndModerateJobSpec: vi.fn(),
+        }),
+      ),
     ).rejects.toThrowError(/No write client/);
     await waitFor(() => expect(result.current.phase).toBe("idle"));
   });
@@ -943,18 +1477,20 @@ describe("useHumanlessHireFlow", () => {
       () => useHumanlessHireFlow<typeof flowJobSpec>(),
       {
         wrapper: wrapper({
-          network: "localnet",
+          network: "mainnet",
           client,
           queryTransport: mockReadTransport(),
         }),
       },
     );
 
-    await result.current.hireAndActivate({
-      hire: flowHire,
-      jobSpec: flowJobSpec,
-      hostAndModerateJobSpec,
-    });
+    await actAsync(() =>
+      result.current.hireAndActivate({
+        hire: flowHire,
+        jobSpec: flowJobSpec,
+        hostAndModerateJobSpec,
+      }),
+    );
     await waitFor(() => expect(result.current.phase).toBe("activated"));
 
     act(() => result.current.reset());
@@ -987,11 +1523,13 @@ describe("useSubmissionReview", () => {
         queryTransport: mockReadTransport(),
       }),
     });
-    const sig = await result.current.accept({
-      worker: PROVIDER_AGENT,
-      treasury: address(VALID_WALLET),
-      workerAuthority: address(VALID_WALLET),
-    } as never);
+    const sig = await actAsync(() =>
+      result.current.accept({
+        worker: PROVIDER_AGENT,
+        treasury: address(VALID_WALLET),
+        workerAuthority: address(VALID_WALLET),
+      } as never),
+    );
     expect(sig).toBe("sig-accept");
     const passed = (client.acceptTaskResult as ReturnType<typeof vi.fn>).mock
       .calls[0]![0];
@@ -1008,12 +1546,14 @@ describe("useSubmissionReview", () => {
         queryTransport: mockReadTransport(),
       }),
     });
-    const sig = await result.current.reject({
-      worker: PROVIDER_AGENT,
-      claim: PROVIDER_AGENT,
-      workerAuthority: address(VALID_WALLET),
-      rejectionHash: new Uint8Array(32).fill(3),
-    } as never);
+    const sig = await actAsync(() =>
+      result.current.reject({
+        worker: PROVIDER_AGENT,
+        claim: PROVIDER_AGENT,
+        workerAuthority: address(VALID_WALLET),
+        rejectionHash: new Uint8Array(32).fill(3),
+      } as never),
+    );
     expect(sig).toBe("sig-send");
     expect(client.send).toHaveBeenCalledTimes(1);
   });
@@ -1217,20 +1757,23 @@ describe("useTaskStatus", () => {
         next: async () => ({ done: true, value: undefined }),
       }),
     );
-    const factoryCall = vi.fn(({
-      signal,
-    }: Parameters<TaskEventsSourceFactory>[0]) => {
-      receivedSignal = signal;
-      return {
-        async *[Symbol.asyncIterator]() {
-          yield { task: "factory" };
-          await new Promise<void>((resolve) => {
-            if (signal.aborted) resolve();
-            else signal.addEventListener("abort", () => resolve(), { once: true });
-          });
-        },
-      };
-    });
+    const factoryCall = vi.fn(
+      ({ signal }: Parameters<TaskEventsSourceFactory>[0]) => {
+        receivedSignal = signal;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { task: "factory" };
+            await new Promise<void>((resolve) => {
+              if (signal.aborted) resolve();
+              else
+                signal.addEventListener("abort", () => resolve(), {
+                  once: true,
+                });
+            });
+          },
+        };
+      },
+    );
     const factory: TaskEventsSourceFactory & TaskEventsSource = Object.assign(
       factoryCall,
       { [Symbol.asyncIterator]: legacyIterator },
@@ -1362,14 +1905,16 @@ describe("useDispute", () => {
       },
     );
     await waitFor(() => expect(result.current.dispute).toBe(dispute));
-    const sig = await result.current.initiate({
-      agent: PROVIDER_AGENT,
-      disputeId: new Uint8Array(32).fill(1),
-      taskId: new Uint8Array(32).fill(2),
-      evidenceHash: new Uint8Array(32).fill(3),
-      resolutionType: 0,
-      evidence: "x",
-    } as never);
+    const sig = await actAsync(() =>
+      result.current.initiate({
+        agent: PROVIDER_AGENT,
+        disputeId: new Uint8Array(32).fill(1),
+        taskId: new Uint8Array(32).fill(2),
+        evidenceHash: new Uint8Array(32).fill(3),
+        resolutionType: 0,
+        evidence: "x",
+      } as never),
+    );
     expect(sig).toBe("sig-dispute");
     expect(client.initiateDispute).toHaveBeenCalledTimes(1);
   });

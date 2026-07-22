@@ -40,9 +40,22 @@ pub fn check_version_compatible_for_exit(config: &ProtocolConfig) -> Result<()> 
     check_version_range(config)
 }
 
-/// Shared protocol-version range invariants used by both the entry and exit
-/// compatibility checks. Does NOT consider `protocol_paused` — callers layer
-/// that gate on top when appropriate.
+/// Validate a frozen administrative bootstrap step without relaxing ordinary
+/// marketplace entry.
+///
+/// A fresh production deployment must prepare release-bound singleton accounts
+/// while `protocol_paused` is still true. Keep this narrowly named surface
+/// crate-private: entry handlers must continue to call
+/// [`check_version_compatible`]. Its only caller is the full-surface bid
+/// marketplace bootstrap, so it is compiled out of the canary build with it.
+#[cfg(not(feature = "mainnet-canary"))]
+pub(crate) fn check_version_compatible_for_bootstrap(config: &ProtocolConfig) -> Result<()> {
+    check_version_range(config)
+}
+
+/// Shared protocol-version range invariants used by entry, exit, and the
+/// narrowly scoped frozen-bootstrap check. Does not consider
+/// `protocol_paused`; callers supply the appropriate policy.
 fn check_version_range(config: &ProtocolConfig) -> Result<()> {
     // Check if account version is below its minimum supported version
     if config.protocol_version < config.min_supported_version {

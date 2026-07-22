@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -44,6 +42,11 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import {
+  getCommitment32Encoder,
+  getFixedBytesEncoder,
+} from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -62,10 +65,10 @@ import {
 import { AGENC_COORDINATION_PROGRAM_ADDRESS } from "../programs";
 
 export const HIRE_FROM_LISTING_HUMANLESS_DISCRIMINATOR: ReadonlyUint8Array =
-  new Uint8Array([90, 142, 39, 225, 150, 161, 217, 49]);
+  new Uint8Array([229, 163, 171, 114, 38, 116, 215, 85]);
 
 export function getHireFromListingHumanlessDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     HIRE_FROM_LISTING_HUMANLESS_DISCRIMINATOR,
   );
 }
@@ -148,6 +151,7 @@ export type HireFromListingHumanlessInstructionData = {
   referrer: Option<Address>;
   referrerFeeBps: number;
   moderator: Address;
+  taskJobSpecHash: ReadonlyUint8Array;
 };
 
 export type HireFromListingHumanlessInstructionDataArgs = {
@@ -158,19 +162,21 @@ export type HireFromListingHumanlessInstructionDataArgs = {
   referrer: OptionOrNullable<Address>;
   referrerFeeBps: number;
   moderator: Address;
+  taskJobSpecHash: ReadonlyUint8Array;
 };
 
 export function getHireFromListingHumanlessInstructionDataEncoder(): Encoder<HireFromListingHumanlessInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["taskId", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["taskId", getFixedBytesEncoder(32, "taskId")],
       ["expectedPrice", getU64Encoder()],
       ["expectedVersion", getU64Encoder()],
       ["reviewWindowSecs", getI64Encoder()],
       ["referrer", getOptionEncoder(getAddressEncoder())],
       ["referrerFeeBps", getU16Encoder()],
       ["moderator", getAddressEncoder()],
+      ["taskJobSpecHash", getCommitment32Encoder("taskJobSpecHash")],
     ]),
     (value) => ({
       ...value,
@@ -189,6 +195,7 @@ export function getHireFromListingHumanlessInstructionDataDecoder(): Decoder<Hir
     ["referrer", getOptionDecoder(getAddressDecoder())],
     ["referrerFeeBps", getU16Decoder()],
     ["moderator", getAddressDecoder()],
+    ["taskJobSpecHash", fixDecoderSize(getBytesDecoder(), 32)],
   ]);
 }
 
@@ -270,6 +277,7 @@ export type HireFromListingHumanlessAsyncInput<
   referrer: HireFromListingHumanlessInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingHumanlessInstructionDataArgs["referrerFeeBps"];
   moderator: HireFromListingHumanlessInstructionDataArgs["moderator"];
+  taskJobSpecHash: HireFromListingHumanlessInstructionDataArgs["taskJobSpecHash"];
 };
 
 export async function getHireFromListingHumanlessInstructionAsync<
@@ -535,6 +543,7 @@ export type HireFromListingHumanlessInput<
   referrer: HireFromListingHumanlessInstructionDataArgs["referrer"];
   referrerFeeBps: HireFromListingHumanlessInstructionDataArgs["referrerFeeBps"];
   moderator: HireFromListingHumanlessInstructionDataArgs["moderator"];
+  taskJobSpecHash: HireFromListingHumanlessInstructionDataArgs["taskJobSpecHash"];
 };
 
 export function getHireFromListingHumanlessInstruction<

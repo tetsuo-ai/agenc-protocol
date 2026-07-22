@@ -19,6 +19,7 @@ import {
 import {
   findClaimPda,
   findCreatorCompletionBondPda,
+  findTaskPda,
   values,
 } from "@tetsuo-ai/marketplace-sdk";
 import { useMemo, useState } from "react";
@@ -29,9 +30,20 @@ import {
   type StarterJobSpec,
 } from "./backend.js";
 import { starterConfig } from "./config.js";
+import {
+  cloneStarterJobSpec,
+  freezeStarterJobSpec,
+  normalizeStarterJobSpec,
+} from "./job-spec.js";
 import { resolveBrowserWalletSigner } from "./wallet.js";
 
 type Step = "browse" | "activate" | "work" | "review";
+
+interface HiredTask {
+  taskPda: Address;
+  jobSpec: StarterJobSpec;
+  taskJobSpecHash: Uint8Array;
+}
 
 export interface AppProps {
   backend?: MarketplaceBackendAdapter;
@@ -135,7 +147,7 @@ function MarketplaceFlow({
   signer: TransactionSigner | null;
 }) {
   const [selected, setSelected] = useState<ListingRow | null>(null);
-  const [taskPda, setTaskPda] = useState<Address | null>(null);
+  const [hiredTask, setHiredTask] = useState<HiredTask | null>(null);
   const [step, setStep] = useState<Step>("browse");
   const listings = useListings(undefined, { pageSize: 12 });
 
@@ -157,7 +169,7 @@ function MarketplaceFlow({
           onRetry={listings.refetch}
           onHire={(listing) => {
             setSelected(listing as ListingRow);
-            setTaskPda(null);
+            setHiredTask(null);
             setStep("browse");
           }}
         />
@@ -173,14 +185,16 @@ function MarketplaceFlow({
             moderator={moderator}
             signer={signer}
             onHired={(task) => {
-              setTaskPda(task);
+              setHiredTask(task);
               setStep("activate");
             }}
           />
         )}
-        {taskPda ? (
+        {hiredTask ? (
           <TaskControls
-            taskPda={taskPda}
+            taskPda={hiredTask.taskPda}
+            jobSpec={hiredTask.jobSpec}
+            taskJobSpecHash={hiredTask.taskJobSpecHash}
             listing={selected}
             signer={signer}
             backend={backend}
@@ -203,10 +217,15 @@ function HireStep({
   listing: ListingRow;
   moderator: Address | null;
   signer: TransactionSigner | null;
-  onHired: (taskPda: Address) => void;
+  onHired: (task: HiredTask) => void;
 }) {
   const hire = useHire();
   const [localError, setLocalError] = useState<Error | null>(null);
+  const [spec, setSpec] = useState<StarterJobSpec>({
+    title: "Complete the hired service",
+    deliverables: ["A result artifact URI"],
+    acceptanceCriteria: ["The result matches the listing scope"],
+  });
 
   async function runHire() {
     setLocalError(null);
@@ -217,19 +236,38 @@ function HireStep({
           "Set VITE_AGENC_MODERATOR to the listing attestor's wallet.",
         );
       }
+      const taskId = values.randomId32();
+      const [expectedTaskPda] = await findTaskPda({
+        creator: signer.address,
+        taskId,
+      });
+      const payload = normalizeStarterJobSpec(String(expectedTaskPda), spec);
+      const { bytes: taskJobSpecHash } =
+        await values.canonicalJobSpecHash(payload);
+      const committedSpec = freezeStarterJobSpec(payload);
       const result = await hire.hire({
         humanless: true,
         listing: listing.address,
         providerAgent: listing.account.providerAgent,
         creator: signer,
-        taskId: values.randomId32(),
+        taskId,
         expectedPrice: listing.account.price,
         expectedVersion: listing.account.version,
         listingSpecHash: listing.account.specHash,
+        taskJobSpecHash,
         reviewWindowSecs: 86_400n,
         moderator,
       });
-      onHired(result.taskPda);
+      if (String(result.taskPda) !== String(expectedTaskPda)) {
+        throw new Error(
+          "The confirmed task address did not match the committed job spec.",
+        );
+      }
+      onHired({
+        taskPda: result.taskPda,
+        jobSpec: committedSpec,
+        taskJobSpecHash: new Uint8Array(taskJobSpecHash),
+      });
     } catch (cause) {
       setLocalError(toError(cause));
     }
@@ -238,10 +276,18 @@ function HireStep({
   return (
     <div className="stack">
       <p>
-        Hiring funds escrow and creates the task. Activation must pin a
-        moderated job spec before discovery and claim attempts; transaction-time
-        gates still decide each claim.
+        Hiring funds escrow, creates the task, and commits this exact job spec
+        hash. Activation then hosts and moderates the same immutable spec before
+        discovery and claim attempts; transaction-time gates still decide each
+        claim.
       </p>
+      <label>
+        Job spec title
+        <input
+          value={spec.title}
+          onChange={(event) => setSpec({ ...spec, title: event.target.value })}
+        />
+      </label>
       <button
         type="button"
         disabled={!signer || hire.isPending}
@@ -260,6 +306,8 @@ function HireStep({
 
 function TaskControls({
   taskPda,
+  jobSpec,
+  taskJobSpecHash,
   listing,
   signer,
   backend,
@@ -268,6 +316,8 @@ function TaskControls({
   setStep,
 }: {
   taskPda: Address;
+  jobSpec: StarterJobSpec;
+  taskJobSpecHash: Uint8Array;
   listing: ListingRow | null;
   signer: TransactionSigner | null;
   backend: MarketplaceBackendAdapter;
@@ -297,6 +347,8 @@ function TaskControls({
           taskPda={taskPda}
           backend={backend}
           moderator={moderator}
+          jobSpec={jobSpec}
+          taskJobSpecHash={taskJobSpecHash}
           hosted={hostedJobSpec}
           onHosted={setHostedJobSpec}
         />
@@ -319,31 +371,80 @@ function ActivationStep({
   taskPda,
   backend,
   moderator,
+  jobSpec,
+  taskJobSpecHash,
   hosted,
   onHosted,
 }: {
   taskPda: Address;
   backend: MarketplaceBackendAdapter;
   moderator: Address | null;
+  jobSpec: StarterJobSpec;
+  taskJobSpecHash: Uint8Array;
   hosted: HostedModeratedJobSpec | null;
   onHosted: (jobSpec: HostedModeratedJobSpec) => void;
 }) {
   const activation = useTaskActivation(taskPda);
   const lifecycle = useTaskLifecycle(taskPda);
   const [localError, setLocalError] = useState<Error | null>(null);
-  const [spec, setSpec] = useState<StarterJobSpec>({
-    title: "Complete the hired service",
-    deliverables: ["A result artifact URI"],
-    acceptanceCriteria: ["The result matches the listing scope"],
-  });
 
   async function hostAndActivate() {
     setLocalError(null);
     try {
-      const next = await backend.hostAndModerateJobSpec({ taskPda, spec });
-      if (!next.moderationAttested) {
+      const committedHashBytes = new Uint8Array(taskJobSpecHash);
+      const committedHashHex = values.bytesToHex(committedHashBytes);
+      const localPayload = normalizeStarterJobSpec(String(taskPda), jobSpec);
+      const localBefore = await values.canonicalJobSpecHash(localPayload);
+      if (localBefore.hex !== committedHashHex) {
+        throw new Error(
+          "The local job spec no longer matches the funded hire commitment.",
+        );
+      }
+      const next = await backend.hostAndModerateJobSpec({
+        taskPda,
+        spec: cloneStarterJobSpec(localPayload),
+      });
+      const localAfter = await values.canonicalJobSpecHash(localPayload);
+      if (localAfter.hex !== committedHashHex) {
+        throw new Error(
+          "The committed job spec changed while the backend request was in flight.",
+        );
+      }
+      const {
+        jobSpecHash: backendHash,
+        jobSpecHashHex: backendHashHex,
+        jobSpecUri: backendJobSpecUri,
+        moderationAttested,
+      } = next;
+      if (!moderationAttested) {
         throw new Error(
           "Backend hosted the spec but did not attest moderation.",
+        );
+      }
+      if (
+        !(backendHash instanceof Uint8Array) ||
+        backendHash.byteLength !== 32
+      ) {
+        throw new Error(
+          "Backend returned a job spec hash that does not match the funded hire commitment.",
+        );
+      }
+      const detachedBackendHash = new Uint8Array(backendHash);
+      if (
+        values.bytesToHex(detachedBackendHash) !== committedHashHex ||
+        backendHashHex !== committedHashHex
+      ) {
+        throw new Error(
+          "Backend returned a job spec hash that does not match the funded hire commitment.",
+        );
+      }
+      if (
+        typeof backendJobSpecUri !== "string" ||
+        backendJobSpecUri === "" ||
+        backendJobSpecUri !== backendJobSpecUri.trim()
+      ) {
+        throw new Error(
+          "Backend returned an invalid job spec URI; activation was not signed.",
         );
       }
       if (!moderator) {
@@ -352,11 +453,16 @@ function ActivationStep({
         );
       }
       await activation.activate({
-        jobSpecHash: next.jobSpecHash,
-        jobSpecUri: next.jobSpecUri,
+        jobSpecHash: new Uint8Array(committedHashBytes),
+        jobSpecUri: backendJobSpecUri,
         moderator,
       });
-      onHosted(next);
+      onHosted({
+        jobSpecHash: new Uint8Array(committedHashBytes),
+        jobSpecHashHex: committedHashHex,
+        jobSpecUri: backendJobSpecUri,
+        moderationAttested: true,
+      });
     } catch (cause) {
       setLocalError(toError(cause));
     }
@@ -373,13 +479,7 @@ function ActivationStep({
 
   return (
     <div className="stack">
-      <label>
-        Job spec title
-        <input
-          value={spec.title}
-          onChange={(event) => setSpec({ ...spec, title: event.target.value })}
-        />
-      </label>
+      <p>Committed job spec: {jobSpec.title}</p>
       <button
         type="button"
         disabled={activation.isPending}

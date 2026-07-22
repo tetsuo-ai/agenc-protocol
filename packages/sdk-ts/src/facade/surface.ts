@@ -19,7 +19,17 @@
 // conservative"). On an old-layout account this returns `listings: false`
 // WITHOUT throwing.
 import { fetchEncodedAccount, getU16Decoder, type Address } from "@solana/kit";
-import { findProtocolConfigPda } from "../generated/index.js";
+import {
+  findProtocolConfigPda,
+  getStampReleaseSurfaceInstructionAsync,
+  type StampReleaseSurfaceAsyncInput,
+} from "../generated/index.js";
+import { snapshotFixedBytes } from "../values/fixed-bytes.js";
+import type { MultisigSignersInput } from "./governance.js";
+import {
+  appendMultisigSignerMetas,
+  snapshotMultisigFacadeInput,
+} from "./wire.js";
 
 /**
  * Byte offset of the appended `surface_revision: u16` in the P6.5 `ProtocolConfig`
@@ -62,6 +72,61 @@ export const SURFACE_REVISION_AUDIT_HARDENING = 5;
 
 /** Highest surface revision understood by this SDK build. */
 export const SURFACE_REVISION_CURRENT = SURFACE_REVISION_AUDIT_HARDENING;
+
+/**
+ * Reviewed release evidence plus the current ProtocolConfig approval set.
+ * The five hashes are detached before PDA derivation can yield so a caller
+ * cannot change the release evidence while the instruction is being built.
+ */
+export type StampReleaseSurfaceInput = StampReleaseSurfaceAsyncInput &
+  MultisigSignersInput;
+
+/**
+ * Build `stamp_release_surface` with the current ProtocolConfig M-of-N approval.
+ *
+ * The named authority, the complete input record, every fixed-width release
+ * commitment, and the approval array are stabilized synchronously before the
+ * generated async builder derives any default PDA. Approval signers are
+ * appended in the remaining-account suffix consumed by the on-chain threshold
+ * check.
+ */
+export async function stampReleaseSurface(input: StampReleaseSurfaceInput) {
+  const { generatedInput, multisigSigners } = snapshotMultisigFacadeInput(
+    input,
+    ["authority"],
+  );
+  const stableGeneratedInput: StampReleaseSurfaceAsyncInput = {
+    ...generatedInput,
+    expectedProtocolConfigHash: snapshotFixedBytes(
+      generatedInput.expectedProtocolConfigHash,
+      32,
+      "stampReleaseSurface: expectedProtocolConfigHash",
+    ),
+    expectedBidConfigHash: snapshotFixedBytes(
+      generatedInput.expectedBidConfigHash,
+      32,
+      "stampReleaseSurface: expectedBidConfigHash",
+    ),
+    expectedModerationConfigHash: snapshotFixedBytes(
+      generatedInput.expectedModerationConfigHash,
+      32,
+      "stampReleaseSurface: expectedModerationConfigHash",
+    ),
+    expectedIdlAccountHash: snapshotFixedBytes(
+      generatedInput.expectedIdlAccountHash,
+      32,
+      "stampReleaseSurface: expectedIdlAccountHash",
+    ),
+    expectedCustodyAccountHash: snapshotFixedBytes(
+      generatedInput.expectedCustodyAccountHash,
+      32,
+      "stampReleaseSurface: expectedCustodyAccountHash",
+    ),
+  };
+  const instruction =
+    await getStampReleaseSurfaceInstructionAsync(stableGeneratedInput);
+  return appendMultisigSignerMetas(instruction, multisigSigners);
+}
 
 /**
  * A typed capability set describing which instruction families a deployed cluster

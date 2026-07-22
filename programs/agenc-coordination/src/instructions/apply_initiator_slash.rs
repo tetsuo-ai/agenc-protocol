@@ -72,7 +72,12 @@ fn terminal_initiator_lost(
             _ => return Err(CoordinationError::CorruptedData.into()),
         },
         DisputeStatus::Expired | DisputeStatus::Cancelled => false,
-        DisputeStatus::Active => return Err(CoordinationError::DisputeNotResolved.into()),
+        // SettlementPending is ruling-recorded but not terminal: the
+        // permissionless peer-settlement crank must finish before finalizers
+        // read the outcome, keeping every pre-chunking invariant intact.
+        DisputeStatus::Active | DisputeStatus::SettlementPending => {
+            return Err(CoordinationError::DisputeNotResolved.into())
+        }
     };
     Ok(initiator_lost_dispute(status, approved))
 }

@@ -124,6 +124,7 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
 
     // 4) buyer hires the listing -> Task + escrow + HireRecord.
     const taskId = new Uint8Array(32).fill(44);
+    const jobSpecHash = new Uint8Array(32).fill(55);
     await buyerClient.hireFromListing({
       listing,
       providerAgent,
@@ -134,12 +135,12 @@ describe("e2e: startLocalMarketplace drives the real program through the public 
       expectedPrice: price,
       expectedVersion: 1n,
       listingSpecHash,
+      taskJobSpecHash: jobSpecHash,
       moderator: market.moderator.address,
     });
     const [task] = await findTaskPda({ creator: buyer.address, taskId });
 
     // 5) CLEAN task attestation + job-spec pin (claim is gated on both).
-    const jobSpecHash = new Uint8Array(32).fill(55);
     await market.moderator.attestTask(task, jobSpecHash);
     await buyerClient.send([
       await facade.setTaskJobSpec({

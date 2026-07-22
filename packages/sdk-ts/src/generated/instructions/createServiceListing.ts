@@ -11,11 +11,9 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -49,6 +47,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -66,9 +66,7 @@ export const CREATE_SERVICE_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([91, 37, 216, 26, 93, 146, 13, 182]);
 
 export function getCreateServiceListingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    CREATE_SERVICE_LISTING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(CREATE_SERVICE_LISTING_DISCRIMINATOR);
 }
 
 export type CreateServiceListingInstruction<
@@ -140,12 +138,12 @@ export type CreateServiceListingInstructionDataArgs = {
 export function getCreateServiceListingInstructionDataEncoder(): Encoder<CreateServiceListingInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["listingId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["name", fixEncoderSize(getBytesEncoder(), 32)],
-      ["category", fixEncoderSize(getBytesEncoder(), 32)],
-      ["tags", fixEncoderSize(getBytesEncoder(), 64)],
-      ["specHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["listingId", getFixedBytesEncoder(32, "listingId")],
+      ["name", getFixedBytesEncoder(32, "name")],
+      ["category", getFixedBytesEncoder(32, "category")],
+      ["tags", getFixedBytesEncoder(64, "tags")],
+      ["specHash", getFixedBytesEncoder(32, "specHash")],
       [
         "specUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),

@@ -9,25 +9,33 @@
 //
 //   --purge   additionally remove the validator ledger (.localnet/ledger) so
 //             the next up is a clean genesis. Keys and env.json are kept.
-import { rm } from "node:fs/promises";
+//
+// Requires the same Linux/procfs/system-Python pidfd + flock rail as localnet-up.
+import { lstat, rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  archiveProcessIdentityFile,
   assertRecordedProcessIdentity,
   observeLinuxProcess,
+  openPrivateStateDirectory,
   readProcessIdentityFile,
 } from "./localnet-process-identity.mjs";
+import { withLocalnetLifecycleLock } from "./localnet-lifecycle-lock.mjs";
+import {
+  LOCALNET_PROGRAM_DESCRIPTOR_PATH,
+  LOCALNET_PROGRAM_ID,
+} from "./localnet-program-binding.mjs";
+import { signalProcessIfIdentityMatches } from "./localnet-process-signal.mjs";
+import { readValidatorLaunchIntentFile } from "./localnet-validator-launch.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
 const STATE_DIR = path.join(ROOT, ".localnet");
 const LEDGER_DIR = path.join(STATE_DIR, "ledger");
-const SO_PATH = path.join(
-  ROOT,
-  "programs/agenc-coordination/target/deploy/agenc_coordination.so",
-);
-const PROGRAM_ID = "HJsZ53Zb27b8QMRbQpuDngE44AdwCGxvEZr61Zmxw1xK";
+const STOPPED_VALIDATOR_FILE = path.join(STATE_DIR, "validator.stopped");
+const STARTING_VALIDATOR_FILE = path.join(STATE_DIR, "validator.starting");
 const PID_FILES = [
   { label: "validator", file: path.join(STATE_DIR, "validator.pid") },
   { label: "attestor", file: path.join(STATE_DIR, "attestor.pid") },
@@ -58,55 +66,134 @@ function validatorArgv(record, argv) {
     path.resolve(argument("--ledger") ?? "") !== path.resolve(LEDGER_DIR) ||
     argument("--rpc-port") !== String(record.rpcPort) ||
     upgrade < 0 ||
-    argv[upgrade + 1] !== PROGRAM_ID ||
-    path.resolve(argv[upgrade + 2] ?? "") !== path.resolve(SO_PATH)
+    argv[upgrade + 1] !== LOCALNET_PROGRAM_ID ||
+    argv[upgrade + 2] !== LOCALNET_PROGRAM_DESCRIPTOR_PATH
   ) {
-    throw new Error("validator shutdown refused: command line does not bind this repo ledger/program");
+    throw new Error(
+      "validator shutdown refused: command line does not bind this repo ledger/program",
+    );
   }
 }
 
-async function assertIdentity(record) {
-  const observed = await observeLinuxProcess(record.pid);
-  return assertRecordedProcessIdentity(record, observed, record.role === "validator"
-    ? {
-        executableBasename: "solana-test-validator",
-        cwd: STATE_DIR,
-        assertArgv: (argv) => validatorArgv(record, argv),
-      }
-    : { executableBasename: "node" });
+async function assertIdentity(record, processReference) {
+  const observed = await observeLinuxProcess(record.pid, {
+    processReference,
+  });
+  return assertRecordedProcessIdentity(
+    record,
+    observed,
+    record.role === "validator"
+      ? {
+          executableBasename: "solana-test-validator",
+          cwd: STATE_DIR,
+          assertArgv: (argv) => validatorArgv(record, argv),
+        }
+      : { executableBasename: "node" },
+  );
 }
 
-async function stopProcess(label, record) {
-  if (!(await assertIdentity(record))) {
-    console.log(`${label}: pid ${record.pid} not running (stale identity file removed)`);
+export async function stopProcess(label, record, dependencies = {}) {
+  const assertIdentityForStop = dependencies.assertIdentity ?? assertIdentity;
+  const openProcessReference = dependencies.openProcessReference;
+  const sendSignal = dependencies.sendSignal;
+  const now = dependencies.now ?? Date.now;
+  const sleep =
+    dependencies.sleep ??
+    ((milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const log = dependencies.log ?? console.log;
+  const termGraceMs = dependencies.termGraceMs ?? 10_000;
+  const killGraceMs = dependencies.killGraceMs ?? 5_000;
+  const signalIfExact = (signal) =>
+    signalProcessIfIdentityMatches(record, signal, {
+      assertIdentity: assertIdentityForStop,
+      ...(openProcessReference === undefined ? {} : { openProcessReference }),
+      ...(sendSignal === undefined ? {} : { sendSignal }),
+    });
+
+  if (!(await signalIfExact("SIGTERM"))) {
+    log(`${label}: recorded pid ${record.pid} is already stopped`);
     return;
   }
-  process.kill(record.pid, "SIGTERM");
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (!(await assertIdentity(record))) {
-      console.log(`${label}: pid ${record.pid} stopped (SIGTERM)`);
+  const deadline = now() + termGraceMs;
+  while (now() < deadline) {
+    if (!(await assertIdentityForStop(record))) {
+      log(`${label}: pid ${record.pid} stopped (SIGTERM)`);
       return;
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await sleep(200);
   }
-  // Revalidate immediately before escalation. If the PID was reused during the
-  // grace period, assertIdentity refuses instead of signalling the new process.
-  await assertIdentity(record);
-  process.kill(record.pid, "SIGKILL");
-  const killDeadline = Date.now() + 5_000;
-  while (Date.now() < killDeadline) {
-    if (!(await assertIdentity(record))) {
-      console.log(`${label}: pid ${record.pid} killed (SIGKILL)`);
+  // Reopen a stable process reference for escalation, verify through it, and
+  // signal through that same reference. Exit yields a benign ESRCH result;
+  // numeric PID reuse cannot retarget the SIGKILL.
+  if (!(await signalIfExact("SIGKILL"))) {
+    log(`${label}: pid ${record.pid} stopped (SIGTERM)`);
+    return;
+  }
+  const killDeadline = now() + killGraceMs;
+  while (now() < killDeadline) {
+    if (!(await assertIdentityForStop(record))) {
+      log(`${label}: pid ${record.pid} killed (SIGKILL)`);
       return;
     }
-    await new Promise((r) => setTimeout(r, 100));
+    await sleep(100);
   }
-  throw new Error(`${label}: verified pid ${record.pid} is still alive after SIGKILL`);
+  throw new Error(
+    `${label}: verified pid ${record.pid} is still alive after SIGKILL`,
+  );
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+export function assertLedgerPurgeIsAttested({
+  ledgerExists,
+  stoppedMarkerFound,
+  startingMarkerFound,
+}) {
+  if (ledgerExists && !stoppedMarkerFound && !startingMarkerFound) {
+    throw new Error(
+      "purge refused: ledger exists without verified stopped/startup lifecycle evidence",
+    );
+  }
+}
+
+export async function purgeAttestedLedger(
+  { ledgerExists, stoppedMarkerFound, startingMarkerFound },
+  {
+    removeLedger,
+    syncStateDirectory,
+    removeStoppedMarker,
+    removeStartingMarker,
+  },
+) {
+  assertLedgerPurgeIsAttested({
+    ledgerExists,
+    stoppedMarkerFound,
+    startingMarkerFound,
+  });
+  await removeLedger();
+  // The markers are recovery proof. Delete them only after the parent
+  // directory durably records ledger removal, then durably record their own
+  // deletion. A crash can therefore restore stale proof, never remove proof
+  // while restoring the ledger it authorized.
+  await syncStateDirectory();
+  await removeStoppedMarker();
+  await removeStartingMarker();
+  await syncStateDirectory();
+}
+
+async function existingLedgerIsDirectory() {
+  try {
+    const metadata = await lstat(LEDGER_DIR);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      throw new Error("purge refused: localnet ledger is not a real directory");
+    }
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function mainLocked(args) {
   let anyFound = false;
 
   for (const { label, file } of PID_FILES) {
@@ -114,20 +201,85 @@ async function main() {
     if (record === null) continue;
     anyFound = true;
     await stopProcess(label, record);
-    await rm(file, { force: true });
+    if (label === "validator") {
+      await archiveProcessIdentityFile(
+        file,
+        STOPPED_VALIDATOR_FILE,
+        "validator",
+      );
+      console.log(
+        `validator: verified-stopped marker retained at ${STOPPED_VALIDATOR_FILE}`,
+      );
+    } else {
+      await rm(file, { force: true });
+    }
+  }
+
+  const stoppedMarkerFound =
+    (await readProcessIdentityFile(STOPPED_VALIDATOR_FILE, "validator")) !==
+    null;
+  if (stoppedMarkerFound) {
+    anyFound = true;
+    console.log("validator: using verified-stopped lifecycle marker");
+  }
+  const startingMarkerFound =
+    (await readValidatorLaunchIntentFile(STARTING_VALIDATOR_FILE, {
+      repoRoot: ROOT,
+      ledgerDir: LEDGER_DIR,
+      programId: LOCALNET_PROGRAM_ID,
+    })) !== null;
+  if (startingMarkerFound) {
+    anyFound = true;
+    console.log("validator: using completed precommit recovery marker");
+  }
+
+  const ledgerExists = args.purge ? await existingLedgerIsDirectory() : false;
+  if (args.purge) {
+    assertLedgerPurgeIsAttested({
+      ledgerExists,
+      stoppedMarkerFound,
+      startingMarkerFound,
+    });
   }
   if (!anyFound) {
     console.log("localnet-down: no pid files found — nothing to stop.");
   }
 
   if (args.purge) {
-    await rm(LEDGER_DIR, { recursive: true, force: true });
+    const stateDirectoryHandle = await openPrivateStateDirectory(STATE_DIR);
+    try {
+      await purgeAttestedLedger(
+        { ledgerExists, stoppedMarkerFound, startingMarkerFound },
+        {
+          removeLedger: () => rm(LEDGER_DIR, { recursive: true, force: true }),
+          syncStateDirectory: () => stateDirectoryHandle.sync(),
+          removeStoppedMarker: () =>
+            rm(STOPPED_VALIDATOR_FILE, { force: true }),
+          removeStartingMarker: () =>
+            rm(STARTING_VALIDATOR_FILE, { force: true }),
+        },
+      );
+    } finally {
+      await stateDirectoryHandle.close();
+    }
     console.log(`purged ledger: ${LEDGER_DIR}`);
-    console.log("(keys and env.json kept; next `localnet-up` is a fresh genesis + re-init)");
+    console.log(
+      "(keys and env.json kept; next `localnet-up` is a fresh genesis + re-init)",
+    );
   }
 }
 
-main().catch((error) => {
-  console.error(`localnet-down: ERROR: ${error?.stack ?? error}`);
-  process.exit(1);
-});
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  await withLocalnetLifecycleLock(STATE_DIR, () => mainLocked(args));
+}
+
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    console.error(`localnet-down: ERROR: ${error?.stack ?? error}`);
+    process.exit(1);
+  });
+}

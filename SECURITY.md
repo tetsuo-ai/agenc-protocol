@@ -261,8 +261,12 @@ Multisig:     7VNP3JwLede86xgfG13pzyTKhTiuZkirJPxULrTce5DY   (program SQDS4ep65T
 No individual key can now unilaterally push an upgrade — the escrow-custodying
 program requires 2-of-3 signatures for any bytecode change. The migration runbook
 and full record are in `docs/UPGRADE_AUTHORITY.md`. Revision 5 is also blocked
-on a separately reviewed 97,152-byte `ExtendProgramChecked` action through
-Squads CPI; extension and upgrade must execute in different slots, and the
+on a separately reviewed 101,272-byte top-level legacy `ExtendProgram` action.
+ProgramData extension is permissionless and does not change executable bytes;
+current Agave rejects it through Squads CPI. The pinned rail therefore requires
+official Agave CLI 4.1.0, snapshots one private payer keypair inode for address
+derivation and execution, and performs two-RPC pre/postflight. Extension
+and the separately governed upgrade must execute in different slots, and the
 deployment rail refuses implicit auto-extension. **Residual (tracked, not yet
 done):** the three member keys are currently co-located on one operator host;
 distributing at least one onto separate hardware (a Ledger) is the remaining

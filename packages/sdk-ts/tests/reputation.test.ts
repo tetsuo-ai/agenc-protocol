@@ -5,6 +5,8 @@ import {
   createNoopSigner,
   none,
   some,
+  type Address,
+  type TransactionSigner,
 } from "@solana/kit";
 import {
   // stake / reputation
@@ -66,6 +68,27 @@ const A7 = address("Config1111111111111111111111111111111111111");
 
 const signerAddr = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
+function mutableSigner(initialAddress: Address): {
+  signer: TransactionSigner;
+  setAddress(nextAddress: Address): void;
+} {
+  let liveAddress = initialAddress;
+  const signer = {
+    ...createNoopSigner(initialAddress),
+  } as TransactionSigner;
+  Object.defineProperty(signer, "address", {
+    configurable: true,
+    enumerable: true,
+    get: () => liveAddress,
+  });
+  return {
+    signer,
+    setAddress(nextAddress) {
+      liveAddress = nextAddress;
+    },
+  };
+}
+
 describe("reputation facade — staking & delegation", () => {
   it("stakeReputation: program, account order, data round-trip", () => {
     const authority = createNoopSigner(signerAddr);
@@ -102,8 +125,9 @@ describe("reputation facade — staking & delegation", () => {
       A1,
       A2,
     ]);
-    const decoded =
-      getWithdrawReputationStakeInstructionDataDecoder().decode(ix.data);
+    const decoded = getWithdrawReputationStakeInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.amount).toBe(1234n);
   });
 
@@ -125,8 +149,9 @@ describe("reputation facade — staking & delegation", () => {
       A3,
       SYSTEM_PROGRAM,
     ]);
-    const decoded =
-      getDelegateReputationInstructionDataDecoder().decode(ix.data);
+    const decoded = getDelegateReputationInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.amount).toBe(250);
     expect(decoded.expiresAt).toBe(1_700_000_000n);
   });
@@ -138,11 +163,7 @@ describe("reputation facade — staking & delegation", () => {
       delegation: A2,
     });
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    expect(ix.accounts.map((a) => a.address)).toEqual([
-      signerAddr,
-      A1,
-      A2,
-    ]);
+    expect(ix.accounts.map((a) => a.address)).toEqual([signerAddr, A1, A2]);
     expect(ix.accounts[0]!.role).toBe(AccountRole.WRITABLE);
     // No args beyond the discriminator — decoding must still succeed.
     const decoded = getRevokeDelegationInstructionDataDecoder().decode(ix.data);
@@ -346,9 +367,9 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
     const [protocolConfig] = await findProtocolConfigPda();
     expect(ix.accounts[3]!.address).toBe(protocolConfig);
     expect(ix.accounts[4]!.address).toBe(SYSTEM_PROGRAM);
-    expect(getStakeReputationInstructionDataDecoder().decode(ix.data).amount).toBe(
-      100n,
-    );
+    expect(
+      getStakeReputationInstructionDataDecoder().decode(ix.data).amount,
+    ).toBe(100n);
   });
 
   it("withdrawReputationStake derives the reputationStake PDA", async () => {
@@ -540,5 +561,199 @@ describe("reputation facade — async builders auto-derive PDAs", () => {
     expect(Array.from(ix.data.slice(-32))).toEqual(
       Array.from(expectedContentHash),
     );
+  });
+});
+
+describe("reputation facade — async transaction intent snapshots", () => {
+  it("binds the authority before hostile whole-input reflection", async () => {
+    const authority = mutableSigner(signerAddr);
+    const input = new Proxy(
+      { authority: authority.signer, agent: A1, amount: 100n },
+      {
+        ownKeys(target) {
+          authority.setAddress(A2);
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    const ix = await stakeReputation(input);
+    expect(ix.accounts[0]).toMatchObject({
+      address: signerAddr,
+      signer: authority.signer,
+    });
+  });
+
+  it("detaches register-skill bytes and its address Option before PDA derivation", async () => {
+    const authority = mutableSigner(signerAddr);
+    const skillId = new Uint8Array(32).fill(11);
+    const name = new Uint8Array(32).fill(12);
+    const contentHash = new Uint8Array(32).fill(13);
+    const tags = new Uint8Array(64).fill(14);
+    const priceMint: { __option: "Some"; value: Address } = {
+      __option: "Some",
+      value: A6,
+    };
+    const pending = registerSkill({
+      author: A2,
+      authority: authority.signer,
+      skillId,
+      name,
+      contentHash,
+      price: 1n,
+      priceMint,
+      tags,
+    });
+
+    skillId.fill(91);
+    name.fill(92);
+    contentHash.fill(93);
+    tags.fill(94);
+    priceMint.value = A7;
+    authority.setAddress(A1);
+
+    const ix = await pending;
+    const decoded = getRegisterSkillInstructionDataDecoder().decode(ix.data);
+    expect(decoded.skillId).toEqual(new Uint8Array(32).fill(11));
+    expect(decoded.name).toEqual(new Uint8Array(32).fill(12));
+    expect(decoded.contentHash).toEqual(new Uint8Array(32).fill(13));
+    expect(decoded.tags).toEqual(new Uint8Array(64).fill(14));
+    expect(decoded.priceMint).toEqual(some(A6));
+    expect(ix.accounts[3]).toMatchObject({
+      address: signerAddr,
+      signer: authority.signer,
+    });
+  });
+
+  it("detaches update/rating/purchase/feed byte and Option payloads", async () => {
+    const authority = createNoopSigner(signerAddr);
+    const updateHash = new Uint8Array(32).fill(21);
+    const updateTags = new Uint8Array(64).fill(22);
+    const tagsOption = { __option: "Some" as const, value: updateTags };
+    const activeOption = { __option: "Some" as const, value: true };
+    const updatePending = updateSkill({
+      skill: A1,
+      author: A2,
+      authority,
+      contentHash: updateHash,
+      price: 5n,
+      tags: tagsOption,
+      isActive: activeOption,
+    });
+    updateHash.fill(81);
+    updateTags.fill(82);
+    tagsOption.value = new Uint8Array(64).fill(83);
+    activeOption.value = false;
+    const updateDecoded = getUpdateSkillInstructionDataDecoder().decode(
+      (await updatePending).data,
+    );
+    expect(updateDecoded.contentHash).toEqual(new Uint8Array(32).fill(21));
+    expect(updateDecoded.tags).toEqual(some(new Uint8Array(64).fill(22)));
+    expect(updateDecoded.isActive).toEqual(some(true));
+
+    const reviewBytes = new Uint8Array(32).fill(31);
+    const reviewOption = { __option: "Some" as const, value: reviewBytes };
+    const ratePending = rateSkill({
+      skill: A1,
+      rater: A3,
+      authorAgent: A4,
+      authority,
+      rating: 5,
+      reviewHash: reviewOption,
+    });
+    reviewBytes.fill(84);
+    reviewOption.value = new Uint8Array(32).fill(85);
+    expect(
+      getRateSkillInstructionDataDecoder().decode((await ratePending).data)
+        .reviewHash,
+    ).toEqual(some(new Uint8Array(32).fill(31)));
+
+    const expectedContentHash = new Uint8Array(32).fill(41);
+    const purchasePending = purchaseSkill({
+      skill: A1,
+      buyer: A3,
+      authorAgent: A4,
+      authorWallet: A5,
+      treasury: A7,
+      authority,
+      expectedPrice: 1n,
+      expectedVersion: 4,
+      expectedContentHash,
+    });
+    expectedContentHash.fill(86);
+    expect(
+      getPurchaseSkillInstructionDataDecoder().decode(
+        (await purchasePending).data,
+      ).expectedContentHash,
+    ).toEqual(new Uint8Array(32).fill(41));
+
+    const feedHash = new Uint8Array(32).fill(51);
+    const nonce = new Uint8Array(32).fill(52);
+    const topic = new Uint8Array(32).fill(53);
+    const parent: { __option: "Some"; value: Address } = {
+      __option: "Some",
+      value: A5,
+    };
+    const postPending = postToFeed({
+      author: A2,
+      authority,
+      contentHash: feedHash,
+      nonce,
+      topic,
+      parentPost: parent,
+    });
+    feedHash.fill(87);
+    nonce.fill(88);
+    topic.fill(89);
+    parent.value = A6;
+    const postDecoded = getPostToFeedInstructionDataDecoder().decode(
+      (await postPending).data,
+    );
+    expect(postDecoded.contentHash).toEqual(new Uint8Array(32).fill(51));
+    expect(postDecoded.nonce).toEqual(new Uint8Array(32).fill(52));
+    expect(postDecoded.topic).toEqual(new Uint8Array(32).fill(53));
+    expect(postDecoded.parentPost).toEqual(some(A5));
+  });
+
+  it("detaches the nested revoke recovery suffix before either PDA await", async () => {
+    const recovery: { treasury: Address } = { treasury: A3 };
+    const pending = revokeDelegation({
+      authority: signerAddr,
+      delegatorAgent: A1,
+      delegateeAgent: A2,
+      recovery,
+    });
+    recovery.treasury = A4;
+
+    const ix = await pending;
+    expect(ix.accounts.at(-1)).toMatchObject({
+      address: A3,
+      role: AccountRole.WRITABLE,
+    });
+  });
+
+  it("rejects malformed fixed-width inputs before building an instruction", async () => {
+    const authority = createNoopSigner(signerAddr);
+    await expect(
+      registerSkill({
+        author: A2,
+        authority,
+        skillId: new Uint8Array(31),
+        name: new Uint8Array(32),
+        contentHash: new Uint8Array(32),
+        price: 1n,
+        tags: new Uint8Array(64),
+      }),
+    ).rejects.toThrow(/exactly 32 bytes/u);
+    await expect(
+      updateSkill({
+        skill: A1,
+        author: A2,
+        authority,
+        contentHash: new Uint8Array(32),
+        price: 1n,
+        tags: new Uint8Array(63),
+      }),
+    ).rejects.toThrow(/exactly 64 bytes/u);
   });
 });

@@ -18,8 +18,7 @@ use crate::instructions::bid_settlement_helpers::{
 };
 use crate::instructions::bond_helpers::{settle_completion_bond, BondDisposition};
 use crate::instructions::dispute_helpers::{
-    process_dispute_peer_bundles, settle_dispute_submission_evidence,
-    validate_dispute_worker_accounts,
+    expected_peer_bundles, settle_dispute_submission_evidence, validate_dispute_worker_accounts,
 };
 use crate::instructions::lamport_transfer::transfer_lamports;
 use crate::instructions::post_completion_bond::dependency_parent_completed;
@@ -413,19 +412,26 @@ pub fn handler<'info>(ctx: Context<'_, '_, '_, 'info, ExpireDispute<'info>>) -> 
     // worker supplies a canonical `(claim, worker, task_submission)` bundle. The
     // submission meta is non-skippable evidence: live records are swept before claim
     // close; the exact empty PDA proves absence.
-    process_dispute_peer_bundles(
-        task.as_mut(),
-        &task_key,
-        dispute_worker_accounts,
-        dispute.total_voters,
-        defendant_worker_key,
-        ctx.accounts.task_validation_config.as_deref_mut(),
-        ctx.program_id,
-    )?;
+    // Chunked settlement: expiry is O(1) in accounts. Additional collaborative
+    // workers are swept by the permissionless `settle_dispute_claim` crank —
+    // any peer account presented here is rejected outright.
+    require!(
+        dispute_worker_accounts.is_empty(),
+        CoordinationError::DisputePeerBundlesRetired
+    );
+    let deferred_peers = u8::try_from(expected_peer_bundles(task.current_workers))
+        .map_err(|_| CoordinationError::ArithmeticOverflow)?;
 
     task.status = TaskStatus::Cancelled;
-    task.current_workers = 0;
-    dispute.status = DisputeStatus::Expired;
+    task.current_workers = deferred_peers;
+    if deferred_peers == 0 {
+        dispute.status = DisputeStatus::Expired;
+    } else {
+        dispute.status = DisputeStatus::SettlementPending;
+        dispute.pending_terminal_status = DisputeStatus::Expired as u8;
+    }
+    dispute.peer_workers_total = deferred_peers;
+    dispute.peer_workers_settled = 0;
     dispute.resolved_at = clock.unix_timestamp;
     escrow.is_closed = true;
 

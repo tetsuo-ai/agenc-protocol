@@ -1,6 +1,6 @@
 # Moderation Liveness Escape Hatch (P1.3 / batch-2 A2)
 
-> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `../TODO.MD` for the completed remediation record.
+> **Historical design record (banner added 2026-07-17).** Dated design document, not current state — see `./MAINNET_MAINLINE.md` for what is live and `./audit/ENTERPRISE_REMEDIATION_2026-07.md` for the completed remediation record.
 
 > **Status:** DESIGN + IMPLEMENTED IN BATCH 2 (this document is written first, the
 > implementation follows its §5 recommendation exactly). Closes the last half of the

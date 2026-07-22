@@ -11,11 +11,9 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -47,6 +45,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -64,9 +64,7 @@ export const CREATE_GOODS_LISTING_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([47, 95, 35, 219, 15, 80, 134, 20]);
 
 export function getCreateGoodsListingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    CREATE_GOODS_LISTING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(CREATE_GOODS_LISTING_DISCRIMINATOR);
 }
 
 export type CreateGoodsListingInstruction<
@@ -136,17 +134,17 @@ export type CreateGoodsListingInstructionDataArgs = {
 export function getCreateGoodsListingInstructionDataEncoder(): Encoder<CreateGoodsListingInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["goodId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["name", fixEncoderSize(getBytesEncoder(), 32)],
-      ["metadataHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["goodId", getFixedBytesEncoder(32, "goodId")],
+      ["name", getFixedBytesEncoder(32, "name")],
+      ["metadataHash", getFixedBytesEncoder(32, "metadataHash")],
       [
         "metadataUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
       ],
       ["price", getU64Encoder()],
       ["priceMint", getOptionEncoder(getAddressEncoder())],
-      ["tags", fixEncoderSize(getBytesEncoder(), 64)],
+      ["tags", getFixedBytesEncoder(64, "tags")],
       ["totalSupply", getU64Encoder()],
       ["operator", getAddressEncoder()],
       ["operatorFeeBps", getU16Encoder()],

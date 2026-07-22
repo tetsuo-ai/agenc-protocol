@@ -16,11 +16,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -51,6 +49,8 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -67,9 +67,7 @@ export const SERVICE_LISTING_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
 );
 
 export function getServiceListingDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    SERVICE_LISTING_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(SERVICE_LISTING_DISCRIMINATOR);
 }
 
 export type ServiceListing = {
@@ -207,14 +205,14 @@ export type ServiceListingArgs = {
 export function getServiceListingEncoder(): Encoder<ServiceListingArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["providerAgent", getAddressEncoder()],
       ["authority", getAddressEncoder()],
-      ["listingId", fixEncoderSize(getBytesEncoder(), 32)],
-      ["name", fixEncoderSize(getBytesEncoder(), 32)],
-      ["category", fixEncoderSize(getBytesEncoder(), 32)],
-      ["tags", fixEncoderSize(getBytesEncoder(), 64)],
-      ["specHash", fixEncoderSize(getBytesEncoder(), 32)],
+      ["listingId", getFixedBytesEncoder(32, "listingId")],
+      ["name", getFixedBytesEncoder(32, "name")],
+      ["category", getFixedBytesEncoder(32, "category")],
+      ["tags", getFixedBytesEncoder(64, "tags")],
+      ["specHash", getFixedBytesEncoder(32, "specHash")],
       [
         "specUri",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),
@@ -235,7 +233,7 @@ export function getServiceListingEncoder(): Encoder<ServiceListingArgs> {
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 32)],
+      ["reserved", getFixedBytesEncoder(32, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: SERVICE_LISTING_DISCRIMINATOR }),
   );

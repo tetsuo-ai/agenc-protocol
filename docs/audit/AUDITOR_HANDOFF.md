@@ -7,7 +7,8 @@
 > have moved on, and the "0 open findings" summary in §4 is historical — the
 > 2026-07-16/17 adversarial audit found additional issues the earlier audits
 > missed. Its F-1..F-19 remediation queue is now implemented in the pending
-> revision-5 candidate; see `TODO.MD` for the remediation record,
+> revision-5 candidate; see `ENTERPRISE_REMEDIATION_2026-07.md` for the
+> remediation record,
 > `docs/MAINNET_MAINLINE.md` for the live/candidate split, and `CHANGELOG.md`
 > for current validation evidence.
 
@@ -217,7 +218,8 @@ All findings below are from internal multi-lens adversarial reviews (each ran a
 multi-dimension lens, then an independent verifier). **Every confirmed finding from
 those reviews was fixed; 0 were open at that time** — a historical statement: the
 2026-07 audit later found new issues the earlier audits missed (see the banner and
-`TODO.MD`). This is provided so the external auditor can see what was already probed —
+`ENTERPRISE_REMEDIATION_2026-07.md`). This is provided so the external auditor
+can see what was already probed —
 it is NOT a substitute for independent confirmation.
 
 | Review | Surface | Result |

@@ -20,6 +20,17 @@ const PROGRAMDATA_METADATA_BYTES: usize = 45;
 const PROGRAMDATA_VARIANT: u32 = 3;
 const ANCHOR_IDL_SEED: &str = "anchor:idl";
 
+// This log-backed marker is intentionally reachable from the production-only
+// release-stamp handler so build consumers can distinguish the reviewed default
+// SBF from same-program-id development feature builds. Keep all values the same
+// byte length so profile mutation regressions can preserve ELF structure.
+#[cfg(feature = "private-zk")]
+const SBF_BUILD_PROFILE: &str = "AGENC_SBF_PROFILE=PRIVATE_ZK_V1";
+#[cfg(all(not(feature = "private-zk"), feature = "validation-timings"))]
+const SBF_BUILD_PROFILE: &str = "AGENC_SBF_PROFILE=VALIDATION_V1";
+#[cfg(all(not(feature = "private-zk"), not(feature = "validation-timings")))]
+const SBF_BUILD_PROFILE: &str = "AGENC_SBF_PROFILE=PRODUCTION_V1";
+
 #[derive(Accounts)]
 pub struct StampReleaseSurface<'info> {
     #[account(
@@ -138,6 +149,7 @@ pub fn handler(
     expected_custody_owner: Pubkey,
     expected_custody_account_hash: [u8; 32],
 ) -> Result<()> {
+    msg!(SBF_BUILD_PROFILE);
     require!(
         ctx.accounts.authority.is_signer,
         CoordinationError::MultisigNotEnoughSigners

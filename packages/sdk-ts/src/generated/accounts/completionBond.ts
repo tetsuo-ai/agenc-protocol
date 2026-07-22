@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -45,14 +43,14 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 export const COMPLETION_BOND_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array(
   [77, 209, 12, 19, 44, 65, 93, 238],
 );
 
 export function getCompletionBondDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    COMPLETION_BOND_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(COMPLETION_BOND_DISCRIMINATOR);
 }
 
 export type CompletionBond = {
@@ -104,7 +102,7 @@ export type CompletionBondArgs = {
 export function getCompletionBondEncoder(): Encoder<CompletionBondArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["party", getAddressEncoder()],
       ["role", getU8Encoder()],
@@ -112,7 +110,7 @@ export function getCompletionBondEncoder(): Encoder<CompletionBondArgs> {
       ["bondMint", getOptionEncoder(getAddressEncoder())],
       ["postedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 16)],
+      ["reserved", getFixedBytesEncoder(16, "reserved")],
     ]),
     (value) => ({ ...value, discriminator: COMPLETION_BOND_DISCRIMINATOR }),
   );

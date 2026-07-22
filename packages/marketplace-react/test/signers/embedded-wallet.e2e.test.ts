@@ -123,6 +123,7 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
 
     // 4) THE WALLETLESS HIRE: the embedded buyer signs + pays for the hire ix.
     const taskId = new Uint8Array(32).fill(44);
+    const jobSpecHash = new Uint8Array(32).fill(55);
     await buyerClient.hireFromListing({
       listing,
       providerAgent,
@@ -133,6 +134,7 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
       expectedPrice: price,
       expectedVersion: 1n,
       listingSpecHash,
+      taskJobSpecHash: jobSpecHash,
       // P1.2: the hire gate consumes the named moderator's record.
       moderator: market.moderator.address,
     });
@@ -142,7 +144,6 @@ describe("e2e: walletless buyer completes a hire via the embedded-wallet path", 
     );
 
     // 5) CLEAN task attestation + job-spec pin (claim is gated on both).
-    const jobSpecHash = new Uint8Array(32).fill(55);
     await market.moderator.attestTask(task, jobSpecHash);
     await buyerClient.send([
       await facade.setTaskJobSpec({

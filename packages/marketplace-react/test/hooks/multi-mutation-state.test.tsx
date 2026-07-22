@@ -3,8 +3,18 @@ import { QueryClient } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { AgencProvider, type MarketplaceClient, type ReadTransport } from "../../src/index.js";
-import { useCompletionBond, useSubmissionReview, useTaskLifecycle, useTaskWork } from "../../src/hooks/index.js";
+import {
+  AgencProvider,
+  type MarketplaceClient,
+  type ReadTransport,
+} from "../../src/index.js";
+import {
+  useCompletionBond,
+  useSubmissionReview,
+  useTaskLifecycle,
+  useTaskWork,
+} from "../../src/hooks/index.js";
+import { actAsync } from "../act-async.js";
 
 const SIGNER = address("11111111111111111111111111111111");
 const TASK = address("So11111111111111111111111111111111111111112");
@@ -91,6 +101,11 @@ const REJECT_INPUT = {
   rejectionHash: new Uint8Array(32).fill(7),
 } as never;
 
+const SUBMIT_INPUT = {
+  proofHash: new Uint8Array(32).fill(9),
+  resultData: null,
+} as never;
+
 describe("latest action state for multi-mutation hooks", () => {
   describe("useSubmissionReview", () => {
     it("reports a later failure after an earlier success", async () => {
@@ -104,8 +119,10 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await result.current.accept(ACCEPT_INPUT);
-      await expect(result.current.reject(REJECT_INPUT)).rejects.toBe(boom);
+      await actAsync(() => result.current.accept(ACCEPT_INPUT));
+      await expect(
+        actAsync(() => result.current.reject(REJECT_INPUT)),
+      ).rejects.toBe(boom);
 
       await waitFor(() => expect(result.current.status).toBe("error"));
       expect(result.current.error).toBe(boom);
@@ -123,8 +140,10 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await expect(result.current.accept(ACCEPT_INPUT)).rejects.toBe(boom);
-      await result.current.reject(REJECT_INPUT);
+      await expect(
+        actAsync(() => result.current.accept(ACCEPT_INPUT)),
+      ).rejects.toBe(boom);
+      await actAsync(() => result.current.reject(REJECT_INPUT));
 
       await waitFor(() => expect(result.current.status).toBe("success"));
       expect(result.current.error).toBeNull();
@@ -144,8 +163,10 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await result.current.post({ role: 1 });
-      await expect(result.current.reclaim({ role: 1 })).rejects.toBe(boom);
+      await actAsync(() => result.current.post({ role: 1 }));
+      await expect(
+        actAsync(() => result.current.reclaim({ role: 1 })),
+      ).rejects.toBe(boom);
 
       await waitFor(() => expect(result.current.status).toBe("error"));
       expect(result.current.error).toBe(boom);
@@ -163,8 +184,10 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await expect(result.current.post({ role: 1 })).rejects.toBe(boom);
-      await result.current.reclaim({ role: 1 });
+      await expect(
+        actAsync(() => result.current.post({ role: 1 })),
+      ).rejects.toBe(boom);
+      await actAsync(() => result.current.reclaim({ role: 1 }));
 
       await waitFor(() => expect(result.current.status).toBe("success"));
       expect(result.current.error).toBeNull();
@@ -184,8 +207,8 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await result.current.cancel();
-      await expect(result.current.close()).rejects.toBe(boom);
+      await actAsync(() => result.current.cancel());
+      await expect(actAsync(() => result.current.close())).rejects.toBe(boom);
 
       await waitFor(() => expect(result.current.status).toBe("error"));
       expect(result.current.error).toBe(boom);
@@ -203,8 +226,8 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await expect(result.current.cancel()).rejects.toBe(boom);
-      await result.current.close();
+      await expect(actAsync(() => result.current.cancel())).rejects.toBe(boom);
+      await actAsync(() => result.current.close());
 
       await waitFor(() => expect(result.current.status).toBe("success"));
       expect(result.current.error).toBeNull();
@@ -224,8 +247,10 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await result.current.claim({} as never);
-      await expect(result.current.submit({} as never)).rejects.toBe(boom);
+      await actAsync(() => result.current.claim({} as never));
+      await expect(
+        actAsync(() => result.current.submit(SUBMIT_INPUT)),
+      ).rejects.toBe(boom);
 
       await waitFor(() => expect(result.current.status).toBe("error"));
       expect(result.current.error).toBe(boom);
@@ -243,8 +268,10 @@ describe("latest action state for multi-mutation hooks", () => {
         wrapper: wrapper(writeClient),
       });
 
-      await expect(result.current.claim({} as never)).rejects.toBe(boom);
-      await result.current.submit({} as never);
+      await expect(
+        actAsync(() => result.current.claim({} as never)),
+      ).rejects.toBe(boom);
+      await actAsync(() => result.current.submit(SUBMIT_INPUT));
 
       await waitFor(() => expect(result.current.status).toBe("success"));
       expect(result.current.error).toBeNull();

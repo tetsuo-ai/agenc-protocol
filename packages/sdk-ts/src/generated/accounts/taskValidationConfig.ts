@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -38,6 +36,8 @@ import {
   type MaybeEncodedAccount,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getValidationModeDecoder,
   getValidationModeEncoder,
@@ -49,9 +49,7 @@ export const TASK_VALIDATION_CONFIG_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([101, 204, 19, 0, 210, 2, 191, 0]);
 
 export function getTaskValidationConfigDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    TASK_VALIDATION_CONFIG_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(TASK_VALIDATION_CONFIG_DISCRIMINATOR);
 }
 
 export type TaskValidationConfig = {
@@ -97,7 +95,7 @@ export type TaskValidationConfigArgs = {
 export function getTaskValidationConfigEncoder(): FixedSizeEncoder<TaskValidationConfigArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["creator", getAddressEncoder()],
       ["mode", getValidationModeEncoder()],
@@ -105,7 +103,7 @@ export function getTaskValidationConfigEncoder(): FixedSizeEncoder<TaskValidatio
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
-      ["reserved", fixEncoderSize(getBytesEncoder(), 7)],
+      ["reserved", getFixedBytesEncoder(7, "reserved")],
     ]),
     (value) => ({
       ...value,

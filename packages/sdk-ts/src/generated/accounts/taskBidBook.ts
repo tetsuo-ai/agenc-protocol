@@ -14,11 +14,9 @@ import {
   fetchEncodedAccount,
   fetchEncodedAccounts,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getOptionDecoder,
@@ -48,6 +46,8 @@ import {
   type OptionOrNullable,
   type ReadonlyUint8Array,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getBidBookStateDecoder,
   getBidBookStateEncoder,
@@ -68,9 +68,7 @@ export const TASK_BID_BOOK_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getTaskBidBookDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    TASK_BID_BOOK_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(TASK_BID_BOOK_DISCRIMINATOR);
 }
 
 export type TaskBidBook = {
@@ -86,6 +84,37 @@ export type TaskBidBook = {
   createdAt: bigint;
   updatedAt: bigint;
   bump: number;
+  /**
+   * Cached deterministic policy winner. `Pubkey::default()` = no tracked
+   * winner. Maintained incrementally by every bid mutation so `accept_bid`
+   * never has to enumerate competitors (the O(1)-accept redesign,
+   * docs/design/bid-accept-o1-redesign.md). Fields appended for layout
+   * stability; the revision-5 cutover preflight requires zero live books.
+   */
+  bestBid: Address;
+  /**
+   * Score components of `best_bid`, snapshotted at install so comparisons
+   * never need to load the incumbent's account. Scores are pure functions
+   * of these values plus the frozen `score_window_secs`.
+   */
+  bestRewardLamports: bigint;
+  bestEtaSeconds: number;
+  bestConfidenceBps: number;
+  bestReputationBps: number;
+  /**
+   * Set when the tracked winner is removed (cancel/expiry/demotion).
+   * `accept_bid` is blocked until the re-promotion grace elapses so every
+   * remaining bidder gets a fair window to promote before acceptance.
+   * 0 = fresh.
+   */
+  winnerStaleSince: bigint;
+  /**
+   * Frozen WeightedScore eta-normalization window, recorded once at
+   * `initialize_bid_book` as `task.deadline - now`. Freezing it makes all
+   * policy orderings pure functions of immutable bid fields (the winner no
+   * longer depends on when the creator calls accept).
+   */
+  scoreWindowSecs: number;
 };
 
 export type TaskBidBookArgs = {
@@ -100,13 +129,44 @@ export type TaskBidBookArgs = {
   createdAt: number | bigint;
   updatedAt: number | bigint;
   bump: number;
+  /**
+   * Cached deterministic policy winner. `Pubkey::default()` = no tracked
+   * winner. Maintained incrementally by every bid mutation so `accept_bid`
+   * never has to enumerate competitors (the O(1)-accept redesign,
+   * docs/design/bid-accept-o1-redesign.md). Fields appended for layout
+   * stability; the revision-5 cutover preflight requires zero live books.
+   */
+  bestBid: Address;
+  /**
+   * Score components of `best_bid`, snapshotted at install so comparisons
+   * never need to load the incumbent's account. Scores are pure functions
+   * of these values plus the frozen `score_window_secs`.
+   */
+  bestRewardLamports: number | bigint;
+  bestEtaSeconds: number;
+  bestConfidenceBps: number;
+  bestReputationBps: number;
+  /**
+   * Set when the tracked winner is removed (cancel/expiry/demotion).
+   * `accept_bid` is blocked until the re-promotion grace elapses so every
+   * remaining bidder gets a fair window to promote before acceptance.
+   * 0 = fresh.
+   */
+  winnerStaleSince: number | bigint;
+  /**
+   * Frozen WeightedScore eta-normalization window, recorded once at
+   * `initialize_bid_book` as `task.deadline - now`. Freezing it makes all
+   * policy orderings pure functions of immutable bid fields (the winner no
+   * longer depends on when the creator calls accept).
+   */
+  scoreWindowSecs: number;
 };
 
 /** Gets the encoder for {@link TaskBidBookArgs} account data. */
 export function getTaskBidBookEncoder(): Encoder<TaskBidBookArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["task", getAddressEncoder()],
       ["state", getBidBookStateEncoder()],
       ["policy", getMatchingPolicyEncoder()],
@@ -118,6 +178,13 @@ export function getTaskBidBookEncoder(): Encoder<TaskBidBookArgs> {
       ["createdAt", getI64Encoder()],
       ["updatedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
+      ["bestBid", getAddressEncoder()],
+      ["bestRewardLamports", getU64Encoder()],
+      ["bestEtaSeconds", getU32Encoder()],
+      ["bestConfidenceBps", getU16Encoder()],
+      ["bestReputationBps", getU16Encoder()],
+      ["winnerStaleSince", getI64Encoder()],
+      ["scoreWindowSecs", getU32Encoder()],
     ]),
     (value) => ({ ...value, discriminator: TASK_BID_BOOK_DISCRIMINATOR }),
   );
@@ -138,6 +205,13 @@ export function getTaskBidBookDecoder(): Decoder<TaskBidBook> {
     ["createdAt", getI64Decoder()],
     ["updatedAt", getI64Decoder()],
     ["bump", getU8Decoder()],
+    ["bestBid", getAddressDecoder()],
+    ["bestRewardLamports", getU64Decoder()],
+    ["bestEtaSeconds", getU32Decoder()],
+    ["bestConfidenceBps", getU16Decoder()],
+    ["bestReputationBps", getU16Decoder()],
+    ["winnerStaleSince", getI64Decoder()],
+    ["scoreWindowSecs", getU32Decoder()],
   ]);
 }
 

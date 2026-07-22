@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -44,9 +44,7 @@ export const DEREGISTER_AGENT_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([227, 208, 166, 164, 48, 69, 111, 1]);
 
 export function getDeregisterAgentDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    DEREGISTER_AGENT_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(DEREGISTER_AGENT_DISCRIMINATOR);
 }
 
 export type DeregisterAgentInstruction<
@@ -85,7 +83,9 @@ export type DeregisterAgentInstructionDataArgs = {};
 
 export function getDeregisterAgentInstructionDataEncoder(): FixedSizeEncoder<DeregisterAgentInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: DEREGISTER_AGENT_DISCRIMINATOR }),
   );
 }

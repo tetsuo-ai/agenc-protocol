@@ -1,7 +1,22 @@
+import { runInNewContext } from "node:vm";
 import { describe, it, expect } from "vitest";
-import { AccountRole, address, createNoopSigner } from "@solana/kit";
+import {
+  AccountRole,
+  address,
+  createNoopSigner,
+  generateKeyPairSigner,
+  getBase58Decoder,
+  getCompiledTransactionMessageDecoder,
+  getSignatureFromTransaction,
+  getTransactionSize,
+  type Address,
+  type Blockhash,
+  type ReadonlyUint8Array,
+  type TransactionSigner,
+} from "@solana/kit";
 import {
   AGENC_COORDINATION_PROGRAM_ADDRESS,
+  SET_TASK_JOB_SPEC_DISCRIMINATOR,
   findTaskModerationPda,
   findModerationAttestorPda,
   findModerationBlockPda,
@@ -31,6 +46,9 @@ import {
   findBidBookPda,
   findWorkerCompletionBondPda,
   DependencyType,
+  createMarketplaceClient,
+  type SignedTransaction,
+  type Transport,
 } from "../src/index.js";
 import {
   createTask,
@@ -83,6 +101,472 @@ const ID32 = new Uint8Array(32).fill(7);
 const DESC64 = new Uint8Array(64).fill(3);
 const HASH32 = new Uint8Array(32).fill(9);
 
+function taskAddressFromSeed(seed: number): Address {
+  return getBase58Decoder().decode(new Uint8Array(32).fill(seed)) as Address;
+}
+
+function mutableTaskSigner(initialAddress: TransactionSigner["address"]): {
+  signer: TransactionSigner;
+  setAddress: (next: TransactionSigner["address"]) => void;
+} {
+  const base = createNoopSigner(initialAddress);
+  let liveAddress = initialAddress;
+  const signer = Object.create(base) as TransactionSigner;
+  Object.defineProperty(signer, "address", {
+    configurable: true,
+    enumerable: true,
+    get: () => liveAddress,
+  });
+  return {
+    signer,
+    setAddress(next) {
+      liveAddress = next;
+    },
+  };
+}
+
+function invalidTaskFixedByteViews(): Uint8Array[] {
+  const detached = new Uint8Array(32).fill(1);
+  structuredClone(detached, { transfer: [detached.buffer] });
+  return [
+    new Proxy(new Uint8Array(32).fill(1), {}),
+    detached,
+    new Uint8Array(new SharedArrayBuffer(32)).fill(1),
+  ];
+}
+
+describe("task facade async intent boundaries", () => {
+  it("snapshots create bytes and collapses equal mutable signer roles synchronously", async () => {
+    const original = signerA.address;
+    const moved = signerB.address;
+    const authority = mutableTaskSigner(original);
+    const creator = mutableTaskSigner(original);
+    const taskId = new Uint8Array(32).fill(0x21);
+    const description = new Uint8Array(64).fill(0x22);
+    const constraintBytes = new Uint8Array(32).fill(0x23);
+    const constraintHash = {
+      __option: "Some" as const,
+      value: constraintBytes,
+    };
+
+    const pending = createTask({
+      creatorAgent: A,
+      authority: authority.signer,
+      creator: creator.signer,
+      taskId,
+      requiredCapabilities: 1n,
+      description,
+      rewardAmount: 1n,
+      maxWorkers: 1,
+      deadline: 1n,
+      taskType: 0,
+      constraintHash,
+      minReputation: 0,
+      rewardMintArg: null,
+    });
+    taskId.fill(0x91);
+    description.fill(0x92);
+    constraintBytes.fill(0x93);
+    constraintHash.value = new Uint8Array(32).fill(0x94);
+    authority.setAddress(moved);
+    creator.setAddress(moved);
+
+    const instruction = await pending;
+    const decoded = getCreateTaskInstructionDataDecoder().decode(
+      instruction.data,
+    );
+    expect(decoded.taskId).toEqual(new Uint8Array(32).fill(0x21));
+    expect(decoded.description).toEqual(new Uint8Array(64).fill(0x22));
+    expect(decoded.constraintHash).toEqual({
+      __option: "Some",
+      value: new Uint8Array(32).fill(0x23),
+    });
+    expect(instruction.accounts[5].address).toBe(original);
+    expect(instruction.accounts[6].address).toBe(original);
+    expect(
+      "signer" in instruction.accounts[5]
+        ? instruction.accounts[5].signer
+        : undefined,
+    ).toBe(
+      "signer" in instruction.accounts[6]
+        ? instruction.accounts[6].signer
+        : undefined,
+    );
+  });
+
+  it("snapshots create-task referrer and reward-mint Option wrappers", async () => {
+    const rewardMint: { __option: "Some"; value: Address } = {
+      __option: "Some",
+      value: A,
+    };
+    const referrer: { __option: "Some"; value: Address } = {
+      __option: "Some",
+      value: B,
+    };
+    const pending = createTask({
+      creatorAgent: A,
+      authority: signerA,
+      creator: signerA,
+      taskId: new Uint8Array(32).fill(0x24),
+      requiredCapabilities: 1n,
+      description: new Uint8Array(64).fill(0x25),
+      rewardAmount: 1n,
+      maxWorkers: 1,
+      deadline: 1n,
+      taskType: 0,
+      constraintHash: null,
+      minReputation: 0,
+      rewardMintArg: rewardMint,
+      referrer,
+      referrerFeeBps: 25,
+    });
+    rewardMint.value = C;
+    referrer.value = D;
+
+    const decoded = getCreateTaskInstructionDataDecoder().decode(
+      (await pending).data,
+    );
+    expect(decoded.rewardMint).toEqual({ __option: "Some", value: A });
+    expect(decoded.referrer).toEqual({ __option: "Some", value: B });
+  });
+
+  it("snapshots humanless referrer and dependent reward-mint wrappers", async () => {
+    const referrer: { __option: "Some"; value: Address } = {
+      __option: "Some",
+      value: B,
+    };
+    const humanlessPending = createTaskHumanless({
+      creator: signerA,
+      taskId: new Uint8Array(32).fill(0x26),
+      requiredCapabilities: 1n,
+      description: new Uint8Array(64).fill(0x27),
+      rewardAmount: 1n,
+      deadline: 1n,
+      minReputation: 0,
+      reviewWindowSecs: 60n,
+      referrer,
+      referrerFeeBps: 25,
+    });
+    referrer.value = C;
+
+    const rewardMint: { __option: "Some"; value: Address } = {
+      __option: "Some",
+      value: A,
+    };
+    const dependentPending = createDependentTask({
+      parentTask: B,
+      creatorAgent: A,
+      authority: signerA,
+      creator: signerA,
+      taskId: new Uint8Array(32).fill(0x28),
+      requiredCapabilities: 1n,
+      description: new Uint8Array(64).fill(0x29),
+      rewardAmount: 1n,
+      maxWorkers: 1,
+      deadline: 1n,
+      taskType: 0,
+      constraintHash: null,
+      dependencyType: DependencyType.Data,
+      minReputation: 0,
+      rewardMintArg: rewardMint,
+    });
+    rewardMint.value = D;
+
+    const humanless = getCreateTaskHumanlessInstructionDataDecoder().decode(
+      (await humanlessPending).data,
+    );
+    const dependent = getCreateDependentTaskInstructionDataDecoder().decode(
+      (await dependentPending).data,
+    );
+    expect(humanless.referrer).toEqual({ __option: "Some", value: B });
+    expect(dependent.rewardMint).toEqual({ __option: "Some", value: A });
+  });
+
+  it("snapshots nested completion settlement records for every facade", async () => {
+    const cases = [
+      {
+        name: "acceptTaskResult",
+        build: (bidSettlement: {
+          bidBook: Address;
+          acceptedBid: Address;
+          bidderMarketState: Address;
+          bidderAuthority: Address;
+        }) =>
+          acceptTaskResult({
+            task: A,
+            worker: B,
+            treasury: C,
+            creator: signerA,
+            workerAuthority: D,
+            hireRecord: A,
+            bidSettlement,
+          }),
+      },
+      {
+        name: "autoAcceptTaskResult",
+        build: (bidSettlement: {
+          bidBook: Address;
+          acceptedBid: Address;
+          bidderMarketState: Address;
+          bidderAuthority: Address;
+        }) =>
+          autoAcceptTaskResult({
+            task: A,
+            worker: B,
+            treasury: C,
+            creator: D,
+            workerAuthority: A,
+            authority: signerA,
+            hireRecord: A,
+            bidSettlement,
+          }),
+      },
+      {
+        name: "validateTaskResult",
+        build: (bidSettlement: {
+          bidBook: Address;
+          acceptedBid: Address;
+          bidderMarketState: Address;
+          bidderAuthority: Address;
+        }) =>
+          validateTaskResult({
+            task: A,
+            worker: B,
+            treasury: C,
+            creator: D,
+            workerAuthority: A,
+            reviewer: signerA,
+            approved: true,
+            bidSettlement,
+          }),
+      },
+      {
+        name: "completeTask",
+        build: (bidSettlement: {
+          bidBook: Address;
+          acceptedBid: Address;
+          bidderMarketState: Address;
+          bidderAuthority: Address;
+        }) =>
+          completeTask({
+            task: A,
+            creator: C,
+            worker: B,
+            treasury: D,
+            authority: signerA,
+            hireRecord: A,
+            proofHash: HASH32,
+            resultData: null,
+            bidSettlement,
+          }),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const bidSettlement = {
+        bidBook: A as Address,
+        acceptedBid: B as Address,
+        bidderMarketState: C as Address,
+        bidderAuthority: D as Address,
+      };
+      const pending = testCase.build(bidSettlement);
+      bidSettlement.bidBook = SYSTEM_PROGRAM;
+      bidSettlement.acceptedBid = SYSTEM_PROGRAM;
+      bidSettlement.bidderMarketState = SYSTEM_PROGRAM;
+      bidSettlement.bidderAuthority = SYSTEM_PROGRAM;
+
+      expect(
+        (await pending).accounts.slice(-4).map((account) => account.address),
+        testCase.name,
+      ).toEqual([A, B, C, D]);
+    }
+  });
+
+  it("locks the preferred signer before a facade-input Proxy can reflect", async () => {
+    const selected = mutableTaskSigner(signerA.address);
+    const plainInput = {
+      creatorAgent: A,
+      authority: selected.signer,
+      creator: selected.signer,
+      taskId: new Uint8Array(32).fill(0x2a),
+      requiredCapabilities: 1n,
+      description: new Uint8Array(64).fill(0x2b),
+      rewardAmount: 1n,
+      maxWorkers: 1,
+      deadline: 1n,
+      taskType: 0,
+      constraintHash: null,
+      minReputation: 0,
+      rewardMintArg: null,
+    };
+    const input = new Proxy(plainInput, {
+      ownKeys(target) {
+        selected.setAddress(signerB.address);
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    const instruction = await createTask(input);
+    expect(instruction.accounts[5].address).toBe(signerA.address);
+    expect(instruction.accounts[6].address).toBe(signerA.address);
+    expect(selected.signer.address).toBe(signerA.address);
+  });
+
+  it("explicitly locks a secondary signer even if Proxy classification is stateful", async () => {
+    const selected = mutableTaskSigner(signerB.address);
+    let hidSigningMethod = false;
+    const creator = new Proxy(selected.signer, {
+      get(target, key, receiver) {
+        if (
+          !hidSigningMethod &&
+          (key === "signTransactions" ||
+            key === "modifyAndSignTransactions" ||
+            key === "signAndSendTransactions")
+        ) {
+          hidSigningMethod = true;
+          selected.setAddress(D);
+          return undefined;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const pending = createTask({
+      creatorAgent: A,
+      authority: signerA,
+      creator,
+      taskId: new Uint8Array(32).fill(0x2c),
+      requiredCapabilities: 1n,
+      description: new Uint8Array(64).fill(0x2d),
+      rewardAmount: 1n,
+      maxWorkers: 1,
+      deadline: 1n,
+      taskType: 0,
+      constraintHash: null,
+      minReputation: 0,
+      rewardMintArg: null,
+    });
+    selected.setAddress(D);
+
+    const instruction = await pending;
+    expect(hidSigningMethod).toBe(true);
+    expect(instruction.accounts[6].address).toBe(signerB.address);
+    expect(creator.address).toBe(signerB.address);
+  });
+
+  it("snapshots every single-hash review facade before its PDA await", async () => {
+    const cases = [
+      {
+        name: "rejectTaskResult",
+        build: (bytes: Uint8Array) =>
+          rejectTaskResult({
+            task: A,
+            claim: C,
+            worker: B,
+            creator: createNoopSigner(signerA.address),
+            workerAuthority: D,
+            rejectionHash: bytes,
+          }),
+        decode: (data: ReadonlyUint8Array) =>
+          getRejectTaskResultInstructionDataDecoder().decode(data)
+            .rejectionHash,
+      },
+      {
+        name: "requestChanges",
+        build: (bytes: Uint8Array) =>
+          requestChanges({
+            task: A,
+            claim: C,
+            creator: createNoopSigner(signerA.address),
+            changesHash: bytes,
+          }),
+        decode: (data: ReadonlyUint8Array) =>
+          getRequestChangesInstructionDataDecoder().decode(data).changesHash,
+      },
+      {
+        name: "rejectAndFreeze",
+        build: (bytes: Uint8Array) =>
+          rejectAndFreeze({
+            task: A,
+            claim: C,
+            creator: createNoopSigner(signerA.address),
+            rejectionHash: bytes,
+          }),
+        decode: (data: ReadonlyUint8Array) =>
+          getRejectAndFreezeInstructionDataDecoder().decode(data).rejectionHash,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const bytes = new Uint8Array(32).fill(0x31);
+      const pending = testCase.build(bytes);
+      bytes.fill(0x99);
+      expect(testCase.decode((await pending).data), testCase.name).toEqual(
+        new Uint8Array(32).fill(0x31),
+      );
+    }
+  });
+
+  it("snapshots required and optional result bytes for submit and complete", async () => {
+    const submitProof = new Uint8Array(32).fill(0x41);
+    const submitResult = new Uint8Array(64).fill(0x42);
+    const submitPending = submitTaskResult({
+      task: A,
+      worker: B,
+      authority: createNoopSigner(signerA.address),
+      proofHash: submitProof,
+      resultData: { __option: "Some", value: submitResult },
+    });
+    submitProof.fill(0x91);
+    submitResult.fill(0x92);
+    const submitted = getSubmitTaskResultInstructionDataDecoder().decode(
+      (await submitPending).data,
+    );
+    expect(submitted.proofHash).toEqual(new Uint8Array(32).fill(0x41));
+    expect(submitted.resultData).toEqual({
+      __option: "Some",
+      value: new Uint8Array(64).fill(0x42),
+    });
+
+    const completeProof = new Uint8Array(32).fill(0x51);
+    const completeResult = new Uint8Array(64).fill(0x52);
+    const completePending = completeTask({
+      task: A,
+      creator: C,
+      worker: B,
+      treasury: D,
+      authority: createNoopSigner(signerA.address),
+      hireRecord: A,
+      proofHash: completeProof,
+      resultData: completeResult,
+    });
+    completeProof.fill(0xa1);
+    completeResult.fill(0xa2);
+    const completed = getCompleteTaskInstructionDataDecoder().decode(
+      (await completePending).data,
+    );
+    expect(completed.proofHash).toEqual(new Uint8Array(32).fill(0x51));
+    expect(completed.resultData).toEqual({
+      __option: "Some",
+      value: new Uint8Array(64).fill(0x52),
+    });
+  });
+
+  it("rejects unsafe fixed-byte views at direct facade boundaries", async () => {
+    for (const bad of invalidTaskFixedByteViews()) {
+      await expect(
+        rejectTaskResult({
+          task: A,
+          claim: C,
+          worker: B,
+          creator: createNoopSigner(signerA.address),
+          workerAuthority: D,
+          rejectionHash: bad,
+        }),
+      ).rejects.toThrow(/exactly 32 bytes/);
+    }
+  });
+});
+
 describe("createTask facade instruction", () => {
   it("targets the program, orders accounts, and round-trips data", async () => {
     const ix = await createTask({
@@ -118,6 +602,32 @@ describe("createTask facade instruction", () => {
     expect(decoded.taskType).toBe(1);
     expect(Array.from(decoded.taskId)).toEqual(Array.from(ID32));
   });
+
+  it("rejects worker counts outside the revision-5 dispute-safe range", async () => {
+    const input = {
+      creatorAgent: A,
+      authority: signerA,
+      creator: signerA,
+      taskId: ID32,
+      requiredCapabilities: 5n,
+      description: DESC64,
+      rewardAmount: 1000n,
+      deadline: 9999n,
+      taskType: 1,
+      constraintHash: null,
+      minReputation: 0,
+      rewardMintArg: null,
+    } as const;
+    await expect(createTask({ ...input, maxWorkers: 0 })).rejects.toThrow(
+      /between 1 and 4/,
+    );
+    await expect(createTask({ ...input, maxWorkers: 5 })).rejects.toThrow(
+      /between 1 and 4/,
+    );
+    await expect(createTask({ ...input, maxWorkers: 1.5 })).rejects.toThrow(
+      /between 1 and 4/,
+    );
+  });
 });
 
 describe("createTaskHumanless facade instruction", () => {
@@ -140,8 +650,9 @@ describe("createTaskHumanless facade instruction", () => {
     expect(names[6]).toBe(SYSTEM_PROGRAM);
     expect(names).toHaveLength(7);
 
-    const decoded =
-      getCreateTaskHumanlessInstructionDataDecoder().decode(ix.data);
+    const decoded = getCreateTaskHumanlessInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.rewardAmount).toBe(500n);
     expect(decoded.reviewWindowSecs).toBe(3600n);
     expect(decoded.minReputation).toBe(1);
@@ -176,11 +687,34 @@ describe("createDependentTask facade instruction", () => {
     expect(names[6]).toBe(signerA.address); // authority
     expect(names[7]).toBe(signerA.address); // creator
 
-    const decoded =
-      getCreateDependentTaskInstructionDataDecoder().decode(ix.data);
+    const decoded = getCreateDependentTaskInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.rewardAmount).toBe(2000n);
     expect(decoded.dependencyType).toBe(2);
     expect(decoded.taskType).toBe(0);
+  });
+
+  it("rejects dependency tasks above the dispute-safe worker cap", async () => {
+    await expect(
+      createDependentTask({
+        parentTask: B,
+        creatorAgent: A,
+        authority: signerA,
+        creator: signerA,
+        taskId: ID32,
+        requiredCapabilities: 7n,
+        description: DESC64,
+        rewardAmount: 2000n,
+        maxWorkers: 5,
+        deadline: 7777n,
+        taskType: 1,
+        constraintHash: null,
+        dependencyType: 2,
+        minReputation: 0,
+        rewardMintArg: null,
+      }),
+    ).rejects.toThrow(/between 1 and 4/);
   });
 });
 
@@ -210,8 +744,9 @@ describe("claimTaskWithJobSpec facade instruction", () => {
     expect(names[9]).toBe(SYSTEM_PROGRAM);
 
     // Empty-args instruction: data is just the 8-byte discriminator.
-    const decoded =
-      getClaimTaskWithJobSpecInstructionDataDecoder().decode(ix.data);
+    const decoded = getClaimTaskWithJobSpecInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.discriminator).toHaveLength(8);
   });
 
@@ -339,6 +874,86 @@ describe("rejectTaskResult facade instruction", () => {
     const decoded = getRejectTaskResultInstructionDataDecoder().decode(ix.data);
     expect(Array.from(decoded.rejectionHash)).toEqual(Array.from(HASH32));
   });
+
+  it.each([
+    { dependencyType: DependencyType.None, includesParent: false },
+    { dependencyType: DependencyType.Data, includesParent: false },
+    { dependencyType: DependencyType.Ordering, includesParent: false },
+    { dependencyType: DependencyType.Proof, includesParent: true },
+  ])(
+    "appends the exact three-account BidExclusive rejection suffix for dependency $dependencyType",
+    async ({ dependencyType, includesParent }) => {
+      const settlement = {
+        bidBook: B as Address,
+        acceptedBid: C as Address,
+        bidderMarketState: D as Address,
+      };
+      const pending = rejectTaskResult({
+        task: A,
+        claim: C,
+        worker: B,
+        creator: signerA,
+        workerAuthority: signerB.address,
+        rejectionHash: HASH32,
+        dependencyType,
+        ...(includesParent ? { dependencyParent: A } : {}),
+        bidSettlement: settlement,
+      });
+      settlement.bidBook = SYSTEM_PROGRAM;
+      settlement.acceptedBid = SYSTEM_PROGRAM;
+      settlement.bidderMarketState = SYSTEM_PROGRAM;
+
+      // reject_task_result has 11 generated accounts. Rust consumes an
+      // optional Proof parent followed by exactly three settlement accounts;
+      // the named workerAuthority receives the refund and is not repeated.
+      expect(
+        (await pending).accounts.slice(11).map((meta) => meta.address),
+      ).toEqual([...(includesParent ? [A] : []), B, C, D]);
+    },
+  );
+
+  it("rejects ambiguous or caller-selected BidExclusive rejection recipients", async () => {
+    const base = {
+      task: A,
+      claim: C,
+      worker: B,
+      creator: signerA,
+      workerAuthority: D,
+      rejectionHash: HASH32,
+    } as const;
+    await expect(
+      rejectTaskResult({
+        ...base,
+        bidSettlement: { acceptedBid: B, bidderMarketState: C },
+      }),
+    ).rejects.toThrow(/dependencyType is required/);
+    await expect(
+      rejectTaskResult({
+        ...base,
+        dependencyType: DependencyType.Proof,
+        bidSettlement: { acceptedBid: B, bidderMarketState: C },
+      }),
+    ).rejects.toThrow(/dependencyParent is required/);
+    await expect(
+      rejectTaskResult({
+        ...base,
+        dependencyType: DependencyType.Data,
+        dependencyParent: D,
+        bidSettlement: { acceptedBid: B, bidderMarketState: C },
+      }),
+    ).rejects.toThrow(/must be omitted unless.*Proof/);
+    await expect(
+      rejectTaskResult({
+        ...base,
+        dependencyType: DependencyType.None,
+        bidSettlement: {
+          acceptedBid: B,
+          bidderMarketState: C,
+          bidderAuthority: D,
+        } as never,
+      }),
+    ).rejects.toThrow(/bidderAuthority must be omitted/);
+  });
 });
 
 describe("autoAcceptTaskResult facade instruction", () => {
@@ -369,8 +984,9 @@ describe("autoAcceptTaskResult facade instruction", () => {
     // operator(11), referrer(12), creator/workerCompletionBond(13,14)
     expect(names[15]).toBe(signerA.address); // authority
 
-    const decoded =
-      getAutoAcceptTaskResultInstructionDataDecoder().decode(ix.data);
+    const decoded = getAutoAcceptTaskResultInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.discriminator).toHaveLength(8);
   });
 });
@@ -396,8 +1012,9 @@ describe("validateTaskResult facade instruction", () => {
     expect(names[12]).toBe(A); // workerAuthority
     expect(names[13]).toBe(signerA.address); // reviewer
 
-    const decoded =
-      getValidateTaskResultInstructionDataDecoder().decode(ix.data);
+    const decoded = getValidateTaskResultInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.approved).toBe(true);
   });
 
@@ -450,6 +1067,14 @@ describe("validateTaskResult facade instruction", () => {
       const bidderMarketState = C;
       const bidderAuthority = D;
       const dependent = dependencyType !== DependencyType.None;
+      const suppliesParent = approved ? dependent : includesParent;
+      const bidSettlement = approved
+        ? {
+            acceptedBid,
+            bidderMarketState,
+            bidderAuthority,
+          }
+        : { acceptedBid, bidderMarketState };
       const ix = await validateTaskResult({
         task: A,
         worker: B,
@@ -459,12 +1084,8 @@ describe("validateTaskResult facade instruction", () => {
         reviewer: signerA,
         approved,
         dependencyType,
-        ...(dependent ? { dependencyParent: D } : {}),
-        bidSettlement: {
-          acceptedBid,
-          bidderMarketState,
-          bidderAuthority,
-        },
+        ...(suppliesParent ? { dependencyParent: D } : {}),
+        bidSettlement,
       });
 
       // validate_task_result has 22 generated accounts; everything after that
@@ -474,7 +1095,7 @@ describe("validateTaskResult facade instruction", () => {
         bidBook,
         acceptedBid,
         bidderMarketState,
-        bidderAuthority,
+        ...(approved ? [bidderAuthority] : []),
       ]);
     },
   );
@@ -493,7 +1114,6 @@ describe("validateTaskResult facade instruction", () => {
         bidSettlement: {
           acceptedBid: B,
           bidderMarketState: C,
-          bidderAuthority: D,
         },
       }),
     ).rejects.toThrow(/dependencyType/);
@@ -512,10 +1132,9 @@ describe("validateTaskResult facade instruction", () => {
         bidSettlement: {
           acceptedBid: B,
           bidderMarketState: C,
-          bidderAuthority: D,
         },
       }),
-    ).rejects.toThrow(/independent task/);
+    ).rejects.toThrow(/must be omitted unless.*Proof/);
   });
 
   it("requires a parent for declared dependent acceptance and Proof rejection", async () => {
@@ -529,7 +1148,6 @@ describe("validateTaskResult facade instruction", () => {
       bidSettlement: {
         acceptedBid: B,
         bidderMarketState: C,
-        bidderAuthority: D,
       },
     } as const;
 
@@ -547,6 +1165,26 @@ describe("validateTaskResult facade instruction", () => {
         dependencyType: DependencyType.Proof,
       }),
     ).rejects.toThrow(/dependencyParent/);
+  });
+
+  it("rejects a fourth caller-selected settlement recipient on validation rejection", async () => {
+    await expect(
+      validateTaskResult({
+        task: A,
+        worker: B,
+        treasury: C,
+        creator: D,
+        workerAuthority: A,
+        reviewer: signerA,
+        approved: false,
+        dependencyType: DependencyType.None,
+        bidSettlement: {
+          acceptedBid: B,
+          bidderMarketState: C,
+          bidderAuthority: D,
+        },
+      }),
+    ).rejects.toThrow(/bidderAuthority must be omitted/);
   });
 });
 
@@ -681,7 +1319,11 @@ describe("cancelTask facade instruction", () => {
       C,
       D,
     ]);
-    expect(ix.accounts.slice(-6).every((account) => account.role === AccountRole.WRITABLE)).toBe(true);
+    expect(
+      ix.accounts
+        .slice(-6)
+        .every((account) => account.role === AccountRole.WRITABLE),
+    ).toBe(true);
   });
 
   it("rejects accepted-bid settlement without exactly one worker triple", async () => {
@@ -697,6 +1339,74 @@ describe("cancelTask facade instruction", () => {
         },
       }),
     ).rejects.toThrow(/exactly one worker/);
+  });
+
+  it("rejects sparse worker arrays and ignores callback-poisoned methods", async () => {
+    await expect(
+      cancelTask({
+        task: A,
+        authority: signerA,
+        workerBondAuthority: signerB.address,
+        workerAccounts: new Array(1),
+        bidSettlement: {
+          kind: "accepted",
+          acceptedBid: C,
+          bidderMarketState: D,
+        },
+      }),
+    ).rejects.toThrow(/dense/);
+
+    let flatMapCalls = 0;
+    const workers = [
+      { claim: B, workerAgent: C, workerAuthority: signerB.address },
+    ];
+    Object.defineProperty(workers, "flatMap", {
+      value() {
+        flatMapCalls += 1;
+        return [];
+      },
+    });
+    const instruction = await cancelTask({
+      task: A,
+      authority: signerA,
+      workerBondAuthority: signerB.address,
+      workerAccounts: workers,
+    });
+    expect(flatMapCalls).toBe(0);
+    expect(
+      instruction.accounts.slice(-3).map((account) => account.address),
+    ).toEqual([B, C, signerB.address]);
+  });
+
+  it("snapshots worker and accepted-bid account records before derivation", async () => {
+    const worker = {
+      claim: B as Address,
+      workerAgent: C as Address,
+      workerAuthority: signerB.address as Address,
+    };
+    const settlement = {
+      kind: "accepted" as const,
+      bidBook: A as Address,
+      acceptedBid: C as Address,
+      bidderMarketState: D as Address,
+    };
+    const pending = cancelTask({
+      task: A,
+      authority: signerA,
+      workerBondAuthority: signerB.address,
+      workerAccounts: [worker],
+      bidSettlement: settlement,
+    });
+    worker.claim = SYSTEM_PROGRAM;
+    worker.workerAgent = SYSTEM_PROGRAM;
+    worker.workerAuthority = SYSTEM_PROGRAM;
+    settlement.bidBook = SYSTEM_PROGRAM;
+    settlement.acceptedBid = SYSTEM_PROGRAM;
+    settlement.bidderMarketState = SYSTEM_PROGRAM;
+
+    expect(
+      (await pending).accounts.slice(-6).map((account) => account.address),
+    ).toEqual([B, C, signerB.address, A, C, D]);
   });
 });
 
@@ -760,6 +1470,163 @@ describe("closeTask facade instruction", () => {
     expect(ix.accounts.at(-1)?.role).toBe(AccountRole.WRITABLE);
   });
 
+  it("snapshots child records and rejects malformed worker-recipient shapes", async () => {
+    const child = {
+      kind: "namedRecipient" as const,
+      account: B as Address,
+      recipient: C as Address,
+    };
+    const pending = closeTask({
+      task: A,
+      taskJobSpec: null,
+      hireRecord: B,
+      creatorCompletionBond: D,
+      authority: signerA,
+      children: [child],
+    });
+    child.account = SYSTEM_PROGRAM;
+    child.recipient = SYSTEM_PROGRAM;
+    expect(
+      (await pending).accounts.slice(-2).map((account) => account.address),
+    ).toEqual([B, C]);
+
+    await expect(
+      closeTask({
+        task: A,
+        taskJobSpec: null,
+        hireRecord: B,
+        creatorCompletionBond: D,
+        authority: signerA,
+        children: [
+          {
+            kind: "workerSubmission",
+            submission: B,
+            workerAgent: C,
+          } as never,
+        ],
+      }),
+    ).rejects.toThrow(/exactly one rent recipient/);
+  });
+
+  it("keeps expanded child sweeps within the standalone transaction wire budget", async () => {
+    const atLimit = await closeTask({
+      task: A,
+      taskJobSpec: null,
+      hireRecord: B,
+      creatorCompletionBond: D,
+      authority: signerA,
+      bidExclusive: true,
+      children: Array.from({ length: 18 }, () => ({
+        kind: "creatorFunded" as const,
+        account: B,
+      })),
+    });
+    expect(atLimit.accounts).toHaveLength(28);
+
+    await expect(
+      closeTask({
+        task: A,
+        taskJobSpec: null,
+        hireRecord: B,
+        creatorCompletionBond: D,
+        authority: signerA,
+        children: [
+          ...Array.from({ length: 6 }, () => ({
+            kind: "workerSubmission" as const,
+            submission: B,
+            workerAgent: C,
+            rentRecipient: D,
+          })),
+          { kind: "namedRecipient", account: B, recipient: C },
+        ],
+      }),
+    ).rejects.toThrow(/20 remaining account metas.*at most 19.*28 total/);
+
+    await expect(
+      closeTask({
+        task: A,
+        taskJobSpec: null,
+        hireRecord: B,
+        creatorCompletionBond: D,
+        authority: signerA,
+        bidExclusive: true,
+        children: Array.from({ length: 19 }, () => ({
+          kind: "creatorFunded" as const,
+          account: B,
+        })),
+      }),
+    ).rejects.toThrow(/20 remaining account metas.*at most 19.*28 total/);
+  });
+
+  it("serializes the 28-meta distinct-key boundary to exactly 1,219 bytes", async () => {
+    const authority = await generateKeyPairSigner();
+    const feePayer = await generateKeyPairSigner();
+    let captured: SignedTransaction | undefined;
+    const transport: Transport = {
+      async getLatestBlockhash() {
+        return {
+          blockhash: getBase58Decoder().decode(
+            new Uint8Array(32).fill(0xa5),
+          ) as Blockhash,
+          lastValidBlockHeight: 100n,
+        };
+      },
+      async sendAndConfirm(transaction) {
+        captured = transaction;
+        return {
+          signature: getSignatureFromTransaction(transaction),
+          logs: [],
+        };
+      },
+    };
+    const instruction = await closeTask({
+      task: taskAddressFromSeed(0x10),
+      taskJobSpec: taskAddressFromSeed(0x11),
+      escrow: taskAddressFromSeed(0x12),
+      hireRecord: taskAddressFromSeed(0x13),
+      listing: taskAddressFromSeed(0x14),
+      creatorCompletionBond: taskAddressFromSeed(0x15),
+      workerCompletionBond: taskAddressFromSeed(0x16),
+      authority,
+      bidExclusive: taskAddressFromSeed(0x17),
+      children: Array.from({ length: 18 }, (_, index) => ({
+        kind: "creatorFunded" as const,
+        account: taskAddressFromSeed(0x20 + index),
+      })),
+    });
+    expect(instruction.accounts).toHaveLength(28);
+
+    const client = createMarketplaceClient({
+      transport,
+      signer: feePayer,
+      computeUnitPrice: 1n,
+    });
+    await client.send([instruction]);
+    expect(captured).toBeDefined();
+    expect(getTransactionSize(captured!)).toBe(1_219);
+    expect(captured!.messageBytes).toHaveLength(1_090);
+
+    const message = getCompiledTransactionMessageDecoder().decode(
+      captured!.messageBytes,
+    );
+    if (!("instructions" in message) || !("staticAccounts" in message)) {
+      throw new Error("expected a compiled v0 transaction message");
+    }
+    expect(message.staticAccounts).toHaveLength(31);
+    expect(
+      "addressTableLookups" in message ? message.addressTableLookups : [],
+    ).toHaveLength(0);
+    expect(
+      message.instructions.map((item) => [
+        item.accountIndices?.length ?? 0,
+        item.data?.length ?? 0,
+      ]),
+    ).toEqual([
+      [0, 5],
+      [0, 9],
+      [28, 8],
+    ]);
+  });
 });
 
 describe("reclaimOrphanTaskChild facade instruction", () => {
@@ -822,6 +1689,25 @@ describe("reclaimOrphanTaskChild facade instruction", () => {
       AccountRole.WRITABLE,
     ]);
   });
+
+  it("snapshots recovery treasury and protocol config before PDA derivation", async () => {
+    const recovery = {
+      protocolConfig: A as Address,
+      treasury: D as Address,
+    };
+    const pending = reclaimOrphanTaskChild({
+      child: A,
+      parentTask: B,
+      workerAgent: C,
+      authority: signerA,
+      recovery,
+    });
+    recovery.protocolConfig = SYSTEM_PROGRAM;
+    recovery.treasury = SYSTEM_PROGRAM;
+    const accounts = (await pending).accounts.map((account) => account.address);
+    expect(accounts[3]).toBe(D);
+    expect(accounts.slice(-2)).toEqual([A, D]);
+  });
 });
 
 describe("expireClaim facade instruction", () => {
@@ -868,6 +1754,29 @@ describe("expireClaim facade instruction", () => {
       signerA.address,
     ]);
   });
+
+  it("snapshots expiry settlement accounts before its generated builder awaits", async () => {
+    const settlement = {
+      bidBook: A as Address,
+      acceptedBid: C as Address,
+      bidderMarketState: B as Address,
+      creator: D as Address,
+    };
+    const pending = expireClaim({
+      authority: signerA,
+      task: A,
+      worker: B,
+      rentRecipient: C,
+      bidSettlement: settlement,
+    });
+    settlement.bidBook = SYSTEM_PROGRAM;
+    settlement.acceptedBid = SYSTEM_PROGRAM;
+    settlement.bidderMarketState = SYSTEM_PROGRAM;
+    settlement.creator = SYSTEM_PROGRAM;
+    expect(
+      (await pending).accounts.slice(-4).map((account) => account.address),
+    ).toEqual([A, C, B, D]);
+  });
 });
 
 describe("configureTaskValidation facade instruction", () => {
@@ -888,16 +1797,37 @@ describe("configureTaskValidation facade instruction", () => {
     expect(names[5]).toBe(signerA.address); // creator
     expect(names[6]).toBe(SYSTEM_PROGRAM);
 
-    const decoded =
-      getConfigureTaskValidationInstructionDataDecoder().decode(ix.data);
+    const decoded = getConfigureTaskValidationInstructionDataDecoder().decode(
+      ix.data,
+    );
     expect(decoded.mode).toBe(1);
     expect(decoded.reviewWindowSecs).toBe(3600n);
     expect(decoded.validatorQuorum).toBe(2);
   });
+
+  it("snapshots an explicit attestor Option wrapper", async () => {
+    const attestor: { __option: "Some"; value: Address } = {
+      __option: "Some",
+      value: B,
+    };
+    const pending = configureTaskValidation({
+      task: A,
+      creator: signerA,
+      mode: 1,
+      reviewWindowSecs: 3600n,
+      validatorQuorum: 2,
+      attestor,
+    });
+    attestor.value = D;
+    const decoded = getConfigureTaskValidationInstructionDataDecoder().decode(
+      (await pending).data,
+    );
+    expect(decoded.attestor).toEqual({ __option: "Some", value: B });
+  });
 });
 
 describe("setTaskJobSpec facade instruction", () => {
-  it("targets the program, orders accounts (P1.2: 9 with the BLOCK floor), and round-trips data", async () => {
+  it("targets the program, orders accounts (revision 5: 10 with the hire commitment), and round-trips data", async () => {
     const ix = await setTaskJobSpec({
       task: A,
       creator: signerA,
@@ -907,8 +1837,8 @@ describe("setTaskJobSpec facade instruction", () => {
     });
 
     expect(ix.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
-    // P1.2 pins the gate at 9 accounts: WP-A1's 8 + the REQUIRED moderationBlock (5).
-    expect(ix.accounts.length).toBe(9);
+    // Revision 5 appends the canonical HireRecord proof to the 9-account P1.2 shape.
+    expect(ix.accounts.length).toBe(10);
     const names = ix.accounts.map((a) => a.address);
     // protocolConfig auto-derived (0).
     expect(names[1]).toBe(A); // task
@@ -923,12 +1853,22 @@ describe("setTaskJobSpec facade instruction", () => {
     // moderationAttestor (4): global-authority path -> program-id placeholder (None).
     expect(names[4]).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     // moderationBlock (5): REQUIRED BLOCK-floor PDA ["moderation_block", jobSpecHash].
-    const [expectedBlock] = await findModerationBlockPda({ contentHash: HASH32 });
+    const [expectedBlock] = await findModerationBlockPda({
+      contentHash: HASH32,
+    });
     expect(names[5]).toBe(expectedBlock);
     expect(names[7]).toBe(signerA.address); // creator
     expect(names[8]).toBe(SYSTEM_PROGRAM);
+    const [expectedHireRecord] = await findHireRecordPda({ task: A });
+    expect(names[9]).toBe(expectedHireRecord);
 
     const decoded = getSetTaskJobSpecInstructionDataDecoder().decode(ix.data);
+    expect(Array.from(decoded.discriminator)).toEqual(
+      Array.from(SET_TASK_JOB_SPEC_DISCRIMINATOR),
+    );
+    expect(Array.from(decoded.discriminator)).toEqual([
+      118, 9, 99, 58, 215, 87, 58, 59,
+    ]);
     expect(Array.from(decoded.jobSpecHash)).toEqual(Array.from(HASH32));
     expect(decoded.jobSpecUri).toBe("ipfs://job-spec");
     expect(decoded.moderator).toBe(D); // P1.2: new 3rd arg
@@ -945,6 +1885,90 @@ describe("setTaskJobSpec facade instruction", () => {
     });
     const [expectedAttestor] = await findModerationAttestorPda({ attestor: D });
     expect(ix.accounts[4].address).toBe(expectedAttestor);
+  });
+
+  it("rejects hashes the generated fixed encoder would pad, truncate, or zero", async () => {
+    for (const bad of [
+      new Uint8Array(31).fill(1),
+      new Uint8Array(33).fill(1),
+      new Uint8Array(32),
+    ]) {
+      await expect(
+        setTaskJobSpec({
+          task: A,
+          creator: signerA,
+          jobSpecHash: bad,
+          jobSpecUri: "ipfs://job-spec",
+          moderator: D,
+        }),
+      ).rejects.toThrow(/exactly 32 bytes|all zeroes/);
+    }
+  });
+
+  it("snapshots the hash and signer address before its first PDA await", async () => {
+    const originalAddress = address(
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    );
+    const movedAddress = address("Stake11111111111111111111111111111111111111");
+    const selected = mutableTaskSigner(originalAddress);
+    const hash = new Uint8Array(32).fill(0x61);
+    const expectedHash = hash.slice();
+
+    const pending = setTaskJobSpec({
+      task: A,
+      creator: selected.signer,
+      jobSpecHash: hash,
+      jobSpecUri: "ipfs://snapshotted",
+      moderator: D,
+    });
+    hash.fill(0x71);
+    selected.setAddress(movedAddress);
+
+    const ix = await pending;
+    const decoded = getSetTaskJobSpecInstructionDataDecoder().decode(ix.data);
+    const [expectedModeration] = await findTaskModerationPda({
+      task: A,
+      jobSpecHash: expectedHash,
+      moderator: D,
+    });
+    expect(decoded.jobSpecHash).toEqual(expectedHash);
+    expect(ix.accounts[3].address).toBe(expectedModeration);
+    expect(ix.accounts[7].address).toBe(originalAddress);
+    expect("signer" in ix.accounts[7] ? ix.accounts[7].signer : undefined).toBe(
+      selected.signer,
+    );
+  });
+
+  it("accepts cross-realm hashes by value and rejects proxy/shared/detached hashes", async () => {
+    const ForeignUint8Array = runInNewContext(
+      "Uint8Array",
+    ) as Uint8ArrayConstructor;
+    const foreign = new ForeignUint8Array(32).fill(0x44);
+    const expected = new Uint8Array(foreign);
+    const pending = setTaskJobSpec({
+      task: A,
+      creator: signerA,
+      jobSpecHash: foreign,
+      jobSpecUri: "ipfs://foreign",
+      moderator: D,
+    });
+    foreign.fill(0x55);
+    expect(
+      getSetTaskJobSpecInstructionDataDecoder().decode((await pending).data)
+        .jobSpecHash,
+    ).toEqual(expected);
+
+    for (const bad of invalidTaskFixedByteViews()) {
+      await expect(
+        setTaskJobSpec({
+          task: A,
+          creator: signerA,
+          jobSpecHash: bad,
+          jobSpecUri: "ipfs://invalid",
+          moderator: D,
+        }),
+      ).rejects.toThrow(/exactly 32 bytes/);
+    }
   });
 });
 
@@ -996,9 +2020,10 @@ describe("createContestTask facade bundle", () => {
     // Ix 1: configure_task_validation — CreatorReview on the derived task.
     expect(configureIx.programAddress).toBe(AGENC_COORDINATION_PROGRAM_ADDRESS);
     expect(configureIx.accounts[0].address).toBe(expectedTask);
-    const configured = getConfigureTaskValidationInstructionDataDecoder().decode(
-      configureIx.data,
-    );
+    const configured =
+      getConfigureTaskValidationInstructionDataDecoder().decode(
+        configureIx.data,
+      );
     expect(configured.mode).toBe(1); // ValidationMode::CreatorReview
     expect(configured.reviewWindowSecs).toBe(3600n);
     expect(configured.validatorQuorum).toBe(0);
@@ -1018,10 +2043,45 @@ describe("createContestTask facade bundle", () => {
     expect(created.referrerFeeBps).toBe(50);
   });
 
+  it("uses one synchronous task-id and signer snapshot for both bundled instructions", async () => {
+    const authority = mutableTaskSigner(signerA.address);
+    const creator = mutableTaskSigner(signerA.address);
+    const taskId = new Uint8Array(32).fill(0x61);
+    const expectedTaskId = new Uint8Array(taskId);
+    const pending = createContestTask({
+      ...base,
+      authority: authority.signer,
+      creator: creator.signer,
+      taskId,
+    });
+    taskId.fill(0xe1);
+    authority.setAddress(signerB.address);
+    creator.setAddress(signerB.address);
+
+    const { task, instructions } = await pending;
+    const [expectedTask] = await findTaskPda({
+      creator: signerA.address,
+      taskId: expectedTaskId,
+    });
+    const created = getCreateTaskInstructionDataDecoder().decode(
+      instructions[0].data,
+    );
+    expect(created.taskId).toEqual(expectedTaskId);
+    expect(task).toBe(expectedTask);
+    expect(instructions[1].accounts[0].address).toBe(expectedTask);
+    expect(instructions[1].accounts[5].address).toBe(signerA.address);
+  });
+
   it("fails fast on a non-positive deadline (contests are deadline-bearing)", async () => {
-    await expect(
-      createContestTask({ ...base, deadline: 0n }),
-    ).rejects.toThrow(/deadline > 0/);
+    await expect(createContestTask({ ...base, deadline: 0n })).rejects.toThrow(
+      /deadline > 0/,
+    );
+  });
+
+  it("fails fast above the dispute-safe contest worker cap", async () => {
+    await expect(createContestTask({ ...base, maxWorkers: 5 })).rejects.toThrow(
+      /between 1 and 4/,
+    );
   });
 });
 

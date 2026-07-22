@@ -9,9 +9,7 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -32,6 +30,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -50,7 +50,7 @@ export const EXPIRE_BID_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getExpireBidDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(EXPIRE_BID_DISCRIMINATOR);
+  return getFixedBytesEncoder(8).encode(EXPIRE_BID_DISCRIMINATOR);
 }
 
 export type ExpireBidInstruction<
@@ -101,7 +101,9 @@ export type ExpireBidInstructionDataArgs = {};
 
 export function getExpireBidInstructionDataEncoder(): FixedSizeEncoder<ExpireBidInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    getStructEncoder([
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+    ]),
     (value) => ({ ...value, discriminator: EXPIRE_BID_DISCRIMINATOR }),
   );
 }

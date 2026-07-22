@@ -175,6 +175,7 @@ export function decodeTaskBinding(dataLike) {
   assertDiscriminator(data, TASK_DISCRIMINATOR, "Task");
   const taskId = Buffer.from(data.subarray(8, 40));
   const creator = new PublicKey(data.subarray(40, 72));
+  const description = Buffer.from(data.subarray(80, 144));
   const constraintHash = Buffer.from(data.subarray(144, 176));
   const rewardAmount = data.readBigUInt64LE(176);
   const maxWorkers = data[184];
@@ -223,6 +224,7 @@ export function decodeTaskBinding(dataLike) {
     return {
       taskId,
       creator,
+      description,
       constraintHash,
       rewardAmount,
       maxWorkers,
@@ -270,6 +272,7 @@ export function decodeTaskBinding(dataLike) {
   return {
     taskId,
     creator,
+    description,
     constraintHash,
     rewardAmount,
     maxWorkers,

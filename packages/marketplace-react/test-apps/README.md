@@ -3,35 +3,36 @@
 The committed fixtures that prove the PLAN_2 Part A Done-whens against the
 **localnet** stack (localnet-first: no devnet/deploy required). Two apps plus a
 Playwright suite, all driven by one local validator booted from the repo-built
-program `.so` + local ProtocolConfig/ModerationConfig.
+program `.so` + local ProtocolConfig/ModerationConfig/BidMarketplaceConfig.
 
 ## Layout
 
-| Path | What |
-|---|---|
-| `../test/sandbox-up.mjs` | The committed bootstrap. Reuses `scripts/localnet-up.mjs` (validator + protocol/moderation config + `.localnet/env.json`) then `packages/sdk-ts/scripts/seed-devnet-sandbox.mjs` (10 Active listings, attested CLEAN, into `.localnet/fixtures.json`). Exposes `start()`/`stop()`/`readSandboxEnv()` + a CLI. |
-| `next-ssr/` | Next.js 15 App Router SSR fixture (PLAN_2 **A1** Done-when): `<AgencProvider>` + `useListings` + the real `<ListingGrid>` in a 30-line page. SSR-safe, no hydration errors. |
-| `checkout/` | Vite + React checkout fixture (PLAN_2 **A3** Done-when): drives a REAL hire `funded -> accepted` through `useHire` + `useSubmissionReview`, using the mock embedded-wallet seam (no browser extension). |
-| `../test/playwright/` | Playwright browser e2e that drives `checkout/` through a real hire in Chromium, plus the worker-side Node scaffolding and a jsdom fallback. |
+| Path                     | What                                                                                                                                                                                                                                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `../test/sandbox-up.mjs` | The committed bootstrap. Reuses `scripts/localnet-up.mjs` (validator + protocol/moderation/bid-marketplace configs + `.localnet/env.json`) then `packages/sdk-ts/scripts/seed-devnet-sandbox.mjs` (10 Active listings, attested CLEAN, into `.localnet/fixtures.json`). Exposes `start()`/`stop()`/`readSandboxEnv()` + a CLI. |
+| `next-ssr/`              | Next.js 15 App Router SSR fixture (PLAN_2 **A1** Done-when): `<AgencProvider>` + `useListings` + the real `<ListingGrid>` in a 30-line page. SSR-safe, no hydration errors.                                                                                                                                                    |
+| `checkout/`              | Vite + React checkout fixture (PLAN_2 **A3** Done-when): drives a REAL hire `funded -> accepted` through `useHire` + `useSubmissionReview`, using the mock embedded-wallet seam (no browser extension).                                                                                                                        |
+| `../test/playwright/`    | Playwright browser e2e that drives `checkout/` through a real hire in Chromium, plus the worker-side Node scaffolding and a jsdom fallback.                                                                                                                                                                                    |
 
 ## The sandbox bootstrap
 
 ```bash
 # from packages/marketplace-react/
-node test/sandbox-up.mjs up --unsafe-unpaused-fixture  # fresh browser ledger + seed
+node test/sandbox-up.mjs up       # fresh --dev-ready browser ledger + seed
 node test/sandbox-up.mjs env       # print the resolved sandbox env JSON
 node test/sandbox-up.mjs down      # stop the validator
 node test/sandbox-up.mjs down --purge   # stop + wipe the ledger
 ```
 
 Prerequisites (same as `scripts/localnet-up.mjs`):
+
 - `solana-test-validator` + `solana-keygen` on PATH,
 - `anchor build` output at `programs/agenc-coordination/target/deploy/agenc_coordination.so` (full surface),
 - the built SDK at `packages/sdk-ts/dist` (`cd packages/sdk-ts && npm run build`).
 
-The full Playwright harness starts from a disposable ledger and passes
-`--unsafe-unpaused-fixture`: this genesis-injects a current, unpaused
-`ProtocolConfig` using the generated SDK encoder. It is deliberately test-only.
+The full Playwright harness starts from a disposable ledger in `--dev-ready`
+mode. This genesis-injects a current, unpaused `ProtocolConfig` using the
+generated SDK encoder. It is deliberately test-only.
 A fresh production binary correctly starts paused and must use the full atomic
 release-stamp ceremony; the React browser fixture neither weakens nor simulates
 that deployment boundary.
@@ -74,6 +75,6 @@ The SSR app renders committed real listing bytes. After re-seeding the sandbox
 (addresses change), refresh them:
 
 ```bash
-node test/sandbox-up.mjs up --unsafe-unpaused-fixture
+node test/sandbox-up.mjs up
 cd test-apps/next-ssr && node scripts/capture-fixtures.mjs
 ```

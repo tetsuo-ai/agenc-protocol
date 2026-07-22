@@ -11,9 +11,7 @@ import {
   addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBytesDecoder,
-  getBytesEncoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -41,6 +39,8 @@ import {
   type WritableSignerAccount,
 } from "@solana/kit";
 
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
+
 import {
   getBorshStringDecoder,
   getBorshStringEncoder,
@@ -57,7 +57,7 @@ export const RECORD_AGENT_VERIFICATION_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([185, 60, 213, 195, 106, 238, 222, 56]);
 
 export function getRecordAgentVerificationDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
+  return getFixedBytesEncoder(8).encode(
     RECORD_AGENT_VERIFICATION_DISCRIMINATOR,
   );
 }
@@ -111,7 +111,7 @@ export type RecordAgentVerificationInstructionDataArgs = {
 export function getRecordAgentVerificationInstructionDataEncoder(): Encoder<RecordAgentVerificationInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       [
         "verifiedDomain",
         addEncoderSizePrefix(getBorshStringEncoder(), getU32Encoder()),

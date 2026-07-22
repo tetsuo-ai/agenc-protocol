@@ -20,6 +20,7 @@ import type {
   IndexerListing,
   ListActiveListingsOptions,
   MarketplaceClient,
+  ModerationAccountReadRpc,
   ProgramAccountsTransport,
   ServiceListing,
 } from "@tetsuo-ai/marketplace-sdk";
@@ -187,6 +188,13 @@ export interface AgencProviderConfig {
    */
   client?: MarketplaceClient;
   /**
+   * Explicit account-read RPC for funded hire/activation orchestration,
+   * including moderation-account resolution and finalized reconciliation.
+   * It wins over `rpcUrl`. Supply this alongside a custom `client` when that
+   * client is not backed by the provider network's HTTP endpoint.
+   */
+  orchestrationRpc?: ModerationAccountReadRpc;
+  /**
    * Pre-built read transport override slot (tests/mocks/SSR fixtures). Wins over
    * `indexer`/`rpc` resolution.
    */
@@ -219,6 +227,13 @@ export interface AgencContextValue {
    * queries stay with the read transport.
    */
   rpcUrl: string | null;
+  /** Explicit account-read seam used by funded orchestration, or `null`. */
+  orchestrationRpc: ModerationAccountReadRpc | null;
+  /**
+   * HTTP RPC used by funded orchestration. A network default is used only for
+   * a provider-built client; a custom client receives no implicit endpoint.
+   */
+  orchestrationRpcUrl: string | null;
   /**
    * The configured hosted-indexer base URL (`config.indexer.baseUrl`), or
    * `null` when reads run over gPA/queryTransport. Earnings hooks prefer it

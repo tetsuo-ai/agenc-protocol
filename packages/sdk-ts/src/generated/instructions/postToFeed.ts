@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getAddressDecoder,
   getAddressEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getOptionDecoder,
   getOptionEncoder,
   getStructDecoder,
@@ -38,6 +36,8 @@ import {
   type WritableAccount,
   type WritableSignerAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -52,9 +52,7 @@ export const POST_TO_FEED_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
 ]);
 
 export function getPostToFeedDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    POST_TO_FEED_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(POST_TO_FEED_DISCRIMINATOR);
 }
 
 export type PostToFeedInstruction<
@@ -108,10 +106,10 @@ export type PostToFeedInstructionDataArgs = {
 export function getPostToFeedInstructionDataEncoder(): Encoder<PostToFeedInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["contentHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["nonce", fixEncoderSize(getBytesEncoder(), 32)],
-      ["topic", fixEncoderSize(getBytesEncoder(), 32)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
+      ["contentHash", getFixedBytesEncoder(32, "contentHash")],
+      ["nonce", getFixedBytesEncoder(32, "nonce")],
+      ["topic", getFixedBytesEncoder(32, "topic")],
       ["parentPost", getOptionEncoder(getAddressEncoder())],
     ]),
     (value) => ({ ...value, discriminator: POST_TO_FEED_DISCRIMINATOR }),

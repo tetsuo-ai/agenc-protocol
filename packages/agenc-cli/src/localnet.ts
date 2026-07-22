@@ -3,16 +3,31 @@
 // `agenc dev` NEVER touches mainnet/devnet: the resolved endpoint must be a
 // loopback URL and the env file must say cluster=localnet.
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readlinkSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { createKeyPairSignerFromBytes } from "@solana/kit";
-import { parseSolanaKeypairJson } from "@tetsuo-ai/agenc-worker";
+import type { ReadonlyUint8Array } from "@solana/kit";
+import {
+  AGENC_COORDINATION_PROGRAM_ADDRESS,
+  findBidMarketplacePda,
+  findModerationConfigPda,
+  findProtocolConfigPda,
+  getBidMarketplaceConfigDecoder,
+  getBidMarketplaceConfigDiscriminatorBytes,
+  getBidMarketplaceConfigSize,
+  getModerationConfigDecoder,
+  getModerationConfigDiscriminatorBytes,
+  getModerationConfigSize,
+  getProtocolConfigDecoder,
+  getProtocolConfigDiscriminatorBytes,
+  getProtocolConfigSize,
+  SURFACE_REVISION_CURRENT,
+  type BidMarketplaceConfig,
+  type ModerationConfig,
+  type ProtocolConfig,
+} from "@tetsuo-ai/marketplace-sdk";
+
+const LOCALNET_PROGRAM_DESCRIPTOR_PATH = "/proc/self/fd/5";
+const LOCALNET_PROGRAM_LOAD_METHOD = "private-unlinked-fd-v1";
 
 /** The subset of `.localnet/env.json` `agenc dev` consumes. */
 export interface LocalnetEnv {
@@ -34,7 +49,7 @@ export class LocalnetError extends Error {
 }
 
 export interface ValidatorPidRecord {
-  schemaVersion: 1;
+  schemaVersion: 2;
   role: "validator";
   pid: number;
   uid: number;
@@ -46,6 +61,7 @@ export interface ValidatorPidRecord {
   rpcPort: number;
   programSha256: string;
   programSize: number;
+  programLoadMethod: typeof LOCALNET_PROGRAM_LOAD_METHOD;
 }
 
 export interface ValidatorProcessObservation {
@@ -73,7 +89,9 @@ export function parseValidatorPidRecord(
   try {
     value = JSON.parse(body);
   } catch (error) {
-    throw new LocalnetError(`${pidFile}: invalid JSON (${(error as Error).message})`);
+    throw new LocalnetError(
+      `${pidFile}: invalid JSON (${(error as Error).message})`,
+    );
   }
   const parsed = record(value);
   const expected = [
@@ -89,13 +107,16 @@ export function parseValidatorPidRecord(
     "rpcPort",
     "programSha256",
     "programSize",
+    "programLoadMethod",
   ];
   const unknown = Object.keys(parsed).find((key) => !expected.includes(key));
   if (unknown !== undefined || expected.some((key) => !(key in parsed))) {
-    throw new LocalnetError(`${pidFile}: invalid or unsupported identity record`);
+    throw new LocalnetError(
+      `${pidFile}: invalid or unsupported identity record`,
+    );
   }
   if (
-    parsed.schemaVersion !== 1 ||
+    parsed.schemaVersion !== 2 ||
     parsed.role !== "validator" ||
     !Number.isSafeInteger(parsed.pid) ||
     (parsed.pid as number) <= 1 ||
@@ -124,7 +145,9 @@ export function parseValidatorPidRecord(
     !Number.isFinite(Date.parse(parsed.recordedAt)) ||
     new Date(Date.parse(parsed.recordedAt)).toISOString() !== parsed.recordedAt
   ) {
-    throw new LocalnetError(`${pidFile}: recordedAt is not a canonical timestamp`);
+    throw new LocalnetError(
+      `${pidFile}: recordedAt is not a canonical timestamp`,
+    );
   }
   if (
     typeof parsed.programSha256 !== "string" ||
@@ -132,13 +155,23 @@ export function parseValidatorPidRecord(
   ) {
     throw new LocalnetError(`${pidFile}: programSha256 is invalid`);
   }
-  if (!Number.isSafeInteger(parsed.programSize) || (parsed.programSize as number) <= 0) {
+  if (
+    !Number.isSafeInteger(parsed.programSize) ||
+    (parsed.programSize as number) <= 0
+  ) {
     throw new LocalnetError(`${pidFile}: programSize is invalid`);
+  }
+  if (parsed.programLoadMethod !== LOCALNET_PROGRAM_LOAD_METHOD) {
+    throw new LocalnetError(`${pidFile}: programLoadMethod is invalid`);
   }
   return parsed as unknown as ValidatorPidRecord;
 }
 
-/** Pure binding checks used immediately before a purge signal is sent. */
+/**
+ * Pure fd-bound record checks for callers that inspect localnet state.
+ * This is not sufficient authorization to signal a numeric PID; lifecycle
+ * mutation belongs to the repository's stable-process-reference scripts.
+ */
 export function assertValidatorProcessBinding(
   recordValue: ValidatorPidRecord,
   observed: ValidatorProcessObservation,
@@ -147,17 +180,22 @@ export function assertValidatorProcessBinding(
     ledger: string;
     stateDir: string;
     programId: string;
-    programBinary: string;
   },
 ): void {
   if (observed.uid !== expected.uid || observed.uid !== recordValue.uid) {
-    throw new LocalnetError("purge refused: validator PID is owned by another user");
+    throw new LocalnetError(
+      "purge refused: validator PID is owned by another user",
+    );
   }
   if (path.basename(observed.executable) !== "solana-test-validator") {
-    throw new LocalnetError("purge refused: PID executable is not solana-test-validator");
+    throw new LocalnetError(
+      "purge refused: PID executable is not solana-test-validator",
+    );
   }
   if (path.resolve(observed.cwd) !== path.resolve(expected.stateDir)) {
-    throw new LocalnetError("purge refused: validator working directory does not match this repo");
+    throw new LocalnetError(
+      "purge refused: validator working directory does not match this repo",
+    );
   }
   if (
     observed.processStartTicks !== recordValue.processStartTicks ||
@@ -165,115 +203,35 @@ export function assertValidatorProcessBinding(
     observed.cwd !== recordValue.cwd ||
     observed.argvSha256 !== recordValue.argvSha256
   ) {
-    throw new LocalnetError("purge refused: PID identity no longer matches its exact record");
+    throw new LocalnetError(
+      "purge refused: PID identity no longer matches its exact record",
+    );
   }
   const argument = (name: string): string | null => {
     const index = observed.argv.indexOf(name);
     return index >= 0 ? (observed.argv[index + 1] ?? null) : null;
   };
-  if (path.resolve(argument("--ledger") ?? "") !== path.resolve(expected.ledger)) {
-    throw new LocalnetError("purge refused: validator ledger argument does not match this repo");
+  if (
+    path.resolve(argument("--ledger") ?? "") !== path.resolve(expected.ledger)
+  ) {
+    throw new LocalnetError(
+      "purge refused: validator ledger argument does not match this repo",
+    );
   }
   if (argument("--rpc-port") !== String(recordValue.rpcPort)) {
-    throw new LocalnetError("purge refused: validator RPC port does not match its PID record");
+    throw new LocalnetError(
+      "purge refused: validator RPC port does not match its PID record",
+    );
   }
   const upgradeIndex = observed.argv.indexOf("--upgradeable-program");
   if (
     upgradeIndex < 0 ||
     observed.argv[upgradeIndex + 1] !== expected.programId ||
-    path.resolve(observed.argv[upgradeIndex + 2] ?? "") !==
-      path.resolve(expected.programBinary)
+    observed.argv[upgradeIndex + 2] !== LOCALNET_PROGRAM_DESCRIPTOR_PATH
   ) {
-    throw new LocalnetError("purge refused: validator program arguments do not match this repo");
-  }
-}
-
-function linuxProcessObservation(pid: number): ValidatorProcessObservation {
-  if (process.platform !== "linux" || typeof process.getuid !== "function") {
     throw new LocalnetError(
-      "purge refused: strong process identity verification is unavailable on this platform",
+      "purge refused: validator program arguments do not match this repo",
     );
-  }
-  try {
-    const status = readFileSync(`/proc/${pid}/status`, "utf8");
-    const uidMatch = /^Uid:\s+(\d+)/mu.exec(status);
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const commEnd = stat.lastIndexOf(")");
-    const fields = commEnd < 0 ? [] : stat.slice(commEnd + 1).trim().split(/\s+/u);
-    const processStartTicks = fields[19];
-    const argvBytes = readFileSync(`/proc/${pid}/cmdline`);
-    if (
-      uidMatch === null ||
-      !Number.isSafeInteger(Number(uidMatch[1])) ||
-      !/^[1-9][0-9]*$/u.test(processStartTicks ?? "") ||
-      argvBytes.length === 0
-    ) {
-      throw new Error("incomplete procfs identity");
-    }
-    return {
-      uid: Number(uidMatch[1]),
-      executable: readlinkSync(`/proc/${pid}/exe`),
-      argv: argvBytes.toString("utf8").split("\0").filter(Boolean),
-      cwd: readlinkSync(`/proc/${pid}/cwd`),
-      processStartTicks: processStartTicks!,
-      argvSha256: createHash("sha256").update(argvBytes).digest("hex"),
-    };
-  } catch (error) {
-    throw new LocalnetError(
-      `purge refused: could not verify validator process identity (${(error as Error).message})`,
-    );
-  }
-}
-
-async function assertValidatorRpcIdentity(
-  repoRoot: string,
-  recordValue: ValidatorPidRecord,
-): Promise<void> {
-  const rpcUrl = `http://127.0.0.1:${recordValue.rpcPort}`;
-  const envPath = path.join(repoRoot, ".localnet", "env.json");
-  const env = parseEnvFile(envPath);
-  if (env.rpcUrl !== rpcUrl) {
-    throw new LocalnetError("purge refused: RPC port does not match .localnet/env.json");
-  }
-  if (
-    env.programSha256 !== recordValue.programSha256 ||
-    env.programSize !== recordValue.programSize
-  ) {
-    throw new LocalnetError("purge refused: PID program identity does not match .localnet/env.json");
-  }
-  const identityPath = path.join(repoRoot, ".localnet", "ledger", "validator-keypair.json");
-  const signer = await createKeyPairSignerFromBytes(
-    parseSolanaKeypairJson(readFileSync(identityPath, "utf8"), identityPath),
-  );
-  const [identity, program] = await Promise.all([
-    fetch(rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getIdentity", params: [] }),
-      signal: AbortSignal.timeout(3_000),
-    }),
-    fetch(rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "getAccountInfo",
-        params: [env.programId, { encoding: "base64" }],
-      }),
-      signal: AbortSignal.timeout(3_000),
-    }),
-  ]);
-  if (!identity.ok || !program.ok) {
-    throw new LocalnetError("purge refused: validator RPC identity is unavailable");
-  }
-  const identityBody = (await identity.json()) as { result?: { identity?: unknown } };
-  const programBody = (await program.json()) as { result?: { value?: unknown } };
-  if (
-    identityBody.result?.identity !== signer.address ||
-    programBody.result?.value == null
-  ) {
-    throw new LocalnetError("purge refused: RPC is not this ledger's AgenC validator");
   }
 }
 
@@ -283,7 +241,7 @@ export const SETUP_INSTRUCTIONS = [
   "",
   "  1. anchor build                                  # compile the program (once)",
   "  2. (cd packages/sdk-ts && npm install && npm run build)",
-  "  3. node scripts/localnet-up.mjs                  # validator + program + configs",
+  "  3. node scripts/localnet-up.mjs --dev-ready      # disposable operational marketplace",
   "",
   "then re-run `agenc dev` from your project (it discovers the stack's",
   ".localnet/env.json by walking up from the working directory, checking",
@@ -369,10 +327,200 @@ export function findLocalnetEnv(
   }
 }
 
-/** Health probe: RPC answers AND the program account exists. */
+export interface LocalnetHealth {
+  rpcHealthy: boolean;
+  programDeployed: boolean;
+  marketplaceReady: boolean;
+  protocolPaused: boolean | null;
+  surfaceRevision: number | null;
+}
+
+const LOCALNET_BID_MARKETPLACE_POLICY = Object.freeze({
+  minBidBondLamports: 1_000_000n,
+  bidCreationCooldownSecs: 60n,
+  maxBidsPer24h: 50,
+  maxActiveBidsPerTask: 20,
+  maxBidLifetimeSecs: 604_800n,
+  acceptedNoShowSlashBps: 1_000,
+});
+
+interface RpcAccountValue {
+  data?: unknown;
+  executable?: unknown;
+  owner?: unknown;
+}
+
+function bytesEqual(
+  left: ReadonlyUint8Array,
+  right: ReadonlyUint8Array,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+/**
+ * Decode only an exact, canonical base64 account owned by this program.
+ * Generated account decoders intentionally decode fields rather than RPC
+ * envelopes, so ownership, executability, allocation size, and discriminator
+ * are enforced here before decoded values can influence readiness.
+ */
+function decodeCanonicalProgramAccount<T>(
+  value: unknown,
+  expectedProgramId: string,
+  expectedSize: number,
+  expectedDiscriminator: ReadonlyUint8Array,
+  decode: (bytes: ReadonlyUint8Array) => T,
+): T | null {
+  const account = value as RpcAccountValue | null;
+  if (
+    account === null ||
+    account.executable !== false ||
+    account.owner !== expectedProgramId ||
+    !Array.isArray(account.data) ||
+    account.data.length !== 2 ||
+    account.data[1] !== "base64" ||
+    typeof account.data[0] !== "string"
+  ) {
+    return null;
+  }
+  try {
+    const bytes = Buffer.from(account.data[0], "base64");
+    if (
+      bytes.toString("base64") !== account.data[0] ||
+      bytes.length !== expectedSize ||
+      !bytesEqual(
+        bytes.subarray(0, expectedDiscriminator.length),
+        expectedDiscriminator,
+      )
+    ) {
+      return null;
+    }
+    return decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+export function localnetProtocolIsMarketplaceReady(config: {
+  protocolPaused: boolean;
+  surfaceRevision: number;
+}): boolean {
+  return (
+    config.protocolPaused === false &&
+    config.surfaceRevision === SURFACE_REVISION_CURRENT
+  );
+}
+
+export function decodeLocalnetProtocolReadiness(
+  value: unknown,
+  expectedProgramId: string,
+  expectedBump?: number,
+): Pick<
+  LocalnetHealth,
+  "marketplaceReady" | "protocolPaused" | "surfaceRevision"
+> | null {
+  const config = decodeCanonicalProgramAccount<ProtocolConfig>(
+    value,
+    expectedProgramId,
+    getProtocolConfigSize(),
+    getProtocolConfigDiscriminatorBytes(),
+    (bytes) => getProtocolConfigDecoder().decode(bytes),
+  );
+  if (
+    config === null ||
+    (expectedBump !== undefined && config.bump !== expectedBump)
+  ) {
+    return null;
+  }
+  return {
+    marketplaceReady: localnetProtocolIsMarketplaceReady(config),
+    protocolPaused: config.protocolPaused,
+    surfaceRevision: config.surfaceRevision,
+  };
+}
+
+export function decodeLocalnetMarketplaceReadiness(
+  values: {
+    protocol: unknown;
+    moderation: unknown;
+    bidMarketplace: unknown;
+  },
+  expected: {
+    programId: string;
+    protocolBump: number;
+    moderationBump: number;
+    bidMarketplaceBump: number;
+  },
+): Pick<
+  LocalnetHealth,
+  "marketplaceReady" | "protocolPaused" | "surfaceRevision"
+> | null {
+  const protocol = decodeCanonicalProgramAccount<ProtocolConfig>(
+    values.protocol,
+    expected.programId,
+    getProtocolConfigSize(),
+    getProtocolConfigDiscriminatorBytes(),
+    (bytes) => getProtocolConfigDecoder().decode(bytes),
+  );
+  if (protocol === null || protocol.bump !== expected.protocolBump) return null;
+
+  const moderation = decodeCanonicalProgramAccount<ModerationConfig>(
+    values.moderation,
+    expected.programId,
+    getModerationConfigSize(),
+    getModerationConfigDiscriminatorBytes(),
+    (bytes) => getModerationConfigDecoder().decode(bytes),
+  );
+  const bidMarketplace = decodeCanonicalProgramAccount<BidMarketplaceConfig>(
+    values.bidMarketplace,
+    expected.programId,
+    getBidMarketplaceConfigSize(),
+    getBidMarketplaceConfigDiscriminatorBytes(),
+    (bytes) => getBidMarketplaceConfigDecoder().decode(bytes),
+  );
+
+  const dependentConfigsReady =
+    moderation !== null &&
+    moderation.bump === expected.moderationBump &&
+    moderation.enabled === true &&
+    moderation.authority === protocol.authority &&
+    bidMarketplace !== null &&
+    bidMarketplace.bump === expected.bidMarketplaceBump &&
+    bidMarketplace.authority === protocol.authority &&
+    bidMarketplace.minBidBondLamports ===
+      LOCALNET_BID_MARKETPLACE_POLICY.minBidBondLamports &&
+    bidMarketplace.bidCreationCooldownSecs ===
+      LOCALNET_BID_MARKETPLACE_POLICY.bidCreationCooldownSecs &&
+    bidMarketplace.maxBidsPer24h ===
+      LOCALNET_BID_MARKETPLACE_POLICY.maxBidsPer24h &&
+    bidMarketplace.maxActiveBidsPerTask ===
+      LOCALNET_BID_MARKETPLACE_POLICY.maxActiveBidsPerTask &&
+    bidMarketplace.maxBidLifetimeSecs ===
+      LOCALNET_BID_MARKETPLACE_POLICY.maxBidLifetimeSecs &&
+    bidMarketplace.acceptedNoShowSlashBps ===
+      LOCALNET_BID_MARKETPLACE_POLICY.acceptedNoShowSlashBps;
+
+  return {
+    marketplaceReady:
+      localnetProtocolIsMarketplaceReady(protocol) && dependentConfigsReady,
+    protocolPaused: protocol.protocolPaused,
+    surfaceRevision: protocol.surfaceRevision,
+  };
+}
+
+/** Health probe: canonical program + every required marketplace config. */
 export async function checkLocalnetHealth(
   env: Pick<LocalnetEnv, "rpcUrl" | "programId">,
-): Promise<{ rpcHealthy: boolean; programDeployed: boolean }> {
+): Promise<LocalnetHealth> {
+  const down = {
+    rpcHealthy: false,
+    programDeployed: false,
+    marketplaceReady: false,
+    protocolPaused: null,
+    surfaceRevision: null,
+  } as const;
   const post = async (body: object): Promise<unknown | null> => {
     try {
       const response = await fetch(env.rpcUrl, {
@@ -390,17 +538,81 @@ export async function checkLocalnetHealth(
   const health = await post({ jsonrpc: "2.0", id: 1, method: "getHealth" });
   const rpcHealthy =
     health !== null && (health as { result?: unknown }).result === "ok";
-  if (!rpcHealthy) return { rpcHealthy: false, programDeployed: false };
+  if (!rpcHealthy) return down;
   const account = await post({
     jsonrpc: "2.0",
     id: 2,
     method: "getAccountInfo",
     params: [env.programId, { encoding: "base64" }],
   });
+  const programValue = (
+    account as {
+      result?: {
+        value?: { executable?: unknown; owner?: unknown } | null;
+      };
+    } | null
+  )?.result?.value;
   const programDeployed =
-    account !== null &&
-    (account as { result?: { value?: unknown } }).result?.value != null;
-  return { rpcHealthy, programDeployed };
+    env.programId === AGENC_COORDINATION_PROGRAM_ADDRESS &&
+    programValue?.executable === true &&
+    programValue.owner === "BPFLoaderUpgradeab1e11111111111111111111111";
+  if (!programDeployed) {
+    return { ...down, rpcHealthy: true };
+  }
+
+  try {
+    const [
+      [protocolConfig, protocolBump],
+      [moderationConfig, moderationBump],
+      [bidMarketplaceConfig, bidMarketplaceBump],
+    ] = await Promise.all([
+      findProtocolConfigPda(),
+      findModerationConfigPda(),
+      findBidMarketplacePda(),
+    ]);
+    const response = await post({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "getMultipleAccounts",
+      params: [
+        [protocolConfig, moderationConfig, bidMarketplaceConfig],
+        { encoding: "base64" },
+      ],
+    });
+    const values = (
+      response as {
+        result?: {
+          value?: unknown;
+        };
+      } | null
+    )?.result?.value;
+    if (!Array.isArray(values) || values.length !== 3) {
+      return { ...down, rpcHealthy: true, programDeployed: true };
+    }
+    const readiness = decodeLocalnetMarketplaceReadiness(
+      {
+        protocol: values[0],
+        moderation: values[1],
+        bidMarketplace: values[2],
+      },
+      {
+        programId: env.programId,
+        protocolBump,
+        moderationBump,
+        bidMarketplaceBump,
+      },
+    );
+    if (readiness === null) {
+      return { ...down, rpcHealthy: true, programDeployed: true };
+    }
+    return {
+      rpcHealthy: true,
+      programDeployed: true,
+      ...readiness,
+    };
+  } catch {
+    return { ...down, rpcHealthy: true, programDeployed: true };
+  }
 }
 
 /** Can we boot the stack from here? (the sdk repo's localnet tooling) */
@@ -409,10 +621,39 @@ export function localnetTooling(repoRoot: string): string | null {
   return existsSync(script) ? script : null;
 }
 
+function localnetDownTooling(repoRoot: string): string | null {
+  const script = path.join(repoRoot, "scripts", "localnet-down.mjs");
+  return existsSync(script) ? script : null;
+}
+
+async function runLocalnetScript(
+  repoRoot: string,
+  script: string,
+  args: readonly string[],
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [script, ...args], {
+      cwd: repoRoot,
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else {
+        const outcome =
+          signal === null ? `code ${String(code)}` : `signal ${signal}`;
+        reject(
+          new LocalnetError(`${path.basename(script)} exited with ${outcome}`),
+        );
+      }
+    });
+  });
+}
+
 /**
  * Boot (or re-boot) the localnet stack via the sdk repo's own tooling.
- * `purge` first kills a stale validator recorded in `.localnet/validator.pid`
- * so localnet-up starts from a reset ledger.
+ * `purge` first delegates the complete stop-and-wipe operation to
+ * localnet-down. localnet-up never starts unless that child exits successfully.
  */
 export async function bootLocalnet(
   repoRoot: string,
@@ -426,64 +667,15 @@ export async function bootLocalnet(
   }
   const log = options.log ?? (() => {});
   if (options.purge === true) {
-    const pidFile = path.join(repoRoot, ".localnet", "validator.pid");
-    if (existsSync(pidFile)) {
-      const metadata = lstatSync(pidFile);
-      if (!metadata.isFile() || metadata.isSymbolicLink()) {
-        throw new LocalnetError("purge refused: validator.pid is not a regular non-symlink file");
-      }
-      if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) {
-        throw new LocalnetError("purge refused: validator.pid is not owned by the current user");
-      }
-      const pidRecord = parseValidatorPidRecord(readFileSync(pidFile, "utf8"), pidFile);
-      const programBinary = path.join(
-        repoRoot,
-        "programs",
-        "agenc-coordination",
-        "target",
-        "deploy",
-        "agenc_coordination.so",
+    const downScript = localnetDownTooling(repoRoot);
+    if (downScript === null) {
+      throw new LocalnetError(
+        `no localnet purge tooling at ${repoRoot}/scripts/localnet-down.mjs`,
       );
-      const env = parseEnvFile(path.join(repoRoot, ".localnet", "env.json"));
-      let alive = true;
-      try {
-        process.kill(pidRecord.pid, 0);
-      } catch (error) {
-        alive = (error as NodeJS.ErrnoException).code === "EPERM";
-      }
-      if (alive) {
-        assertValidatorProcessBinding(pidRecord, linuxProcessObservation(pidRecord.pid), {
-          uid: process.getuid!(),
-          ledger: path.join(repoRoot, ".localnet", "ledger"),
-          stateDir: path.join(repoRoot, ".localnet"),
-          programId: env.programId,
-          programBinary,
-        });
-        await assertValidatorRpcIdentity(repoRoot, pidRecord);
-        // Identity is rechecked immediately before the only mutating operation.
-        assertValidatorProcessBinding(pidRecord, linuxProcessObservation(pidRecord.pid), {
-          uid: process.getuid!(),
-          ledger: path.join(repoRoot, ".localnet", "ledger"),
-          stateDir: path.join(repoRoot, ".localnet"),
-          programId: env.programId,
-          programBinary,
-        });
-        process.kill(pidRecord.pid, "SIGTERM");
-        log(`purge: sent SIGTERM to verified validator pid ${pidRecord.pid}`);
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
-      }
     }
+    log(`purging localnet sandbox: node ${downScript} --purge`);
+    await runLocalnetScript(repoRoot, downScript, ["--purge"]);
   }
-  log(`booting localnet sandbox: node ${script}`);
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [script], {
-      cwd: repoRoot,
-      stdio: ["ignore", "inherit", "inherit"],
-    });
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new LocalnetError(`localnet-up.mjs exited with code ${code}`));
-    });
-  });
+  log(`booting localnet sandbox: node ${script} --dev-ready`);
+  await runLocalnetScript(repoRoot, script, ["--dev-ready"]);
 }

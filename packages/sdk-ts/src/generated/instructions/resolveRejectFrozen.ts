@@ -9,11 +9,9 @@
 import {
   combineCodec,
   fixDecoderSize,
-  fixEncoderSize,
   getBooleanDecoder,
   getBooleanEncoder,
   getBytesDecoder,
-  getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -34,6 +32,8 @@ import {
   type TransactionSigner,
   type WritableAccount,
 } from "@solana/kit";
+
+import { getFixedBytesEncoder } from "../codecs/fixedBytes";
 import {
   getAccountMetaFactory,
   getAddressFromResolvedInstructionAccount,
@@ -53,9 +53,7 @@ export const RESOLVE_REJECT_FROZEN_DISCRIMINATOR: ReadonlyUint8Array =
   new Uint8Array([247, 17, 223, 213, 12, 193, 235, 127]);
 
 export function getResolveRejectFrozenDiscriminatorBytes(): ReadonlyUint8Array {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    RESOLVE_REJECT_FROZEN_DISCRIMINATOR,
-  );
+  return getFixedBytesEncoder(8).encode(RESOLVE_REJECT_FROZEN_DISCRIMINATOR);
 }
 
 export type ResolveRejectFrozenInstruction<
@@ -147,7 +145,7 @@ export type ResolveRejectFrozenInstructionDataArgs = {
 export function getResolveRejectFrozenInstructionDataEncoder(): FixedSizeEncoder<ResolveRejectFrozenInstructionDataArgs> {
   return transformEncoder(
     getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
+      ["discriminator", getFixedBytesEncoder(8, "discriminator")],
       ["approveCompletion", getBooleanEncoder()],
     ]),
     (value) => ({

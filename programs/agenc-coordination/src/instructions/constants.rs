@@ -105,10 +105,15 @@ pub const MIN_VOTERS_FOR_RESOLUTION: usize = 3;
 /// `(vote, arbiter)` pairs. This cap is unreferenced; retained only for API stability.
 pub const MAX_DISPUTE_VOTERS: u8 = 20;
 
-/// Maximum simultaneous workers supportable by the monolithic dispute unwind.
-/// Resolution and expiry carry every other `(claim, worker)` pair in one Solana
-/// transaction; four workers preserves room for the fixed accounts and maximum
-/// rationale payload. Larger collaboration needs chunked settlement state.
+/// Maximum simultaneous workers per collaborative task.
+///
+/// Historically this bounded the monolithic dispute unwind, which carried every
+/// other `(claim, worker, submission)` bundle in one transaction — a bound that
+/// was in fact wire-infeasible at four workers for dependent expiry. Dispute
+/// exits now record the ruling O(1) and settle each deferred peer through the
+/// permissionless `settle_dispute_claim` crank, so this cap is purely a
+/// state/product bound with NO wire-size consequence and can be raised on its
+/// own merits.
 pub const DISPUTE_SAFE_MAX_WORKERS: u8 = 4;
 
 // ============================================================================

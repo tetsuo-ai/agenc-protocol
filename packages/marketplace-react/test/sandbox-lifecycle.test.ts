@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   runSandboxBootstrap,
   start,
+  localSeederArgs,
+  parseSandboxCliArgs,
   type SandboxBootstrapDependencies,
   type SandboxEnv,
 } from "./sandbox-up.mjs";
@@ -52,6 +54,74 @@ function dependencies(
 }
 
 describe("sandbox bootstrap lifecycle", () => {
+  it("strictly parses the sandbox CLI instead of ignoring misspelled flags", () => {
+    expect(parseSandboxCliArgs([])).toEqual({
+      command: "up",
+      keepLedger: false,
+      seed: true,
+      devReady: true,
+    });
+    expect(
+      parseSandboxCliArgs([
+        "up",
+        "--production-frozen",
+        "--no-seed",
+        "--keep-ledger",
+      ]),
+    ).toEqual({
+      command: "up",
+      keepLedger: true,
+      seed: false,
+      devReady: false,
+    });
+    expect(() => parseSandboxCliArgs(["env", "--bogus"])).toThrow(
+      /unknown argument/u,
+    );
+    expect(() => parseSandboxCliArgs(["up", "--no-seed", "--no-seed"])).toThrow(
+      /duplicate argument/u,
+    );
+  });
+
+  it("builds an explicit moderator seed route that suppresses stale attestor state", () => {
+    const env = {
+      ...resolvedSandbox(),
+      attestorUrl: "http://127.0.0.1:7779/attest",
+    };
+    expect(localSeederArgs(env, "/repo/.localnet/env.json")).toEqual([
+      "--env-file",
+      "/repo/.localnet/env.json",
+      "--moderator-keypair",
+      ".localnet/keys/moderator.json",
+    ]);
+    expect(() =>
+      localSeederArgs({ ...env, keypairs: null }, "/repo/.localnet/env.json"),
+    ).toThrow(/keypairs\.moderator/);
+  });
+
+  it("refuses to seed the deliberately paused production rehearsal", async () => {
+    const assertPrereqs = vi.fn(async () => undefined);
+    await expect(
+      start(
+        { devReady: false, seed: true },
+        {
+          assertPrereqs,
+        },
+      ),
+    ).rejects.toThrow(/production-frozen sandbox cannot be seeded/);
+    expect(assertPrereqs).not.toHaveBeenCalled();
+  });
+
+  it("refuses the dev-ready keep-ledger combination before prerequisites", async () => {
+    const assertPrereqs = vi.fn(async () => undefined);
+    await expect(
+      start(
+        { devReady: true, keepLedger: true, seed: false },
+        { assertPrereqs },
+      ),
+    ).rejects.toThrow(/fresh genesis/u);
+    expect(assertPrereqs).not.toHaveBeenCalled();
+  });
+
   it("does not register or invoke process-owning hooks when the integration is disabled", () => {
     const up = vi.fn(async () => undefined);
     const stop = vi.fn(async () => undefined);
@@ -210,5 +280,19 @@ describe("sandbox bootstrap lifecycle", () => {
 
     await expect(runSandboxBootstrap(deps)).resolves.toBe(resolved);
     expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("passes the resolved env snapshot into the seed stage", async () => {
+    const resolved = resolvedSandbox();
+    const env = { marker: "resolved-before-seed" };
+    const seed = vi.fn(async () => undefined);
+    await runSandboxBootstrap(
+      dependencies({
+        readEnv: vi.fn(async () => env),
+        seed,
+        resolve: vi.fn(async () => resolved),
+      }),
+    );
+    expect(seed).toHaveBeenCalledWith(env);
   });
 });

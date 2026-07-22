@@ -12,6 +12,10 @@
 // client sends it. They accept exactly the same input as the facade function.
 import {
   appendTransactionMessageInstructions,
+  assertIsTransactionMessageWithinSizeLimit,
+  assertIsTransactionWithinSizeLimit,
+  address,
+  compressTransactionMessageUsingAddressLookupTables,
   createSolanaRpc,
   createSolanaRpcSubscriptions,
   createTransactionMessage,
@@ -21,6 +25,7 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
   signTransactionMessageWithSigners,
   type Address,
+  type AddressesByLookupTableAddress,
   type Commitment,
   type Instruction,
   type TransactionSigner,
@@ -32,6 +37,11 @@ import {
 } from "./compute-budget.js";
 import { AgencError, isBlockhashExpiredError, toAgencError } from "./errors.js";
 import {
+  canonicalizeFacadeInputSigners,
+  canonicalizeInstructionSigners,
+  stabilizeTransactionSigner,
+} from "./signer-identity.js";
+import {
   createRpcTransport,
   isRetrySafePreBroadcastFailure,
   type RpcTransportRpc,
@@ -41,6 +51,7 @@ import {
   type TransportSendResult,
   type TransportSignatureStatus,
 } from "./transport.js";
+import { snapshotDenseStructuredArray } from "../values/structured-clone.js";
 
 /**
  * Default compute-unit limit prepended to every transaction.
@@ -58,6 +69,113 @@ export const DEFAULT_COMPUTE_UNIT_LIMIT = 600_000;
 export const DEFAULT_MAX_RETRIES = 3;
 /** Default commitment used when the client builds its own transport. */
 export const DEFAULT_COMMITMENT: Commitment = "confirmed";
+
+const MAX_ADDRESS_LOOKUP_TABLES_PER_SEND = 16;
+const MAX_ADDRESSES_PER_LOOKUP_TABLE = 256;
+
+function snapshotLookupTableAddresses(
+  value: readonly Address[],
+  label: string,
+): readonly Address[] {
+  const entries = snapshotDenseStructuredArray(
+    value,
+    label,
+    MAX_ADDRESS_LOOKUP_TABLES_PER_SEND,
+  );
+  const seen = new Set<Address>();
+  const snapshot: Address[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    let lookupTableAddress: Address;
+    try {
+      lookupTableAddress = address(entries[index]!);
+    } catch (cause) {
+      throw new TypeError(`${label}[${index}] must be a valid address`, {
+        cause,
+      });
+    }
+    if (seen.has(lookupTableAddress)) {
+      throw new Error(`${label}: duplicate lookup table ${lookupTableAddress}`);
+    }
+    seen.add(lookupTableAddress);
+    snapshot.push(lookupTableAddress);
+  }
+  return Object.freeze(snapshot);
+}
+
+function snapshotResolvedLookupTables(
+  requested: readonly Address[],
+  value: AddressesByLookupTableAddress,
+): AddressesByLookupTableAddress {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("resolved address lookup tables must be an object");
+  }
+  let keys: readonly PropertyKey[];
+  try {
+    keys = Reflect.ownKeys(value);
+  } catch (cause) {
+    throw new TypeError(
+      "resolved address lookup tables must be safely inspectable",
+      { cause },
+    );
+  }
+  if (keys.length !== requested.length) {
+    throw new Error(
+      "resolved address lookup tables must exactly match the requested table set",
+    );
+  }
+  const requestedSet = new Set(requested);
+  const resolved = Object.create(null) as AddressesByLookupTableAddress;
+  for (const key of keys) {
+    if (typeof key !== "string") {
+      throw new TypeError(
+        "resolved address lookup tables must contain only address keys",
+      );
+    }
+    const tableAddress = address(key);
+    if (!requestedSet.delete(tableAddress)) {
+      throw new Error(`unexpected resolved lookup table ${tableAddress}`);
+    }
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch (cause) {
+      throw new TypeError(
+        "resolved address lookup tables must be safely inspectable",
+        { cause },
+      );
+    }
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      descriptor.enumerable !== true
+    ) {
+      throw new TypeError(
+        `resolved lookup table ${tableAddress} must be an enumerable own data property`,
+      );
+    }
+    const rawAddresses = snapshotDenseStructuredArray(
+      descriptor.value as readonly Address[],
+      `resolved lookup table ${tableAddress}`,
+      MAX_ADDRESSES_PER_LOOKUP_TABLE,
+    );
+    const addresses: Address[] = [];
+    for (let index = 0; index < rawAddresses.length; index += 1) {
+      try {
+        addresses.push(address(rawAddresses[index]!));
+      } catch (cause) {
+        throw new TypeError(
+          `resolved lookup table ${tableAddress}[${index}] must be a valid address`,
+          { cause },
+        );
+      }
+    }
+    resolved[tableAddress] = Object.freeze(addresses) as Address[];
+  }
+  if (requestedSet.size !== 0) {
+    throw new Error("one or more requested address lookup tables were not resolved");
+  }
+  return Object.freeze(resolved);
+}
 
 /** Result of a confirmed client send. */
 export type SendResult = TransportSendResult;
@@ -85,6 +203,14 @@ export interface SendOptions {
   computeUnitPrice?: bigint | number;
   /** Override the client's proven-pre-broadcast blockhash-expiry retry bound. */
   maxRetries?: number;
+  /**
+   * Canonical on-chain address lookup tables used to compress this v0 message.
+   * The client asks the transport to fetch their actual ordered contents; it
+   * never trusts caller-supplied address indexes. Per-call values replace the
+   * client default. Custom transports must implement
+   * `resolveAddressLookupTables` when this option is non-empty.
+   */
+  addressLookupTableAddresses?: readonly Address[];
 }
 
 /** Connection part of the client config: bring a transport, a kit RPC, or URLs. */
@@ -454,7 +580,7 @@ export function createMarketplaceClient(
   config: MarketplaceClientConfig,
 ): MarketplaceClient {
   const transport = resolveTransport(config);
-  const { signer } = config;
+  const signer = stabilizeTransactionSigner(config.signer);
   const defaultComputeUnitLimit =
     config.computeUnitLimit ?? DEFAULT_COMPUTE_UNIT_LIMIT;
   const defaultComputeUnitPrice = config.computeUnitPrice;
@@ -659,11 +785,38 @@ export function createMarketplaceClient(
     instructions: readonly Instruction[],
     options?: SendOptions,
   ): Promise<SendResult> {
-    const allInstructions = [
-      ...computeBudgetInstructions(options),
-      ...instructions,
-    ];
+    let allInstructions: readonly Instruction[];
+    try {
+      allInstructions = canonicalizeInstructionSigners(
+        [...computeBudgetInstructions(options), ...instructions],
+        signer,
+      );
+    } catch (error) {
+      throw toAgencError(error);
+    }
     const maxRetries = options?.maxRetries ?? defaultMaxRetries;
+    const lookupTableAddresses = snapshotLookupTableAddresses(
+      options?.addressLookupTableAddresses ?? [],
+      "MarketplaceClient.send: addressLookupTableAddresses",
+    );
+    let lookupTables: AddressesByLookupTableAddress | undefined;
+    if (lookupTableAddresses.length > 0) {
+      if (transport.resolveAddressLookupTables === undefined) {
+        throw toAgencError(
+          new Error(
+            "MarketplaceClient.send: transport cannot resolve address lookup tables",
+          ),
+        );
+      }
+      try {
+        lookupTables = snapshotResolvedLookupTables(
+          lookupTableAddresses,
+          await transport.resolveAddressLookupTables(lookupTableAddresses),
+        );
+      } catch (error) {
+        throw toAgencError(error);
+      }
+    }
     let attempt = 0;
     for (;;) {
       // Pre-submission steps (blockhash fetch, assembly, signing) are wrapped
@@ -673,18 +826,32 @@ export function createMarketplaceClient(
       let signedTransaction: SignedTransaction;
       try {
         const latestBlockhash = await transport.getLatestBlockhash();
-        const message = pipe(
+        const uncompressedMessage = pipe(
           createTransactionMessage({ version: 0 }),
           (m) => setTransactionMessageFeePayerSigner(signer, m),
           (m) =>
             setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, m),
           (m) => appendTransactionMessageInstructions(allInstructions, m),
         );
+        const message =
+          lookupTables === undefined
+            ? uncompressedMessage
+            : compressTransactionMessageUsingAddressLookupTables(
+                uncompressedMessage,
+                lookupTables,
+              );
+        // Reject an impossible wire before invoking any wallet capability. The
+        // v0 compiler accounts for signatures, compact lengths, and lookup-table
+        // references exactly; legacy/v0 transactions are capped at 1,232 bytes.
+        assertIsTransactionMessageWithinSizeLimit(message);
         // RE-SIGNED on every attempt: the message embeds the freshly fetched
         // blockhash, so a retry is a new signature over a new lifetime.
         signedTransaction = (await signTransactionMessageWithSigners(
           message,
         )) as SignedTransaction;
+        // Defense in depth at the transport seam. Signing must not be able to
+        // turn a size-checked message into an oversized wire transaction.
+        assertIsTransactionWithinSizeLimit(signedTransaction);
       } catch (error) {
         throw toAgencError(error);
       }
@@ -731,7 +898,10 @@ export function createMarketplaceClient(
   function viaFacade<TInput>(
     build: (input: TInput) => Promise<Instruction>,
   ): (input: TInput, options?: SendOptions) => Promise<SendResult> {
-    return async (input, options) => send([await build(input)], options);
+    return async (input, options) => {
+      const stableInput = canonicalizeFacadeInputSigners(input, signer);
+      return send([await build(stableInput)], options);
+    };
   }
 
   /**
@@ -745,7 +915,8 @@ export function createMarketplaceClient(
   ): (input: TInput, options?: SendOptions) => Promise<SendResult> {
     return async (input, options) => {
       const merged = withReferrerDefault(input, defaultReferrer);
-      return send([await build(merged)], options);
+      const stableInput = canonicalizeFacadeInputSigners(merged, signer);
+      return send([await build(stableInput)], options);
     };
   }
 
