@@ -46,7 +46,7 @@
     "@solana/kit": "^6.9.0"
   },
   "devDependencies": {
-    "@solana/kit": "6.9.0",
+    "@solana/kit": "7.0.0",
     "litesvm": "1.1.0",
     "tsup": "8.5.1",
     "typedoc": "^0.28.13",
